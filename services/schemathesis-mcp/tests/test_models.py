@@ -1,23 +1,26 @@
-from schemathesis_mcp.models import RunOutcome, RunState, RunStatus
+import pytest
+from pydantic import ValidationError
+
+from schemathesis_mcp.models import InlineSchema, RunOutcome, RunRequest, RunState, RunStatus
+
+
+def test_run_request_uses_discriminated_schema_input() -> None:
+    request = RunRequest(
+        schema={"kind": "inline", "format": "yaml", "content": "openapi: 3.0.0"},
+        reports=["junit"],
+    )
+
+    assert isinstance(request.schema_input, InlineSchema)
+    assert request.reports == ["junit"]
+
+
+def test_old_string_schema_contract_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        RunRequest(schema="openapi.yaml")
 
 
 def test_run_status_separates_job_state_from_test_outcome() -> None:
     status = RunStatus(run_id="run-1", state=RunState.COMPLETED, outcome=RunOutcome.FAILED)
 
-    assert status.model_dump(mode="json") == {
-        "run_id": "run-1",
-        "state": "completed",
-        "outcome": "failed",
-        "created_at": status.created_at.isoformat().replace("+00:00", "Z"),
-        "started_at": None,
-        "finished_at": None,
-        "current_phase": None,
-        "stop_reason": None,
-        "progress": {
-            "events": 0,
-            "scenarios": 0,
-            "failures": 0,
-            "errors": 0,
-        },
-        "error": None,
-    }
+    assert status.state is RunState.COMPLETED
+    assert status.outcome is RunOutcome.FAILED

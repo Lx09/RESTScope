@@ -32,7 +32,9 @@ class ArtifactStore:
 
     def create_run(self, run_id: str) -> None:
         with self._lock:
-            (self.root / run_id / "failures").mkdir(parents=True, exist_ok=True)
+            run_dir = self.root / run_id
+            (run_dir / "failures").mkdir(parents=True, exist_ok=True)
+            run_dir.chmod(0o700)
             self._runs[run_id] = _RunArtifacts(events=deque(maxlen=self.max_events))
 
     def run_dir(self, run_id: str) -> Path:
@@ -62,6 +64,9 @@ class ArtifactStore:
 
     def write_failure(self, run_id: str, failure: FailureDetail) -> str:
         path = self.root / run_id / "failures" / f"{failure.failure_id}.json"
+        if path.exists():
+            previous = FailureDetail.model_validate_json(path.read_text(encoding="utf-8"))
+            failure = failure.model_copy(update={"count": previous.count + failure.count})
         path.write_text(failure.model_dump_json(indent=2), encoding="utf-8")
         return f"schemathesis://runs/{run_id}/failures/{failure.failure_id}.json"
 
@@ -71,7 +76,7 @@ class ArtifactStore:
 
     def write_result(self, result: RunResult) -> None:
         path = self.root / result.run_id / "result.json"
-        path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        path.write_text(result.model_dump_json(indent=2, by_alias=True), encoding="utf-8")
 
     def read_result(self, run_id: str) -> RunResult:
         return RunResult.model_validate_json((self.root / run_id / "result.json").read_text(encoding="utf-8"))
@@ -85,6 +90,8 @@ class ArtifactStore:
         root = self.root.resolve()
         if root not in path.parents:
             raise ValueError("Resource path escapes the artifact directory")
+        if path.is_dir():
+            return json.dumps(sorted(item.name for item in path.iterdir()))
         return path.read_text(encoding="utf-8")
 
     @staticmethod
@@ -93,7 +100,16 @@ class ArtifactStore:
 
     def artifact_uris(self, run_id: str) -> dict[str, str]:
         output = {"events": self.events_uri(run_id)}
-        for name, filename in (("junit", "junit.xml"), ("har", "har.json")):
+        for name, filename in (
+            ("schemathesis_ndjson", "schemathesis.ndjson"),
+            ("stdout", "stdout.log"),
+            ("stderr", "stderr.log"),
+            ("schema", "schema.json"),
+            ("junit", "junit.xml"),
+            ("har", "har.json"),
+            ("vcr", "vcr.yaml"),
+            ("allure", "allure"),
+        ):
             if (self.root / run_id / filename).exists():
                 output[name] = f"schemathesis://runs/{run_id}/{filename}"
         return output

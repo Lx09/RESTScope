@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,8 +56,27 @@ class EventPage(BaseModel):
     artifact_uri: str
 
 
+class FileSchema(BaseModel):
+    kind: Literal["file"]
+    path: str
+
+
+class UrlSchema(BaseModel):
+    kind: Literal["url"]
+    url: str
+
+
+class InlineSchema(BaseModel):
+    kind: Literal["inline"]
+    format: Literal["yaml", "json"] = "yaml"
+    content: str
+
+
+SchemaInput = Annotated[FileSchema | UrlSchema | InlineSchema, Field(discriminator="kind")]
+
+
 class RunRequest(BaseModel):
-    schema_location: str = Field(alias="schema")
+    schema_input: SchemaInput = Field(alias="schema")
     base_url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     phases: list[str] | None = None
@@ -71,6 +90,7 @@ class RunRequest(BaseModel):
     max_time: float | None = None
     seed: int | None = None
     tls_verify: bool = True
+    reports: list[Literal["junit", "har", "vcr", "allure"]] = Field(default_factory=list)
 
 
 class FailureDetail(BaseModel):
@@ -94,3 +114,7 @@ class RunResult(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
     failure_ids: list[str] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(default_factory=dict)
+    cli_version: str | None = None
+    command: str | None = None
+    exit_code: int | None = None
+    schema_info: dict[str, Any] | None = Field(default=None, alias="schema")

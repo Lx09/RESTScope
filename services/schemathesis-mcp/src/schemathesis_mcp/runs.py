@@ -34,6 +34,7 @@ class RunManager:
         self._statuses: dict[str, RunStatus] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._stop_events: dict[str, threading.Event] = {}
+        self._run_metadata: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
     def start(self, request: Any) -> str:
@@ -65,12 +66,19 @@ class RunManager:
             return self._statuses[run_id].model_copy(deep=True)
 
     def cancel(self, run_id: str) -> RunStatus:
+        should_terminate = False
         with self._lock:
             status = self._statuses[run_id]
             if status.state in {RunState.QUEUED, RunState.LOADING, RunState.RUNNING}:
                 status.state = RunState.CANCELLING
                 self._stop_events[run_id].set()
-            return status.model_copy(deep=True)
+                should_terminate = True
+            result = status.model_copy(deep=True)
+        if should_terminate:
+            terminate = getattr(self.backend, "terminate", None)
+            if terminate is not None:
+                terminate(run_id)
+        return result
 
     def wait(self, run_id: str, timeout: float | None = None) -> None:
         self._threads[run_id].join(timeout)
@@ -94,7 +102,8 @@ class RunManager:
         timer: threading.Timer | None = None
         with self._lock:
             status = self._statuses[run_id]
-            status.state = RunState.RUNNING
+            if status.state is not RunState.CANCELLING:
+                status.state = RunState.RUNNING
             status.started_at = datetime.now(UTC)
         max_time = getattr(request, "max_time", None)
         if max_time is not None:
@@ -120,10 +129,17 @@ class RunManager:
             with self._lock:
                 status = self._statuses[run_id]
                 cancelled = stop_event.is_set() or status.outcome is RunOutcome.INTERRUPTED
-                status.state = RunState.CANCELLED if cancelled else RunState.COMPLETED
+                status.state = (
+                    RunState.CANCELLED
+                    if cancelled
+                    else RunState.FAILED
+                    if status.outcome is RunOutcome.ERRORED
+                    else RunState.COMPLETED
+                )
                 status.finished_at = datetime.now(UTC)
                 if status.outcome is None:
                     status.outcome = RunOutcome.FAILED if status.progress.failures else RunOutcome.PASSED
+                metadata = self._run_metadata.get(run_id, {})
                 result = RunResult(
                     run_id=run_id,
                     outcome=status.outcome,
@@ -131,6 +147,10 @@ class RunManager:
                     summary=status.progress.model_dump(),
                     failure_ids=failure_ids,
                     artifacts=self.artifacts.artifact_uris(run_id),
+                    cli_version=metadata.get("cli_version"),
+                    command=metadata.get("command"),
+                    exit_code=metadata.get("exit_code"),
+                    schema=metadata.get("schema"),
                 )
             self.artifacts.write_result(result)
         except Exception as exc:
@@ -175,4 +195,10 @@ class RunManager:
                     status.outcome = RunOutcome(raw_outcome)
                 elif event.get("after_run_failures", 0):
                     progress.failures += int(event["after_run_failures"])
+            elif event_type == "run_started":
+                status.state = RunState.RUNNING
+            elif event_type == "run_finished":
+                status.stop_reason = event.get("stop_reason")
+                status.outcome = RunOutcome(event["outcome"])
+                self._run_metadata[run_id] = event
             status.progress = RunProgress.model_validate(progress)

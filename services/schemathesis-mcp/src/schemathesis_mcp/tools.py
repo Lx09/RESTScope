@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from schemathesis_mcp.adapter import SchemathesisBackend
+from schemathesis_mcp.adapter import CliBackend
 from schemathesis_mcp.artifacts import ArtifactStore
 from schemathesis_mcp.models import RunRequest
 from schemathesis_mcp.runs import RunManager
@@ -19,7 +19,10 @@ class ToolService:
 
     @classmethod
     def create(cls, backend: Any | None = None, artifact_root: Path | None = None) -> ToolService:
-        resolved_backend = backend or SchemathesisBackend()
+        resolved_backend = backend or CliBackend()
+        probe = getattr(resolved_backend, "probe", None)
+        if probe is not None:
+            probe()
         root = artifact_root or Path(tempfile.mkdtemp(prefix="schemathesis-mcp-"))
         artifacts = ArtifactStore(root)
         return cls(
@@ -27,9 +30,6 @@ class ToolService:
             artifacts=artifacts,
             runs=RunManager(backend=resolved_backend, artifacts=artifacts),
         )
-
-    def inspect_api(self, **kwargs: Any) -> dict[str, Any]:
-        return self.backend.inspect(RunRequest.model_validate(kwargs))
 
     def start_run(self, **kwargs: Any) -> dict[str, Any]:
         request = RunRequest.model_validate(kwargs)
@@ -43,16 +43,13 @@ class ToolService:
         return self.artifacts.get_events(run_id, cursor=cursor, limit=limit).model_dump(mode="json")
 
     def get_result(self, run_id: str) -> dict[str, Any]:
-        return self.runs.get_result(run_id).model_dump(mode="json")
+        return self.runs.get_result(run_id).model_dump(mode="json", by_alias=True)
 
     def get_failure(self, run_id: str, failure_id: str) -> dict[str, Any]:
         return self.artifacts.read_failure(run_id, failure_id).model_dump(mode="json")
 
     def cancel_run(self, run_id: str) -> dict[str, Any]:
         return self.runs.cancel(run_id).model_dump(mode="json")
-
-    def replay_failure(self, run_id: str, failure_id: str) -> dict[str, Any]:
-        return self.backend.replay(run_id, failure_id)
 
     def read_resource(self, uri: str) -> str:
         return self.artifacts.read_resource(uri)

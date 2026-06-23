@@ -6,8 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from schemathesis_mcp.adapter import SchemathesisBackend
-from schemathesis_mcp.models import RunRequest
+from schemathesis_mcp.adapter import CliBackend
+from schemathesis_mcp.security import PathPolicy
 from schemathesis_mcp.tools import ToolService
 
 
@@ -25,6 +25,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"secret":"response-secret"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self) -> None:
+        if self.path == "/graphql":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data":{"hello":"world"}}')
         else:
             self.send_response(404)
             self.end_headers()
@@ -66,35 +76,49 @@ def api_server(monkeypatch):
         thread.join(timeout=2)
 
 
-def test_real_engine_run_produces_sanitized_failure_artifact(tmp_path, api_server) -> None:
-    service = ToolService.create(backend=SchemathesisBackend(), artifact_root=tmp_path)
+def test_real_cli_run_produces_sanitized_failure_and_optional_artifacts(tmp_path, api_server) -> None:
+    service = ToolService.create(backend=CliBackend(), artifact_root=tmp_path)
     started = service.start_run(
-        schema=f"{api_server}/openapi.json",
+        schema={"kind": "url", "url": f"{api_server}/openapi.json"},
         headers={"Authorization": "Bearer test-secret"},
         phases=["fuzzing"],
         generation_modes=["positive"],
         max_examples=1,
         max_failures=1,
         seed=1,
+        reports=["junit", "har"],
     )
     service.runs.wait(started["run_id"], timeout=20)
 
     result = service.get_result(started["run_id"])
     assert result["outcome"] == "failed"
+    assert result["exit_code"] == 1
     assert result["failure_ids"]
-    assert set(result["artifacts"]) == {"events", "junit", "har"}
+    assert {"events", "schemathesis_ndjson", "stdout", "stderr", "schema", "junit", "har"} <= set(result["artifacts"])
 
     failure = service.get_failure(started["run_id"], result["failure_ids"][0])
     assert failure["operation"] == "GET /boom"
     assert failure["request"]["headers"]["Authorization"] == "[REDACTED]"
     assert "test-secret" not in json.dumps(failure)
+    assert not (tmp_path / started["run_id"] / "schemathesis.toml").exists()
 
 
-def test_graphql_schema_inspection(tmp_path) -> None:
+def test_real_cli_runs_graphql_schema_file(tmp_path, api_server) -> None:
     schema_path = tmp_path / "schema.graphql"
     schema_path.write_text("type Query { hello: String! }")
+    backend = CliBackend(path_policy=PathPolicy([tmp_path]))
+    service = ToolService.create(backend=backend, artifact_root=tmp_path)
+    started = service.start_run(
+        schema={"kind": "file", "path": str(schema_path)},
+        base_url=f"{api_server}/graphql",
+        phases=["fuzzing"],
+        generation_modes=["positive"],
+        max_examples=1,
+        seed=1,
+    )
+    service.runs.wait(started["run_id"], timeout=20)
 
-    result = SchemathesisBackend().inspect(RunRequest(schema=str(schema_path), base_url="http://127.0.0.1:1/graphql"))
-
-    assert result["specification"].startswith("GraphQL")
-    assert [operation["label"] for operation in result["operations"]] == ["Query.hello"]
+    result = service.get_result(started["run_id"])
+    assert result["outcome"] == "passed"
+    raw = (tmp_path / started["run_id"] / "schemathesis.ndjson").read_text()
+    assert '"kind":"graphql"' in raw

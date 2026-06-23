@@ -3,12 +3,41 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 class TargetNotAllowed(ValueError):
     pass
+
+
+class PathNotAllowed(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class PathPolicy:
+    allowed_roots: tuple[Path, ...]
+
+    def __init__(self, allowed_roots: list[Path] | tuple[Path, ...]) -> None:
+        object.__setattr__(self, "allowed_roots", tuple(Path(root).resolve() for root in allowed_roots))
+
+    @classmethod
+    def from_env(cls) -> PathPolicy:
+        roots = [Path.cwd()]
+        value = os.getenv("SCHEMATHESIS_MCP_ALLOWED_PATHS")
+        if value:
+            roots.extend(Path(item) for item in value.split(os.pathsep) if item)
+        return cls(roots)
+
+    def validate(self, target: str) -> Path:
+        path = Path(target).expanduser().resolve()
+        if not path.is_file():
+            raise PathNotAllowed(f"Schema path is not a readable file: {path}")
+        if not any(path == root or root in path.parents for root in self.allowed_roots):
+            raise PathNotAllowed(f"Schema path is outside allowed roots: {path}")
+        return path
 
 
 @dataclass(frozen=True)

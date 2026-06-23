@@ -11,31 +11,12 @@ def create_server(service: ToolService | None = None) -> FastMCP:
     tools = service or ToolService.create()
     server = FastMCP(
         "schemathesis-mcp",
-        instructions="Inspect and test OpenAPI or GraphQL APIs with Schemathesis.",
+        instructions="Run OpenAPI or GraphQL API tests through the official Schemathesis CLI.",
     )
 
     @server.tool()
-    def inspect_api(
-        schema: str,
-        base_url: str | None = None,
-        headers: dict[str, str] | None = None,
-        include: dict[str, Any] | None = None,
-        exclude: dict[str, Any] | None = None,
-        tls_verify: bool = True,
-    ) -> dict[str, Any]:
-        """Inspect an API schema and list the selected operations."""
-        return tools.inspect_api(
-            schema=schema,
-            base_url=base_url,
-            headers=headers or {},
-            include=include or {},
-            exclude=exclude or {},
-            tls_verify=tls_verify,
-        )
-
-    @server.tool()
     def start_run(
-        schema: str,
+        schema: dict[str, Any],
         base_url: str | None = None,
         headers: dict[str, str] | None = None,
         phases: list[str] | None = None,
@@ -49,6 +30,7 @@ def create_server(service: ToolService | None = None) -> FastMCP:
         max_time: float | None = None,
         seed: int | None = None,
         tls_verify: bool = True,
+        reports: list[str] | None = None,
     ) -> dict[str, Any]:
         """Start an asynchronous Schemathesis test run."""
         return tools.start_run(
@@ -66,6 +48,7 @@ def create_server(service: ToolService | None = None) -> FastMCP:
             max_time=max_time,
             seed=seed,
             tls_verify=tls_verify,
+            reports=reports or [],
         )
 
     @server.tool()
@@ -92,11 +75,6 @@ def create_server(service: ToolService | None = None) -> FastMCP:
     def cancel_run(run_id: str) -> dict[str, Any]:
         """Request cancellation of a running test."""
         return tools.cancel_run(run_id)
-
-    @server.tool()
-    def replay_failure(run_id: str, failure_id: str) -> dict[str, Any]:
-        """Replay the original request associated with a failure."""
-        return tools.replay_failure(run_id, failure_id)
 
     @server.resource("schemathesis://runs/{run_id}/{name}")
     def run_artifact(run_id: str, name: str) -> str:

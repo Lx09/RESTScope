@@ -45,6 +45,19 @@ class FailingBackend:
         yield
 
 
+class CliErrorBackend:
+    def execute(self, run_id, request, stop_event):
+        yield {
+            "type": "run_finished",
+            "outcome": "errored",
+            "stop_reason": "cli_error",
+            "exit_code": 2,
+            "cli_version": "4.21.10",
+            "command": "schemathesis run schema.yaml",
+            "schema": {"kind": "file", "sha256": "abc"},
+        }
+
+
 def test_backend_errors_are_available_as_completed_result(tmp_path) -> None:
     manager = RunManager(backend=FailingBackend(), artifacts=ArtifactStore(tmp_path))
     run_id = manager.start({"schema": "api.yaml"})
@@ -54,6 +67,17 @@ def test_backend_errors_are_available_as_completed_result(tmp_path) -> None:
     result = manager.get_result(run_id)
     assert result.outcome is RunOutcome.ERRORED
     assert result.summary["error"] == "backend exploded"
+
+
+def test_cli_usage_error_maps_to_failed_job_and_errored_outcome(tmp_path) -> None:
+    manager = RunManager(backend=CliErrorBackend(), artifacts=ArtifactStore(tmp_path))
+    run_id = manager.start({"schema": "api.yaml"})
+    manager.wait(run_id, timeout=1)
+
+    assert manager.get(run_id).state is RunState.FAILED
+    result = manager.get_result(run_id)
+    assert result.outcome is RunOutcome.ERRORED
+    assert result.exit_code == 2
 
 
 def test_max_time_requests_cancellation(tmp_path) -> None:

@@ -1,291 +1,347 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
-import requests
-from schemathesis import graphql, openapi
-from schemathesis.config import SchemathesisConfig
-from schemathesis.core.result import Ok
-from schemathesis.engine import Status, events, from_schema
-from schemathesis.reporting.har import HarWriter
-from schemathesis.reporting.junitxml import JunitXmlWriter
-from schemathesis.reporting.ndjson import serialize
-
-from schemathesis_mcp.models import FailureDetail, RunRequest
-from schemathesis_mcp.projector import EventProjector
-from schemathesis_mcp.security import Sanitizer, TargetPolicy
+from schemathesis_mcp.models import FileSchema, RunRequest, SchemaInput, UrlSchema
+from schemathesis_mcp.projector import NdjsonProjector
+from schemathesis_mcp.security import PathPolicy, Sanitizer, TargetPolicy
 
 
-class SchemathesisBackend:
-    def __init__(
-        self,
-        sanitizer: Sanitizer | None = None,
-        target_policy: TargetPolicy | None = None,
-    ) -> None:
-        self.sanitizer = sanitizer or Sanitizer()
-        self.target_policy = target_policy or TargetPolicy.from_env()
-        self.projector = EventProjector(self.sanitizer)
-        self._replay_data: dict[tuple[str, str], dict[str, Any]] = {}
-        self._artifact_dirs: dict[str, Path] = {}
-        self._failure_counts: dict[tuple[str, str], int] = {}
+class CliCompatibilityError(RuntimeError):
+    pass
 
-    def configure_run(self, run_id: str, artifact_dir: Path) -> None:
-        self._artifact_dirs[run_id] = artifact_dir
 
-    def inspect(self, request: RunRequest) -> dict[str, Any]:
-        schema = self._load_schema(request)
-        operations = []
-        warnings = []
-        for result in schema.get_all_operations():
-            if isinstance(result, Ok):
-                operation = result.ok()
-                raw = operation.definition.raw
-                operations.append(
-                    {
-                        "label": operation.label,
-                        "method": operation.method.upper(),
-                        "path": operation.path,
-                        "operation_id": raw.get("operationId") if isinstance(raw, Mapping) else None,
-                        "tags": operation.tags or [],
-                    }
-                )
-            else:
-                warnings.append(str(result.err()))
-        statistic = schema.statistic
-        info = schema.raw_schema.get("info", {})
-        specification = schema.specification
-        kind = specification.kind.value
-        specification_name = "Open API" if kind == "openapi" else "GraphQL"
-        if specification.version:
-            specification_name = f"{specification_name} {specification.version}"
-        return self.sanitizer.sanitize(
-            {
-                "schema": request.schema_location,
-                "title": info.get("title"),
-                "specification": specification_name,
-                "base_url": schema.get_base_url(),
-                "operations": operations,
-                "statistics": {
-                    "operations": {
-                        "total": statistic.operations.total,
-                        "selected": statistic.operations.selected,
-                    },
-                    "transitions": {
-                        "total": statistic.transitions.total,
-                        "selected": statistic.transitions.selected,
-                    },
-                },
-                "warnings": warnings,
-                "supported_phases": ["probing", "schema_analysis", "examples", "coverage", "fuzzing", "stateful"],
-            }
+@dataclass(frozen=True)
+class SchemaSnapshot:
+    cli_location: str
+    metadata: dict[str, Any]
+    sha256: str | None
+
+
+class SchemaSnapshotter:
+    def __init__(self, path_policy: PathPolicy, target_policy: TargetPolicy) -> None:
+        self.path_policy = path_policy
+        self.target_policy = target_policy
+
+    def snapshot(self, schema: SchemaInput, run_dir: Path) -> SchemaSnapshot:
+        if isinstance(schema, UrlSchema):
+            self.target_policy.validate(schema.url)
+            return SchemaSnapshot(schema.url, {"kind": "url", "url": schema.url}, None)
+        if isinstance(schema, FileSchema):
+            source = self.path_policy.validate(schema.path)
+            suffix = source.suffix.lower()
+            if suffix not in {".yaml", ".yml", ".json", ".graphql", ".gql"}:
+                suffix = ".yaml"
+            content = source.read_bytes()
+            target = run_dir / f"schema{suffix}"
+            self._write_private(target, content)
+            digest = hashlib.sha256(content).hexdigest()
+            return SchemaSnapshot(
+                str(target),
+                {"kind": "file", "source": str(source), "snapshot": target.name, "sha256": digest},
+                digest,
+            )
+        suffix = ".json" if schema.format == "json" else ".yaml"
+        content = schema.content.encode()
+        target = run_dir / f"schema{suffix}"
+        self._write_private(target, content)
+        digest = hashlib.sha256(content).hexdigest()
+        return SchemaSnapshot(
+            str(target),
+            {"kind": "inline", "format": schema.format, "snapshot": target.name, "sha256": digest},
+            digest,
         )
-
-    def execute(
-        self,
-        run_id: str,
-        request: RunRequest | dict[str, Any],
-        stop_event: threading.Event,
-    ) -> Iterator[dict[str, Any]]:
-        if not isinstance(request, RunRequest):
-            request = RunRequest.model_validate(request)
-        yield {"type": "loading_started", "timestamp": time.time()}
-        schema = self._load_schema(request)
-        yield {
-            "type": "loading_finished",
-            "timestamp": time.time(),
-            "specification": schema.specification.kind.value,
-            "operations": schema.statistic.operations.selected,
-        }
-        artifact_dir = self._artifact_dirs.get(run_id)
-        junit = JunitXmlWriter(artifact_dir / "junit.xml", config=schema.config.output) if artifact_dir else None
-        har = HarWriter(artifact_dir / "har.json", config=schema.config.output) if artifact_dir else None
-        if har is not None:
-            har.open(seed=schema.config.seed)
-        stream = from_schema(schema).execute()
-        had_failures = False
-        had_errors = False
-        try:
-            for raw_event in stream:
-                if stop_event.is_set():
-                    stream.stop()
-                projected = self.projector.project(raw_event)
-                if isinstance(raw_event, events.ScenarioFinished):
-                    if junit is not None:
-                        junit.write(raw_event.recorder, raw_event.elapsed_time)
-                    if har is not None:
-                        har.write(raw_event.recorder)
-                    details = self._extract_failures(run_id, raw_event)
-                    if details:
-                        had_failures = True
-                        projected["_failures"] = [detail.model_dump(mode="json") for detail in details]
-                elif isinstance(raw_event, (events.NonFatalError, events.FatalError)):
-                    had_errors = True
-                if isinstance(raw_event, events.EngineFinished):
-                    if stop_event.is_set():
-                        projected["outcome"] = "interrupted"
-                    elif had_errors:
-                        projected["outcome"] = "errored"
-                    elif had_failures or raw_event.failures:
-                        projected["outcome"] = "failed"
-                    else:
-                        projected["outcome"] = "passed"
-                yield projected
-        finally:
-            if junit is not None:
-                junit.close()
-            if har is not None:
-                har.close()
-
-    def replay(self, run_id: str, failure_id: str) -> dict[str, Any]:
-        replay = self._replay_data[(run_id, failure_id)]
-        response = requests.request(
-            replay["method"],
-            replay["url"],
-            headers=replay["headers"],
-            data=replay["body"],
-            verify=replay["verify"],
-            timeout=30,
-        )
-        expected_status = replay.get("status_code")
-        return self.sanitizer.sanitize(
-            {
-                "failure_id": failure_id,
-                "reproduced": expected_status is None or response.status_code == expected_status,
-                "expected_status_code": expected_status,
-                "status_code": response.status_code,
-                "response": {
-                    "headers": dict(response.headers),
-                    "body": response.text[:100_000],
-                },
-            }
-        )
-
-    def _load_schema(self, request: RunRequest):
-        config = self._build_config(request)
-        location = request.schema_location
-        self.target_policy.validate(location)
-        if request.base_url is not None:
-            self.target_policy.validate(request.base_url)
-        parsed = urlsplit(location)
-        is_url = parsed.scheme in {"http", "https"}
-        graphql_hint = location.lower().endswith((".graphql", ".gql", "/graphql", "/graphql/"))
-        modules = (graphql, openapi) if graphql_hint else (openapi, graphql)
-        error: Exception | None = None
-        for module in modules:
-            try:
-                if is_url:
-                    kwargs: dict[str, Any] = {"config": config, "verify": request.tls_verify}
-                    if request.headers:
-                        kwargs["headers"] = request.headers
-                    schema = module.from_url(location, **kwargs)
-                else:
-                    schema = module.from_path(Path(location), config=config)
-                if request.include:
-                    schema = schema.include(**request.include)
-                if request.exclude:
-                    schema = schema.exclude(**request.exclude)
-                return schema
-            except Exception as exc:
-                error = exc
-        assert error is not None
-        raise error
 
     @staticmethod
-    def _build_config(request: RunRequest) -> SchemathesisConfig:
-        data: dict[str, Any] = {}
-        if request.base_url is not None:
-            data["base-url"] = request.base_url
-        if request.headers:
-            data["headers"] = request.headers
-        if request.workers is not None:
-            data["workers"] = request.workers
-        data["tls-verify"] = request.tls_verify
-        if request.seed is not None:
-            data["seed"] = request.seed
-        if request.max_failures is not None:
-            data["max-failures"] = request.max_failures
-        if request.max_examples is not None or request.generation_modes:
-            generation: dict[str, Any] = {}
-            if request.max_examples is not None:
-                generation["max-examples"] = request.max_examples
-            if request.generation_modes:
-                generation["mode"] = "all" if len(request.generation_modes) > 1 else request.generation_modes[0]
-            data["generation"] = generation
-        if request.phases is not None:
-            phases: dict[str, Any] = {"enabled": False}
-            for phase in request.phases:
-                if phase in {"examples", "coverage", "fuzzing", "stateful"}:
-                    phases[phase] = {"enabled": True}
-            data["phases"] = phases
-        if request.max_time is not None:
-            data["fuzz"] = {"max-time": int(request.max_time)}
-        if request.checks is not None:
-            data["checks"] = {"enabled": False, **{name: {"enabled": True} for name in request.checks}}
-        return SchemathesisConfig.from_dict(data)
+    def _write_private(path: Path, content: bytes) -> None:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
 
-    def _extract_failures(self, run_id: str, event: events.ScenarioFinished) -> list[FailureDetail]:
-        recorder = event.recorder
-        output: list[FailureDetail] = []
-        for case_id, nodes in recorder.checks.items():
-            for node in nodes:
-                if node.status is not Status.FAILURE or node.failure_info is None:
-                    continue
-                failure = node.failure_info.failure
-                case_node = recorder.cases.get(case_id)
-                interaction = recorder.interactions.get(case_id)
-                operation = case_node.value.operation.label if case_node is not None else recorder.label
-                title = getattr(failure, "title", type(failure).__name__)
-                message = str(failure)
-                key = f"{operation}\0{node.name}\0{type(failure).__name__}\0{message}"
-                failure_id = hashlib.sha256(key.encode()).hexdigest()[:16]
-                count_key = (run_id, failure_id)
-                count = self._failure_counts.get(count_key, 0) + 1
-                self._failure_counts[count_key] = count
-                request_payload = serialize(interaction.request) if interaction is not None else None
-                response_payload = (
-                    serialize(interaction.response)
-                    if interaction is not None and interaction.response is not None
-                    else None
-                )
-                case_payload = serialize(case_node.value) if case_node is not None else None
-                related_case_ids = getattr(failure, "related_case_ids", ())
-                if callable(related_case_ids):
-                    related_case_ids = related_case_ids()
-                detail = FailureDetail(
-                    failure_id=failure_id,
-                    operation=operation,
-                    check=node.name,
-                    title=title,
-                    message=message,
-                    count=count,
-                    request=self.sanitizer.sanitize(request_payload),
-                    response=self.sanitizer.sanitize(response_payload),
-                    curl=self.sanitizer.sanitize(node.failure_info.code_sample),
-                    case=self.sanitizer.sanitize(case_payload),
-                    related_cases=[
-                        self.sanitizer.sanitize(serialize(item))
-                        for item in recorder.iter_chain_cases(
-                            case_id=getattr(failure, "case_id", None) or case_id,
-                            related_case_ids=tuple(related_case_ids or ()),
-                        )
-                    ],
-                )
-                output.append(detail)
-                if interaction is not None:
-                    raw_request = interaction.request
-                    raw_response = interaction.response
-                    self._replay_data[(run_id, failure_id)] = {
-                        "method": raw_request.method,
-                        "url": raw_request.uri,
-                        "headers": {key: value[0] for key, value in raw_request.headers.items()},
-                        "body": raw_request.body,
-                        "verify": getattr(raw_response, "verify", True),
-                        "status_code": getattr(raw_response, "status_code", None),
-                    }
+
+@dataclass(frozen=True)
+class PreparedCommand:
+    argv: list[str]
+    display_command: str
+    config_path: Path
+    raw_ndjson_path: Path
+    artifact_paths: dict[str, Path]
+
+
+class CommandBuilder:
+    def __init__(self, command: list[str], sanitizer: Sanitizer | None = None) -> None:
+        self.command = command
+        self.sanitizer = sanitizer or Sanitizer()
+
+    def prepare(self, request: RunRequest, schema_location: str, run_dir: Path) -> PreparedCommand:
+        config_path = run_dir / "schemathesis.toml"
+        config_path.write_text(self._config_text(request), encoding="utf-8")
+        config_path.chmod(0o600)
+        raw_ndjson = run_dir / "schemathesis.ndjson"
+        argv = [*self.command, "run"]
+        if request.base_url is not None:
+            argv.append(f"--url={request.base_url}")
+        if request.phases:
+            argv.append(f"--phases={','.join(request.phases)}")
+        if request.checks:
+            argv.append(f"--checks={','.join(request.checks)}")
+        if request.generation_modes:
+            mode = request.generation_modes[0] if len(request.generation_modes) == 1 else "all"
+            argv.append(f"--mode={mode}")
+        if request.workers is not None:
+            argv.append(f"--workers={request.workers}")
+        if request.max_examples is not None:
+            argv.append(f"--max-examples={request.max_examples}")
+        if request.max_failures is not None:
+            argv.append(f"--max-failures={request.max_failures}")
+        if request.seed is not None:
+            argv.append(f"--seed={request.seed}")
+        argv.append(f"--tls-verify={'true' if request.tls_verify else 'false'}")
+        argv.extend(self._filter_args("include", request.include))
+        argv.extend(self._filter_args("exclude", request.exclude))
+        formats = ["ndjson", *request.reports]
+        argv.extend(
+            [
+                f"--report={','.join(formats)}",
+                f"--report-ndjson-path={raw_ndjson}",
+                "--output-sanitize=true",
+                "--no-color",
+            ]
+        )
+        artifacts: dict[str, Path] = {"schemathesis_ndjson": raw_ndjson}
+        report_flags = {
+            "junit": ("--report-junit-path", "junit.xml"),
+            "har": ("--report-har-path", "har.json"),
+            "vcr": ("--report-vcr-path", "vcr.yaml"),
+            "allure": ("--report-allure-path", "allure"),
+        }
+        for report in request.reports:
+            flag, filename = report_flags[report]
+            path = run_dir / filename
+            argv.append(f"{flag}={path}")
+            artifacts[report] = path
+        argv.append(schema_location)
+        return PreparedCommand(
+            argv=argv,
+            display_command=shlex.join(self._display_argv(argv)),
+            config_path=config_path,
+            raw_ndjson_path=raw_ndjson,
+            artifact_paths=artifacts,
+        )
+
+    @staticmethod
+    def _config_text(request: RunRequest) -> str:
+        if not request.headers:
+            return ""
+        entries = ", ".join(f"{json.dumps(key)} = {json.dumps(value)}" for key, value in request.headers.items())
+        return f"headers = {{ {entries} }}\n"
+
+    @staticmethod
+    def _filter_args(prefix: str, filters: dict[str, Any]) -> list[str]:
+        output = []
+        for name, value in filters.items():
+            values = value if isinstance(value, list) else [value]
+            output.extend(f"--{prefix}-{name.replace('_', '-')}={item}" for item in values)
         return output
+
+    def _display_argv(self, argv: list[str]) -> list[str]:
+        output = []
+        for item in argv:
+            if item.startswith("--url="):
+                output.append(f"--url={self.sanitizer.sanitize_url(item.split('=', 1)[1])}")
+            elif item.startswith(("http://", "https://")):
+                output.append(self.sanitizer.sanitize_url(item))
+            else:
+                output.append(item)
+        return output
+
+
+class CliBackend:
+    REQUIRED_FLAGS = ("--report-ndjson-path", "--output-sanitize")
+
+    def __init__(
+        self,
+        command: list[str] | None = None,
+        *,
+        sanitizer: Sanitizer | None = None,
+        path_policy: PathPolicy | None = None,
+        target_policy: TargetPolicy | None = None,
+        terminate_grace_seconds: float = 5.0,
+    ) -> None:
+        self.command = command or self._command_from_env()
+        self.sanitizer = sanitizer or Sanitizer()
+        self.target_policy = target_policy or TargetPolicy.from_env()
+        self.snapshotter = SchemaSnapshotter(
+            path_policy or PathPolicy.from_env(),
+            self.target_policy,
+        )
+        self.builder = CommandBuilder(self.command, self.sanitizer)
+        self.projector = NdjsonProjector(self.sanitizer)
+        self.terminate_grace_seconds = terminate_grace_seconds
+        self._run_dirs: dict[str, Path] = {}
+        self._processes: dict[str, subprocess.Popen[bytes]] = {}
+        self._lock = threading.RLock()
+        self._probe: dict[str, Any] | None = None
+
+    @staticmethod
+    def _command_from_env() -> list[str]:
+        override = os.getenv("SCHEMATHESIS_CLI")
+        return shlex.split(override) if override else [sys.executable, "-m", "schemathesis.cli"]
+
+    def configure_run(self, run_id: str, run_dir: Path) -> None:
+        self._run_dirs[run_id] = run_dir
+
+    def probe(self) -> dict[str, Any]:
+        if self._probe is not None:
+            return self._probe
+        version = subprocess.run([*self.command, "--version"], check=False, capture_output=True, text=True, timeout=15)
+        help_result = subprocess.run(
+            [*self.command, "run", "--help"], check=False, capture_output=True, text=True, timeout=15
+        )
+        help_text = f"{help_result.stdout}\n{help_result.stderr}"
+        missing = [flag for flag in self.REQUIRED_FLAGS if flag not in help_text]
+        if version.returncode != 0 or help_result.returncode != 0 or missing:
+            details = f"; missing flags: {', '.join(missing)}" if missing else ""
+            raise CliCompatibilityError(f"Unsupported Schemathesis CLI{details}")
+        self._probe = {"version": version.stdout.strip(), "help": help_text}
+        return self._probe
+
+    def execute(self, run_id: str, request: RunRequest, stop_event: threading.Event):
+        probe = self.probe()
+        run_dir = self._run_dirs[run_id]
+        run_dir.chmod(0o700)
+        if request.base_url is not None:
+            self.target_policy.validate(request.base_url)
+        snapshot = self.snapshotter.snapshot(request.schema_input, run_dir)
+        safe_schema_metadata = self.sanitizer.sanitize(snapshot.metadata)
+        metadata_path = run_dir / "schema.json"
+        metadata_path.write_text(json.dumps(safe_schema_metadata, indent=2), encoding="utf-8")
+        metadata_path.chmod(0o600)
+        prepared = self.builder.prepare(request, snapshot.cli_location, run_dir)
+        stdout_path = run_dir / "stdout.log"
+        stderr_path = run_dir / "stderr.log"
+        process: subprocess.Popen[bytes] | None = None
+        try:
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                process_kwargs: dict[str, Any] = {}
+                if os.name == "nt":
+                    process_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                else:
+                    process_kwargs["start_new_session"] = True
+                process = subprocess.Popen(
+                    prepared.argv,
+                    cwd=run_dir,
+                    env=os.environ.copy(),
+                    stdout=stdout,
+                    stderr=stderr,
+                    **process_kwargs,
+                )
+                with self._lock:
+                    self._processes[run_id] = process
+                yield {
+                    "type": "run_started",
+                    "timestamp": time.time(),
+                    "cli_version": probe["version"],
+                    "command": prepared.display_command,
+                    "schema": safe_schema_metadata,
+                }
+                offset = 0
+                pending = ""
+                while process.poll() is None:
+                    if stop_event.is_set():
+                        self.terminate(run_id)
+                    offset, pending, records = self._read_records(prepared.raw_ndjson_path, offset, pending)
+                    for record in records:
+                        yield from self.projector.project(record)
+                    time.sleep(0.01)
+                offset, pending, records = self._read_records(prepared.raw_ndjson_path, offset, pending, final=True)
+                for record in records:
+                    yield from self.projector.project(record)
+        finally:
+            if process is not None and process.poll() is None:
+                self.terminate(run_id)
+            with self._lock:
+                self._processes.pop(run_id, None)
+            prepared.config_path.unlink(missing_ok=True)
+        assert process is not None
+        exit_code = process.returncode
+        cancelled = stop_event.is_set()
+        if cancelled:
+            outcome = "interrupted"
+        elif exit_code == 0:
+            outcome = "passed"
+        elif exit_code == 1:
+            outcome = "failed"
+        else:
+            outcome = "errored"
+        stop_reason = "interrupted" if cancelled else "completed" if exit_code in {0, 1} else "cli_error"
+        yield {
+            "type": "run_finished",
+            "timestamp": time.time(),
+            "outcome": outcome,
+            "stop_reason": stop_reason,
+            "exit_code": exit_code,
+            "cli_version": probe["version"],
+            "command": prepared.display_command,
+            "schema": safe_schema_metadata,
+            "artifacts": {name: path.name for name, path in prepared.artifact_paths.items() if path.exists()},
+        }
+
+    def terminate(self, run_id: str) -> None:
+        with self._lock:
+            process = self._processes.get(run_id)
+        if process is None or process.poll() is not None:
+            return
+        if os.name == "nt":
+            process.terminate()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+        try:
+            process.wait(timeout=self.terminate_grace_seconds)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+
+    @staticmethod
+    def _read_records(
+        path: Path, offset: int, pending: str, *, final: bool = False
+    ) -> tuple[int, str, list[dict[str, Any]]]:
+        if not path.exists():
+            return offset, pending, []
+        with path.open("r", encoding="utf-8") as stream:
+            stream.seek(offset)
+            chunk = stream.read()
+            offset = stream.tell()
+        lines = (pending + chunk).splitlines(keepends=True)
+        pending = ""
+        if lines and not lines[-1].endswith(("\n", "\r")) and not final:
+            pending = lines.pop()
+        records = []
+        for index, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                if not (final and index == len(lines) - 1 and not line.endswith(("\n", "\r"))):
+                    raise
+        pending = "" if final else pending
+        return offset, pending, records
