@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+# Virtual environments
+.venv
+.claude/
+.vscode/
+*.xml
+.env
+*.log
+
+# Test framework caches
+.hypothesis/
+
+**/logs/
+llm/traces/
+artifacts/
+
+# Data directories (unified storage)
+data/
+
+# Test snapshot files (generated, not committed)
+tests/helpers/snapshots/
+
+# Git worktrees
+.worktrees/

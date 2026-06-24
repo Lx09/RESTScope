@@ -1,0 +1,46 @@
+"""Exception classes for the OpenAPI parser."""
+
+
+class OpenAPIParserError(Exception):
+    """Base exception for all OpenAPI parser errors."""
+    pass
+
+
+class LoaderError(OpenAPIParserError):
+    """Raised when the loader fails to load the input."""
+    pass
+
+
+class UnsupportedSpecVersionError(OpenAPIParserError):
+    """Raised when the spec version cannot be identified."""
+    pass
+
+
+class InvalidTopLevelSchemaError(OpenAPIParserError):
+    """Raised when the top-level schema is invalid."""
+    pass
+
+
+class ReferenceResolutionError(OpenAPIParserError):
+    """Raised when a $ref cannot be resolved."""
+    pass
+
+
+class RecursiveReferenceError(OpenAPIParserError):
+    """Raised when a recursive reference is detected."""
+    pass
+
+
+class PathItemParseError(OpenAPIParserError):
+    """Raised when a path item cannot be parsed."""
+    pass
+
+
+class OperationParseError(OpenAPIParserError):
+    """Raised when an operation cannot be parsed."""
+    pass
+
+
+class SchemaParseError(OpenAPIParserError):
+    """Raised when a schema cannot be parsed."""
+    pass
