@@ -74,12 +74,23 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class DBConfig:
+    """Database connection configuration."""
+
+    url: str = "sqlite:///./data/restscope.db"
+    echo: bool = False
+    pool_size: int | None = None
+    max_overflow: int | None = None
+
+
+@dataclass(frozen=True)
 class RESTScopeConfig:
     """RESTScope configuration loaded from `.env` and environment variables."""
 
     paths: PathsConfig
     logging: LoggingConfig
     llm: LLMConfig
+    db: DBConfig
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
@@ -99,6 +110,12 @@ class RESTScopeConfig:
             llm=LLMConfig(
                 thinking=thinking,
                 fast=_load_model_config(values, "FAST", fallback=thinking),
+            ),
+            db=DBConfig(
+                url=values.get("DB_URL", "sqlite:///./data/restscope.db"),
+                echo=_bool_value(values.get("DB_ECHO"), False),
+                pool_size=_optional_int_value(values.get("DB_POOL_SIZE")),
+                max_overflow=_optional_int_value(values.get("DB_MAX_OVERFLOW")),
             ),
         )
 
@@ -135,10 +152,22 @@ def _int_value(value: str | None, default: int) -> int:
     return int(value)
 
 
+def _optional_int_value(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
 def _float_value(value: str | None, default: float) -> float:
     if value is None or value == "":
         return default
     return float(value)
+
+
+def _bool_value(value: str | None, default: bool) -> bool:
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 CONFIG = RESTScopeConfig.from_environment()
