@@ -23,6 +23,44 @@ class TestObservationRepository(BaseRepository[TestObservationORM, TestObservati
         )
         return self.to_record(obj) if obj is not None else None
 
+    def list_by_schema_status(
+        self,
+        schema_id: str,
+        statuses: list[str],
+        *,
+        limit: int = 50,
+    ) -> list[TestObservationRecord]:
+        statement = (
+            select(TestObservationORM)
+            .where(TestObservationORM.schema_id == schema_id)
+            .order_by(TestObservationORM.last_seen_at.desc())
+            .limit(limit)
+        )
+        if statuses:
+            statement = statement.where(TestObservationORM.status.in_(statuses))
+        return self.to_records(self.session.scalars(statement).all())
+
+    def list_recent_for_operations(
+        self,
+        schema_id: str,
+        operation_ids: list[str],
+        *,
+        limit: int = 50,
+    ) -> list[TestObservationRecord]:
+        if not operation_ids:
+            return []
+        return self.to_records(
+            self.session.scalars(
+                select(TestObservationORM)
+                .where(
+                    TestObservationORM.schema_id == schema_id,
+                    TestObservationORM.operation_id.in_(operation_ids),
+                )
+                .order_by(TestObservationORM.last_seen_at.desc())
+                .limit(limit)
+            ).all()
+        )
+
     def upsert_observed(self, **values: Any) -> TestObservationRecord:
         existing = self.session.scalar(
             select(TestObservationORM).where(

@@ -16,6 +16,13 @@ class OperationRepository(BaseRepository[OperationORM, OperationRecord]):
             self.session.scalars(select(OperationORM).where(OperationORM.schema_id == schema_id)).all()
         )
 
+    def list_by_ids(self, operation_ids: list[str]) -> list[OperationRecord]:
+        if not operation_ids:
+            return []
+        return self.to_records(
+            self.session.scalars(select(OperationORM).where(OperationORM.id.in_(operation_ids))).all()
+        )
+
     def get_by_schema_method_path(
         self,
         schema_id: str,

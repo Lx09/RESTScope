@@ -19,3 +19,12 @@ class ContextSnapshotRepository(BaseRepository[ContextSnapshotORM, ContextSnapsh
                 .order_by(ContextSnapshotORM.cycle_index)
             ).all()
         )
+
+    def get_latest_by_task_role(self, task_id: str, role: str) -> ContextSnapshotRecord | None:
+        obj = self.session.scalar(
+            select(ContextSnapshotORM)
+            .where(ContextSnapshotORM.task_id == task_id, ContextSnapshotORM.role == role)
+            .order_by(ContextSnapshotORM.cycle_index.desc(), ContextSnapshotORM.created_at.desc())
+            .limit(1)
+        )
+        return self.to_record(obj) if obj is not None else None

@@ -16,20 +16,28 @@ class EventLogRepository(BaseRepository[EventLogORM, EventLogRecord]):
     def append(self, **values: Any) -> EventLogRecord:
         return self.add(**values)
 
-    def list_by_task(self, task_id: str) -> list[EventLogRecord]:
+    def list_by_task(self, task_id: str, *, limit: int | None = None) -> list[EventLogRecord]:
+        statement = (
+            select(EventLogORM)
+            .where(EventLogORM.task_id == task_id)
+            .order_by(EventLogORM.created_at.desc())
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
         return self.to_records(
-            self.session.scalars(
-                select(EventLogORM).where(EventLogORM.task_id == task_id).order_by(EventLogORM.created_at)
-            ).all()
+            self.session.scalars(statement).all()
         )
 
-    def list_by_campaign(self, campaign_id: str) -> list[EventLogRecord]:
+    def list_by_campaign(self, campaign_id: str, *, limit: int | None = None) -> list[EventLogRecord]:
+        statement = (
+            select(EventLogORM)
+            .where(EventLogORM.campaign_id == campaign_id)
+            .order_by(EventLogORM.created_at.desc())
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
         return self.to_records(
-            self.session.scalars(
-                select(EventLogORM)
-                .where(EventLogORM.campaign_id == campaign_id)
-                .order_by(EventLogORM.created_at)
-            ).all()
+            self.session.scalars(statement).all()
         )
 
     def delete(self, record_id: Any) -> None:
