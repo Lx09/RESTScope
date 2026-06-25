@@ -57,6 +57,7 @@ class LoggingConfig:
 class ModelConfig:
     """Configuration for one LLM endpoint."""
 
+    provider: str = "openai_compatible"
     model: str = ""
     api_key: str = ""
     base_url: str = ""
@@ -131,6 +132,7 @@ def _load_model_config(
     fallback: ModelConfig | None = None,
 ) -> ModelConfig:
     return ModelConfig(
+        provider=values.get(f"{prefix}_PROVIDER", fallback.provider if fallback else "openai_compatible"),
         model=values.get(f"{prefix}_MODEL", fallback.model if fallback else ""),
         api_key=values.get(f"{prefix}_API_KEY", fallback.api_key if fallback else ""),
         base_url=values.get(f"{prefix}_BASE_URL", fallback.base_url if fallback else ""),
