@@ -6,6 +6,8 @@ its sanitized NDJSON report. It does not import Schemathesis Engine internals.
 
 ## Tools
 
+- `get_capabilities`: describe supported tools, run options, limits, and safe
+  configuration state.
 - `start_run`: start an asynchronous Schemathesis CLI run.
 - `get_run`: read state, phase, and progress counters.
 - `get_events`: page through stable MCP events projected from CLI NDJSON.
@@ -53,11 +55,35 @@ uv sync --no-sources
 
 ## MCP configuration
 
+For local development, point the MCP client at the virtualenv script and pass
+deployment-level policy through environment variables:
+
 ```json
 {
   "mcpServers": {
     "schemathesis": {
-      "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp"
+      "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp",
+      "env": {
+        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/workspace:/tmp",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1,api.test.example"
+      }
+    }
+  }
+}
+```
+
+For reusable package-based installs, run the server through `uvx`:
+
+```json
+{
+  "mcpServers": {
+    "schemathesis": {
+      "command": "uvx",
+      "args": ["schemathesis-mcp"],
+      "env": {
+        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/workspace:/tmp",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1"
+      }
     }
   }
 }
@@ -65,9 +91,102 @@ uv sync --no-sources
 
 The server uses stdio and does not open a network listener.
 
+## Reusable configuration model
+
+Keep reusable MCP server configuration split by responsibility:
+
+- MCP client configuration starts the server and supplies deployment-level
+  environment variables.
+- Environment variables define local policy, such as allowed schema paths,
+  allowed hosts, and an optional Schemathesis CLI override.
+- Tool arguments describe one test run, such as schema source, base URL,
+  checks, generation settings, timeouts, and reports.
+- `get_capabilities` lets Agents discover supported tools, options, limits, and
+  whether optional environment variables are configured.
+
+Do not put deployment policy in `start_run`. Keep local paths, host allowlists,
+CLI overrides, and similar reusable settings in MCP `env` or the process
+environment.
+
+`get_capabilities` returns a safe summary. It reports whether optional
+configuration is present, but it does not expose full local paths, host lists, or
+CLI override values:
+
+```json
+{
+  "name": "schemathesis-mcp",
+  "version": "0.1.0",
+  "transport": "stdio",
+  "backend": {
+    "type": "schemathesis-cli",
+    "cli_version": "schemathesis 4.21.10",
+    "command_overridden": false
+  },
+  "tools": [
+    "get_capabilities",
+    "start_run",
+    "get_run",
+    "get_events",
+    "get_result",
+    "get_failure",
+    "cancel_run"
+  ],
+  "resources": [
+    "schemathesis://runs/{run_id}/{name}",
+    "schemathesis://runs/{run_id}/failures/{failure_id}.json"
+  ],
+  "schema_inputs": {
+    "kinds": ["file", "url", "inline"],
+    "inline_formats": ["yaml", "json"]
+  },
+  "run_options": {
+    "reports": ["junit", "har", "vcr", "allure"],
+    "supports_headers": true,
+    "supports_tls_verify": true,
+    "supports_filters": true,
+    "supports_timeout": true,
+    "supports_seed": true
+  },
+  "limits": {
+    "max_concurrent_runs": 4,
+    "artifact_ttl_seconds": 3600
+  },
+  "configuration": {
+    "env": [
+      {
+        "name": "SCHEMATHESIS_CLI",
+        "required": false,
+        "configured": false,
+        "purpose": "Override the Schemathesis CLI command"
+      },
+      {
+        "name": "SCHEMATHESIS_MCP_ALLOWED_PATHS",
+        "required": false,
+        "configured": false,
+        "purpose": "Add allowed local schema roots"
+      },
+      {
+        "name": "SCHEMATHESIS_MCP_ALLOWED_HOSTS",
+        "required": false,
+        "configured": false,
+        "purpose": "Restrict URL schema and base_url hosts"
+      }
+    ],
+    "path_policy": {
+      "default_allows_current_working_directory": true,
+      "additional_roots_configured": false
+    },
+    "target_policy": {
+      "host_allowlist_configured": false
+    }
+  }
+}
+```
+
 ## Starting a run
 
-Schema input is explicit and immutable for file and inline sources:
+`start_run` should contain only parameters for a single test run. Schema input
+is explicit and immutable for file and inline sources:
 
 ```json
 {
@@ -146,6 +265,10 @@ Optionally restrict URL targets:
 ```console
 export SCHEMATHESIS_MCP_ALLOWED_HOSTS="api.test.example,localhost,127.0.0.1"
 ```
+
+Use `get_capabilities` to diagnose whether optional security configuration is
+present. It exposes boolean summaries only; it does not replace these runtime
+checks or reveal the configured paths, hosts, or CLI command.
 
 Write operations remain enabled because this server is intended for isolated
 test environments. Use operation filters to narrow scope.

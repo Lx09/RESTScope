@@ -44,6 +44,53 @@ def test_tool_service_exposes_cli_run_lifecycle(tmp_path) -> None:
     assert result["cli_version"] == "4.99.0"
 
 
+def test_tool_service_exposes_safe_capability_summary(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SCHEMATHESIS_CLI", "/private/bin/schemathesis")
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ALLOWED_PATHS", "/secret/contracts")
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ALLOWED_HOSTS", "api.example.com")
+    service = ToolService.create(backend=StubBackend(), artifact_root=tmp_path)
+
+    capabilities = service.get_capabilities()
+
+    assert capabilities["name"] == "schemathesis-mcp"
+    assert capabilities["version"] == "0.1.0"
+    assert capabilities["transport"] == "stdio"
+    assert capabilities["backend"] == {
+        "type": "schemathesis-cli",
+        "cli_version": "4.99.0",
+        "command_overridden": True,
+    }
+    assert capabilities["tools"] == [
+        "get_capabilities",
+        "start_run",
+        "get_run",
+        "get_events",
+        "get_result",
+        "get_failure",
+        "cancel_run",
+    ]
+    assert capabilities["schema_inputs"] == {
+        "kinds": ["file", "url", "inline"],
+        "inline_formats": ["yaml", "json"],
+    }
+    assert capabilities["run_options"]["reports"] == ["junit", "har", "vcr", "allure"]
+    assert capabilities["limits"] == {
+        "max_concurrent_runs": 4,
+        "artifact_ttl_seconds": 3600,
+    }
+    assert capabilities["configuration"]["path_policy"] == {
+        "default_allows_current_working_directory": True,
+        "additional_roots_configured": True,
+    }
+    assert capabilities["configuration"]["target_policy"] == {
+        "host_allowlist_configured": True,
+    }
+    assert all(entry["configured"] is True for entry in capabilities["configuration"]["env"])
+    assert "/private/bin/schemathesis" not in str(capabilities)
+    assert "/secret/contracts" not in str(capabilities)
+    assert "api.example.com" not in str(capabilities)
+
+
 @pytest.mark.asyncio
 async def test_server_registers_only_cli_first_tools(tmp_path) -> None:
     service = ToolService.create(backend=StubBackend(), artifact_root=tmp_path)
@@ -52,6 +99,7 @@ async def test_server_registers_only_cli_first_tools(tmp_path) -> None:
     names = {tool.name for tool in server._tool_manager.list_tools()}
 
     assert names == {
+        "get_capabilities",
         "start_run",
         "get_run",
         "get_events",

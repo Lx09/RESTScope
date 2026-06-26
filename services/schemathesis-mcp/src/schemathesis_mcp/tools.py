@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,78 @@ class ToolService:
             runs=RunManager(backend=resolved_backend, artifacts=artifacts),
         )
 
+    def get_capabilities(self) -> dict[str, Any]:
+        probe = getattr(self.backend, "probe", None)
+        backend_info = probe() if probe is not None else {}
+        return {
+            "name": "schemathesis-mcp",
+            "version": _package_version(),
+            "transport": "stdio",
+            "backend": {
+                "type": "schemathesis-cli",
+                "cli_version": backend_info.get("version"),
+                "command_overridden": _env_configured("SCHEMATHESIS_CLI"),
+            },
+            "tools": [
+                "get_capabilities",
+                "start_run",
+                "get_run",
+                "get_events",
+                "get_result",
+                "get_failure",
+                "cancel_run",
+            ],
+            "resources": [
+                "schemathesis://runs/{run_id}/{name}",
+                "schemathesis://runs/{run_id}/failures/{failure_id}.json",
+            ],
+            "schema_inputs": {
+                "kinds": ["file", "url", "inline"],
+                "inline_formats": ["yaml", "json"],
+            },
+            "run_options": {
+                "reports": ["junit", "har", "vcr", "allure"],
+                "supports_headers": True,
+                "supports_tls_verify": True,
+                "supports_filters": True,
+                "supports_timeout": True,
+                "supports_seed": True,
+            },
+            "limits": {
+                "max_concurrent_runs": self.runs.max_concurrent,
+                "artifact_ttl_seconds": self.runs.artifact_ttl_seconds,
+            },
+            "configuration": {
+                "env": [
+                    {
+                        "name": "SCHEMATHESIS_CLI",
+                        "required": False,
+                        "configured": _env_configured("SCHEMATHESIS_CLI"),
+                        "purpose": "Override the Schemathesis CLI command",
+                    },
+                    {
+                        "name": "SCHEMATHESIS_MCP_ALLOWED_PATHS",
+                        "required": False,
+                        "configured": _env_configured("SCHEMATHESIS_MCP_ALLOWED_PATHS"),
+                        "purpose": "Add allowed local schema roots",
+                    },
+                    {
+                        "name": "SCHEMATHESIS_MCP_ALLOWED_HOSTS",
+                        "required": False,
+                        "configured": _env_configured("SCHEMATHESIS_MCP_ALLOWED_HOSTS"),
+                        "purpose": "Restrict URL schema and base_url hosts",
+                    },
+                ],
+                "path_policy": {
+                    "default_allows_current_working_directory": True,
+                    "additional_roots_configured": _env_configured("SCHEMATHESIS_MCP_ALLOWED_PATHS"),
+                },
+                "target_policy": {
+                    "host_allowlist_configured": _env_configured("SCHEMATHESIS_MCP_ALLOWED_HOSTS"),
+                },
+            },
+        }
+
     def start_run(self, **kwargs: Any) -> dict[str, Any]:
         request = RunRequest.model_validate(kwargs)
         run_id = self.runs.start(request)
@@ -53,3 +127,14 @@ class ToolService:
 
     def read_resource(self, uri: str) -> str:
         return self.artifacts.read_resource(uri)
+
+
+def _package_version() -> str:
+    try:
+        return version("schemathesis-mcp")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
+def _env_configured(name: str) -> bool:
+    return bool(os.getenv(name))

@@ -15,6 +15,11 @@ def create_server(service: ToolService | None = None) -> FastMCP:
     )
 
     @server.tool()
+    def get_capabilities() -> dict[str, Any]:
+        """Describe supported tools, options, limits, and safe configuration state."""
+        return tools.get_capabilities()
+
+    @server.tool()
     def start_run(
         schema: dict[str, Any],
         base_url: str | None = None,
