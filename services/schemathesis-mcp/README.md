@@ -41,16 +41,10 @@ export SCHEMATHESIS_CLI="/opt/tools/schemathesis"
 
 At startup the backend checks the CLI version and required NDJSON flags.
 
-For local development against the sibling Schemathesis checkout:
+For local development:
 
 ```console
 uv sync
-```
-
-For development without that checkout:
-
-```console
-uv sync --no-sources
 ```
 
 ## MCP configuration

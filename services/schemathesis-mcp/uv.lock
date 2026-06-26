@@ -1375,7 +1375,7 @@ wheels = [
 [[package]]
 name = "schemathesis"
 version = "4.21.10"
-source = { editable = "../schemathesis-master" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "harfile" },
@@ -1396,56 +1396,10 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "werkzeug" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "allure-python-commons", marker = "extra == 'allure'", specifier = ">=2.13.0" },
-    { name = "allure-python-commons", marker = "extra == 'tests'", specifier = ">=2.13.0" },
-    { name = "click", specifier = ">=8.0,<9" },
-    { name = "coverage", marker = "extra == 'tests'", specifier = ">=6" },
-    { name = "coverage", extras = ["toml"], marker = "extra == 'cov'", specifier = ">=5.3" },
-    { name = "coverage-enable-subprocess", marker = "extra == 'cov'" },
-    { name = "fastapi", marker = "extra == 'tests'", specifier = ">=0.86.0" },
-    { name = "flask", marker = "extra == 'tests'", specifier = ">=2.1.1,<4.0" },
-    { name = "harfile", specifier = ">=0.5.0,<1.0" },
-    { name = "httpx", specifier = ">=0.22.0,<1.0" },
-    { name = "hypothesis", specifier = ">=6.108.0,<7" },
-    { name = "hypothesis-graphql", specifier = ">=0.13.0,<1" },
-    { name = "hypothesis-jsonschema", specifier = ">=0.23.1,<0.24" },
-    { name = "hypothesis-openapi", marker = "extra == 'tests'", specifier = ">=0.3,<1" },
-    { name = "jsonschema-rs", specifier = ">=0.46.4" },
-    { name = "junit-xml", specifier = ">=1.9,<2.0" },
-    { name = "mkdocs-material", marker = "extra == 'docs'" },
-    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'" },
-    { name = "pydantic", marker = "extra == 'tests'", specifier = ">=1.10.2" },
-    { name = "pyinstrument", marker = "extra == 'profiling'", specifier = ">=5.1" },
-    { name = "pyrate-limiter", specifier = ">=4.0,<5.0" },
-    { name = "pytest", specifier = ">=9,<10" },
-    { name = "pytest-asyncio", marker = "extra == 'tests'", specifier = ">=1.0,<2.0" },
-    { name = "pytest-codspeed", marker = "extra == 'bench'", specifier = "==5.0.3" },
-    { name = "pytest-httpserver", marker = "extra == 'tests'", specifier = ">=1.0,<2.0" },
-    { name = "pytest-mock", marker = "extra == 'tests'", specifier = ">=3.7.0,<4.0" },
-    { name = "pytest-test-groups", marker = "extra == 'bench'", specifier = "==1.2.1" },
-    { name = "pytest-trio", marker = "extra == 'tests'", specifier = ">=0.8,<1.0" },
-    { name = "pytest-xdist", marker = "extra == 'tests'", specifier = ">=3,<4.0" },
-    { name = "pyyaml", specifier = ">=5.1,<7.0" },
-    { name = "requests", specifier = ">=2.22,<3" },
-    { name = "rich", specifier = ">=13.9.4" },
-    { name = "schemathesis", extras = ["tests", "cov", "bench", "docs", "scripts"], marker = "extra == 'dev'" },
-    { name = "seaborn", marker = "extra == 'scripts'", specifier = ">=0.13" },
-    { name = "starlette-testclient", specifier = ">=0.4.1,<1" },
-    { name = "strawberry-graphql", extras = ["fastapi"], marker = "extra == 'tests'", specifier = ">=0.109.0" },
-    { name = "syrupy", marker = "extra == 'tests'", specifier = ">=4,<6.0" },
-    { name = "tenacity", specifier = ">=9.1.2,<10.0" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.2.1" },
-    { name = "tomli-w", marker = "extra == 'tests'", specifier = ">=1.2.0" },
-    { name = "tracecov", marker = "extra == 'scripts'", specifier = ">=0.21" },
-    { name = "trustme", marker = "extra == 'tests'", specifier = ">=0.9.0,<2.0" },
-    { name = "typing-extensions", specifier = ">=4.12.2" },
-    { name = "uvicorn", marker = "extra == 'tests'", specifier = ">=0.20,<1.0" },
-    { name = "werkzeug", specifier = ">=0.16.0,<4" },
+sdist = { url = "https://files.pythonhosted.org/packages/ee/a4/6fb439725e2f75e6ed0793c013fd431a754884a1a6233ff4e022efe4b4bd/schemathesis-4.21.10.tar.gz", hash = "sha256:d44ae9e10984bb5fbeff8277c0d6177b207569ce93d9e5c7aeb4351f97619b7a", size = 2283644, upload-time = "2026-06-19T23:50:16.524Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/20/c608ff7f1b64309fca2415b0f130c019d83c70e0398d8c18f443daf9a267/schemathesis-4.21.10-py3-none-any.whl", hash = "sha256:0aa6242b91738934793dbc201f36bb71861579eeb1ad10cceb5b7d5a492fd43d", size = 756097, upload-time = "2026-06-19T23:50:14.346Z" },
 ]
-provides-extras = ["tests", "allure", "cov", "bench", "docs", "profiling", "scripts", "dev"]
 
 [[package]]
 name = "schemathesis-mcp"
@@ -1470,7 +1424,7 @@ dev = [
 requires-dist = [
     { name = "mcp", specifier = ">=1.12,<2" },
     { name = "pydantic", specifier = ">=2.10,<3" },
-    { name = "schemathesis", editable = "../schemathesis-master" },
+    { name = "schemathesis", specifier = ">=4.21,<5" },
 ]
 
 [package.metadata.requires-dev]

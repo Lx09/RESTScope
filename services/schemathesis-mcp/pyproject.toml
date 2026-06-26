@@ -27,9 +27,6 @@ dev = [
   "uvicorn>=0.30,<1",
 ]
 
-[tool.uv.sources]
-schemathesis = { path = "../schemathesis-master", editable = true }
-
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
