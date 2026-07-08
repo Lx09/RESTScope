@@ -1,3 +1,5 @@
+"""Integration tests that exercise the real Schemathesis CLI backend."""
+
 from __future__ import annotations
 
 import json

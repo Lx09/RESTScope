@@ -1,3 +1,5 @@
+"""FastMCP server registration for Schemathesis testing tools and resources."""
+
 from __future__ import annotations
 
 from typing import Any

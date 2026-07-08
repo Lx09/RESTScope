@@ -1,3 +1,12 @@
+"""Service facade for MCP tool calls.
+
+This module sits between the FastMCP server registration layer and the lower
+level run, artifact, and Schemathesis CLI backend components. `server.py`
+registers public MCP tools, then delegates each call here so this layer can
+validate inputs, prepare deployment-level configuration, create the artifact
+store, manage run lifecycle state, and expose safe capability metadata.
+"""
+
 from __future__ import annotations
 
 import os

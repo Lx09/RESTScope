@@ -1,3 +1,5 @@
+"""Tests for asynchronous run lifecycle, cancellation, and cleanup behavior."""
+
 import threading
 import time
 from types import SimpleNamespace

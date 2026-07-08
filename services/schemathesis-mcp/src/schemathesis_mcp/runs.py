@@ -1,3 +1,5 @@
+"""Run lifecycle manager for asynchronous Schemathesis executions."""
+
 from __future__ import annotations
 
 import threading

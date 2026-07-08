@@ -1,3 +1,5 @@
+"""Pydantic models for MCP run requests, statuses, events, and results."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

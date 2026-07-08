@@ -1,3 +1,5 @@
+"""Tests for sanitization and target allowlist security helpers."""
+
 import pytest
 
 from schemathesis_mcp.security import Sanitizer, TargetNotAllowed, TargetPolicy

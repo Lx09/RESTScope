@@ -1,3 +1,5 @@
+"""End-to-end test against the Schemathesis booking example application."""
+
 from __future__ import annotations
 
 import importlib.util

@@ -1,3 +1,5 @@
+"""Security helpers for path allowlists, target allowlists, and sanitization."""
+
 from __future__ import annotations
 
 import os

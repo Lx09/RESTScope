@@ -1,3 +1,5 @@
+"""Tests for Schemathesis CLI command building, execution, and cancellation."""
+
 from __future__ import annotations
 
 import stat

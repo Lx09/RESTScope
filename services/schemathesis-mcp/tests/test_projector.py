@@ -1,3 +1,5 @@
+"""Tests for projecting Schemathesis NDJSON records into MCP events."""
+
 from schemathesis_mcp.projector import NdjsonProjector
 
 

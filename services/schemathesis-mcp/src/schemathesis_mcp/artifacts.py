@@ -1,3 +1,5 @@
+"""Artifact storage for run events, results, reports, and failures."""
+
 from __future__ import annotations
 
 import json

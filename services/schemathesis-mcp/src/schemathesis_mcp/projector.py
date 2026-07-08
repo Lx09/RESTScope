@@ -1,3 +1,5 @@
+"""Projection helpers that convert Schemathesis NDJSON into stable MCP events."""
+
 from __future__ import annotations
 
 import base64

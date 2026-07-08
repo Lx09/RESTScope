@@ -1,3 +1,5 @@
+"""Tests for artifact storage, event pagination, and resource safety."""
+
 import json
 import stat
 

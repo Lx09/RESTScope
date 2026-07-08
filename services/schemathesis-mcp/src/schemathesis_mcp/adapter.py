@@ -1,3 +1,5 @@
+"""Adapter layer that runs Schemathesis CLI and projects its output."""
+
 from __future__ import annotations
 
 import hashlib
