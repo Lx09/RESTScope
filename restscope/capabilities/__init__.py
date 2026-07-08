@@ -1,17 +1,36 @@
 """RESTScope capability and tool runtime."""
 
-from .default_tools import default_tool_specs
+from .runtime import CapabilityRuntime, build_capabilities
+from .skills import SkillManifest, SkillPolicy, SkillRegistry
 from .tool_call_validator import ToolCallValidator
 from .tool_executor import ToolExecutor
 from .tool_policy import ToolPolicy
 from .tool_registry import ToolRegistry
 from .tool_selector import ToolSelector
+from .tool_sources import (
+    PresetToolSourceNotFoundError,
+    ToolSourceError,
+    UnsupportedPresetToolSourceError,
+    UnsupportedToolSourceKindError,
+    add_preset_tools,
+    register_tool_source,
+)
 
 __all__ = [
-    "default_tool_specs",
+    "CapabilityRuntime",
+    "build_capabilities",
+    "SkillManifest",
+    "SkillPolicy",
+    "SkillRegistry",
     "ToolCallValidator",
     "ToolExecutor",
     "ToolPolicy",
     "ToolRegistry",
     "ToolSelector",
+    "PresetToolSourceNotFoundError",
+    "ToolSourceError",
+    "UnsupportedPresetToolSourceError",
+    "UnsupportedToolSourceKindError",
+    "add_preset_tools",
+    "register_tool_source",
 ]

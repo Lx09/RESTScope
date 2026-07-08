@@ -47,3 +47,47 @@ and a safe tool-call shell in `restscope.capabilities`.
 
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
+
+## MCP Tools
+
+RESTScope does not own MCP server configuration, process startup, stdio
+transport, or session lifecycle. Configure MCP servers in your MCP Host or
+Agent Runtime. For example, `schemathesis-mcp` can be configured externally as:
+
+```json
+{
+  "mcpServers": {
+    "schemathesis": {
+      "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp",
+      "env": {
+        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/Users/lixin/Workplace/RESTScope:/tmp",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1"
+      }
+    }
+  }
+}
+```
+
+After the host discovers tools and provides a call bridge, register them with
+RESTScope's generic capability layer:
+
+```python
+from restscope.capabilities import build_capabilities
+
+runtime = build_capabilities(
+    sources={
+        "schemathesis": {
+            "kind": "mcp",
+            "tools": schemathesis_tools,
+            "call_tool": schemathesis_call_tool,
+        }
+    },
+)
+```
+
+If the `schemathesis` source is not provided, preset registration raises
+`PresetToolSourceNotFoundError`. To build a runtime without external tool sources, pass
+`presets=()`.
+
+`MCPToolAdapter` uses MCP annotations for read-only/risk classification, while
+`ToolPolicy` remains the final execution gate.
