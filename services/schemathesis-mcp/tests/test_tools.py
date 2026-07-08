@@ -107,3 +107,66 @@ async def test_server_registers_only_cli_first_tools(tmp_path) -> None:
         "get_failure",
         "cancel_run",
     }
+
+
+@pytest.mark.asyncio
+async def test_server_registers_tool_annotations(tmp_path) -> None:
+    service = ToolService.create(backend=StubBackend(), artifact_root=tmp_path)
+    server = create_server(service)
+
+    annotations = {
+        tool.name: tool.annotations.model_dump(exclude_none=True)
+        for tool in server._tool_manager.list_tools()
+    }
+
+    assert annotations == {
+        "get_capabilities": {
+            "title": "Get capabilities",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "start_run": {
+            "title": "Start run",
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
+        "get_run": {
+            "title": "Get run",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "get_events": {
+            "title": "Get events",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "get_result": {
+            "title": "Get result",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "get_failure": {
+            "title": "Get failure",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "cancel_run": {
+            "title": "Cancel run",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    }

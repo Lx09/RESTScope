@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from schemathesis_mcp.tools import ToolService
 
@@ -16,12 +17,20 @@ def create_server(service: ToolService | None = None) -> FastMCP:
         instructions="Run OpenAPI or GraphQL API tests through the official Schemathesis CLI.",
     )
 
-    @server.tool()
+    @server.tool(annotations=_read_only("Get capabilities"))
     def get_capabilities() -> dict[str, Any]:
         """Describe supported tools, options, limits, and safe configuration state."""
         return tools.get_capabilities()
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            title="Start run",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=True,
+        )
+    )
     def start_run(
         schema: dict[str, Any],
         base_url: str | None = None,
@@ -58,27 +67,35 @@ def create_server(service: ToolService | None = None) -> FastMCP:
             reports=reports or [],
         )
 
-    @server.tool()
+    @server.tool(annotations=_read_only("Get run"))
     def get_run(run_id: str) -> dict[str, Any]:
         """Get status and progress for a test run."""
         return tools.get_run(run_id)
 
-    @server.tool()
+    @server.tool(annotations=_read_only("Get events"))
     def get_events(run_id: str, cursor: int = 0, limit: int = 100) -> dict[str, Any]:
         """Read a page of projected run events."""
         return tools.get_events(run_id, cursor, limit)
 
-    @server.tool()
+    @server.tool(annotations=_read_only("Get result"))
     def get_result(run_id: str) -> dict[str, Any]:
         """Get the completed result for a test run."""
         return tools.get_result(run_id)
 
-    @server.tool()
+    @server.tool(annotations=_read_only("Get failure"))
     def get_failure(run_id: str, failure_id: str) -> dict[str, Any]:
         """Get a detailed, sanitized API failure."""
         return tools.get_failure(run_id, failure_id)
 
-    @server.tool()
+    @server.tool(
+        annotations=ToolAnnotations(
+            title="Cancel run",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        )
+    )
     def cancel_run(run_id: str) -> dict[str, Any]:
         """Request cancellation of a running test."""
         return tools.cancel_run(run_id)
@@ -94,6 +111,16 @@ def create_server(service: ToolService | None = None) -> FastMCP:
         return tools.read_resource(f"schemathesis://runs/{run_id}/failures/{failure_id}.json")
 
     return server
+
+
+def _read_only(title: str) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
 
 
 def main() -> None:
