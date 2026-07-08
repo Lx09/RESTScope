@@ -89,6 +89,99 @@ For reusable package-based installs, run the server through `uvx`:
 
 The server uses stdio and does not open a network listener.
 
+## Using with LangGraph
+
+LangGraph agents can use this server through
+[`langchain-mcp-adapters`](https://docs.langchain.com/oss/python/langchain/mcp),
+which turns MCP tools into LangChain/LangGraph tools.
+
+Install the agent-side dependencies in your LangGraph project:
+
+```console
+uv add langgraph langchain langchain-mcp-adapters
+```
+
+Or, with pip:
+
+```console
+pip install langgraph langchain langchain-mcp-adapters
+```
+
+The runtime chain looks like this:
+
+```text
+LangGraph agent -> MultiServerMCPClient -> schemathesis-mcp -> Schemathesis CLI -> target API
+```
+
+`schemathesis-mcp` is stateful: `start_run` creates a run and returns a
+`run_id`, then later calls such as `get_run`, `get_events`, `get_result`, and
+`get_failure` read state for that same run. `MultiServerMCPClient` is stateless
+by default, so use an explicit session for this server.
+
+```python
+import asyncio
+
+from langchain.agents import create_agent
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
+
+
+async def main() -> None:
+    client = MultiServerMCPClient(
+        {
+            "schemathesis": {
+                "transport": "stdio",
+                "command": "uvx",
+                "args": [
+                    "--from",
+                    "/Users/lixin/Workplace/schemathesis-mcp",
+                    "schemathesis-mcp",
+                ],
+                "env": {
+                    "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/Users/lixin/Workplace:/tmp",
+                    "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1",
+                    "SCHEMATHESIS_MCP_ARTIFACT_DIR": "/Users/lixin/Workplace/.schemathesis-mcp",
+                    "SCHEMATHESIS_MCP_ARTIFACT_TTL": "1h",
+                },
+            }
+        }
+    )
+
+    async with client.session("schemathesis") as session:
+        tools = await load_mcp_tools(session)
+        agent = create_agent("openai:gpt-4.1", tools)
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use schemathesis to test "
+                            "/Users/lixin/Workplace/demo/openapi.yaml against "
+                            "http://localhost:8000. Run for at most 120 seconds "
+                            "and explain any failures."
+                        ),
+                    }
+                ]
+            }
+        )
+        print(result)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+After publishing `schemathesis-mcp` to PyPI, simplify the command arguments to:
+
+```python
+"args": ["schemathesis-mcp"]
+```
+
+If the schema path or target API host is outside the configured allowlists,
+`start_run` will fail. Update `SCHEMATHESIS_MCP_ALLOWED_PATHS` or
+`SCHEMATHESIS_MCP_ALLOWED_HOSTS` in the MCP server environment.
+
 ## Reusable configuration model
 
 Keep reusable MCP server configuration split by responsibility:
