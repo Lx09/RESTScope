@@ -10,6 +10,7 @@ store, manage run lifecycle state, and expose safe capability metadata.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -27,6 +28,8 @@ class ToolService:
     backend: Any
     artifacts: ArtifactStore
     runs: RunManager
+    artifact_root_configured: bool = False
+    artifact_ttl_configured: bool = False
 
     @classmethod
     def create(cls, backend: Any | None = None, artifact_root: Path | None = None) -> ToolService:
@@ -34,12 +37,19 @@ class ToolService:
         probe = getattr(resolved_backend, "probe", None)
         if probe is not None:
             probe()
-        root = artifact_root or Path(tempfile.mkdtemp(prefix="schemathesis-mcp-"))
+        root, artifact_root_configured = _artifact_root(artifact_root)
+        artifact_ttl_seconds, artifact_ttl_configured = _artifact_ttl_seconds()
         artifacts = ArtifactStore(root)
         return cls(
             backend=resolved_backend,
             artifacts=artifacts,
-            runs=RunManager(backend=resolved_backend, artifacts=artifacts),
+            runs=RunManager(
+                backend=resolved_backend,
+                artifacts=artifacts,
+                artifact_ttl_seconds=artifact_ttl_seconds,
+            ),
+            artifact_root_configured=artifact_root_configured,
+            artifact_ttl_configured=artifact_ttl_configured,
         )
 
     def get_capabilities(self) -> dict[str, Any]:
@@ -103,6 +113,18 @@ class ToolService:
                         "configured": _env_configured("SCHEMATHESIS_MCP_ALLOWED_HOSTS"),
                         "purpose": "Restrict URL schema and base_url hosts",
                     },
+                    {
+                        "name": "SCHEMATHESIS_MCP_ARTIFACT_DIR",
+                        "required": False,
+                        "configured": _env_configured("SCHEMATHESIS_MCP_ARTIFACT_DIR"),
+                        "purpose": "Store run artifacts in a persistent directory",
+                    },
+                    {
+                        "name": "SCHEMATHESIS_MCP_ARTIFACT_TTL",
+                        "required": False,
+                        "configured": _artifact_ttl_configured(),
+                        "purpose": "Set artifact retention time, for example 30m, 1h, or 7d",
+                    },
                 ],
                 "path_policy": {
                     "default_allows_current_working_directory": True,
@@ -110,6 +132,12 @@ class ToolService:
                 },
                 "target_policy": {
                     "host_allowlist_configured": _env_configured("SCHEMATHESIS_MCP_ALLOWED_HOSTS"),
+                },
+                "artifact_policy": {
+                    "persistent_root_configured": self.artifact_root_configured,
+                    "default_uses_temporary_directory": not self.artifact_root_configured,
+                    "ttl_seconds": self.runs.artifact_ttl_seconds,
+                    "ttl_configured": self.artifact_ttl_configured,
                 },
             },
         }
@@ -147,3 +175,41 @@ def _package_version() -> str:
 
 def _env_configured(name: str) -> bool:
     return bool(os.getenv(name))
+
+
+def _artifact_root(artifact_root: Path | None) -> tuple[Path, bool]:
+    if artifact_root is not None:
+        return artifact_root, True
+    value = os.getenv("SCHEMATHESIS_MCP_ARTIFACT_DIR")
+    if not value:
+        return Path(tempfile.mkdtemp(prefix="schemathesis-mcp-")), False
+    root = Path(value).expanduser().resolve()
+    if root.exists() and not root.is_dir():
+        raise ValueError(f"SCHEMATHESIS_MCP_ARTIFACT_DIR is not a directory: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    root.chmod(0o700)
+    return root, True
+
+
+def _artifact_ttl_configured() -> bool:
+    return os.getenv("SCHEMATHESIS_MCP_ARTIFACT_TTL") is not None
+
+
+def _artifact_ttl_seconds() -> tuple[int, bool]:
+    value = os.getenv("SCHEMATHESIS_MCP_ARTIFACT_TTL")
+    if value is None:
+        return 3_600, False
+    match = re.fullmatch(r"([0-9]+)([smhd]?)", value.strip())
+    if match is None:
+        raise ValueError("SCHEMATHESIS_MCP_ARTIFACT_TTL must be a positive duration like 3600, 30m, 1h, or 7d")
+    amount = int(match.group(1))
+    if amount <= 0:
+        raise ValueError("SCHEMATHESIS_MCP_ARTIFACT_TTL must be greater than zero")
+    multiplier = {
+        "": 1,
+        "s": 1,
+        "m": 60,
+        "h": 3_600,
+        "d": 86_400,
+    }[match.group(2)]
+    return amount * multiplier, True

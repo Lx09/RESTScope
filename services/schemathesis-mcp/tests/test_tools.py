@@ -1,3 +1,7 @@
+"""Tests for MCP tool service behavior and server tool registration."""
+
+import stat
+
 import pytest
 
 from schemathesis_mcp.server import create_server
@@ -45,10 +49,13 @@ def test_tool_service_exposes_cli_run_lifecycle(tmp_path) -> None:
 
 
 def test_tool_service_exposes_safe_capability_summary(tmp_path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "private-artifacts"
     monkeypatch.setenv("SCHEMATHESIS_CLI", "/private/bin/schemathesis")
     monkeypatch.setenv("SCHEMATHESIS_MCP_ALLOWED_PATHS", "/secret/contracts")
     monkeypatch.setenv("SCHEMATHESIS_MCP_ALLOWED_HOSTS", "api.example.com")
-    service = ToolService.create(backend=StubBackend(), artifact_root=tmp_path)
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_DIR", str(artifact_dir))
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_TTL", "30m")
+    service = ToolService.create(backend=StubBackend())
 
     capabilities = service.get_capabilities()
 
@@ -76,7 +83,7 @@ def test_tool_service_exposes_safe_capability_summary(tmp_path, monkeypatch) -> 
     assert capabilities["run_options"]["reports"] == ["junit", "har", "vcr", "allure"]
     assert capabilities["limits"] == {
         "max_concurrent_runs": 4,
-        "artifact_ttl_seconds": 3600,
+        "artifact_ttl_seconds": 1800,
     }
     assert capabilities["configuration"]["path_policy"] == {
         "default_allows_current_working_directory": True,
@@ -85,10 +92,74 @@ def test_tool_service_exposes_safe_capability_summary(tmp_path, monkeypatch) -> 
     assert capabilities["configuration"]["target_policy"] == {
         "host_allowlist_configured": True,
     }
+    assert capabilities["configuration"]["artifact_policy"] == {
+        "persistent_root_configured": True,
+        "default_uses_temporary_directory": False,
+        "ttl_seconds": 1800,
+        "ttl_configured": True,
+    }
     assert all(entry["configured"] is True for entry in capabilities["configuration"]["env"])
     assert "/private/bin/schemathesis" not in str(capabilities)
     assert "/secret/contracts" not in str(capabilities)
     assert "api.example.com" not in str(capabilities)
+    assert str(artifact_dir) not in str(capabilities)
+
+
+def test_tool_service_uses_configured_artifact_directory(tmp_path, monkeypatch) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_DIR", str(artifact_dir))
+
+    service = ToolService.create(backend=StubBackend())
+
+    assert service.artifacts.root == artifact_dir.resolve()
+    assert service.artifacts.root.is_dir()
+    assert stat.S_IMODE(service.artifacts.root.stat().st_mode) == 0o700
+
+
+def test_explicit_artifact_root_overrides_environment(tmp_path, monkeypatch) -> None:
+    env_dir = tmp_path / "from-env"
+    explicit_dir = tmp_path / "explicit"
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_DIR", str(env_dir))
+
+    service = ToolService.create(backend=StubBackend(), artifact_root=explicit_dir)
+
+    assert service.artifacts.root == explicit_dir
+    assert not env_dir.exists()
+
+
+def test_configured_artifact_directory_must_be_a_directory(tmp_path, monkeypatch) -> None:
+    artifact_file = tmp_path / "artifact-root"
+    artifact_file.write_text("not a directory")
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_DIR", str(artifact_file))
+
+    with pytest.raises(ValueError, match="SCHEMATHESIS_MCP_ARTIFACT_DIR"):
+        ToolService.create(backend=StubBackend())
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("3600", 3600),
+        ("15s", 15),
+        ("30m", 1800),
+        ("1h", 3600),
+        ("7d", 604800),
+    ],
+)
+def test_tool_service_parses_artifact_ttl(value, expected, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_TTL", value)
+
+    service = ToolService.create(backend=StubBackend(), artifact_root=tmp_path)
+
+    assert service.runs.artifact_ttl_seconds == expected
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "abc", "1w", "1.5h"])
+def test_invalid_artifact_ttl_fails_startup(value, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SCHEMATHESIS_MCP_ARTIFACT_TTL", value)
+
+    with pytest.raises(ValueError, match="SCHEMATHESIS_MCP_ARTIFACT_TTL"):
+        ToolService.create(backend=StubBackend(), artifact_root=tmp_path)
 
 
 @pytest.mark.asyncio

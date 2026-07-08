@@ -59,7 +59,9 @@ deployment-level policy through environment variables:
       "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp",
       "env": {
         "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/workspace:/tmp",
-        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1,api.test.example"
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1,api.test.example",
+        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "/workspace/.schemathesis-mcp",
+        "SCHEMATHESIS_MCP_ARTIFACT_TTL": "1h"
       }
     }
   }
@@ -76,7 +78,9 @@ For reusable package-based installs, run the server through `uvx`:
       "args": ["schemathesis-mcp"],
       "env": {
         "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/workspace:/tmp",
-        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1"
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1",
+        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "/workspace/.schemathesis-mcp",
+        "SCHEMATHESIS_MCP_ARTIFACT_TTL": "1h"
       }
     }
   }
@@ -164,6 +168,18 @@ CLI override values:
         "required": false,
         "configured": false,
         "purpose": "Restrict URL schema and base_url hosts"
+      },
+      {
+        "name": "SCHEMATHESIS_MCP_ARTIFACT_DIR",
+        "required": false,
+        "configured": false,
+        "purpose": "Store run artifacts in a persistent directory"
+      },
+      {
+        "name": "SCHEMATHESIS_MCP_ARTIFACT_TTL",
+        "required": false,
+        "configured": false,
+        "purpose": "Set artifact retention time, for example 30m, 1h, or 7d"
       }
     ],
     "path_policy": {
@@ -172,6 +188,12 @@ CLI override values:
     },
     "target_policy": {
       "host_allowlist_configured": false
+    },
+    "artifact_policy": {
+      "persistent_root_configured": false,
+      "default_uses_temporary_directory": true,
+      "ttl_seconds": 3600,
+      "ttl_configured": false
     }
   }
 }
@@ -237,6 +259,38 @@ schemathesis://runs/{run_id}/failures/{failure_id}.json
 
 Requested JUnit, HAR, VCR, or Allure output is added to the same run namespace.
 
+By default, artifacts are written under a temporary directory created at server
+startup, such as `/tmp/schemathesis-mcp-*` on Linux. Set
+`SCHEMATHESIS_MCP_ARTIFACT_DIR` to keep artifacts in a stable directory:
+
+```console
+export SCHEMATHESIS_MCP_ARTIFACT_DIR="/workspace/.schemathesis-mcp"
+```
+
+Runs are stored below that directory by run ID:
+
+```text
+/workspace/.schemathesis-mcp/{run_id}/
+  schemathesis.ndjson
+  events.ndjson
+  stdout.log
+  stderr.log
+  schema.json
+  result.json
+  failures/
+```
+
+Artifacts expire after one hour by default. Override the retention period with
+`SCHEMATHESIS_MCP_ARTIFACT_TTL`:
+
+```console
+export SCHEMATHESIS_MCP_ARTIFACT_TTL="30m"
+```
+
+Supported TTL formats are seconds (`3600` or `15s`), minutes (`30m`), hours
+(`1h`), and days (`7d`). Expired run directories are removed when the next
+`start_run` call triggers cleanup.
+
 ## Security
 
 - Run directories use mode `0700`.
@@ -245,7 +299,11 @@ Requested JUnit, HAR, VCR, or Allure output is added to the same run namespace.
   is deleted when the CLI exits.
 - CLI output sanitization is always enabled.
 - Arbitrary CLI argument passthrough is not supported.
-- At most four runs execute concurrently; artifacts expire after one hour.
+- At most four runs execute concurrently; artifacts expire after one hour by
+  default.
+- `SCHEMATHESIS_MCP_ARTIFACT_DIR` controls where output files are written; it
+  does not grant schema read access. Schema files are still restricted by
+  `SCHEMATHESIS_MCP_ALLOWED_PATHS`.
 
 Local files are restricted to the server working directory by default. Add
 allowed roots with the platform path separator:
