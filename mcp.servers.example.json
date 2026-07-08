@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "schemathesis": {
+      "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp",
+      "args": [],
+      "env": {
+        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/Users/lixin/Workplace/RESTScope:/tmp",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1"
+      },
+      "timeout": 30
+    }
+  }
+}

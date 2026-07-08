@@ -11,6 +11,7 @@ The parser-only package uses a short optional `.env` file:
 LOG_LEVEL=INFO
 DATA_DIR=./data
 # LOG_FILE=./data/logs/restscope.log
+MCP_SERVERS_FILE=./mcp.servers.json
 
 DB_URL=sqlite:///./data/restscope.db
 DB_ECHO=false
@@ -50,9 +51,15 @@ do not execute tools or write database rows.
 
 ## MCP Tools
 
-RESTScope does not own MCP server configuration, process startup, stdio
-transport, or session lifecycle. Configure MCP servers in your MCP Host or
-Agent Runtime. For example, `schemathesis-mcp` can be configured externally as:
+RESTScope can run as a standalone lightweight MCP Host. The short `.env`
+surface only points at a server config file:
+
+```env
+MCP_SERVERS_FILE=./mcp.servers.json
+```
+
+Put MCP server command and environment details in that JSON file. The first
+supported preset is `schemathesis`:
 
 ```json
 {
@@ -68,25 +75,20 @@ Agent Runtime. For example, `schemathesis-mcp` can be configured externally as:
 }
 ```
 
-After the host discovers tools and provides a call bridge, register them with
-RESTScope's generic capability layer:
+Build a standalone capability runtime by letting RESTScope start the MCP server,
+run `tools/list`, and register the discovered tools through the generic
+capability layer:
 
 ```python
-from restscope.capabilities import build_capabilities
+from restscope.capabilities import build_capabilities_with_mcp_host
 
-runtime = build_capabilities(
-    sources={
-        "schemathesis": {
-            "kind": "mcp",
-            "tools": schemathesis_tools,
-            "call_tool": schemathesis_call_tool,
-        }
-    },
-)
+runtime = build_capabilities_with_mcp_host(config="./mcp.servers.json")
 ```
 
-If the `schemathesis` source is not provided, preset registration raises
-`PresetToolSourceNotFoundError`. To build a runtime without external tool sources, pass
+Lower-level embedding remains possible through `build_capabilities(...)` when a
+caller already has discovered tools and a call bridge. If the `schemathesis`
+source is not configured or provided, preset registration raises
+`PresetToolSourceNotFoundError`. To build a runtime without MCP sources, pass
 `presets=()`.
 
 `MCPToolAdapter` uses MCP annotations for read-only/risk classification, while

@@ -1,6 +1,6 @@
 """RESTScope capability and tool runtime."""
 
-from .runtime import CapabilityRuntime, build_capabilities
+from .runtime import CapabilityRuntime, build_capabilities, build_capabilities_with_mcp_host
 from .skills import SkillManifest, SkillPolicy, SkillRegistry
 from .tool_call_validator import ToolCallValidator
 from .tool_executor import ToolExecutor
@@ -19,6 +19,7 @@ from .tool_sources import (
 __all__ = [
     "CapabilityRuntime",
     "build_capabilities",
+    "build_capabilities_with_mcp_host",
     "SkillManifest",
     "SkillPolicy",
     "SkillRegistry",

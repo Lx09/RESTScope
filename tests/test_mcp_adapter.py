@@ -342,7 +342,15 @@ def test_default_tools_are_not_public_api() -> None:
 def test_mcp_package_exports_adapter_only() -> None:
     import restscope.capabilities.mcp as mcp
 
-    assert mcp.__all__ == ["MCPToolAdapter"]
+    assert mcp.__all__ == [
+        "MCPHost",
+        "MCPServerConfig",
+        "MCPSourceBuilder",
+        "MCPToolAdapter",
+        "StdioMCPClientSession",
+        "load_mcp_server_configs",
+    ]
     assert hasattr(mcp, "MCPToolAdapter")
+    assert hasattr(mcp, "MCPHost")
     assert not hasattr(mcp, "register_mcp_tools")
     assert not hasattr(mcp, "add_preset_mcp_tools")

@@ -85,6 +85,13 @@ class DBConfig:
 
 
 @dataclass(frozen=True)
+class MCPConfig:
+    """MCP host configuration."""
+
+    servers_file: Path = PROJECT_ROOT / "mcp.servers.json"
+
+
+@dataclass(frozen=True)
 class RESTScopeConfig:
     """RESTScope configuration loaded from `.env` and environment variables."""
 
@@ -92,6 +99,7 @@ class RESTScopeConfig:
     logging: LoggingConfig
     llm: LLMConfig
     db: DBConfig
+    mcp: MCPConfig
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
@@ -117,6 +125,9 @@ class RESTScopeConfig:
                 echo=_bool_value(values.get("DB_ECHO"), False),
                 pool_size=_optional_int_value(values.get("DB_POOL_SIZE")),
                 max_overflow=_optional_int_value(values.get("DB_MAX_OVERFLOW")),
+            ),
+            mcp=MCPConfig(
+                servers_file=Path(values.get("MCP_SERVERS_FILE", str(PROJECT_ROOT / "mcp.servers.json"))).expanduser(),
             ),
         )
 

@@ -51,6 +51,16 @@ def test_short_environment_names_configure_dual_llm_models(monkeypatch) -> None:
     assert config.llm.fast.max_tokens == 4096
 
 
+def test_short_environment_name_configures_mcp_servers_file(monkeypatch, tmp_path) -> None:
+    servers_file = tmp_path / "mcp.servers.json"
+    monkeypatch.setenv("MCP_SERVERS_FILE", str(servers_file))
+
+    config_module = importlib.import_module("restscope.restscope_config")
+    config = config_module.RESTScopeConfig.from_environment()
+
+    assert config.mcp.servers_file == servers_file
+
+
 def test_parser_loads_bundled_petstore_spec() -> None:
     from restscope.openapi_parser import OpenAPIParser
 

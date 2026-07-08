@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_call_validator import ToolCallValidator
 from restscope.capabilities.tool_executor import ToolExecutor
@@ -25,6 +27,7 @@ class CapabilityRuntime:
     tool_executor: ToolExecutor
     skill_registry: SkillRegistry
     skill_policy: SkillPolicy
+    mcp_host: MCPHost | None = None
 
 
 def build_capabilities(
@@ -58,3 +61,35 @@ def build_capabilities(
         skill_registry=skill_registry,
         skill_policy=skill_policy,
     )
+
+
+def build_capabilities_with_mcp_host(
+    *,
+    config: Mapping[str, MCPServerConfig] | str | Path | None = None,
+    mcp_host: MCPHost | None = None,
+    presets: Iterable[str] = ("schemathesis",),
+    skills: Iterable[SkillManifest] = (),
+) -> CapabilityRuntime:
+    """Build capabilities after discovering tools through RESTScope's MCP host."""
+
+    host = mcp_host or MCPHost(_load_mcp_configs(config))
+    preset_list = tuple(presets)
+    sources = MCPSourceBuilder(host).build_sources(presets=preset_list)
+    runtime = build_capabilities(sources=sources, presets=preset_list, skills=skills)
+    return CapabilityRuntime(
+        tool_registry=runtime.tool_registry,
+        tool_policy=runtime.tool_policy,
+        tool_selector=runtime.tool_selector,
+        tool_executor=runtime.tool_executor,
+        skill_registry=runtime.skill_registry,
+        skill_policy=runtime.skill_policy,
+        mcp_host=host,
+    )
+
+
+def _load_mcp_configs(config: Mapping[str, MCPServerConfig] | str | Path | None) -> dict[str, MCPServerConfig]:
+    if config is None:
+        return load_mcp_server_configs()
+    if isinstance(config, str | Path):
+        return load_mcp_server_configs(config)
+    return dict(config)
