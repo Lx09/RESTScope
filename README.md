@@ -93,3 +93,55 @@ source is not configured or provided, preset registration raises
 
 `MCPToolAdapter` uses MCP annotations for read-only/risk classification, while
 `ToolPolicy` remains the final execution gate.
+
+## Operation Test Agent
+
+The first agent scaffold lives in `restscope.agent`. It tests one operation with
+a fixed LangGraph flow: smoke, conformance, positive, negative, boundary,
+evaluate, and report. The MVP runner calls Schemathesis through the capability
+runtime, so MCP tools still pass through `ToolPolicy` and `ToolExecutor`:
+
+```python
+from restscope.agent import OperationTestAgent, OperationTestRequest, SchemathesisOperationRunner
+from restscope.capabilities import build_capabilities_with_mcp_host
+
+runtime = build_capabilities_with_mcp_host(config="./mcp.servers.json")
+agent = OperationTestAgent(
+    runner=SchemathesisOperationRunner(tool_executor=runtime.tool_executor),
+)
+
+report = agent.run(
+    OperationTestRequest(
+        schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
+        base_url="http://localhost:8000",
+        method="GET",
+        path="/pets",
+        allow_live_testing=True,
+    )
+)
+```
+
+## Program Startup
+
+`RESTScopeApp` is the Python API entrypoint for the standalone runtime. It loads
+RESTScope config, builds the capability runtime, and runs the global supervisor
+graph over explicitly selected operations:
+
+```python
+from restscope import OperationSelection, RESTScopeApp, RESTScopeRunRequest
+
+with RESTScopeApp.from_environment() as app:
+    report = app.run(
+        RESTScopeRunRequest(
+            schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
+            base_url="http://localhost:8000",
+            operations=[
+                OperationSelection(method="GET", path="/pets"),
+            ],
+            allow_live_testing=True,
+        )
+    )
+```
+
+The first supervisor graph is intentionally narrow: direct request input,
+selected operations only, no CLI, and no business fact table writes.

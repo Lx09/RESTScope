@@ -23,7 +23,8 @@ class ToolCallValidator:
         except KeyError:
             return [{"type": "unknown_tool", "message": f"Unknown tool: {tool_call.name}"}]
 
-        if not self.policy.is_allowed(role=role, tool_spec=spec, state=state):
+        allowed = self.policy.is_allowed(role=role, tool_spec=spec, state=state)
+        if not allowed:
             errors.append(
                 {
                     "type": "tool_not_allowed",
@@ -31,7 +32,7 @@ class ToolCallValidator:
                 }
             )
 
-        if spec.requires_approval:
+        if spec.requires_approval and not allowed:
             errors.append(
                 {
                     "type": "approval_required",

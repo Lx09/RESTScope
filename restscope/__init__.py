@@ -7,6 +7,8 @@ setup_logging()
 
 from .openapi_parser import OpenAPIParser, OpenAPISpecIR
 from .restscope_config import CONFIG
+from .app import RESTScopeApp
+from .agent import OperationSelection, RESTScopeRunReport, RESTScopeRunRequest
 
 __all__ = [
     # Logging
@@ -17,4 +19,9 @@ __all__ = [
     "OpenAPISpecIR",
     # Configuration
     "CONFIG",
+    # Program entry
+    "RESTScopeApp",
+    "RESTScopeRunRequest",
+    "RESTScopeRunReport",
+    "OperationSelection",
 ]

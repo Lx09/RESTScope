@@ -8,7 +8,8 @@ from restscope.llm.schemas import ToolSpec
 class ToolPolicy:
     """Allow only explicitly safe tool use for each role."""
 
-    MCP_READ_ROLES = {"planner", "result_analyst"}
+    MCP_READ_ROLES = {"planner", "result_analyst", "operation_tester"}
+    OPERATION_TESTER_LIVE_TOOLS = {"mcp.schemathesis.start_run"}
     ROLE_ALLOWLISTS = {
         "planner": {
             "artifact.read_summary",
@@ -23,7 +24,14 @@ class ToolPolicy:
     }
 
     def is_allowed(self, *, role: str, tool_spec: ToolSpec, state: dict) -> bool:
-        del state
+        if role == "operation_tester" and tool_spec.kind == "mcp_tool":
+            if tool_spec.read_only:
+                return True
+            return (
+                tool_spec.name in self.OPERATION_TESTER_LIVE_TOOLS
+                and bool(state.get("allow_live_testing"))
+            )
+
         if tool_spec.requires_approval:
             return False
         if tool_spec.risk_level == "high":
