@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "schemathesis": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "./assets:/workspace:ro",
+        "-v",
+        "./.schemathesis-mcp:/data",
+        "-e",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS=host.docker.internal,localhost,127.0.0.1",
+        "schemathesis-mcp"
+      ],
+      "timeout": 30
+    }
+  }
+}
