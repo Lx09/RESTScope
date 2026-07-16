@@ -26,6 +26,7 @@ include = ["restscope*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
 markers = [
     "integration: marks tests as requiring LLM env vars (deselect with '-m \"not integration\"')",
 ]

@@ -30,8 +30,15 @@ FAST_MODEL=glm-4.7-flash
 
 ```bash
 uv sync
+uv sync --project services/schemathesis-mcp
 uv run pytest
+
+cd services/schemathesis-mcp
+uv run pytest
+uv run ruff check .
 ```
+
+The two Python projects intentionally keep separate environments and lock files.
 
 ## Database
 
@@ -58,18 +65,34 @@ surface only points at a server config file:
 MCP_SERVERS_FILE=./mcp.servers.json
 ```
 
-Put MCP server command and environment details in that JSON file. The first
-supported preset is `schemathesis`:
+Put MCP server command and environment details in that JSON file. The default
+`mcp.servers.json` runs the internal `schemathesis-mcp` service with Docker.
+Build its image from the repository root before using that configuration:
+
+```bash
+docker build -t schemathesis-mcp services/schemathesis-mcp
+```
+
+For local stdio development without Docker, copy `mcp.servers.example.json`,
+which starts the isolated subproject through `uv`:
 
 ```json
 {
   "mcpServers": {
     "schemathesis": {
-      "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp",
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "services/schemathesis-mcp",
+        "schemathesis-mcp"
+      ],
       "env": {
-        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/Users/lixin/Workplace/RESTScope:/tmp",
-        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1"
-      }
+        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "./assets:/tmp",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1",
+        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "./.schemathesis-mcp"
+      },
+      "cwd": "."
     }
   }
 }

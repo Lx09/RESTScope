@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import Future
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from datetime import timedelta
 import os
+from queue import Queue
+from threading import Thread
 from typing import Any
 
 from .config import MCPServerConfig
@@ -17,63 +21,123 @@ class StdioMCPClientSession:
 
     def __init__(self, config: MCPServerConfig) -> None:
         self.config = config
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._stack: AsyncExitStack | None = None
+        self._commands: Queue[_SessionCommand] = Queue()
+        self._thread: Thread | None = None
         self._session: Any | None = None
 
     def start(self) -> None:
-        if self._session is not None:
+        if self._thread is not None:
             return
 
-        self._loop = asyncio.new_event_loop()
-        self._loop.run_until_complete(self._start_async())
+        ready: Future[None] = Future()
+        self._thread = Thread(
+            target=self._run_owner,
+            args=(ready,),
+            name=f"mcp-session-{self.config.name}",
+            daemon=True,
+        )
+        self._thread.start()
+        try:
+            ready.result(timeout=self.config.timeout)
+        except BaseException:
+            self._thread.join(timeout=self.config.timeout)
+            self._thread = None
+            raise
 
     def list_tools(self) -> list[dict[str, Any]]:
-        self.start()
-        result = self._run(self._session.list_tools())
+        result = self._request("list_tools")
         return [_to_plain_data(tool) for tool in result.tools]
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        self.start()
-        result = self._run(self._session.call_tool(tool_name, arguments))
+        result = self._request("call_tool", tool_name, arguments)
         return _to_plain_data(result)
 
     def close(self) -> None:
-        if self._loop is None:
+        thread = self._thread
+        if thread is None:
             return
-        if self._stack is not None:
-            self._loop.run_until_complete(self._stack.aclose())
-        self._loop.close()
-        self._loop = None
-        self._stack = None
-        self._session = None
 
-    async def _start_async(self) -> None:
+        completed: Future[Any] = Future()
+        self._commands.put(_SessionCommand(name="close", args=(), completed=completed))
+        try:
+            completed.result(timeout=self.config.timeout)
+        finally:
+            thread.join(timeout=self.config.timeout)
+            self._thread = None
+            self._session = None
+
+    def _request(self, name: str, *args: Any) -> Any:
+        self.start()
+        completed: Future[Any] = Future()
+        self._commands.put(_SessionCommand(name=name, args=args, completed=completed))
+        return completed.result()
+
+    def _run_owner(self, ready: Future[None]) -> None:
+        try:
+            asyncio.run(self._serve(ready))
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+
+    async def _serve(self, ready: Future[None]) -> None:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        self._stack = AsyncExitStack()
         params = StdioServerParameters(
             command=self.config.command,
             args=self.config.args,
             env={**os.environ, **self.config.env} if self.config.env else None,
             cwd=self.config.cwd,
         )
-        read_stream, write_stream = await self._stack.enter_async_context(stdio_client(params))
-        session = await self._stack.enter_async_context(
-            ClientSession(
-                read_stream,
-                write_stream,
-                read_timeout_seconds=timedelta(seconds=self.config.timeout),
-            )
-        )
-        await session.initialize()
-        self._session = session
+        close_command: _SessionCommand | None = None
+        try:
+            async with AsyncExitStack() as stack:
+                read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
+                session = await stack.enter_async_context(
+                    ClientSession(
+                        read_stream,
+                        write_stream,
+                        read_timeout_seconds=timedelta(seconds=self.config.timeout),
+                    )
+                )
+                await session.initialize()
+                self._session = session
+                ready.set_result(None)
 
-    def _run(self, coroutine):
-        if self._loop is None:
-            raise RuntimeError("MCP session is not started.")
-        return self._loop.run_until_complete(coroutine)
+                while True:
+                    command = await asyncio.to_thread(self._commands.get)
+                    if command.name == "close":
+                        close_command = command
+                        break
+                    try:
+                        if command.name == "list_tools":
+                            result = await session.list_tools()
+                        elif command.name == "call_tool":
+                            result = await session.call_tool(*command.args)
+                        else:
+                            raise RuntimeError(f"Unsupported MCP session command: {command.name}")
+                    except BaseException as exc:
+                        command.completed.set_exception(exc)
+                    else:
+                        command.completed.set_result(result)
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            if close_command is not None:
+                close_command.completed.set_exception(exc)
+            raise
+        else:
+            if close_command is not None:
+                close_command.completed.set_result(None)
+        finally:
+            self._session = None
+
+
+@dataclass(frozen=True)
+class _SessionCommand:
+    name: str
+    args: tuple[Any, ...]
+    completed: Future[Any]
 
 
 MCPSessionFactory = Callable[[MCPServerConfig], Any]

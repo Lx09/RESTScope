@@ -35,4 +35,24 @@ Import `schemathesis-mcp` as `services/schemathesis-mcp/` with its full reachabl
 
 ## Verification
 
-Pending implementation and fresh final results.
+- Rewritten service history tip: `fa2cf4a8454d6d4ca9c5955cff141d1dd2dff714`.
+- History merge commit: `0d8ed61`.
+- Imported commit count: 10.
+- Source and imported metadata digest:
+  `241616c2da7546f798cf971017664027e8ef866b55c18d843016f92ec4b0c684`.
+- Source and normalized imported tree digest:
+  `4ccdea6333bee92b546336fd61ba89bc95e7840554d1478db7468fec03dda282`.
+- `uv run pytest -q`: 79 passed.
+- `uv run python -m compileall -q restscope`: passed.
+- `uv run pytest -q -k 'not test_docker_stdio_mcp_host_runs_api_test'`
+  from `services/schemathesis-mcp/`: 49 passed, 1 deselected.
+- `uv run ruff check .` from the service project: passed.
+- `uv build` from the service project: sdist and wheel built successfully.
+- `uv run pytest -q tests/test_schemathesis_mcp_contract.py`: passed against
+  the real in-repository stdio server.
+- `git diff --check`: passed.
+- Docker e2e remains unverified because `docker info` cannot connect to the
+  local daemon; this is an approved non-blocking limitation.
+
+Final merge, source-repository deletion, and post-deletion verification remain
+pending.

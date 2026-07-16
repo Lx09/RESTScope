@@ -22,6 +22,7 @@ frontend/dist/
 **/logs/
 llm/traces/
 artifacts/
+.schemathesis-mcp/
 
 # Data directories (unified storage)
 data/

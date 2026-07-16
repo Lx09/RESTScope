@@ -1,8 +1,10 @@
 # schemathesis-mcp
 
-`schemathesis-mcp` is a CLI-first MCP server for agent-driven API testing. It
-runs the official Schemathesis command as an isolated subprocess and consumes
-its sanitized NDJSON report. It does not import Schemathesis Engine internals.
+`schemathesis-mcp` is RESTScope's internal CLI-first MCP execution service for
+agent-driven API testing. It remains an independently buildable Python package
+and Docker image, while RESTScope communicates with it only through MCP. It runs
+the official Schemathesis command as an isolated subprocess and consumes its
+sanitized NDJSON report; it does not import Schemathesis Engine internals.
 
 ## Tools
 
@@ -20,11 +22,7 @@ its sanitized NDJSON report. It does not import Schemathesis Engine internals.
 `inspect_api` and `replay_failure` are intentionally absent. The Agent owns and
 understands the OpenAPI document; the MCP server only snapshots and executes it.
 
-## Installation
-
-```console
-uv tool install schemathesis-mcp
-```
+## Development
 
 The package supports `schemathesis>=4.21,<5`. By default it invokes the CLI from
 the same Python environment:
@@ -41,47 +39,36 @@ export SCHEMATHESIS_CLI="/opt/tools/schemathesis"
 
 At startup the backend checks the CLI version and required NDJSON flags.
 
-For local development:
+From the RESTScope repository root, create the service's independent environment:
 
 ```console
-uv sync
+uv sync --project services/schemathesis-mcp
 ```
 
 ## MCP configuration
 
-For local development, point the MCP client at the virtualenv script and pass
-deployment-level policy through environment variables:
+For local development from the RESTScope repository root, start the service
+through its own uv project and pass deployment-level policy through environment
+variables:
 
 ```json
 {
   "mcpServers": {
     "schemathesis": {
-      "command": "/Users/lixin/Workplace/schemathesis-mcp/.venv/bin/schemathesis-mcp",
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "services/schemathesis-mcp",
+        "schemathesis-mcp"
+      ],
       "env": {
-        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/workspace:/tmp",
+        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "./assets:/tmp",
         "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1,api.test.example",
-        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "/workspace/.schemathesis-mcp",
+        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "./.schemathesis-mcp",
         "SCHEMATHESIS_MCP_ARTIFACT_TTL": "1h"
-      }
-    }
-  }
-}
-```
-
-For reusable package-based installs, run the server through `uvx`:
-
-```json
-{
-  "mcpServers": {
-    "schemathesis": {
-      "command": "uvx",
-      "args": ["schemathesis-mcp"],
-      "env": {
-        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/workspace:/tmp",
-        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1",
-        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "/workspace/.schemathesis-mcp",
-        "SCHEMATHESIS_MCP_ARTIFACT_TTL": "1h"
-      }
+      },
+      "cwd": "."
     }
   }
 }
@@ -94,7 +81,7 @@ The server uses stdio and does not open a network listener.
 Build the image locally:
 
 ```console
-docker build -t schemathesis-mcp .
+docker build -t schemathesis-mcp services/schemathesis-mcp
 ```
 
 Run the MCP server over stdio:
@@ -198,18 +185,20 @@ async def main() -> None:
         {
             "schemathesis": {
                 "transport": "stdio",
-                "command": "uvx",
+                "command": "uv",
                 "args": [
-                    "--from",
-                    "/Users/lixin/Workplace/schemathesis-mcp",
+                    "run",
+                    "--project",
+                    "services/schemathesis-mcp",
                     "schemathesis-mcp",
                 ],
                 "env": {
-                    "SCHEMATHESIS_MCP_ALLOWED_PATHS": "/Users/lixin/Workplace:/tmp",
+                    "SCHEMATHESIS_MCP_ALLOWED_PATHS": "./assets:/tmp",
                     "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1",
-                    "SCHEMATHESIS_MCP_ARTIFACT_DIR": "/Users/lixin/Workplace/.schemathesis-mcp",
+                    "SCHEMATHESIS_MCP_ARTIFACT_DIR": "./.schemathesis-mcp",
                     "SCHEMATHESIS_MCP_ARTIFACT_TTL": "1h",
                 },
+                "cwd": ".",
             }
         }
     )
@@ -224,7 +213,7 @@ async def main() -> None:
                         "role": "user",
                         "content": (
                             "Use schemathesis to test "
-                            "/Users/lixin/Workplace/demo/openapi.yaml against "
+                            "assets/openapi/petstore-v3.json against "
                             "http://localhost:8000. Run for at most 120 seconds "
                             "and explain any failures."
                         ),
@@ -237,12 +226,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-```
-
-After publishing `schemathesis-mcp` to PyPI, simplify the command arguments to:
-
-```python
-"args": ["schemathesis-mcp"]
 ```
 
 If the schema path or target API host is outside the configured allowlists,

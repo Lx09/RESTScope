@@ -80,3 +80,17 @@ This is a hard project constraint for code under `restscope/agent/`:
   Agents or catch-all schema modules.
 - Keep `tests/test_agent_package_boundaries.py` passing when adding or moving an
   Agent.
+
+## Schemathesis MCP service boundary
+
+`services/schemathesis-mcp/` is an internal RESTScope service with an independent
+Python package, dependency lock, test suite, CLI entrypoint, and Docker image.
+
+- RESTScope communicates with the service only through MCP. Code under
+  `restscope/` must not import `schemathesis_mcp` implementation modules.
+- Do not add the service to a shared uv workspace or move its dependencies into
+  the RESTScope root project.
+- Preserve the service's stdio process and Docker isolation boundaries.
+- A change to MCP tool names, annotations, input schemas, or result contracts
+  must run both component suites and the real stdio contract test at
+  `tests/test_schemathesis_mcp_contract.py`.
