@@ -89,6 +89,73 @@ For reusable package-based installs, run the server through `uvx`:
 
 The server uses stdio and does not open a network listener.
 
+## Running with Docker
+
+Build the image locally:
+
+```console
+docker build -t schemathesis-mcp .
+```
+
+Run the MCP server over stdio:
+
+```console
+docker run --rm -i \
+  -v /path/to/contracts:/workspace:ro \
+  -v /path/to/artifacts:/data \
+  -e SCHEMATHESIS_MCP_ALLOWED_HOSTS=host.docker.internal,localhost,127.0.0.1 \
+  schemathesis-mcp
+```
+
+The image defaults to:
+
+```text
+SCHEMATHESIS_MCP_ALLOWED_PATHS=/workspace
+SCHEMATHESIS_MCP_ARTIFACT_DIR=/data
+SCHEMATHESIS_MCP_ARTIFACT_TTL=1h
+```
+
+For MCP clients, use Docker as the command:
+
+```json
+{
+  "mcpServers": {
+    "schemathesis": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "/path/to/contracts:/workspace:ro",
+        "-v",
+        "/path/to/artifacts:/data",
+        "-e",
+        "SCHEMATHESIS_MCP_ALLOWED_HOSTS=host.docker.internal,localhost,127.0.0.1",
+        "schemathesis-mcp"
+      ]
+    }
+  }
+}
+```
+
+Inside the container, schema files should be referenced by their container path,
+for example `/workspace/openapi.yaml`. Artifacts are written below `/data`, so
+mount `/data` to a host directory if you want to keep reports after the
+container exits. When `start_run` uses a file schema in Docker, pass `base_url`
+as a tool argument as well; for an API running on the host machine this is often
+`http://host.docker.internal:8000`.
+
+When testing an API running on the host machine, macOS and Windows Docker users
+can usually reach it as:
+
+```text
+http://host.docker.internal:8000
+```
+
+On Linux, use the networking mode or hostname that matches your Docker setup,
+for example `--network host` when appropriate.
+
 ## Using with LangGraph
 
 LangGraph agents can use this server through
