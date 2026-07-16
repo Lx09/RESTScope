@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "schemathesis-mcp"
+version = "0.1.0"
+description = "MCP server for agent-driven Schemathesis API testing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+  "mcp>=1.12,<2",
+  "pydantic>=2.10,<3",
+  "schemathesis>=4.21,<5",
+]
+
+[project.scripts]
+schemathesis-mcp = "schemathesis_mcp.server:main"
+
+[dependency-groups]
+dev = [
+  "fastapi>=0.115,<1",
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.24,<2",
+  "ruff>=0.11,<1",
+  "uvicorn>=0.30,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/schemathesis_mcp"]
