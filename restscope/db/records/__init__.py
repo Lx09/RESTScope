@@ -7,6 +7,7 @@ from .event_log_record import EventLogRecord
 from .intelligence_record import OperationIntelligenceRecord
 from .observation_record import TestObservationRecord
 from .operation_record import OperationRecord
+from .operation_edge_record import OperationEdgeRecord
 from .schema_record import SchemaRecord
 from .task_record import AgentTaskRecord
 
@@ -18,6 +19,7 @@ __all__ = [
     "OperationIntelligenceRecord",
     "TestObservationRecord",
     "OperationRecord",
+    "OperationEdgeRecord",
     "SchemaRecord",
     "AgentTaskRecord",
 ]

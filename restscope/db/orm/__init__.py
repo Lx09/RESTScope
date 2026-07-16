@@ -7,6 +7,7 @@ from .event_log_orm import EventLogORM
 from .intelligence_orm import OperationIntelligenceORM
 from .observation_orm import TestObservationORM
 from .operation_orm import OperationORM
+from .operation_edge_orm import OperationEdgeORM
 from .schema_orm import SchemaORM
 from .task_orm import AgentTaskORM
 
@@ -18,6 +19,7 @@ __all__ = [
     "OperationIntelligenceORM",
     "TestObservationORM",
     "OperationORM",
+    "OperationEdgeORM",
     "SchemaORM",
     "AgentTaskORM",
 ]

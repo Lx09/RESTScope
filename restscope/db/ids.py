@@ -19,6 +19,10 @@ def new_operation_id() -> str:
     return new_id("op")
 
 
+def new_operation_edge_id() -> str:
+    return new_id("edge")
+
+
 def new_task_id() -> str:
     return new_id("task")
 

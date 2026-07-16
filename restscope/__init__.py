@@ -6,8 +6,14 @@ from .logging_config import setup_logging, get_logger
 setup_logging()
 
 from .openapi_parser import OpenAPIParser, OpenAPISpecIR
-from .restscope_config import CONFIG
+from .restscope_config import CONFIG, RESTScopeConfig
 from .app import RESTScopeApp
+from .catalog import (
+    CatalogInitializationError,
+    OpenAPIInitializationRequest,
+    OpenAPIInitializationResult,
+    initialize_openapi_catalog,
+)
 from .agent import OperationSelection, RESTScopeRunReport, RESTScopeRunRequest
 
 __all__ = [
@@ -19,8 +25,13 @@ __all__ = [
     "OpenAPISpecIR",
     # Configuration
     "CONFIG",
+    "RESTScopeConfig",
     # Program entry
     "RESTScopeApp",
+    "CatalogInitializationError",
+    "OpenAPIInitializationRequest",
+    "OpenAPIInitializationResult",
+    "initialize_openapi_catalog",
     "RESTScopeRunRequest",
     "RESTScopeRunReport",
     "OperationSelection",

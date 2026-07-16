@@ -13,6 +13,7 @@ from .repositories import (
     ContextSnapshotRepository,
     EventLogRepository,
     OperationIntelligenceRepository,
+    OperationEdgeRepository,
     OperationRepository,
     SchemaRepository,
     TestObservationRepository,
@@ -31,6 +32,7 @@ class UnitOfWork:
         self.session = self.session_factory()
         self.schemas = SchemaRepository(self.session)
         self.operations = OperationRepository(self.session)
+        self.operation_edges = OperationEdgeRepository(self.session)
         self.intelligence = OperationIntelligenceRepository(self.session)
         self.tasks = AgentTaskRepository(self.session)
         self.campaigns = CampaignRepository(self.session)
