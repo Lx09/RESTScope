@@ -2,22 +2,27 @@
 
 from __future__ import annotations
 
-from .operation_test_agent import OperationTestAgent
-from .runner import FakeOperationTestRunner, OperationTestRunner, SchemathesisOperationRunner
-from .schemas import (
+from .operation_test import (
+    FakeOperationTestRunner,
     OperationTarget,
-    OperationSelection,
+    OperationTestAgent,
     OperationTestFinding,
     OperationTestReport,
     OperationTestRequest,
+    OperationTestRunner,
+    OperationTestStage,
     OperationTestStageResult,
+    SchemathesisOperationRunner,
+    StageOptions,
+    default_operation_test_stages,
+)
+from .supervisor import (
+    OperationSelection,
+    RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
     SupervisorTaskKind,
-    StageOptions,
 )
-from .main_graph import RESTScopeMainGraph
-from .stages import OperationTestStage, default_operation_test_stages
 
 __all__ = [
     "FakeOperationTestRunner",

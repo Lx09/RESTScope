@@ -8,8 +8,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from restscope.agent import OperationTestRunner, RESTScopeMainGraph, RESTScopeRunReport, RESTScopeRunRequest
-from restscope.agent.runner import SchemathesisOperationRunner
+from restscope.agent import (
+    OperationTestRunner,
+    RESTScopeMainGraph,
+    RESTScopeRunReport,
+    RESTScopeRunRequest,
+    SchemathesisOperationRunner,
+)
 from restscope.capabilities import CapabilityRuntime, build_capabilities_with_mcp_host
 from restscope.db import create_engine_from_config
 from restscope.db.session import make_session_factory

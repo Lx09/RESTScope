@@ -62,3 +62,21 @@ they would clarify rather than constrain the exploration.
 Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.
+
+## Agent package boundary
+
+This is a hard project constraint for code under `restscope/agent/`:
+
+- Every Agent, including orchestration Agents, must live in its own named
+  Python package such as `restscope/agent/planner/`.
+- An Agent package owns its runtime, schemas, state, prompts, and directly
+  supporting services. Do not add `<name>_agent.py`, `<name>_schemas.py`, or
+  other implementation modules at the root of `restscope/agent/`.
+- `restscope/agent/__init__.py` is only a stable public import facade.
+- Cross-Agent imports must use the target package's public exports. Do not
+  reach into another Agent's private implementation modules.
+- Extract a shared package only when multiple real consumers have identical
+  semantics and lifecycle requirements. Do not create speculative common base
+  Agents or catch-all schema modules.
+- Keep `tests/test_agent_package_boundaries.py` passing when adding or moving an
+  Agent.
