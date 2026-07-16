@@ -14,7 +14,18 @@ from .catalog import (
     OpenAPIInitializationResult,
     initialize_openapi_catalog,
 )
-from .agent import OperationSelection, RESTScopeRunReport, RESTScopeRunRequest
+from .agent import (
+    OperationSelection,
+    PlannerAgent,
+    PlannerError,
+    PlannerRequest,
+    PlannerResult,
+    RESTScopeRunReport,
+    RESTScopeRunRequest,
+    TestRequirement,
+    TestRequirementPlan,
+    build_planner_agent,
+)
 
 __all__ = [
     # Logging
@@ -35,4 +46,11 @@ __all__ = [
     "RESTScopeRunRequest",
     "RESTScopeRunReport",
     "OperationSelection",
+    "PlannerAgent",
+    "PlannerError",
+    "PlannerRequest",
+    "PlannerResult",
+    "TestRequirement",
+    "TestRequirementPlan",
+    "build_planner_agent",
 ]

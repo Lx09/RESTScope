@@ -58,7 +58,11 @@ class MemoryService:
         selected_ids = _selected_operation_ids(working)
         high_risk_ops = self.operation_store.list_high_risk_operations(schema_id=schema_id, limit=30)
         selected_ops = self.operation_store.get_operation_memory(selected_ids)
-        operation_items = _merge_unique([*high_risk_ops, *selected_ops])
+        catalog_ops = self.operation_store.list_not_recently_tested_operations(
+            schema_id=schema_id,
+            limit=1000,
+        )
+        operation_items = _merge_unique([*high_risk_ops, *selected_ops, *catalog_ops])
         operation_ids = [item.operation_id for item in operation_items if item.operation_id]
         observations = self.observation_store.list_recent_for_operations(
             schema_id=schema_id,
@@ -76,6 +80,7 @@ class MemoryService:
             role="planner",
             operation_ids=operation_ids,
             token_budget=token_budget,
+            max_items=1000,
         )
         return self._package(query, [*working, *operation_items, *observations, *campaigns, *episodic], selected_ids)
 

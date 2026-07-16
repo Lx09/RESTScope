@@ -95,6 +95,7 @@ class OperationMemoryStore:
                 "failure_density": _decimal_to_float(intelligence.failure_density) if intelligence else 0.0,
                 "flake_rate": _decimal_to_float(intelligence.flake_rate) if intelligence else 0.0,
                 "recommended_checks": checks,
+                "operation_card": operation.card_json,
             },
             importance=max(static_risk, dynamic_risk, 0.5),
             confidence=0.8 if intelligence else 0.6,

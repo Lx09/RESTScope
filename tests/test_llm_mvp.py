@@ -109,6 +109,29 @@ def test_fake_provider_returns_contract_specific_json_and_tool_calls() -> None:
     assert tool_response.tool_calls[0].name == "artifact.read_summary"
 
 
+def test_fake_provider_returns_generic_test_requirement_plan() -> None:
+    from restscope.llm import LLMMessage, LLMRequest
+    from restscope.llm.providers.fake import FakeProvider
+
+    response = FakeProvider().invoke(
+        LLMRequest(
+            provider="fake",
+            model="fake-model",
+            messages=[
+                LLMMessage(
+                    role="user",
+                    content="Candidate operations\n- Operation ID: op_1\nRequired output",
+                )
+            ],
+            response_format="json_schema",
+            json_schema_name="TestRequirementPlanDraft",
+        )
+    )
+
+    assert response.parsed_json["requirements"][0]["target"] == {"operation_id": "op_1"}
+    assert "schemathesis" not in response.content.lower()
+
+
 class _FakeOpenAIMessage:
     content = '{"ok": true}'
     tool_calls = None

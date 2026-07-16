@@ -33,6 +33,10 @@ class ContextBuilder:
         policy = self.policy_registry.get(request.role, request.prompt_version)
         token_budget = request.token_budget or policy.default_token_budget
         memory_package = self._retrieve_memory(request, token_budget)
+        if request.role == "planner":
+            memory_package = memory_package.model_copy(
+                update={"planner_evidence": request.planner_evidence}
+            )
         output_contract = build_output_contract(policy.output_contract_name)
         sections = build_sections(
             policy=policy,
@@ -40,12 +44,18 @@ class ContextBuilder:
             output_contract=output_contract,
         )
         sections = self.budget_manager.fit(sections, token_budget)
+        source_refs = dict(memory_package.source_refs)
+        for table, identifiers in request.planner_evidence.get("source_refs", {}).items():
+            source_refs.setdefault(table, [])
+            source_refs[table].extend(
+                identifier for identifier in identifiers if identifier not in source_refs[table]
+            )
         context = self.renderer.render(
             request=request,
             prompt_version=policy.prompt_version,
             sections=sections,
             output_contract=output_contract,
-            source_refs=memory_package.source_refs,
+            source_refs=source_refs,
             cycle_index=_cycle_index(memory_package),
             token_budget=token_budget,
             context_id=new_id("context"),
@@ -81,6 +91,30 @@ class ContextBuilder:
 
 def build_output_contract(name: str) -> OutputContract:
     schemas = {
+        "TestRequirementPlanDraft": {
+            "type": "object",
+            "required": ["requirements"],
+            "properties": {
+                "requirements": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "kind",
+                            "title",
+                            "priority",
+                            "objective",
+                            "target",
+                            "test_focus",
+                            "expected_behaviors",
+                            "rationale",
+                            "evidence_refs",
+                        ],
+                    },
+                }
+            },
+        },
         "TestCampaignSpec": {
             "type": "object",
             "required": ["campaign_type", "target_operation_ids", "hypothesis", "rationale"],

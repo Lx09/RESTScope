@@ -24,6 +24,9 @@ def build_sections(
         "operation_targets": _operation_targets,
         "operation_risk_profile": _operation_risk_profile,
         "historical_observations": _historical_observations,
+        "testing_evidence": _testing_evidence,
+        "operation_relationships": _operation_relationships,
+        "prior_requirement_plan": _prior_requirement_plan,
         "campaign_history": _campaign_history,
         "current_campaign_result": _current_campaign_result,
         "recent_events": _recent_events,
@@ -50,9 +53,10 @@ def _role_instruction(memory_package: MemoryPackage) -> ContextSection:
     role = memory_package.role
     if role == "planner":
         content = (
-            "You are the Planner. Select the next Schemathesis campaign, target operations, "
-            "testing hypothesis, rationale, expected learning, and stop conditions. "
-            "Do not claim tests were executed or modify task state."
+            "You are the Planner. Produce a complete test-requirement plan from the API "
+            "catalog, current testing evidence, and any prior plan. Each requirement must be "
+            "independently consumable by a TestAgent. Do not describe runner configuration, "
+            "claim tests were executed, or modify task state."
         )
     elif role == "result_analyst":
         content = (
@@ -88,8 +92,8 @@ def _test_goal(memory_package: MemoryPackage) -> ContextSection:
     content = "\n".join(
         [
             "Goal:",
-            f"- {goal.get('goal', 'Explore REST API behavior using Schemathesis.')}",
-            f"- Target: {goal.get('target', 'live test environment')}",
+            f"- {goal.get('goal', 'Explore REST API behavior and identify useful test requirements.')}",
+            f"- Target: {goal.get('target', 'configured API test environment')}",
         ]
     )
     return _section("test_goal", "Test goal", content, structured=goal)
@@ -105,7 +109,10 @@ def _budget(memory_package: MemoryPackage) -> ContextSection:
 def _operation_targets(memory_package: MemoryPackage) -> ContextSection:
     lines = []
     refs = []
+    rendered_ids: set[str] = set()
     for item in memory_package.operation_memory:
+        if item.operation_id:
+            rendered_ids.add(item.operation_id)
         lines.extend(
             [
                 f"### {item.title}",
@@ -117,6 +124,19 @@ def _operation_targets(memory_package: MemoryPackage) -> ContextSection:
             ]
         )
         refs.append(_source_ref(item.source_table, item.source_id))
+    for operation in memory_package.planner_evidence.get("operation_catalog", []):
+        if operation["id"] in rendered_ids:
+            continue
+        lines.extend(
+            [
+                f"### {operation['method']} {operation['path']}",
+                f"- Operation ID: {operation['id']}",
+                f"- OpenAPI operationId: {operation.get('operation_id')}",
+                f"- Summary: {operation.get('summary') or 'none'}",
+                f"- Operation card: {operation.get('card_json', {})}",
+            ]
+        )
+        refs.append(_source_ref("operations", operation["id"]))
     return _section("operation_targets", "Candidate operations", "\n".join(lines), source_refs=refs)
 
 
@@ -150,6 +170,51 @@ def _historical_observations(memory_package: MemoryPackage) -> ContextSection:
         )
         refs.append(_source_ref(item.source_table, item.source_id))
     return _section("historical_observations", "Historical observations", "\n".join(lines), source_refs=refs)
+
+
+def _testing_evidence(memory_package: MemoryPackage) -> ContextSection:
+    observations = _historical_observations(memory_package)
+    campaigns = _campaign_history(memory_package)
+    content = "\n\n".join(
+        part for part in [observations.content, campaigns.content] if part and not part.startswith("No relevant")
+    )
+    return _section(
+        "testing_evidence",
+        "Current testing evidence",
+        content or "No testing evidence is available yet.",
+        source_refs=[*observations.source_refs, *campaigns.source_refs],
+    )
+
+
+def _operation_relationships(memory_package: MemoryPackage) -> ContextSection:
+    edges = memory_package.planner_evidence.get("operation_edges", [])
+    lines = [
+        "- {source_operation_id} -> {target_operation_id}: {edge_type}; "
+        "value={value}; confidence={confidence}; reason={reason}".format(**edge)
+        for edge in edges
+    ]
+    return _section(
+        "operation_relationships",
+        "Operation relationships",
+        "\n".join(lines) or "No operation relationships were inferred.",
+        structured={"operation_edges": edges},
+    )
+
+
+def _prior_requirement_plan(memory_package: MemoryPackage) -> ContextSection:
+    prior_plan = memory_package.planner_evidence.get("prior_plan")
+    if not prior_plan:
+        return _section(
+            "prior_requirement_plan",
+            "Prior requirement plan",
+            "No prior requirement plan exists; create revision 1.",
+        )
+    return _section(
+        "prior_requirement_plan",
+        "Prior requirement plan",
+        str(prior_plan),
+        structured=prior_plan,
+    )
 
 
 def _campaign_history(memory_package: MemoryPackage) -> ContextSection:

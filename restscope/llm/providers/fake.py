@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from restscope.db.ids import new_id
 from restscope.llm.providers.base import BaseLLMProvider
@@ -31,7 +32,7 @@ class FakeProvider(BaseLLMProvider):
                 finish_reason="tool_calls",
             )
 
-        payload = self._payload_for_schema(request.json_schema_name)
+        payload = self._payload_for_schema(request.json_schema_name, request=request)
         return LLMResponse(
             provider=self.name,
             model=request.model,
@@ -41,7 +42,26 @@ class FakeProvider(BaseLLMProvider):
             metadata={"fake": True},
         )
 
-    def _payload_for_schema(self, schema_name: str | None) -> dict:
+    def _payload_for_schema(self, schema_name: str | None, *, request: LLMRequest) -> dict:
+        if schema_name == "TestRequirementPlanDraft":
+            prompt = "\n".join(message.content for message in request.messages)
+            operation_ids = re.findall(r"Operation ID:\s*([^\s]+)", prompt)
+            operation_id = operation_ids[0] if operation_ids else "op_fake"
+            return {
+                "requirements": [
+                    {
+                        "kind": "single_operation",
+                        "title": "Validate documented operation behavior",
+                        "priority": "medium",
+                        "objective": "Validate the operation against its documented contract.",
+                        "target": {"operation_id": operation_id},
+                        "test_focus": ["request validation", "documented responses"],
+                        "expected_behaviors": ["Responses conform to the documented contract."],
+                        "rationale": "This deterministic requirement supports offline Planner tests.",
+                        "evidence_refs": [f"operation:{operation_id}"],
+                    }
+                ]
+            }
         if schema_name == "TestCampaignSpec":
             return {
                 "campaign_type": "risk_targeted_fuzzing",

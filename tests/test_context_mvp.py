@@ -137,7 +137,7 @@ def test_planner_context_builds_messages_and_persists_snapshot(tmp_path: Path) -
     finally:
         uow.__exit__(None, None, None)
 
-    assert context.output_contract.name == "TestCampaignSpec"
+    assert context.output_contract.name == "TestRequirementPlanDraft"
     assert [message.role for message in context.messages] == ["system", "user"]
     section_kinds = {section.kind for section in context.sections}
     assert {
@@ -147,18 +147,14 @@ def test_planner_context_builds_messages_and_persists_snapshot(tmp_path: Path) -
         "budget",
         "operation_targets",
         "operation_risk_profile",
-        "historical_observations",
-        "campaign_history",
-        "tool_affordances",
-        "execution_assumptions",
+        "testing_evidence",
+        "operation_relationships",
+        "prior_requirement_plan",
         "output_contract",
     }.issubset(section_kinds)
     user_content = context.messages[1].content
-    assert "unrestricted live testing" in user_content
-    assert "GET, POST, PUT, PATCH, and DELETE" in user_content
-    assert "allow_write" not in user_content
-    assert "allow_delete" not in user_content
-    assert "requires approval" not in user_content
+    assert "schemathesis" not in user_content.lower()
+    assert "campaign configuration" not in user_content.lower()
     assert context.artifact_uri is not None
     assert context.metadata["context_snapshot_id"]
 
@@ -238,7 +234,7 @@ def test_context_budget_keeps_required_sections_and_trims_optional(tmp_path: Pat
         uow.__exit__(None, None, None)
 
     section_kinds = {section.kind for section in context.sections}
-    assert {"role_instruction", "task_state", "output_contract", "execution_assumptions"}.issubset(
+    assert {"role_instruction", "task_state", "output_contract", "operation_targets"}.issubset(
         section_kinds
     )
     assert context.estimated_tokens <= context.token_budget

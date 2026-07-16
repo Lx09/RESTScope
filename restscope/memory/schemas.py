@@ -80,6 +80,7 @@ class MemoryPackage(BaseModel):
     campaign_memory: list[MemoryItem] = Field(default_factory=list)
     testing_knowledge_memory: list[MemoryItem] = Field(default_factory=list)
     episodic_memory: list[MemoryItem] = Field(default_factory=list)
+    planner_evidence: dict[str, Any] = Field(default_factory=dict)
     selected_operation_ids: list[str] = Field(default_factory=list)
     source_refs: dict[str, list[str]] = Field(default_factory=dict)
     estimated_tokens: int = 0

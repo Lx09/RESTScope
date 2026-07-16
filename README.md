@@ -121,6 +121,41 @@ report = agent.run(
 )
 ```
 
+## Planner Agent
+
+Planner uses a one-time OpenAPI catalog stored in the database. After the
+catalog is ready, Planner startup and planning never read the original OpenAPI
+file or URL again:
+
+```python
+from restscope import (
+    OpenAPIInitializationRequest,
+    PlannerRequest,
+    RESTScopeConfig,
+    build_planner_agent,
+    initialize_openapi_catalog,
+)
+
+config = RESTScopeConfig.from_environment()
+
+# Run once for a new, migrated database.
+catalog = initialize_openapi_catalog(
+    config,
+    OpenAPIInitializationRequest(
+        source="assets/openapi/petstore-v3.json",
+        name="Petstore",
+    ),
+)
+
+# The task must already exist and be bound to catalog.schema_id.
+planner = build_planner_agent(config, catalog.schema_id)
+result = planner.plan(PlannerRequest(task_id="task_..."))
+```
+
+Every successful call writes an immutable `test_requirement_plan` Artifact.
+Each requirement targets either one operation or an ordered multi-operation
+workflow and can be handed independently to a future TestAgent integration.
+
 ## Program Startup
 
 `RESTScopeApp` is the Python API entrypoint for the standalone runtime. It loads

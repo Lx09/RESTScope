@@ -16,6 +16,9 @@ ContextSectionKind = Literal[
     "operation_targets",
     "operation_risk_profile",
     "historical_observations",
+    "testing_evidence",
+    "operation_relationships",
+    "prior_requirement_plan",
     "campaign_history",
     "current_campaign_result",
     "recent_events",
@@ -95,6 +98,7 @@ class ContextBuildRequest(BaseModel):
     token_budget: int | None = None
     debug: bool = False
     force_include_source_tables: list[str] = Field(default_factory=list)
+    planner_evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 def estimate_tokens(*parts: str) -> int:
