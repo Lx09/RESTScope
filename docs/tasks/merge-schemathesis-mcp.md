@@ -1,6 +1,6 @@
 # Merge schemathesis-mcp into RESTScope
 
-Status: In progress
+Status: Completed
 
 ## Objective
 
@@ -54,5 +54,9 @@ Import `schemathesis-mcp` as `services/schemathesis-mcp/` with its full reachabl
 - Docker e2e remains unverified because `docker info` cannot connect to the
   local daemon; this is an approved non-blocking limitation.
 
-Final merge, source-repository deletion, and post-deletion verification remain
-pending.
+- Integration commit `d2a9945` was fast-forwarded into local `main`.
+- The original `/Users/lixin/Workplace/schemathesis-mcp` repository was deleted
+  only after its clean HEAD and both history digests were rechecked.
+- After deletion, the imported history remains reachable from `main` and the
+  real in-repository stdio contract test passed again.
+- No push was performed.
