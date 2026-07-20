@@ -42,9 +42,24 @@ The two Python projects intentionally keep separate environments and lock files.
 
 ## Database
 
-The MVP database layer lives in `restscope.db` and provides SQLAlchemy ORM
-mappings, repositories, a UnitOfWork transaction boundary, and packaged Alembic
-migrations for the MVP tables.
+The database currently stores only OpenAPI schema sources. Domain code in
+`restscope.catalog` depends on repository and transaction protocols; SQLAlchemy
+models, sessions, and the protocol adapters remain inside `restscope.db`.
+
+The destructive Alembic baseline is intended for new databases. A schema stores
+either an absolute file path or verbatim JSON/YAML content. Paths are reread on
+every load, while parsed catalog metadata and operations are not persisted yet:
+
+```python
+from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
+
+config = RESTScopeConfig.from_environment()
+catalog = build_schema_catalog(config)
+schema = catalog.register(
+    SchemaSourceInput(file_path="assets/openapi/petstore-v3.json")
+)
+parsed = catalog.load(schema.id)
+```
 
 ## LLM
 
@@ -119,87 +134,67 @@ source is not configured or provided, preset registration raises
 
 ## Operation Test Agent
 
-The first agent scaffold lives in `restscope.agent`. It tests one operation with
-a fixed LangGraph flow: smoke, conformance, positive, negative, boundary,
-evaluate, and report. The MVP runner calls Schemathesis through the capability
-runtime, so MCP tools still pass through `ToolPolicy` and `ToolExecutor`:
+OperationTestAgent executes one Schemathesis run for one operation attempt, then
+uses the configured Thinking model to identify direct operation dependencies.
+There are no smoke/conformance/positive/negative/boundary stages. The runner
+passes only schema, target URL, runtime headers, and the method/path filter;
+other Schemathesis settings use service defaults.
 
 ```python
-from restscope.agent import OperationTestAgent, OperationTestRequest, SchemathesisOperationRunner
+from restscope.agent import (
+    LLMOperationDependencyAnalyzer,
+    OperationCandidate,
+    OperationReference,
+    OperationTestAgent,
+    OperationTestRequest,
+    SchemathesisOperationRunner,
+)
 from restscope.capabilities import build_capabilities_with_mcp_host
+from restscope.llm import ModelSelector, build_llm_client
+from restscope.restscope_config import RESTScopeConfig
 
+config = RESTScopeConfig.from_environment()
 runtime = build_capabilities_with_mcp_host(config="./mcp.servers.json")
 agent = OperationTestAgent(
     runner=SchemathesisOperationRunner(tool_executor=runtime.tool_executor),
+    dependency_analyzer=LLMOperationDependencyAnalyzer(
+        client=build_llm_client(config.llm),
+        model=ModelSelector.from_config(config.llm).select("operation_dependency_analyzer"),
+    ),
 )
 
+operation = OperationReference(method="GET", path="/pets", operation_id="listPets")
 report = agent.run(
     OperationTestRequest(
         schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
         base_url="http://localhost:8000",
-        method="GET",
-        path="/pets",
+        operation=operation,
+        candidate_operations=[OperationCandidate(operation=operation)],
         allow_live_testing=True,
     )
 )
 ```
 
-## Planner Agent
-
-Planner uses a one-time OpenAPI catalog stored in the database. After the
-catalog is ready, Planner startup and planning never read the original OpenAPI
-file or URL again:
-
-```python
-from restscope import (
-    OpenAPIInitializationRequest,
-    PlannerRequest,
-    RESTScopeConfig,
-    build_planner_agent,
-    initialize_openapi_catalog,
-)
-
-config = RESTScopeConfig.from_environment()
-
-# Run once for a new, migrated database.
-catalog = initialize_openapi_catalog(
-    config,
-    OpenAPIInitializationRequest(
-        source="assets/openapi/petstore-v3.json",
-        name="Petstore",
-    ),
-)
-
-# The task must already exist and be bound to catalog.schema_id.
-planner = build_planner_agent(config, catalog.schema_id)
-result = planner.plan(PlannerRequest(task_id="task_..."))
-```
-
-Every successful call writes an immutable `test_requirement_plan` Artifact.
-Each requirement targets either one operation or an ordered multi-operation
-workflow and can be handed independently to a future TestAgent integration.
-
 ## Program Startup
 
 `RESTScopeApp` is the Python API entrypoint for the standalone runtime. It loads
-RESTScope config, builds the capability runtime, and runs the global supervisor
-graph over explicitly selected operations:
+RESTScope config, builds the capability and Thinking-model runtimes, discovers
+all schema operations, and schedules them through round-based FIFO queues:
 
 ```python
-from restscope import OperationSelection, RESTScopeApp, RESTScopeRunRequest
+from restscope import RESTScopeApp, RESTScopeRunRequest
 
 with RESTScopeApp.from_environment() as app:
     report = app.run(
         RESTScopeRunRequest(
             schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
             base_url="http://localhost:8000",
-            operations=[
-                OperationSelection(method="GET", path="/pets"),
-            ],
             allow_live_testing=True,
         )
     )
 ```
 
-The first supervisor graph is intentionally narrow: direct request input,
-selected operations only, no CLI, and no business fact table writes.
+Supervisor orders operations by stable path depth, retains every attempt, and
+retries blocked operations only in later rounds after all direct prerequisites
+have produced a passing run with an observed 2xx. Queue and dependency state are
+not persisted.

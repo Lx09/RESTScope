@@ -92,6 +92,7 @@ class NdjsonProjector:
     def _scenario(self, payload: dict[str, Any]) -> dict[str, Any]:
         recorder = payload.get("recorder", {})
         failures = self._failures(recorder)
+        status_code_counts = self._status_code_counts(recorder)
         event = {
             "type": "scenario_finished",
             "timestamp": payload.get("timestamp"),
@@ -101,10 +102,30 @@ class NdjsonProjector:
             "elapsed_time": payload.get("elapsed_time"),
             "is_final": payload.get("is_final", False),
             "failures": len(failures),
+            "status_code_counts": status_code_counts,
         }
         if failures:
             event["_failures"] = failures
         return self.sanitizer.sanitize(event)
+
+    @staticmethod
+    def _status_code_counts(recorder: dict[str, Any]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        interactions = recorder.get("interactions", {})
+        if not isinstance(interactions, dict):
+            return counts
+        for interaction in interactions.values():
+            if not isinstance(interaction, dict):
+                continue
+            response = interaction.get("response")
+            if not isinstance(response, dict):
+                continue
+            status_code = response.get("status_code")
+            if status_code is None:
+                continue
+            key = str(status_code)
+            counts[key] = counts.get(key, 0) + 1
+        return counts
 
     def _failures(self, recorder: dict[str, Any]) -> list[dict[str, Any]]:
         output = []

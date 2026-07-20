@@ -1,35 +1,13 @@
-"""RESTScope database module."""
+"""SQLAlchemy persistence adapter for RESTScope."""
 
 from .base import Base
-from .orm import (
-    AgentTaskORM,
-    ArtifactORM,
-    CampaignORM,
-    ContextSnapshotORM,
-    EventLogORM,
-    OperationIntelligenceORM,
-    OperationEdgeORM,
-    OperationORM,
-    SchemaORM,
-    TestObservationORM,
-)
-from .session import SessionLocal, create_engine_from_config, create_engine_from_url
-from .unit_of_work import UnitOfWork
+from .session import create_engine_from_config, create_engine_from_url, make_session_factory
+from .unit_of_work import SqlAlchemySchemaUnitOfWork
 
 __all__ = [
     "Base",
-    "SessionLocal",
+    "SqlAlchemySchemaUnitOfWork",
     "create_engine_from_config",
     "create_engine_from_url",
-    "UnitOfWork",
-    "AgentTaskORM",
-    "ArtifactORM",
-    "CampaignORM",
-    "ContextSnapshotORM",
-    "EventLogORM",
-    "OperationIntelligenceORM",
-    "OperationEdgeORM",
-    "OperationORM",
-    "SchemaORM",
-    "TestObservationORM",
+    "make_session_factory",
 ]

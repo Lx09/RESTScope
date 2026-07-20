@@ -60,6 +60,20 @@ class CliErrorBackend:
         }
 
 
+class StatusCodeBackend:
+    def execute(self, run_id, request, stop_event):
+        yield {
+            "type": "scenario_finished",
+            "failures": 0,
+            "status_code_counts": {"200": 2, "404": 1},
+        }
+        yield {
+            "type": "scenario_finished",
+            "failures": 1,
+            "status_code_counts": {"200": 1, "500": 1},
+        }
+
+
 def test_backend_errors_are_available_as_completed_result(tmp_path) -> None:
     manager = RunManager(backend=FailingBackend(), artifacts=ArtifactStore(tmp_path))
     run_id = manager.start({"schema": "api.yaml"})
@@ -80,6 +94,17 @@ def test_cli_usage_error_maps_to_failed_job_and_errored_outcome(tmp_path) -> Non
     result = manager.get_result(run_id)
     assert result.outcome is RunOutcome.ERRORED
     assert result.exit_code == 2
+
+
+def test_status_code_counts_accumulate_in_progress_and_result(tmp_path) -> None:
+    manager = RunManager(backend=StatusCodeBackend(), artifacts=ArtifactStore(tmp_path))
+    run_id = manager.start({"schema": "api.yaml"})
+    manager.wait(run_id, timeout=1)
+
+    status = manager.get(run_id)
+    assert status.progress.status_code_counts == {"200": 3, "404": 1, "500": 1}
+    result = manager.get_result(run_id)
+    assert result.summary["status_code_counts"] == {"200": 3, "404": 1, "500": 1}
 
 
 def test_max_time_requests_cancellation(tmp_path) -> None:

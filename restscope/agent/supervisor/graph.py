@@ -1,4 +1,4 @@
-"""Supervisor graph for RESTScope program runs."""
+"""Round-based FIFO Supervisor for dynamically discovered operations."""
 
 from __future__ import annotations
 
@@ -6,272 +6,571 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy.orm import Session, sessionmaker
+
+from restscope.openapi_parser import OpenAPIParser
+from restscope.openapi_parser.ir import OperationIR, SchemaIR
 
 from ..operation_test import (
+    OperationCandidate,
+    OperationDependencyAnalyzer,
+    OperationReference,
     OperationTestAgent,
     OperationTestFinding,
     OperationTestReport,
     OperationTestRequest,
     OperationTestRunner,
 )
-from .schemas import (
-    OperationSelection,
-    RESTScopeRunReport,
-    RESTScopeRunRequest,
-)
+from .schemas import BlockedOperation, OperationAttempt, RESTScopeRunReport, RESTScopeRunRequest
 
 
 class RESTScopeMainState(TypedDict, total=False):
-    """Lightweight supervisor state; raw specs and secrets stay out."""
+    """Serializable scheduler state; schema source and headers remain runtime-only."""
 
     request: dict[str, Any]
-    selected_index: int
-    operation_reports: list[dict[str, Any]]
+    operations: list[dict[str, Any]]
+    candidates: list[dict[str, Any]]
+    ready_queue: list[dict[str, Any]]
+    blocked_queue: list[dict[str, Any]]
+    satisfied: list[dict[str, Any]]
+    attempts: list[dict[str, Any]]
+    attempt_counts: dict[str, int]
     findings: list[dict[str, Any]]
+    current_round: int
+    rounds: int
     status: str
+    stop_reason: str
+    failed_operation: dict[str, Any]
+    dependency_cycles: list[list[dict[str, Any]]]
     last_error: dict[str, Any]
     final_report: dict[str, Any]
 
 
 class RESTScopeMainGraph:
-    """Coordinate selected operation tests and aggregate their reports."""
+    """Discover operations and schedule them through two round-based FIFO queues."""
 
     def __init__(
         self,
         *,
         operation_runner: OperationTestRunner,
-        session_factory: sessionmaker[Session] | None = None,
+        dependency_analyzer: OperationDependencyAnalyzer,
     ) -> None:
         self.operation_runner = operation_runner
-        self.session_factory = session_factory
+        self.dependency_analyzer = dependency_analyzer
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
-        """Run the supervisor graph for a direct request."""
-
         runtime_headers = dict(request.headers)
-        graph = self._build_graph(runtime_headers=runtime_headers)
+        graph = self._build_graph(request=request, runtime_headers=runtime_headers)
         final_state = graph.invoke(
             {
-                "request": request.model_dump(exclude={"headers"}),
-                "selected_index": 0,
-                "operation_reports": [],
+                "request": request.model_dump(
+                    exclude={"headers", "schema_source"},
+                    mode="json",
+                ),
+                "operations": [],
+                "candidates": [],
+                "ready_queue": [],
+                "blocked_queue": [],
+                "satisfied": [],
+                "attempts": [],
+                "attempt_counts": {},
                 "findings": [],
-            }
+                "current_round": 0,
+                "rounds": 0,
+                "dependency_cycles": [],
+            },
+            config={"recursion_limit": 10_000},
         )
         return RESTScopeRunReport.model_validate(final_state["final_report"])
 
-    def _build_graph(self, *, runtime_headers: dict[str, str]):
+    def _build_graph(self, *, request: RESTScopeRunRequest, runtime_headers: dict[str, str]):
         graph = StateGraph(RESTScopeMainState)
-        graph.add_node("classify_task", self._classify_task)
-        graph.add_node("validate_permissions", self._validate_permissions)
-        graph.add_node("resolve_operations", self._resolve_operations)
-        graph.add_node("run_next_operation", self._run_next_operation(runtime_headers=runtime_headers))
-        graph.add_node("aggregate_reports", self._aggregate_reports)
+        graph.add_node("validate_runtime", self._validate_runtime(request))
+        graph.add_node("discover_operations", self._discover_operations(request))
+        graph.add_node("run_next_operation", self._run_next_operation(request, runtime_headers))
+        graph.add_node("advance_round", self._advance_round)
         graph.add_node("finalize_report", self._finalize_report)
-        graph.add_node("fail", self._fail)
 
-        graph.add_edge(START, "classify_task")
+        graph.add_edge(START, "validate_runtime")
         graph.add_conditional_edges(
-            "classify_task",
-            self._route_after_error,
-            {"fail": "fail", "next": "validate_permissions"},
+            "validate_runtime",
+            self._route_after_setup,
+            {"finalize": "finalize_report", "next": "discover_operations"},
         )
         graph.add_conditional_edges(
-            "validate_permissions",
-            self._route_after_error,
-            {"fail": "fail", "next": "resolve_operations"},
-        )
-        graph.add_conditional_edges(
-            "resolve_operations",
-            self._route_after_error,
-            {"fail": "fail", "next": "run_next_operation"},
+            "discover_operations",
+            self._route_after_discovery,
+            {"finalize": "finalize_report", "run": "run_next_operation"},
         )
         graph.add_conditional_edges(
             "run_next_operation",
-            self._route_after_operation,
-            {"run_next_operation": "run_next_operation", "aggregate_reports": "aggregate_reports"},
+            self._route_after_attempt,
+            {"finalize": "finalize_report", "run": "run_next_operation", "advance": "advance_round"},
         )
-        graph.add_edge("aggregate_reports", "finalize_report")
+        graph.add_conditional_edges(
+            "advance_round",
+            self._route_after_advance,
+            {"finalize": "finalize_report", "run": "run_next_operation"},
+        )
         graph.add_edge("finalize_report", END)
-        graph.add_edge("fail", END)
         return graph.compile()
 
-    def _classify_task(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        try:
-            request = RESTScopeRunRequest.model_validate(state["request"])
-            if request.task_kind != "operation_test":
-                raise RuntimeError(f"Unsupported task kind: {request.task_kind}")
-            return {}
-        except Exception as exc:
-            return {"last_error": _error_payload(exc, stage="classify_task")}
-
-    def _validate_permissions(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        request = RESTScopeRunRequest.model_validate(state["request"])
-        if not request.allow_live_testing:
-            return {
-                "last_error": {
-                    "stage": "validate_permissions",
-                    "type": "PermissionError",
-                    "message": "Operation testing requires allow_live_testing=True.",
-                }
-            }
-        return {}
-
-    def _resolve_operations(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        request = RESTScopeRunRequest.model_validate(state["request"])
-        if not request.operations:
-            return {
-                "last_error": {
-                    "stage": "resolve_operations",
-                    "type": "ValueError",
-                    "message": "RESTScopeRunRequest requires at least one selected operation.",
-                }
-            }
-        return {}
-
-    def _run_next_operation(self, *, runtime_headers: dict[str, str]):
+    def _validate_runtime(self, request: RESTScopeRunRequest):
         def node(state: RESTScopeMainState) -> RESTScopeMainState:
-            request = RESTScopeRunRequest.model_validate(state["request"])
-            selected_index = int(state.get("selected_index", 0))
-            if selected_index >= len(request.operations):
-                return {}
-
-            operation = request.operations[selected_index]
+            del state
             try:
-                agent = OperationTestAgent(
+                if not request.allow_live_testing:
+                    raise PermissionError("Operation testing requires allow_live_testing=True")
+                self.dependency_analyzer.check_configured()
+                return {}
+            except Exception as exc:
+                return self._technical_error(exc, stage="validate_runtime")
+
+        return node
+
+    def _discover_operations(self, request: RESTScopeRunRequest):
+        def node(state: RESTScopeMainState) -> RESTScopeMainState:
+            del state
+            try:
+                ir = OpenAPIParser.parse(_schema_source_value(request))
+                parser_errors = [
+                    *ir.diagnostics.spec_errors,
+                    *ir.diagnostics.path_errors,
+                    *ir.diagnostics.operation_errors,
+                ]
+                if parser_errors:
+                    first = parser_errors[0]
+                    raise ValueError(f"OpenAPI parsing produced {len(parser_errors)} error(s): {first.message}")
+                indexed = list(enumerate(ir.operations.values()))
+                ordered_ir = [
+                    operation
+                    for _, operation in sorted(
+                        indexed,
+                        key=lambda item: (_path_depth(item[1].path), item[0]),
+                    )
+                ]
+                if not ordered_ir:
+                    raise ValueError("OpenAPI schema contains no testable operations")
+                candidates = [_operation_candidate(operation) for operation in ordered_ir]
+                operations = [candidate.operation for candidate in candidates]
+                return {
+                    "operations": [operation.model_dump(mode="json") for operation in operations],
+                    "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+                    "ready_queue": [operation.model_dump(mode="json") for operation in operations],
+                    "current_round": 1,
+                    "rounds": 1,
+                }
+            except Exception as exc:
+                return self._technical_error(exc, stage="discover_operations")
+
+        return node
+
+    def _run_next_operation(self, request: RESTScopeRunRequest, runtime_headers: dict[str, str]):
+        def node(state: RESTScopeMainState) -> RESTScopeMainState:
+            ready = list(state.get("ready_queue", []))
+            if not ready:
+                return {}
+            operation = OperationReference.model_validate(ready.pop(0))
+            candidates = [OperationCandidate.model_validate(item) for item in state.get("candidates", [])]
+            counts = dict(state.get("attempt_counts", {}))
+            identity_key = _identity_key(operation)
+            attempt_number = counts.get(identity_key, 0) + 1
+            counts[identity_key] = attempt_number
+
+            try:
+                report = OperationTestAgent(
                     runner=self.operation_runner,
-                    session_factory=self.session_factory,
-                )
-                operation_report = agent.run(
+                    dependency_analyzer=self.dependency_analyzer,
+                ).run(
                     OperationTestRequest(
-                        schema_source=request.schema_source,
+                        task_id=request.metadata.get("task_id"),
+                        schema_source=request.schema_source.model_dump(mode="json"),
                         base_url=request.base_url,
-                        method=operation.method,
-                        path=operation.path,
-                        operation_id=operation.operation_id,
+                        operation=operation,
+                        candidate_operations=candidates,
                         headers=runtime_headers,
                         allow_live_testing=request.allow_live_testing,
-                        max_examples=request.max_examples,
-                        boundary_max_examples=request.boundary_max_examples,
-                        max_failures=request.max_failures,
-                        max_time=request.max_time,
-                        poll_interval=request.poll_interval,
-                        poll_timeout=request.poll_timeout,
-                        seed=request.seed,
                     )
                 )
             except Exception as exc:
                 return {
-                    "last_error": _error_payload(
-                        exc,
-                        stage="run_next_operation",
-                        operation=operation,
-                    )
+                    "ready_queue": ready,
+                    "attempt_counts": counts,
+                    **self._technical_error(exc, stage="run_next_operation", operation=operation),
                 }
 
-            if operation_report.status == "errored":
-                return {
-                    "last_error": {
-                        "stage": "run_next_operation",
-                        "type": "OperationTestError",
-                        "message": "Operation test returned an errored report.",
-                        "operation": operation.model_dump(),
-                        "operation_error": operation_report.error,
-                    }
-                }
-
-            reports = list(state.get("operation_reports", [])) + [operation_report.model_dump()]
-            findings = list(state.get("findings", [])) + [
-                finding.model_dump() for finding in operation_report.findings
-            ]
-            return {
-                "selected_index": selected_index + 1,
-                "operation_reports": reports,
-                "findings": findings,
+            analysis = report.dependency_analysis
+            direct_dependencies = analysis.dependencies if analysis is not None else []
+            satisfied_ids = {
+                OperationReference.model_validate(item).identity()
+                for item in state.get("satisfied", [])
             }
+            unsatisfied = [
+                dependency
+                for dependency in direct_dependencies
+                if dependency.identity() not in satisfied_ids
+            ]
+            disposition = "errored"
+            updates: RESTScopeMainState = {}
+
+            if report.status == "errored":
+                updates.update(
+                    {
+                        "status": "errored",
+                        "stop_reason": "technical_error",
+                        "last_error": {
+                            "stage": "run_next_operation",
+                            "type": "OperationTestError",
+                            "message": "Operation test attempt returned an errored report",
+                            "operation": operation.model_dump(mode="json"),
+                            "operation_error": report.error,
+                        },
+                    }
+                )
+            elif analysis is not None and analysis.dependency_issue and (not direct_dependencies or unsatisfied):
+                disposition = "blocked"
+                blocked = list(state.get("blocked_queue", []))
+                blocked.append(
+                    {
+                        "operation": operation.model_dump(mode="json"),
+                        "dependency_hint": analysis.hint,
+                        "direct_dependencies": [item.model_dump(mode="json") for item in direct_dependencies],
+                        "unsatisfied_dependencies": [item.model_dump(mode="json") for item in unsatisfied],
+                    }
+                )
+                updates["blocked_queue"] = blocked
+            elif report.status == "passed" and report.observed_2xx:
+                disposition = "satisfied"
+                updates["satisfied"] = list(state.get("satisfied", [])) + [operation.model_dump(mode="json")]
+            else:
+                disposition = "failed"
+                updates.update(
+                    {
+                        "status": "failed",
+                        "stop_reason": "operation_failed",
+                        "failed_operation": operation.model_dump(mode="json"),
+                    }
+                )
+
+            attempt = OperationAttempt(
+                operation=operation,
+                round_number=int(state.get("current_round", 1)),
+                attempt_number=attempt_number,
+                report=report,
+                disposition=disposition,
+                dependency_hint=analysis.hint if analysis is not None else None,
+                direct_dependencies=direct_dependencies,
+                unsatisfied_dependencies=unsatisfied,
+            )
+            updates.update(
+                {
+                    "ready_queue": ready,
+                    "attempt_counts": counts,
+                    "attempts": list(state.get("attempts", [])) + [attempt.model_dump(mode="json")],
+                    "findings": list(state.get("findings", []))
+                    + [finding.model_dump(mode="json") for finding in report.findings],
+                }
+            )
+            return updates
 
         return node
 
-    def _aggregate_reports(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        reports = [
-            OperationTestReport.model_validate(item)
-            for item in state.get("operation_reports", [])
-        ]
-        status = "passed"
-        if state.get("last_error") is not None:
-            status = "errored"
-        elif any(report.status == "errored" for report in reports):
-            status = "errored"
-        elif any(report.status == "failed" for report in reports):
-            status = "failed"
+    def _advance_round(self, state: RESTScopeMainState) -> RESTScopeMainState:
+        blocked = list(state.get("blocked_queue", []))
+        if not blocked:
+            return {"status": "passed", "stop_reason": "completed"}
 
-        findings = [OperationTestFinding.model_validate(item) for item in state.get("findings", [])]
+        satisfied_ids = {
+            OperationReference.model_validate(item).identity()
+            for item in state.get("satisfied", [])
+        }
+        promotable: list[dict[str, Any]] = []
+        remaining: list[dict[str, Any]] = []
+        for item in blocked:
+            dependencies = [OperationReference.model_validate(value) for value in item.get("direct_dependencies", [])]
+            if dependencies and all(dependency.identity() in satisfied_ids for dependency in dependencies):
+                promotable.append(item)
+            else:
+                remaining.append(item)
+
+        if not promotable:
+            cycles = _dependency_cycles(remaining)
+            return {
+                "blocked_queue": remaining,
+                "dependency_cycles": [
+                    [operation.model_dump(mode="json") for operation in cycle]
+                    for cycle in cycles
+                ],
+                "status": "failed",
+                "stop_reason": "unresolved_dependencies",
+            }
+
+        operation_order = {
+            OperationReference.model_validate(value).identity(): index
+            for index, value in enumerate(state.get("operations", []))
+        }
+        promoted_operations = [OperationReference.model_validate(item["operation"]) for item in promotable]
+        promoted_operations.sort(key=lambda operation: operation_order[operation.identity()])
         return {
-            "status": status,
-            "findings": [finding.model_dump() for finding in findings],
+            "ready_queue": [operation.model_dump(mode="json") for operation in promoted_operations],
+            "blocked_queue": remaining,
+            "current_round": int(state.get("current_round", 1)) + 1,
+            "rounds": int(state.get("rounds", 1)) + 1,
         }
 
     def _finalize_report(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        return {"final_report": self._report_payload(state, error=state.get("last_error"))}
+        operations = [OperationReference.model_validate(item) for item in state.get("operations", [])]
+        attempts = [OperationAttempt.model_validate(item) for item in state.get("attempts", [])]
+        satisfied_ids = {
+            OperationReference.model_validate(item).identity()
+            for item in state.get("satisfied", [])
+        }
+        satisfied = [operation for operation in operations if operation.identity() in satisfied_ids]
+        attempted_ids = {attempt.operation.identity() for attempt in attempts}
+        unattempted = [operation for operation in operations if operation.identity() not in attempted_ids]
+        cycles = [
+            [OperationReference.model_validate(operation) for operation in cycle]
+            for cycle in state.get("dependency_cycles", [])
+        ]
+        cycle_ids = {operation.identity() for cycle in cycles for operation in cycle}
+        failed_payload = state.get("failed_operation")
+        failed_id = OperationReference.model_validate(failed_payload).identity() if failed_payload else None
 
-    def _fail(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        return {"final_report": self._report_payload(state, error=state.get("last_error"))}
+        blocked_operations: list[BlockedOperation] = []
+        for item in state.get("blocked_queue", []):
+            operation = OperationReference.model_validate(item["operation"])
+            direct_dependencies = [
+                OperationReference.model_validate(value)
+                for value in item.get("direct_dependencies", [])
+            ]
+            unsatisfied = [
+                dependency for dependency in direct_dependencies if dependency.identity() not in satisfied_ids
+            ]
+            if not direct_dependencies:
+                reason = "unknown_dependency"
+            elif failed_id is not None and any(dependency.identity() == failed_id for dependency in unsatisfied):
+                reason = "failed_prerequisite"
+            elif operation.identity() in cycle_ids:
+                reason = "dependency_cycle"
+            else:
+                reason = "unsatisfied_dependency"
+            blocked_operations.append(
+                BlockedOperation(
+                    operation=operation,
+                    dependency_hint=item.get("dependency_hint"),
+                    direct_dependencies=direct_dependencies,
+                    unsatisfied_dependencies=unsatisfied,
+                    reason=reason,
+                )
+            )
 
-    def _route_after_error(self, state: RESTScopeMainState) -> str:
-        return "fail" if state.get("last_error") else "next"
-
-    def _route_after_operation(self, state: RESTScopeMainState) -> str:
-        if state.get("last_error"):
-            return "aggregate_reports"
-        request = RESTScopeRunRequest.model_validate(state["request"])
-        return "run_next_operation" if state.get("selected_index", 0) < len(request.operations) else "aggregate_reports"
-
-    def _report_payload(self, state: RESTScopeMainState, *, error: dict[str, Any] | None) -> dict[str, Any]:
-        request = RESTScopeRunRequest.model_validate(state["request"])
-        reports = [OperationTestReport.model_validate(item) for item in state.get("operation_reports", [])]
         findings = [OperationTestFinding.model_validate(item) for item in state.get("findings", [])]
-
-        run_ids: list[str] = []
-        artifact_refs: list[dict[str, Any]] = []
-        for report in reports:
-            run_ids.extend(report.run_ids)
-            artifact_refs.extend(report.artifact_refs)
-        for finding in findings:
-            artifact_refs.extend(finding.artifact_refs)
-
-        return RESTScopeRunReport(
+        run_ids = [run_id for attempt in attempts for run_id in attempt.report.run_ids]
+        artifact_refs = [artifact for attempt in attempts for artifact in attempt.report.artifact_refs]
+        error = state.get("last_error")
+        status = "errored" if error is not None else state.get("status", "failed")
+        stop_reason = "technical_error" if error is not None else state.get("stop_reason", "technical_error")
+        report = RESTScopeRunReport(
             report_id=f"restscope_run_{uuid4().hex}",
-            status="errored" if error is not None else state.get("status", "passed"),
-            task_kind=request.task_kind,
-            operations=request.operations,
-            operation_reports=reports,
+            status=status,
+            stop_reason=stop_reason,
+            operations=operations,
+            attempts=attempts,
+            satisfied_operations=satisfied,
+            blocked_operations=blocked_operations,
+            unattempted_operations=unattempted,
+            dependency_cycles=cycles,
             findings=findings,
             run_ids=_unique(run_ids),
             artifact_refs=_unique_artifact_refs(artifact_refs),
+            rounds=int(state.get("rounds", 0)),
+            attempt_count=len(attempts),
             error=error,
             metadata={
                 "graph": "restscope_main_graph",
-                "selected_operation_count": len(request.operations),
-                "completed_operation_count": len(reports),
+                "discovered_operation_count": len(operations),
+                "satisfied_operation_count": len(satisfied),
             },
-        ).model_dump()
+        )
+        return {"final_report": report.model_dump(mode="json")}
+
+    @staticmethod
+    def _route_after_setup(state: RESTScopeMainState) -> str:
+        return "finalize" if state.get("last_error") else "next"
+
+    @staticmethod
+    def _route_after_discovery(state: RESTScopeMainState) -> str:
+        return "finalize" if state.get("last_error") else "run"
+
+    @staticmethod
+    def _route_after_attempt(state: RESTScopeMainState) -> str:
+        if state.get("status") in {"failed", "errored"}:
+            return "finalize"
+        return "run" if state.get("ready_queue") else "advance"
+
+    @staticmethod
+    def _route_after_advance(state: RESTScopeMainState) -> str:
+        return "finalize" if state.get("status") in {"passed", "failed", "errored"} else "run"
+
+    @staticmethod
+    def _technical_error(
+        exc: Exception,
+        *,
+        stage: str,
+        operation: OperationReference | None = None,
+    ) -> RESTScopeMainState:
+        payload: dict[str, Any] = {"stage": stage, "type": type(exc).__name__, "message": str(exc)}
+        if operation is not None:
+            payload["operation"] = operation.model_dump(mode="json")
+        return {"status": "errored", "stop_reason": "technical_error", "last_error": payload}
 
 
-def _error_payload(
-    exc: Exception,
-    *,
-    stage: str,
-    operation: OperationSelection | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "stage": stage,
-        "type": type(exc).__name__,
-        "message": str(exc),
+def _schema_source_value(request: RESTScopeRunRequest) -> str:
+    source = request.schema_source
+    if source.kind == "file":
+        return source.path
+    if source.kind == "url":
+        return source.url
+    return source.content
+
+
+def _path_depth(path: str) -> int:
+    return sum(1 for segment in path.split("/") if segment)
+
+
+def _operation_candidate(operation: OperationIR) -> OperationCandidate:
+    parameters = []
+    for location, values in (
+        ("path", operation.path_parameters),
+        ("query", operation.query_parameters),
+        ("header", operation.header_parameters),
+        ("cookie", operation.cookie_parameters),
+    ):
+        for parameter in values:
+            parameters.append(
+                {
+                    "name": parameter.name,
+                    "in": location,
+                    "required": parameter.required,
+                    "schema": _schema_structure(parameter.schema),
+                }
+            )
+
+    request_structure = None
+    if operation.request_body is not None:
+        request_structure = {
+            "required": operation.request_body.required,
+            "content": {
+                media_type: _schema_structure(media.schema)
+                for media_type, media in operation.request_body.contents.items()
+            },
+        }
+    response_structure = {
+        status_code: {
+            "content": {
+                media_type: _schema_structure(media.schema)
+                for media_type, media in response.contents.items()
+            }
+        }
+        for status_code, response in operation.responses.by_status.items()
     }
-    if operation is not None:
-        payload["operation"] = operation.model_dump()
-    return payload
+    security = [
+        {"scheme": requirement.scheme_name, "scopes": requirement.scopes}
+        for requirement in operation.security.requirements
+    ]
+    return OperationCandidate(
+        operation=OperationReference(
+            method=operation.method,
+            path=operation.path,
+            operation_id=operation.operation_id,
+        ),
+        summary=operation.summary,
+        parameters=parameters,
+        security=security,
+        request_structure=request_structure,
+        response_structure=response_structure,
+    )
+
+
+def _schema_structure(schema: SchemaIR | None, *, depth: int = 0, seen: set[int] | None = None) -> dict[str, Any]:
+    if schema is None:
+        return {}
+    if depth >= 8:
+        return {"type": schema.type}
+    seen = set() if seen is None else set(seen)
+    if id(schema) in seen:
+        return {"type": schema.type, "recursive": True}
+    seen.add(id(schema))
+    result: dict[str, Any] = {}
+    if schema.type is not None:
+        result["type"] = schema.type
+    if schema.format is not None:
+        result["format"] = schema.format
+    if schema.required:
+        result["required"] = list(schema.required)
+    if schema.properties:
+        result["properties"] = {
+            name: _schema_structure(value, depth=depth + 1, seen=seen)
+            for name, value in schema.properties.items()
+        }
+    if schema.items is not None:
+        result["items"] = _schema_structure(schema.items, depth=depth + 1, seen=seen)
+    for name in ("minimum", "maximum", "min_length", "max_length", "pattern", "min_items", "max_items"):
+        value = getattr(schema, name)
+        if value is not None:
+            result[name] = value
+    return result
+
+
+def _identity_key(operation: OperationReference) -> str:
+    return f"{operation.method}\0{operation.path}\0{operation.operation_id or ''}"
+
+
+def _dependency_cycles(blocked: list[dict[str, Any]]) -> list[list[OperationReference]]:
+    references: dict[tuple[str, str, str | None], OperationReference] = {}
+    for item in blocked:
+        operation = OperationReference.model_validate(item["operation"])
+        references[operation.identity()] = operation
+    graph = {
+        identity: [
+            dependency.identity()
+            for dependency in (
+                OperationReference.model_validate(value)
+                for value in item.get("direct_dependencies", [])
+            )
+            if dependency.identity() in references
+        ]
+        for item in blocked
+        for identity in [OperationReference.model_validate(item["operation"]).identity()]
+    }
+    visiting: set[tuple[str, str, str | None]] = set()
+    visited: set[tuple[str, str, str | None]] = set()
+    stack: list[tuple[str, str, str | None]] = []
+    cycles: list[list[OperationReference]] = []
+    seen_cycles: set[tuple[tuple[str, str, str | None], ...]] = set()
+
+    def visit(node: tuple[str, str, str | None]) -> None:
+        if node in visited:
+            return
+        visiting.add(node)
+        stack.append(node)
+        for dependency in graph.get(node, []):
+            if dependency in visiting:
+                start = stack.index(dependency)
+                raw_cycle = stack[start:]
+                rotations = [tuple(raw_cycle[index:] + raw_cycle[:index]) for index in range(len(raw_cycle))]
+                canonical = min(rotations, key=repr)
+                if canonical not in seen_cycles:
+                    seen_cycles.add(canonical)
+                    cycles.append([references[identity] for identity in raw_cycle])
+            elif dependency not in visited:
+                visit(dependency)
+        stack.pop()
+        visiting.remove(node)
+        visited.add(node)
+
+    for identity in graph:
+        visit(identity)
+    return cycles
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -283,8 +582,7 @@ def _unique_artifact_refs(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: list[dict[str, Any]] = []
     for item in values:
         key = tuple(sorted((str(name), str(value)) for name, value in item.items()))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(item)
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
     return unique

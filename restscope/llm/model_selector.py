@@ -7,13 +7,26 @@ from typing import Literal
 from restscope.llm.schemas import LLMModelConfig
 
 
-LLMRoleName = Literal["planner", "result_analyst", "decision_maker", "check_designer", "intelligence_updater"]
+LLMRoleName = Literal[
+    "planner",
+    "result_analyst",
+    "decision_maker",
+    "check_designer",
+    "intelligence_updater",
+    "operation_dependency_analyzer",
+]
 
 
 class ModelSelector:
     """Map context roles to thinking or fast model settings."""
 
-    THINKING_ROLES = {"planner", "result_analyst", "check_designer", "intelligence_updater"}
+    THINKING_ROLES = {
+        "planner",
+        "result_analyst",
+        "check_designer",
+        "intelligence_updater",
+        "operation_dependency_analyzer",
+    }
     FAST_ROLES = {"decision_maker"}
 
     def __init__(self, *, thinking: LLMModelConfig, fast: LLMModelConfig) -> None:

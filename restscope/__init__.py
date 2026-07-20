@@ -14,22 +14,17 @@ from .openapi_parser import (
 from .restscope_config import CONFIG, RESTScopeConfig
 from .app import RESTScopeApp
 from .catalog import (
-    CatalogInitializationError,
-    OpenAPIInitializationRequest,
-    OpenAPIInitializationResult,
-    initialize_openapi_catalog,
+    SchemaCatalog,
+    SchemaNotFoundError,
+    SchemaRecord,
+    SchemaSourceInput,
+    SchemaSourceValidationError,
 )
+from .bootstrap import build_schema_catalog
 from .agent import (
-    OperationSelection,
-    PlannerAgent,
-    PlannerError,
-    PlannerRequest,
-    PlannerResult,
+    OperationReference,
     RESTScopeRunReport,
     RESTScopeRunRequest,
-    TestRequirement,
-    TestRequirementPlan,
-    build_planner_agent,
 )
 
 __all__ = [
@@ -46,18 +41,13 @@ __all__ = [
     "RESTScopeConfig",
     # Program entry
     "RESTScopeApp",
-    "CatalogInitializationError",
-    "OpenAPIInitializationRequest",
-    "OpenAPIInitializationResult",
-    "initialize_openapi_catalog",
+    "SchemaCatalog",
+    "SchemaNotFoundError",
+    "SchemaRecord",
+    "SchemaSourceInput",
+    "SchemaSourceValidationError",
+    "build_schema_catalog",
     "RESTScopeRunRequest",
     "RESTScopeRunReport",
-    "OperationSelection",
-    "PlannerAgent",
-    "PlannerError",
-    "PlannerRequest",
-    "PlannerResult",
-    "TestRequirement",
-    "TestRequirementPlan",
-    "build_planner_agent",
+    "OperationReference",
 ]

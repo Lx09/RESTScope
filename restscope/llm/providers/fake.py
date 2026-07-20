@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from restscope.db.ids import new_id
+from uuid import uuid4
 from restscope.llm.providers.base import BaseLLMProvider
 from restscope.llm.schemas import LLMRequest, LLMResponse, ToolCall
 
@@ -23,7 +23,7 @@ class FakeProvider(BaseLLMProvider):
                 model=request.model,
                 tool_calls=[
                     ToolCall(
-                        id=new_id("call"),
+                        id=f"call_{uuid4().hex}",
                         name=first_tool.name,
                         arguments={},
                         provider=self.name,
@@ -43,6 +43,8 @@ class FakeProvider(BaseLLMProvider):
         )
 
     def _payload_for_schema(self, schema_name: str | None, *, request: LLMRequest) -> dict:
+        if schema_name == "OperationDependencyAnalysis":
+            return {"dependency_issue": False, "hint": None, "dependencies": []}
         if schema_name == "TestRequirementPlanDraft":
             prompt = "\n".join(message.content for message in request.messages)
             operation_ids = re.findall(r"Operation ID:\s*([^\s]+)", prompt)

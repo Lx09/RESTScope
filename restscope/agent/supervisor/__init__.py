@@ -1,17 +1,31 @@
-"""RESTScope supervisor Agent package."""
+"""RESTScope Supervisor Agent package."""
 
 from .graph import RESTScopeMainGraph
 from .schemas import (
-    OperationSelection,
+    AttemptDisposition,
+    BlockedOperation,
+    FileSchemaSource,
+    InlineSchemaSource,
+    OperationAttempt,
     RESTScopeRunReport,
     RESTScopeRunRequest,
-    SupervisorTaskKind,
+    RunStatus,
+    SchemaSource,
+    StopReason,
+    UrlSchemaSource,
 )
 
 __all__ = [
-    "OperationSelection",
+    "AttemptDisposition",
+    "BlockedOperation",
+    "FileSchemaSource",
+    "InlineSchemaSource",
+    "OperationAttempt",
     "RESTScopeMainGraph",
     "RESTScopeRunReport",
     "RESTScopeRunRequest",
-    "SupervisorTaskKind",
+    "RunStatus",
+    "SchemaSource",
+    "StopReason",
+    "UrlSchemaSource",
 ]

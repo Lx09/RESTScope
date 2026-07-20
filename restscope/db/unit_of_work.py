@@ -1,4 +1,4 @@
-"""Unit of Work transaction boundary."""
+"""SQLAlchemy implementation of the catalog transaction port."""
 
 from __future__ import annotations
 
@@ -6,40 +6,19 @@ from types import TracebackType
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from .repositories import (
-    AgentTaskRepository,
-    ArtifactRepository,
-    CampaignRepository,
-    ContextSnapshotRepository,
-    EventLogRepository,
-    OperationIntelligenceRepository,
-    OperationEdgeRepository,
-    OperationRepository,
-    SchemaRepository,
-    TestObservationRepository,
-)
-from .session import SessionLocal
+from .repositories import SqlAlchemySchemaRepository
 
 
-class UnitOfWork:
-    """Context-managed transaction with all MVP repositories."""
+class SqlAlchemySchemaUnitOfWork:
+    """Context-managed transaction for schema source persistence."""
 
-    def __init__(self, session_factory: sessionmaker[Session] = SessionLocal) -> None:
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self.session_factory = session_factory
         self.session: Session | None = None
 
-    def __enter__(self) -> "UnitOfWork":
+    def __enter__(self) -> "SqlAlchemySchemaUnitOfWork":
         self.session = self.session_factory()
-        self.schemas = SchemaRepository(self.session)
-        self.operations = OperationRepository(self.session)
-        self.operation_edges = OperationEdgeRepository(self.session)
-        self.intelligence = OperationIntelligenceRepository(self.session)
-        self.tasks = AgentTaskRepository(self.session)
-        self.campaigns = CampaignRepository(self.session)
-        self.artifacts = ArtifactRepository(self.session)
-        self.observations = TestObservationRepository(self.session)
-        self.context_snapshots = ContextSnapshotRepository(self.session)
-        self.events = EventLogRepository(self.session)
+        self.schemas = SqlAlchemySchemaRepository(self.session)
         return self
 
     def __exit__(
@@ -48,19 +27,19 @@ class UnitOfWork:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        del tb
+        del exc, tb
         if self.session is None:
             return
-        if exc_type is not None:
+        if exc_type is not None or self.session.in_transaction():
             self.session.rollback()
         self.session.close()
 
     def commit(self) -> None:
         if self.session is None:
-            raise RuntimeError("UnitOfWork is not active")
+            raise RuntimeError("Unit of work is not active")
         self.session.commit()
 
     def rollback(self) -> None:
         if self.session is None:
-            raise RuntimeError("UnitOfWork is not active")
+            raise RuntimeError("Unit of work is not active")
         self.session.rollback()

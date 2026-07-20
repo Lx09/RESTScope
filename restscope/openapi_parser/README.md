@@ -9,7 +9,7 @@
 - 完整的 `$ref` 引用解析（本地、相对路径、file://、http://）
 - 自动补全缺失的 path 参数
 - 错误隔离：单个 operation 失败不会影响整个 spec 的解析
-- 资源索引、依赖线索、约束标签自动生成
+- 自动生成 `operationId` 和 method/path 查找索引
 
 ## 安装
 
@@ -31,6 +31,7 @@ spec = {
     "paths": {
         "/users": {
             "get": {
+                "operationId": "listUsers",
                 "responses": {
                     "200": {"description": "Success"}
                 }
@@ -104,15 +105,11 @@ for op_key, op in ir.operations.items():
 print(ir.components.schemas.keys())
 print(ir.components.parameters.keys())
 
-# 访问资源索引
-for resource_name, resource in ir.indexes.resources.items():
-    print(f"{resource_name}:")
-    print(f"  Collection: {resource.collection_operations}")
-    print(f"  Item: {resource.item_operations}")
+# 按 operationId 查找 operation key
+print(ir.indexes.by_operation_id["listUsers"])
 
-# 访问约束标签
-for tag in ir.indexes.constraint_tags:
-    print(f"{tag.operation_key}: {tag.tag}")
+# 按 method/path 查找 operation key；method 使用小写
+print(ir.indexes.by_method_path[("get", "/users")])
 ```
 
 ## 输出结构
@@ -123,7 +120,7 @@ for tag in ir.indexes.constraint_tags:
 - `components`: 组件容器（schemas、parameters、responses 等）
 - `paths`: PathItemIR 字典
 - `operations`: OperationIR 字典
-- `indexes`: 索引数据（operation_id 索引、资源索引、依赖线索、约束标签）
+- `indexes`: operation 查找索引（`by_operation_id`、`by_method_path`）
 - `diagnostics`: 诊断信息（错误、警告）
 
 ## 项目结构
@@ -160,9 +157,7 @@ openapi_parser/
 │   └── components_parser.py # 组件解析
 └── postprocess/
     ├── __init__.py
-    ├── resource_index.py    # 资源索引构建
-    ├── value_flow.py        # 值索引/操作卡/流图构建
-    └── constraint_tags.py   # 约束标签构建
+    └── schema_sync.py       # 可选的运行时 Schema 推断、比较与合并工具
 ```
 
 ## 运行测试
