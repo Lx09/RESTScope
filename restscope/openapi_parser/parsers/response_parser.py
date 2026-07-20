@@ -15,7 +15,7 @@ from ..ir import (
 )
 from ..resolver import ReferenceResolver
 from .request_body_parser import parse_media_type
-from .schema_parser import parse_schema
+from .schema_parser import extract_legacy_inline_schema, parse_schema
 
 
 def parse_response_headers(
@@ -53,7 +53,7 @@ def parse_response_headers(
 
             # Parse schema
             schema: SchemaIR | None = None
-            schema_raw = header_raw.get("schema")
+            schema_raw = header_raw.get("schema") or extract_legacy_inline_schema(header_raw)
             if schema_raw:
                 schema = parse_schema(schema_raw, resolver, scope, diagnostics)
 

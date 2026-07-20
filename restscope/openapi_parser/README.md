@@ -44,6 +44,34 @@ print(f"Title: {ir.meta.title}")
 print(f"Operations: {list(ir.operations.keys())}")
 ```
 
+### 从 IR 生成选定 operations 的文档
+
+```python
+from restscope.openapi_parser import build_openapi_document
+
+document = build_openapi_document(
+    ir,
+    ["GET /users", "POST /users"],
+)
+```
+
+构建结果是一个 OpenAPI 3.1.0 Python 字典，只包含指定 operations。普通
+Schema 会内联；递归 Schema 和 security schemes 仅保留必要的最小
+`components`。callbacks 和 response links 不会输出。
+
+构建器同时使用 Schema、Parameter、RequestBody、Response、Header、
+MediaType、Example 和 SecurityScheme 节点的 `raw`。类型化 IR 字段优先：
+即使其值为 `None` 或空集合，也不会回退到 raw 中的旧值。Schema raw 中
+尚未类型化的 JSON Schema 关键字（例如 `multipleOf`、`contains`、
+`prefixItems` 和 `unevaluatedProperties`）会递归归一化并输出。其他节点只
+保留 OpenAPI 3.1 白名单内的未建模属性与 `x-*` 扩展，Swagger 2 和解析器
+内部字段会被过滤。
+
+raw 中的本地 Schema 和 Example component 引用会被内联；递归 Schema
+引用会形成最小 `components.schemas` 闭包。外部引用、非对应 component
+引用或缺失引用会抛出 `OperationDocumentGenerationError`。构建过程会深拷贝
+raw 数据，不修改 IR。
+
 ## 使用示例
 
 ### 从文件加载
@@ -161,7 +189,9 @@ python examples/parse_example.py
    - 顶层结构错误会抛出异常
    - 单个 path/operation 错误会被记录并跳过，不影响其他部分
 
-3. 所有 IR 模型都保留 `raw` 字段以保存原始数据
+3. Schema、Parameter、RequestBody、Response、Header、MediaType、Example
+   和 SecurityScheme IR 保留 `raw` 字段；它们用于补充尚未类型化的合法属性，
+   不是类型化字段的回退来源
 
 ## License
 

@@ -5,7 +5,12 @@ from .logging_config import setup_logging, get_logger
 # Auto-initialize logging when package is imported
 setup_logging()
 
-from .openapi_parser import OpenAPIParser, OpenAPISpecIR
+from .openapi_parser import (
+    OpenAPIParser,
+    OpenAPISpecIR,
+    OperationDocumentGenerationError,
+    build_openapi_document,
+)
 from .restscope_config import CONFIG, RESTScopeConfig
 from .app import RESTScopeApp
 from .catalog import (
@@ -34,6 +39,8 @@ __all__ = [
     # OpenAPI Parser
     "OpenAPIParser",
     "OpenAPISpecIR",
+    "OperationDocumentGenerationError",
+    "build_openapi_document",
     # Configuration
     "CONFIG",
     "RESTScopeConfig",

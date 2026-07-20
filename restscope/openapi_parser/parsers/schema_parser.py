@@ -8,6 +8,51 @@ from ..ir import DiagnosticsIR, SchemaIR
 from ..resolver import ReferenceResolver
 
 
+_LEGACY_SCHEMA_KEYS = {
+    "type",
+    "format",
+    "title",
+    "description",
+    "properties",
+    "required",
+    "items",
+    "enum",
+    "default",
+    "multipleOf",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "minProperties",
+    "maxProperties",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "additionalProperties",
+    "readOnly",
+    "writeOnly",
+    "example",
+    "xml",
+}
+
+
+def extract_legacy_inline_schema(raw_object: dict) -> dict | None:
+    """Extract Swagger 2 schema keywords declared directly on a parameter or header."""
+    schema = {
+        key: value
+        for key, value in raw_object.items()
+        if key in _LEGACY_SCHEMA_KEYS
+    }
+    return schema or None
+
+
 def parse_schema(
     raw_schema_node: dict | bool | None,
     resolver: ReferenceResolver | None,

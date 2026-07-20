@@ -44,3 +44,8 @@ class OperationParseError(OpenAPIParserError):
 class SchemaParseError(OpenAPIParserError):
     """Raised when a schema cannot be parsed."""
     pass
+
+
+class OperationDocumentGenerationError(OpenAPIParserError):
+    """Raised when selected operations cannot form a valid OpenAPI document."""
+    pass

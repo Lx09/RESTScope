@@ -341,6 +341,7 @@ class SecuritySchemeIR:
     name: str
     type: str
     location: str | None
+    api_key_name: str | None
     scheme: str | None
     bearer_format: str | None
     flows: dict[str, object]
@@ -360,6 +361,7 @@ class SecurityRequirementIR:
 class OperationSecurityIR:
     """Operation security definition."""
     requirements: list[SecurityRequirementIR]
+    requirement_sets: list[list[SecurityRequirementIR]]
     resolved_schemes: dict[str, SecuritySchemeIR]
 
 

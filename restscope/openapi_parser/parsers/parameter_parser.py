@@ -8,7 +8,7 @@ from ..constants import HTTP_METHODS
 from ..diagnostics import make_diagnostic
 from ..ir import DiagnosticsIR, ExampleIR, ParameterIR, SchemaIR
 from ..resolver import ReferenceResolver
-from .schema_parser import parse_schema
+from .schema_parser import extract_legacy_inline_schema, parse_schema
 
 
 def parse_single_parameter_from_definition(
@@ -82,7 +82,7 @@ def parse_single_parameter_from_definition(
 
     # Parse schema
     schema: SchemaIR | None = None
-    schema_raw = raw_param.get("schema")
+    schema_raw = raw_param.get("schema") or extract_legacy_inline_schema(raw_param)
     if schema_raw:
         schema = parse_schema(schema_raw, resolver, scope, DiagnosticsIR([], [], [], []), pointer)
 

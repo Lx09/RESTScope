@@ -19,7 +19,7 @@ from ..resolver import ReferenceResolver
 from .parameter_parser import parse_single_parameter_from_definition
 from .request_body_parser import parse_request_body
 from .response_parser import parse_responses
-from .schema_parser import parse_schema
+from .schema_parser import extract_legacy_inline_schema, parse_schema
 from .security_parser import parse_security_scheme
 
 
@@ -170,7 +170,7 @@ def parse_components(
 
                     # Parse schema
                     schema: SchemaIR | None = None
-                    schema_raw = header_raw.get("schema")
+                    schema_raw = header_raw.get("schema") or extract_legacy_inline_schema(header_raw)
                     if schema_raw:
                         schema = parse_schema(schema_raw, resolver, None, diagnostics)
 
@@ -204,7 +204,7 @@ def parse_components(
             try:
                 if isinstance(scheme_raw, dict):
                     security_schemes[str(name)] = parse_security_scheme(
-                        str(name), scheme_raw
+                        str(name), scheme_raw, spec_format=adapter.spec_format
                     )
             except Exception as exc:
                 diagnostics.spec_errors.append(
