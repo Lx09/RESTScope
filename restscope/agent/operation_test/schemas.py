@@ -18,7 +18,6 @@ class OperationTestRequest(BaseModel):
 
     task_id: str | None = None
     schema_id: str | None = None
-    operation_db_id: str | None = None
     schema_source: dict[str, Any] | None = None
     base_url: str | None = None
     method: str | None = None
@@ -36,13 +35,11 @@ class OperationTestRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def require_direct_or_db_target(self) -> "OperationTestRequest":
+    def require_direct_target(self) -> "OperationTestRequest":
         direct_input = self.schema_source is not None and self.method is not None and self.path is not None
-        db_input = self.schema_id is not None and self.operation_db_id is not None
-        if not direct_input and not db_input:
+        if not direct_input:
             raise ValueError(
-                "OperationTestRequest requires direct schema_source/method/path "
-                "or schema_id/operation_db_id"
+                "OperationTestRequest requires schema_source, method, and path"
             )
         if self.method is not None:
             self.method = self.method.upper()
@@ -58,7 +55,6 @@ class OperationTarget(BaseModel):
     path: str
     operation_id: str | None = None
     schema_id: str | None = None
-    operation_db_id: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -113,7 +109,6 @@ class OperationTestReport(BaseModel):
     status: OperationTestStatus
     task_id: str | None = None
     schema_id: str | None = None
-    operation_db_id: str | None = None
     operation_id: str | None = None
     method: str | None = None
     path: str | None = None

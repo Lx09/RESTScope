@@ -2,6 +2,10 @@
 
 Status: Completed
 
+Superseded for the active architecture by
+`docs/tasks/schema-source-persistence-redesign.md`. This record remains as
+history of the former ten-table database-backed Planner experiment.
+
 ## Objective
 
 Implement the user-approved Planner Agent design: initialize one OpenAPI

@@ -1,29 +1,60 @@
+"""SQLAlchemy schema repository adapter."""
+
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from restscope.catalog import SchemaRecord
 
 from ..orm import SchemaORM
-from ..records import SchemaRecord
-from .base_repo import BaseRepository
+from ..time import as_utc
 
 
-class SchemaRepository(BaseRepository[SchemaORM, SchemaRecord]):
-    orm_class = SchemaORM
-    record_class = SchemaRecord
+class SqlAlchemySchemaRepository:
+    """Implement the schema repository port with SQLAlchemy."""
 
-    def get_by_hash(self, spec_hash: str) -> SchemaRecord | None:
-        obj = self.session.scalar(select(SchemaORM).where(SchemaORM.spec_hash == spec_hash))
-        return self.to_record(obj) if obj is not None else None
+    def __init__(self, session: Session) -> None:
+        self.session = session
 
-    def get_ready(self) -> SchemaRecord | None:
-        obj = self.session.scalar(
-            select(SchemaORM).where(SchemaORM.catalog_status == "ready")
-        )
-        return self.to_record(obj) if obj is not None else None
+    def add(self, *, id: str, file_path: str | None, raw_content: str | None) -> SchemaRecord:
+        obj = SchemaORM(id=id, file_path=file_path, raw_content=raw_content)
+        self.session.add(obj)
+        self.session.flush()
+        return self._to_record(obj)
 
-    def list_recent(self, *, limit: int = 20) -> list[SchemaRecord]:
-        return self.to_records(
-            self.session.scalars(
-                select(SchemaORM).order_by(SchemaORM.created_at.desc()).limit(limit)
-            ).all()
+    def get(self, schema_id: str) -> SchemaRecord | None:
+        obj = self.session.get(SchemaORM, schema_id)
+        return self._to_record(obj) if obj is not None else None
+
+    def list(self) -> list[SchemaRecord]:
+        objects = self.session.scalars(
+            select(SchemaORM).order_by(SchemaORM.created_at, SchemaORM.id)
+        ).all()
+        return [self._to_record(obj) for obj in objects]
+
+    def replace_source(
+        self,
+        schema_id: str,
+        *,
+        file_path: str | None,
+        raw_content: str | None,
+    ) -> SchemaRecord | None:
+        obj = self.session.get(SchemaORM, schema_id)
+        if obj is None:
+            return None
+        obj.file_path = file_path
+        obj.raw_content = raw_content
+        self.session.flush()
+        self.session.refresh(obj)
+        return self._to_record(obj)
+
+    @staticmethod
+    def _to_record(obj: SchemaORM) -> SchemaRecord:
+        return SchemaRecord(
+            id=obj.id,
+            file_path=obj.file_path,
+            raw_content=obj.raw_content,
+            created_at=as_utc(obj.created_at),
+            updated_at=as_utc(obj.updated_at),
         )

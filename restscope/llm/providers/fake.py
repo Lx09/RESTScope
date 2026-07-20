@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from restscope.db.ids import new_id
+from uuid import uuid4
 from restscope.llm.providers.base import BaseLLMProvider
 from restscope.llm.schemas import LLMRequest, LLMResponse, ToolCall
 
@@ -23,7 +23,7 @@ class FakeProvider(BaseLLMProvider):
                 model=request.model,
                 tool_calls=[
                     ToolCall(
-                        id=new_id("call"),
+                        id=f"call_{uuid4().hex}",
                         name=first_tool.name,
                         arguments={},
                         provider=self.name,

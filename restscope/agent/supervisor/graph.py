@@ -6,7 +6,6 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy.orm import Session, sessionmaker
 
 from ..operation_test import (
     OperationTestAgent,
@@ -41,10 +40,8 @@ class RESTScopeMainGraph:
         self,
         *,
         operation_runner: OperationTestRunner,
-        session_factory: sessionmaker[Session] | None = None,
     ) -> None:
         self.operation_runner = operation_runner
-        self.session_factory = session_factory
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
         """Run the supervisor graph for a direct request."""
@@ -141,7 +138,6 @@ class RESTScopeMainGraph:
             try:
                 agent = OperationTestAgent(
                     runner=self.operation_runner,
-                    session_factory=self.session_factory,
                 )
                 operation_report = agent.run(
                     OperationTestRequest(

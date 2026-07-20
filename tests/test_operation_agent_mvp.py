@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 
@@ -63,63 +61,6 @@ def test_operation_test_agent_returns_fail_report_when_stage_fails() -> None:
     assert [stage.stage for stage in report.stages] == ["smoke", "conformance", "positive"]
 
 
-def test_operation_test_agent_can_load_schema_and_operation_from_db(tmp_path: Path) -> None:
-    from restscope.agent import FakeOperationTestRunner, OperationTestAgent, OperationTestRequest
-    from restscope.db import Base, UnitOfWork, create_engine_from_url
-    from restscope.db.session import make_session_factory
-
-    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'agent.db'}")
-    Base.metadata.create_all(engine)
-    session_factory = make_session_factory(engine)
-
-    with UnitOfWork(session_factory) as uow:
-        uow.schemas.add(
-            id="schema_1",
-            name="Petstore",
-            version="1",
-            spec_hash="hash_1",
-            raw_spec_uri="assets/openapi/petstore-v3.json",
-            normalized_spec_uri=None,
-            openapi_version="3.0.0",
-            operation_count=1,
-        )
-        uow.operations.add(
-            id="op_1",
-            schema_id="schema_1",
-            operation_id="listPets",
-            method="get",
-            path="/pets",
-            tags=[],
-            summary="List pets",
-            resource="pets",
-            mutability="read",
-            security=None,
-            request_schema_refs=[],
-            response_schema_refs=[],
-            card_json={},
-            static_risk_score=0,
-        )
-        uow.commit()
-
-    report = OperationTestAgent(
-        runner=FakeOperationTestRunner(),
-        session_factory=session_factory,
-    ).run(
-        OperationTestRequest(
-            schema_id="schema_1",
-            operation_db_id="op_1",
-            allow_live_testing=True,
-        )
-    )
-
-    assert report.status == "passed"
-    assert report.schema_id == "schema_1"
-    assert report.operation_db_id == "op_1"
-    assert report.operation_id == "listPets"
-    assert report.method == "GET"
-    assert report.path == "/pets"
-
-
 def test_operation_test_report_records_findings_without_raw_artifact_body() -> None:
     from restscope.agent import FakeOperationTestRunner, OperationTestAgent, OperationTestRequest
 
@@ -142,7 +83,7 @@ def test_operation_test_report_records_findings_without_raw_artifact_body() -> N
     assert "full_response_body" not in payload
 
 
-def test_operation_test_request_requires_direct_or_db_input() -> None:
+def test_operation_test_request_requires_direct_input() -> None:
     from pydantic import ValidationError
 
     from restscope.agent import OperationTestRequest

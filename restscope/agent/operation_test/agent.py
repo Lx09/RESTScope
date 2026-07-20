@@ -6,9 +6,6 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy.orm import Session, sessionmaker
-
-from restscope.db import UnitOfWork
 
 from .runner import OperationTestRunner
 from .schemas import (
@@ -45,11 +42,9 @@ class OperationTestAgent:
         self,
         *,
         runner: OperationTestRunner,
-        session_factory: sessionmaker[Session] | None = None,
         stages: list[OperationTestStage] | None = None,
     ) -> None:
         self.runner = runner
-        self.session_factory = session_factory
         self.stages = stages or default_operation_test_stages()
         self._stage_by_name = {stage.name: stage for stage in self.stages}
 
@@ -101,18 +96,14 @@ class OperationTestAgent:
     def _load_operation(self, state: OperationTestState) -> OperationTestState:
         try:
             request = OperationTestRequest.model_validate(state["request"])
-            if request.schema_source is not None and request.method is not None and request.path is not None:
-                target = OperationTarget(
-                    schema_source=request.schema_source,
-                    base_url=request.base_url,
-                    method=request.method,
-                    path=request.path,
-                    operation_id=request.operation_id,
-                    schema_id=request.schema_id,
-                    operation_db_id=request.operation_db_id,
-                )
-            else:
-                target = self._load_target_from_db(request)
+            target = OperationTarget(
+                schema_source=request.schema_source,
+                base_url=request.base_url,
+                method=request.method,
+                path=request.path,
+                operation_id=request.operation_id,
+                schema_id=request.schema_id,
+            )
 
             options = StageOptions(
                 max_examples=request.max_examples,
@@ -126,29 +117,6 @@ class OperationTestAgent:
             return {"target": target.model_dump(exclude={"headers"}), "options": options.model_dump()}
         except Exception as exc:
             return {"last_error": self._error_payload(exc, stage="load_operation")}
-
-    def _load_target_from_db(self, request: OperationTestRequest) -> OperationTarget:
-        if self.session_factory is None:
-            raise RuntimeError("DB-backed operation input requires session_factory")
-        if request.schema_id is None or request.operation_db_id is None:
-            raise RuntimeError("DB-backed operation input requires schema_id and operation_db_id")
-
-        with UnitOfWork(self.session_factory) as uow:
-            schema = uow.schemas.require(request.schema_id)
-            operation = uow.operations.require(request.operation_db_id)
-
-        if operation.schema_id != schema.id:
-            raise RuntimeError(f"Operation {operation.id} does not belong to schema {schema.id}")
-
-        return OperationTarget(
-            schema_source=_schema_source_from_uri(schema.raw_spec_uri),
-            base_url=request.base_url,
-            method=operation.method,
-            path=operation.path,
-            operation_id=operation.operation_id,
-            schema_id=schema.id,
-            operation_db_id=operation.id,
-        )
 
     def _check_capabilities(self, state: OperationTestState) -> OperationTestState:
         try:
@@ -248,7 +216,6 @@ class OperationTestAgent:
             status=status,
             task_id=request.get("task_id"),
             schema_id=target.schema_id if target else request.get("schema_id"),
-            operation_db_id=target.operation_db_id if target else request.get("operation_db_id"),
             operation_id=target.operation_id if target else request.get("operation_id"),
             method=target.method if target else request.get("method"),
             path=target.path if target else request.get("path"),
@@ -269,7 +236,6 @@ class OperationTestAgent:
             "task_id": request.get("task_id"),
             "allow_live_testing": bool(request.get("allow_live_testing")),
             "schema_id": request.get("schema_id"),
-            "operation_db_id": request.get("operation_db_id"),
         }
 
     def _route_after_error(self, state: OperationTestState) -> str:
@@ -286,14 +252,6 @@ class OperationTestAgent:
             "type": type(exc).__name__,
             "message": str(exc),
         }
-
-
-def _schema_source_from_uri(uri: str) -> dict[str, str]:
-    if uri.startswith(("http://", "https://")):
-        return {"kind": "url", "url": uri}
-    if uri.startswith("file://"):
-        return {"kind": "file", "path": uri.removeprefix("file://")}
-    return {"kind": "file", "path": uri}
 
 
 def _unique(values: list[str]) -> list[str]:

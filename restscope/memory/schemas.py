@@ -68,7 +68,7 @@ class MemoryQuery(BaseModel):
 
 
 class MemoryPackage(BaseModel):
-    """Selected memory ready for ContextBuilder consumption."""
+    """Selected memory ready for database-independent prompt construction."""
 
     schema_id: str
     task_id: str | None
