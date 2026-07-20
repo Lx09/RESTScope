@@ -32,6 +32,7 @@ class RunProgress(BaseModel):
     scenarios: int = 0
     failures: int = 0
     errors: int = 0
+    status_code_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class RunStatus(BaseModel):

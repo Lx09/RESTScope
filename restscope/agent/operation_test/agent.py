@@ -1,4 +1,4 @@
-"""LangGraph scaffold for testing one OpenAPI operation."""
+"""LangGraph workflow for one complete operation-test attempt."""
 
 from __future__ import annotations
 
@@ -7,28 +7,26 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
+from .dependency import OperationDependencyAnalyzer
 from .runner import OperationTestRunner
 from .schemas import (
+    OperationDependencyAnalysis,
+    OperationExecutionResult,
     OperationTarget,
     OperationTestFinding,
     OperationTestReport,
     OperationTestRequest,
-    OperationTestStageResult,
-    StageOptions,
 )
-from .stages import OperationTestStage, default_operation_test_stages
 
 
 class OperationTestState(TypedDict, total=False):
-    """Lightweight graph state for the single-operation test workflow."""
+    """Serializable attempt state; runtime headers stay outside this object."""
 
     request: dict[str, Any]
     target: dict[str, Any]
-    options: dict[str, Any]
     capabilities: dict[str, Any]
-    pending_stages: list[str]
-    completed_stages: list[str]
-    stage_results: list[dict[str, Any]]
+    execution: dict[str, Any]
+    dependency_analysis: dict[str, Any]
     findings: list[dict[str, Any]]
     status: str
     last_error: dict[str, Any]
@@ -36,28 +34,22 @@ class OperationTestState(TypedDict, total=False):
 
 
 class OperationTestAgent:
-    """Run smoke, conformance, positive, negative, and boundary stages."""
+    """Run Schemathesis once, then analyze direct operation dependencies."""
 
     def __init__(
         self,
         *,
         runner: OperationTestRunner,
-        stages: list[OperationTestStage] | None = None,
+        dependency_analyzer: OperationDependencyAnalyzer,
     ) -> None:
         self.runner = runner
-        self.stages = stages or default_operation_test_stages()
-        self._stage_by_name = {stage.name: stage for stage in self.stages}
+        self.dependency_analyzer = dependency_analyzer
 
     def run(self, request: OperationTestRequest) -> OperationTestReport:
-        """Execute the graph and return a sanitized operation test report."""
-
         runtime_headers = dict(request.headers)
         graph = self._build_graph(runtime_headers=runtime_headers)
         initial_state: OperationTestState = {
-            "request": request.model_dump(exclude={"headers"}),
-            "pending_stages": [stage.name for stage in self.stages],
-            "completed_stages": [],
-            "stage_results": [],
+            "request": request.model_dump(exclude={"headers"}, mode="json"),
             "findings": [],
         }
         final_state = graph.invoke(initial_state)
@@ -67,8 +59,9 @@ class OperationTestAgent:
         graph = StateGraph(OperationTestState)
         graph.add_node("load_operation", self._load_operation)
         graph.add_node("check_capabilities", self._check_capabilities)
-        graph.add_node("run_stage", self._run_stage(runtime_headers=runtime_headers))
-        graph.add_node("evaluate_results", self._evaluate_results)
+        graph.add_node("run_operation", self._run_operation(runtime_headers=runtime_headers))
+        graph.add_node("analyze_dependencies", self._analyze_dependencies)
+        graph.add_node("evaluate_result", self._evaluate_result)
         graph.add_node("finalize_report", self._finalize_report)
         graph.add_node("fail", self._fail)
 
@@ -81,14 +74,19 @@ class OperationTestAgent:
         graph.add_conditional_edges(
             "check_capabilities",
             self._route_after_error,
-            {"fail": "fail", "next": "run_stage"},
+            {"fail": "fail", "next": "run_operation"},
         )
         graph.add_conditional_edges(
-            "run_stage",
-            self._route_after_stage,
-            {"fail": "fail", "run_stage": "run_stage", "evaluate_results": "evaluate_results"},
+            "run_operation",
+            self._route_after_error,
+            {"fail": "fail", "next": "analyze_dependencies"},
         )
-        graph.add_edge("evaluate_results", "finalize_report")
+        graph.add_conditional_edges(
+            "analyze_dependencies",
+            self._route_after_error,
+            {"fail": "fail", "next": "evaluate_result"},
+        )
+        graph.add_edge("evaluate_result", "finalize_report")
         graph.add_edge("finalize_report", END)
         graph.add_edge("fail", END)
         return graph.compile()
@@ -96,97 +94,73 @@ class OperationTestAgent:
     def _load_operation(self, state: OperationTestState) -> OperationTestState:
         try:
             request = OperationTestRequest.model_validate(state["request"])
+            self.dependency_analyzer.check_configured()
             target = OperationTarget(
                 schema_source=request.schema_source,
                 base_url=request.base_url,
-                method=request.method,
-                path=request.path,
-                operation_id=request.operation_id,
-                schema_id=request.schema_id,
+                operation=request.operation,
             )
-
-            options = StageOptions(
-                max_examples=request.max_examples,
-                boundary_max_examples=request.boundary_max_examples,
-                max_failures=request.max_failures,
-                max_time=request.max_time,
-                poll_interval=request.poll_interval,
-                poll_timeout=request.poll_timeout,
-                seed=request.seed,
-            )
-            return {"target": target.model_dump(exclude={"headers"}), "options": options.model_dump()}
+            return {"target": target.model_dump(exclude={"headers"}, mode="json")}
         except Exception as exc:
             return {"last_error": self._error_payload(exc, stage="load_operation")}
 
     def _check_capabilities(self, state: OperationTestState) -> OperationTestState:
         try:
-            target = OperationTarget.model_validate(state["target"])
             capabilities = self.runner.check_capabilities(
-                target=target,
+                target=OperationTarget.model_validate(state["target"]),
                 state=self._runner_state(state),
             )
             return {"capabilities": capabilities}
         except Exception as exc:
             return {"last_error": self._error_payload(exc, stage="check_capabilities")}
 
-    def _run_stage(self, *, runtime_headers: dict[str, str]):
+    def _run_operation(self, *, runtime_headers: dict[str, str]):
         def node(state: OperationTestState) -> OperationTestState:
-            pending = list(state.get("pending_stages", []))
-            if not pending:
-                return {}
-            stage_name = pending.pop(0)
             try:
-                stage = self._stage_by_name[stage_name]
                 target = OperationTarget.model_validate(state["target"]).model_copy(
                     update={"headers": runtime_headers}
                 )
-                result = self.runner.run_stage(
-                    stage=stage,
-                    target=target,
-                    options=StageOptions.model_validate(state["options"]),
-                    state=self._runner_state(state),
-                )
-                completed = list(state.get("completed_stages", [])) + [stage_name]
-                results = list(state.get("stage_results", [])) + [result.model_dump()]
-                return {
-                    "pending_stages": pending,
-                    "completed_stages": completed,
-                    "stage_results": results,
-                }
+                execution = self.runner.run_operation(target=target, state=self._runner_state(state))
+                return {"execution": execution.model_dump(mode="json")}
             except Exception as exc:
-                return {
-                    "pending_stages": pending,
-                    "last_error": self._error_payload(exc, stage=stage_name),
-                }
+                return {"last_error": self._error_payload(exc, stage="run_operation")}
 
         return node
 
-    def _evaluate_results(self, state: OperationTestState) -> OperationTestState:
-        findings: list[OperationTestFinding] = []
-        status = "passed"
-        for payload in state.get("stage_results", []):
-            result = OperationTestStageResult.model_validate(payload)
-            findings.extend(result.findings)
-            if result.status == "failed":
-                status = "failed"
-                if not result.findings:
-                    findings.append(
-                        OperationTestFinding(
-                            stage=result.stage,
-                            severity="high",
-                            title=f"{result.stage} failures",
-                            summary=f"{result.stage} returned a failed result.",
-                            evidence_refs=result.failure_ids,
-                            artifact_refs=result.artifact_refs,
-                        )
-                    )
-            elif result.status == "errored":
-                status = "errored"
+    def _analyze_dependencies(self, state: OperationTestState) -> OperationTestState:
+        try:
+            request = OperationTestRequest.model_validate(state["request"])
+            execution = OperationExecutionResult.model_validate(state["execution"])
+            analysis = self.dependency_analyzer.analyze(
+                operation=request.operation,
+                candidates=request.candidate_operations,
+                execution=execution,
+            )
+            return {"dependency_analysis": analysis.model_dump(mode="json")}
+        except Exception as exc:
+            return {"last_error": self._error_payload(exc, stage="analyze_dependencies")}
 
-        return {
-            "status": status,
-            "findings": [finding.model_dump() for finding in findings],
-        }
+    def _evaluate_result(self, state: OperationTestState) -> OperationTestState:
+        execution = OperationExecutionResult.model_validate(state["execution"])
+        outcome = execution.outcome.lower()
+        if outcome in {"passed", "success", "succeeded"}:
+            status = "passed"
+        elif outcome == "errored":
+            status = "errored"
+        else:
+            status = "failed"
+        findings: list[OperationTestFinding] = []
+        if status == "failed":
+            findings.append(
+                OperationTestFinding(
+                    severity="high",
+                    title="Schemathesis reported operation failures",
+                    summary=f"Schemathesis returned {execution.outcome} with {len(execution.failure_ids)} failure(s).",
+                    evidence_refs=execution.failure_ids or [execution.run_id],
+                    artifact_refs=execution.artifact_refs,
+                )
+            )
+        return {"status": status, "findings": [finding.model_dump(mode="json") for finding in findings]}
 
     def _finalize_report(self, state: OperationTestState) -> OperationTestState:
         return {"final_report": self._report_payload(state, error=None)}
@@ -195,76 +169,40 @@ class OperationTestAgent:
         return {"final_report": self._report_payload(state, error=state.get("last_error"))}
 
     def _report_payload(self, state: OperationTestState, *, error: dict[str, Any] | None) -> dict[str, Any]:
-        target_payload = state.get("target") or {}
-        target = OperationTarget.model_validate(target_payload) if target_payload else None
-        stage_results = [OperationTestStageResult.model_validate(item) for item in state.get("stage_results", [])]
+        request = OperationTestRequest.model_validate(state["request"])
+        execution_payload = state.get("execution")
+        execution = OperationExecutionResult.model_validate(execution_payload) if execution_payload else None
+        analysis_payload = state.get("dependency_analysis")
+        analysis = OperationDependencyAnalysis.model_validate(analysis_payload) if analysis_payload else None
         findings = [OperationTestFinding.model_validate(item) for item in state.get("findings", [])]
         status = "errored" if error is not None else state.get("status", "passed")
-
-        artifact_refs: list[dict[str, Any]] = []
-        run_ids: list[str] = []
-        for result in stage_results:
-            if result.run_id is not None:
-                run_ids.append(result.run_id)
-            artifact_refs.extend(result.artifact_refs)
-        for finding in findings:
-            artifact_refs.extend(finding.artifact_refs)
-
-        request = state.get("request", {})
         return OperationTestReport(
             report_id=f"optest_report_{uuid4().hex}",
             status=status,
-            task_id=request.get("task_id"),
-            schema_id=target.schema_id if target else request.get("schema_id"),
-            operation_id=target.operation_id if target else request.get("operation_id"),
-            method=target.method if target else request.get("method"),
-            path=target.path if target else request.get("path"),
-            stages=stage_results,
+            task_id=request.task_id,
+            operation=request.operation,
+            execution=execution,
+            dependency_analysis=analysis,
+            observed_2xx=execution.observed_2xx if execution else False,
             findings=findings,
-            run_ids=_unique(run_ids),
-            artifact_refs=_unique_artifact_refs(artifact_refs),
+            run_ids=[execution.run_id] if execution else [],
+            artifact_refs=execution.artifact_refs if execution else [],
             error=error,
-            metadata={
-                "agent": "operation_test_agent",
-                "stage_count": len(stage_results),
-            },
-        ).model_dump()
+            metadata={"agent": "operation_test_agent", "schemathesis_run_count": 1 if execution else 0},
+        ).model_dump(mode="json")
 
-    def _runner_state(self, state: OperationTestState) -> dict[str, Any]:
+    @staticmethod
+    def _runner_state(state: OperationTestState) -> dict[str, Any]:
         request = state.get("request", {})
         return {
             "task_id": request.get("task_id"),
             "allow_live_testing": bool(request.get("allow_live_testing")),
-            "schema_id": request.get("schema_id"),
         }
 
-    def _route_after_error(self, state: OperationTestState) -> str:
+    @staticmethod
+    def _route_after_error(state: OperationTestState) -> str:
         return "fail" if state.get("last_error") else "next"
 
-    def _route_after_stage(self, state: OperationTestState) -> str:
-        if state.get("last_error"):
-            return "fail"
-        return "run_stage" if state.get("pending_stages") else "evaluate_results"
-
-    def _error_payload(self, exc: Exception, *, stage: str) -> dict[str, Any]:
-        return {
-            "stage": stage,
-            "type": type(exc).__name__,
-            "message": str(exc),
-        }
-
-
-def _unique(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(values))
-
-
-def _unique_artifact_refs(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[tuple[tuple[str, str], ...]] = set()
-    unique: list[dict[str, Any]] = []
-    for item in values:
-        key = tuple(sorted((str(name), str(value)) for name, value in item.items()))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(item)
-    return unique
+    @staticmethod
+    def _error_payload(exc: Exception, *, stage: str) -> dict[str, Any]:
+        return {"stage": stage, "type": type(exc).__name__, "message": str(exc)}

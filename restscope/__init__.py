@@ -17,7 +17,7 @@ from .catalog import (
 )
 from .bootstrap import build_schema_catalog
 from .agent import (
-    OperationSelection,
+    OperationReference,
     RESTScopeRunReport,
     RESTScopeRunRequest,
 )
@@ -42,5 +42,5 @@ __all__ = [
     "build_schema_catalog",
     "RESTScopeRunRequest",
     "RESTScopeRunReport",
-    "OperationSelection",
+    "OperationReference",
 ]

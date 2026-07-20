@@ -43,6 +43,8 @@ class FakeProvider(BaseLLMProvider):
         )
 
     def _payload_for_schema(self, schema_name: str | None, *, request: LLMRequest) -> dict:
+        if schema_name == "OperationDependencyAnalysis":
+            return {"dependency_issue": False, "hint": None, "dependencies": []}
         if schema_name == "TestRequirementPlanDraft":
             prompt = "\n".join(message.content for message in request.messages)
             operation_ids = re.findall(r"Operation ID:\s*([^\s]+)", prompt)

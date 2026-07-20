@@ -29,6 +29,10 @@ def test_scenario_finished_is_compacted_and_failures_are_extracted() -> None:
                     ]
                 },
                 "interactions": {
+                    "parent": {
+                        "request": {"method": "POST", "uri": "https://api.example/users"},
+                        "response": {"status_code": 201, "headers": {}},
+                    },
                     "child": {
                         "request": {
                             "method": "GET",
@@ -47,6 +51,7 @@ def test_scenario_finished_is_compacted_and_failures_are_extracted() -> None:
     assert event["type"] == "scenario_finished"
     assert event["operation"] == "POST /users"
     assert event["failures"] == 1
+    assert event["status_code_counts"] == {"201": 1, "500": 1}
     assert "recorder" not in event
     [failure] = event["_failures"]
     assert failure["check"] == "not_a_server_error"
@@ -55,6 +60,29 @@ def test_scenario_finished_is_compacted_and_failures_are_extracted() -> None:
     assert "secret" not in failure["curl"]
     assert failure["curl"].startswith("curl -X GET")
     assert [case["id"] for case in failure["related_cases"]] == ["parent", "child"]
+
+
+def test_scenario_finished_counts_successful_interactions_without_failures() -> None:
+    [event] = NdjsonProjector().project(
+        {
+            "ScenarioFinished": {
+                "status": "success",
+                "recorder": {
+                    "label": "GET /users",
+                    "checks": {},
+                    "interactions": {
+                        "one": {"response": {"status_code": 200}},
+                        "two": {"response": {"status_code": 204}},
+                        "three": {"response": {"status_code": 200}},
+                    },
+                },
+            }
+        }
+    )
+
+    assert event["failures"] == 0
+    assert event["status_code_counts"] == {"200": 2, "204": 1}
+    assert "_failures" not in event
 
 
 def test_loading_and_engine_events_have_stable_shapes() -> None:

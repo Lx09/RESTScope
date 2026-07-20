@@ -1,4 +1,4 @@
-"""Operation test runner abstractions and Schemathesis MCP scaffold."""
+"""Operation runner abstractions and the Schemathesis MCP adapter."""
 
 from __future__ import annotations
 
@@ -10,96 +10,68 @@ from uuid import uuid4
 from restscope.capabilities import ToolExecutor
 from restscope.llm import ToolCall, ToolResult
 
-from .schemas import OperationTarget, OperationTestFinding, OperationTestStageResult, StageOptions
-from .stages import OperationTestStage
+from .schemas import FailureSummary, OperationExecutionResult, OperationTarget
 
 
 class OperationTestRunner(Protocol):
-    """Runner protocol used by OperationTestAgent graph nodes."""
+    """Runner protocol used by OperationTestAgent."""
 
-    def check_capabilities(self, *, target: OperationTarget, state: dict[str, Any]) -> dict[str, Any]:
-        """Return runner capability metadata, or raise when unavailable."""
+    def check_capabilities(self, *, target: OperationTarget, state: dict[str, Any]) -> dict[str, Any]: ...
 
-    def run_stage(
-        self,
-        *,
-        stage: OperationTestStage,
-        target: OperationTarget,
-        options: StageOptions,
-        state: dict[str, Any],
-    ) -> OperationTestStageResult:
-        """Run one testing stage and return a sanitized summary."""
+    def run_operation(self, *, target: OperationTarget, state: dict[str, Any]) -> OperationExecutionResult: ...
 
 
 @dataclass(frozen=True)
 class FakeOperationTestCall:
-    """Recorded fake runner invocation for tests."""
-
-    stage: str
     method: str
     path: str
 
 
 class FakeOperationTestRunner:
-    """Deterministic runner for graph and report tests."""
+    """Deterministic single-run adapter for unit tests."""
 
-    def __init__(self, *, fail_stage: str | None = None, failed_stage: str | None = None) -> None:
-        self.fail_stage = fail_stage
-        self.failed_stage = failed_stage
+    def __init__(
+        self,
+        *,
+        results: dict[tuple[str, str], OperationExecutionResult | list[OperationExecutionResult]] | None = None,
+        error_paths: set[str] | None = None,
+    ) -> None:
+        self.results = results or {}
+        self.error_paths = error_paths or set()
         self.calls: list[FakeOperationTestCall] = []
 
     def check_capabilities(self, *, target: OperationTarget, state: dict[str, Any]) -> dict[str, Any]:
         del target, state
         return {"runner": "fake", "available": True}
 
-    def run_stage(
-        self,
-        *,
-        stage: OperationTestStage,
-        target: OperationTarget,
-        options: StageOptions,
-        state: dict[str, Any],
-    ) -> OperationTestStageResult:
-        del options, state
-        self.calls.append(FakeOperationTestCall(stage=stage.name, method=target.method, path=target.path))
-        if stage.name == self.fail_stage:
-            raise RuntimeError(f"Fake stage error: {stage.name}")
-
-        run_id = f"fake_{stage.name}_run"
-        if stage.name == self.failed_stage:
-            finding = OperationTestFinding(
-                stage=stage.name,
-                severity="high",
-                title=f"{stage.name} mismatch",
-                summary=f"Fake runner reported a mismatch during {stage.name}.",
-                evidence_refs=[run_id],
-            )
-            return OperationTestStageResult(
-                stage=stage.name,
-                status="failed",
-                run_id=run_id,
-                outcome="failed",
-                summary={"runner": "fake", "checks": {"failed": 1}},
-                failure_ids=[f"{run_id}_failure"],
-                findings=[finding],
-            )
-
-        return OperationTestStageResult(
-            stage=stage.name,
-            status="passed",
-            run_id=run_id,
+    def run_operation(self, *, target: OperationTarget, state: dict[str, Any]) -> OperationExecutionResult:
+        del state
+        operation = target.operation
+        self.calls.append(FakeOperationTestCall(method=operation.method, path=operation.path))
+        if operation.path in self.error_paths:
+            raise RuntimeError(f"Fake operation error: {operation.path}")
+        configured = self.results.get((operation.method, operation.path))
+        if isinstance(configured, list):
+            if configured:
+                return configured.pop(0)
+        elif configured is not None:
+            return configured
+        slug = f"{operation.method.lower()}_{operation.path.strip('/').replace('/', '_') or 'root'}"
+        return OperationExecutionResult(
+            run_id=f"fake_{slug}_run",
             outcome="passed",
-            summary={"runner": "fake", "checks": {"passed": 1}},
+            status_code_counts={"200": 1},
         )
 
 
 class SchemathesisOperationRunner:
-    """Run operation stages through Schemathesis MCP tools via ToolExecutor."""
+    """Run exactly one operation through Schemathesis MCP tools."""
 
     START_RUN = "mcp.schemathesis.start_run"
     GET_CAPABILITIES = "mcp.schemathesis.get_capabilities"
     GET_RUN = "mcp.schemathesis.get_run"
     GET_RESULT = "mcp.schemathesis.get_result"
+    GET_FAILURE = "mcp.schemathesis.get_failure"
 
     def __init__(self, *, tool_executor: ToolExecutor, poll_interval: float = 0.5, poll_timeout: float = 180.0) -> None:
         self.tool_executor = tool_executor
@@ -111,17 +83,10 @@ class SchemathesisOperationRunner:
         result = self._execute_tool(name=self.GET_CAPABILITIES, arguments={}, state=state)
         return result.structured if isinstance(result.structured, dict) else {"content": result.content}
 
-    def run_stage(
-        self,
-        *,
-        stage: OperationTestStage,
-        target: OperationTarget,
-        options: StageOptions,
-        state: dict[str, Any],
-    ) -> OperationTestStageResult:
+    def run_operation(self, *, target: OperationTarget, state: dict[str, Any]) -> OperationExecutionResult:
         start_result = self._execute_tool(
             name=self.START_RUN,
-            arguments=self._start_run_arguments(stage=stage, target=target, options=options),
+            arguments=self._start_run_arguments(target),
             state=state,
         )
         start_payload = start_result.structured if isinstance(start_result.structured, dict) else {}
@@ -129,10 +94,22 @@ class SchemathesisOperationRunner:
         if not run_id:
             raise RuntimeError("Schemathesis start_run did not return run_id")
 
-        self._wait_for_run(run_id=str(run_id), options=options, state=state)
+        self._wait_for_run(run_id=str(run_id), state=state)
         result = self._execute_tool(name=self.GET_RESULT, arguments={"run_id": str(run_id)}, state=state)
         payload = result.structured if isinstance(result.structured, dict) else {}
-        return self._stage_result_from_payload(stage=stage, run_id=str(run_id), payload=payload)
+        failure_ids = [str(item) for item in payload.get("failure_ids", [])]
+        summaries = [self._get_failure_summary(str(run_id), failure_id, state) for failure_id in failure_ids[:20]]
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        status_counts = summary.get("status_code_counts", {})
+        return OperationExecutionResult(
+            run_id=str(run_id),
+            outcome=str(payload.get("outcome") or "errored"),
+            status_code_counts={str(key): int(value) for key, value in status_counts.items()},
+            failure_ids=failure_ids,
+            failure_summaries=summaries,
+            artifact_refs=_artifact_refs(payload.get("artifacts")),
+            stop_reason=payload.get("stop_reason"),
+        )
 
     def _execute_tool(self, *, name: str, arguments: dict[str, Any], state: dict[str, Any]) -> ToolResult:
         result = self.tool_executor.execute(
@@ -144,38 +121,22 @@ class SchemathesisOperationRunner:
             raise RuntimeError(f"Tool {name} failed: {result.error or result.status}")
         return result
 
-    def _start_run_arguments(
-        self,
-        *,
-        stage: OperationTestStage,
-        target: OperationTarget,
-        options: StageOptions,
-    ) -> dict[str, Any]:
-        max_examples = options.boundary_max_examples if stage.name == "boundary" else options.max_examples
-        if stage.max_examples_override is not None:
-            max_examples = stage.max_examples_override
-
+    @staticmethod
+    def _start_run_arguments(target: OperationTarget) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "schema": target.schema_source,
             "base_url": target.base_url,
             "headers": target.headers or None,
-            "phases": stage.phases,
-            "checks": stage.checks or None,
-            "generation_modes": stage.generation_modes,
-            "include": {"path": target.path, "method": target.method.upper()},
-            "max_examples": max_examples,
-            "max_failures": options.max_failures,
-            "max_time": options.max_time,
-            "seed": options.seed,
+            "include": {
+                "path": target.operation.path,
+                "method": target.operation.method,
+            },
         }
         return {key: value for key, value in arguments.items() if value is not None}
 
-    def _wait_for_run(self, *, run_id: str, options: StageOptions, state: dict[str, Any]) -> None:
-        timeout = options.poll_timeout if options.poll_timeout is not None else self.poll_timeout
-        interval = options.poll_interval if options.poll_interval is not None else self.poll_interval
-        deadline = time.monotonic() + timeout
+    def _wait_for_run(self, *, run_id: str, state: dict[str, Any]) -> None:
+        deadline = time.monotonic() + self.poll_timeout
         terminal_states = {"completed", "failed", "errored", "cancelled", "canceled", "expired", "finished"}
-
         while True:
             run_result = self._execute_tool(name=self.GET_RUN, arguments={"run_id": run_id}, state=state)
             payload = run_result.structured if isinstance(run_result.structured, dict) else {}
@@ -184,43 +145,24 @@ class SchemathesisOperationRunner:
                 return
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Schemathesis run timed out: {run_id}")
-            if interval > 0:
-                time.sleep(interval)
+            if self.poll_interval > 0:
+                time.sleep(self.poll_interval)
 
-    def _stage_result_from_payload(
-        self,
-        *,
-        stage: OperationTestStage,
-        run_id: str,
-        payload: dict[str, Any],
-    ) -> OperationTestStageResult:
-        failure_ids = [str(item) for item in payload.get("failure_ids", [])]
-        outcome = str(payload.get("outcome") or payload.get("status") or ("failed" if failure_ids else "passed"))
-        status = "passed" if outcome.lower() in {"passed", "success", "succeeded"} and not failure_ids else "failed"
-        artifact_refs = _artifact_refs(payload.get("artifacts"))
-        findings: list[OperationTestFinding] = []
-        if status == "failed":
-            findings.append(
-                OperationTestFinding(
-                    stage=stage.name,
-                    severity="high",
-                    title="Schemathesis reported operation failures",
-                    summary=f"Schemathesis found {len(failure_ids) or 1} failure(s) in {stage.name}.",
-                    evidence_refs=failure_ids or [run_id],
-                    artifact_refs=artifact_refs,
-                )
-            )
-
-        summary = payload.get("summary")
-        return OperationTestStageResult(
-            stage=stage.name,
-            status=status,
-            run_id=run_id,
-            outcome=outcome,
-            summary=summary if isinstance(summary, dict) else {},
-            failure_ids=failure_ids,
-            artifact_refs=artifact_refs,
-            findings=findings,
+    def _get_failure_summary(self, run_id: str, failure_id: str, state: dict[str, Any]) -> FailureSummary:
+        result = self._execute_tool(
+            name=self.GET_FAILURE,
+            arguments={"run_id": run_id, "failure_id": failure_id},
+            state=state,
+        )
+        payload = result.structured if isinstance(result.structured, dict) else {}
+        response = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+        raw_status = response.get("status_code")
+        return FailureSummary(
+            failure_id=failure_id,
+            check=str(payload.get("check") or "unknown_check"),
+            title=str(payload.get("title") or "Schemathesis failure"),
+            message=str(payload.get("message") or ""),
+            response_status=int(raw_status) if raw_status is not None else None,
         )
 
 
@@ -228,13 +170,7 @@ def _artifact_refs(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict):
         return [{"name": str(name), "uri": str(uri)} for name, uri in value.items()]
     if isinstance(value, list):
-        refs: list[dict[str, Any]] = []
-        for item in value:
-            if isinstance(item, dict):
-                refs.append(item)
-            else:
-                refs.append({"uri": str(item)})
-        return refs
+        return [item if isinstance(item, dict) else {"uri": str(item)} for item in value]
     if value is None:
         return []
     return [{"uri": str(value)}]

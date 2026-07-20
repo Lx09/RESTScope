@@ -84,10 +84,9 @@ def test_tool_validator_does_not_require_approval_for_authorized_operation_test_
 
 def test_schemathesis_runner_uses_tool_executor_and_operation_filter() -> None:
     from restscope.agent import (
+        OperationReference,
         OperationTarget,
         SchemathesisOperationRunner,
-        StageOptions,
-        default_operation_test_stages,
     )
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry
 
@@ -97,6 +96,7 @@ def test_schemathesis_runner_uses_tool_executor_and_operation_filter() -> None:
         ("mcp.schemathesis.start_run", False, True, "high"),
         ("mcp.schemathesis.get_run", True, False, "low"),
         ("mcp.schemathesis.get_result", True, False, "low"),
+        ("mcp.schemathesis.get_failure", True, False, "low"),
     ]:
         registry.register(
             spec=_tool_spec(
@@ -110,23 +110,61 @@ def test_schemathesis_runner_uses_tool_executor_and_operation_filter() -> None:
     executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
     runner = SchemathesisOperationRunner(tool_executor=executor, poll_interval=0, poll_timeout=1)
 
-    result = runner.run_stage(
-        stage=default_operation_test_stages()[0],
+    result = runner.run_operation(
         target=OperationTarget(
             schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
             base_url="http://localhost:8000",
-            method="get",
-            path="/pets",
+            operation=OperationReference(method="get", path="/pets"),
             headers={},
         ),
-        options=StageOptions(max_examples=5, max_failures=2, max_time=30, seed=7),
         state={"allow_live_testing": True},
     )
 
-    assert result.status == "passed"
+    assert result.outcome == "passed"
     assert calls[0][0] == "mcp.schemathesis.start_run"
     assert calls[0][1]["include"] == {"path": "/pets", "method": "GET"}
     assert calls[0][1]["schema"] == {"kind": "file", "path": "assets/openapi/petstore-v3.json"}
+    assert set(calls[0][1]) == {"schema", "base_url", "include"}
+    assert result.status_code_counts == {"200": 3}
+
+
+def test_schemathesis_runner_reads_at_most_twenty_compact_failure_summaries() -> None:
+    from restscope.agent import OperationReference, OperationTarget, SchemathesisOperationRunner
+    from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry
+
+    calls: list[tuple[str, dict]] = []
+    registry = ToolRegistry()
+    for name, read_only, requires_approval, risk_level in [
+        ("mcp.schemathesis.start_run", False, True, "high"),
+        ("mcp.schemathesis.get_run", True, False, "low"),
+        ("mcp.schemathesis.get_result", True, False, "low"),
+        ("mcp.schemathesis.get_failure", True, False, "low"),
+    ]:
+        registry.register(
+            spec=_tool_spec(name, read_only=read_only, requires_approval=requires_approval, risk_level=risk_level),
+            handler=lambda _name=name, **arguments: _handle_failure_tool_call(calls, _name, arguments),
+        )
+    runner = SchemathesisOperationRunner(
+        tool_executor=ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy())),
+        poll_interval=0,
+        poll_timeout=1,
+    )
+
+    result = runner.run_operation(
+        target=OperationTarget(
+            schema_source={"kind": "file", "path": "api.yaml"},
+            operation=OperationReference(method="GET", path="/pets"),
+            headers={"Authorization": "Bearer runtime-secret"},
+        ),
+        state={"allow_live_testing": True},
+    )
+
+    assert len(result.failure_ids) == 25
+    assert len(result.failure_summaries) == 20
+    assert sum(name == "mcp.schemathesis.get_failure" for name, _ in calls) == 20
+    assert result.failure_summaries[0].response_status == 404
+    assert "runtime-secret" not in result.model_dump_json()
+    assert "response-secret" not in result.model_dump_json()
 
 
 def _handle_tool_call(calls: list[tuple[str, dict]], name: str, arguments: dict) -> dict:
@@ -140,9 +178,39 @@ def _handle_tool_call(calls: list[tuple[str, dict]], name: str, arguments: dict)
             "structured": {
                 "run_id": arguments["run_id"],
                 "outcome": "passed",
-                "summary": {"checks": {"passed": 3}},
+                "summary": {"checks": {"passed": 3}, "status_code_counts": {"200": 3}},
                 "failure_ids": [],
                 "artifacts": {"events": "schemathesis://runs/run_1/events.ndjson"},
+            }
+        }
+    raise AssertionError(name)
+
+
+def _handle_failure_tool_call(calls: list[tuple[str, dict]], name: str, arguments: dict) -> dict:
+    calls.append((name, arguments))
+    if name == "mcp.schemathesis.start_run":
+        assert set(arguments) == {"schema", "headers", "include"}
+        return {"structured": {"run_id": "run_failures"}}
+    if name == "mcp.schemathesis.get_run":
+        return {"structured": {"state": "completed"}}
+    if name == "mcp.schemathesis.get_result":
+        return {
+            "structured": {
+                "outcome": "failed",
+                "summary": {"status_code_counts": {"404": 25}},
+                "failure_ids": [f"failure_{index}" for index in range(25)],
+            }
+        }
+    if name == "mcp.schemathesis.get_failure":
+        return {
+            "structured": {
+                "failure_id": arguments["failure_id"],
+                "check": "status_code_conformance",
+                "title": "Unexpected status",
+                "message": "Expected a documented status",
+                "request": {"headers": {"Authorization": "response-secret"}, "body": "response-secret"},
+                "response": {"status_code": 404, "body": "response-secret"},
+                "curl": "curl -H response-secret",
             }
         }
     raise AssertionError(name)

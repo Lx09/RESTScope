@@ -7,6 +7,8 @@ from types import TracebackType
 from typing import Any
 
 from restscope.agent import (
+    LLMOperationDependencyAnalyzer,
+    OperationDependencyAnalyzer,
     OperationTestRunner,
     RESTScopeMainGraph,
     RESTScopeRunReport,
@@ -14,6 +16,7 @@ from restscope.agent import (
     SchemathesisOperationRunner,
 )
 from restscope.capabilities import CapabilityRuntime, build_capabilities_with_mcp_host
+from restscope.llm import ModelSelector, build_llm_client
 from restscope.restscope_config import RESTScopeConfig
 
 
@@ -25,10 +28,12 @@ class RESTScopeApp:
         *,
         config: RESTScopeConfig,
         operation_runner: OperationTestRunner,
+        dependency_analyzer: OperationDependencyAnalyzer,
         capability_runtime: CapabilityRuntime | Any | None = None,
     ) -> None:
         self.config = config
         self.operation_runner = operation_runner
+        self.dependency_analyzer = dependency_analyzer
         self.capability_runtime = capability_runtime
         self._closed = False
 
@@ -38,6 +43,7 @@ class RESTScopeApp:
         *,
         env_file: str | Path | None = None,
         operation_runner: OperationTestRunner | None = None,
+        dependency_analyzer: OperationDependencyAnalyzer | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
     ) -> "RESTScopeApp":
         """Load `.env`/environment config and build the program runtime."""
@@ -46,6 +52,7 @@ class RESTScopeApp:
         return cls.from_config(
             config,
             operation_runner=operation_runner,
+            dependency_analyzer=dependency_analyzer,
             capability_runtime=capability_runtime,
         )
 
@@ -55,6 +62,7 @@ class RESTScopeApp:
         config: RESTScopeConfig,
         *,
         operation_runner: OperationTestRunner | None = None,
+        dependency_analyzer: OperationDependencyAnalyzer | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
     ) -> "RESTScopeApp":
         """Build RESTScope from an explicit config object."""
@@ -65,9 +73,18 @@ class RESTScopeApp:
             runtime = runtime or build_capabilities_with_mcp_host(config=config.mcp.servers_file)
             runner = SchemathesisOperationRunner(tool_executor=runtime.tool_executor)
 
+        analyzer = dependency_analyzer
+        if analyzer is None:
+            selector = ModelSelector.from_config(config.llm)
+            analyzer = LLMOperationDependencyAnalyzer(
+                client=build_llm_client(config.llm),
+                model=selector.select("operation_dependency_analyzer"),
+            )
+
         return cls(
             config=config,
             operation_runner=runner,
+            dependency_analyzer=analyzer,
             capability_runtime=runtime,
         )
 
@@ -77,6 +94,7 @@ class RESTScopeApp:
         self._ensure_open()
         return RESTScopeMainGraph(
             operation_runner=self.operation_runner,
+            dependency_analyzer=self.dependency_analyzer,
         ).run(request)
 
     def close(self) -> None:

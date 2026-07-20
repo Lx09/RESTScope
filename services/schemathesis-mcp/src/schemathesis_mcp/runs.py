@@ -188,6 +188,9 @@ class RunManager:
             elif event_type == "scenario_finished":
                 progress.scenarios += 1
                 progress.failures += int(event.get("failures", 0))
+                for status_code, count in event.get("status_code_counts", {}).items():
+                    key = str(status_code)
+                    progress.status_code_counts[key] = progress.status_code_counts.get(key, 0) + int(count)
             elif event_type in {"non_fatal_error", "fatal_error"}:
                 progress.errors += 1
             elif event_type == "engine_finished":

@@ -4,6 +4,10 @@
 
 Completed.
 
+Superseded for the active architecture by
+`docs/tasks/supervisor-dependency-scheduler-mvp.md`. This record describes the
+former five-stage OperationTestAgent experiment.
+
 ## Objective
 
 Add the first LangGraph-based agent scaffold for testing a single OpenAPI operation with Schemathesis-backed stages.
