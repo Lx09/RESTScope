@@ -24,11 +24,6 @@ from .parsers import (
 )
 from .parsers.parameter_parser import merge_parameters, inject_missing_path_parameters
 from .parsers.server_parser import resolve_operation_servers
-from .postprocess import (
-    build_constraint_tags,
-    build_resource_index,
-    build_value_flow_indexes,
-)
 from .resolver import ReferenceResolver
 from .versioning import detect_spec_version_and_adapter
 
@@ -335,9 +330,6 @@ class OpenAPIParser:
             indexes=SpecIndexesIR(
                 by_operation_id={},
                 by_method_path={},
-                resources={},
-                constraint_tags=[],
-                operation_resource_map={},
             ),
             diagnostics=diagnostics,
         )
@@ -398,10 +390,7 @@ class OpenAPIParser:
 
             ir.paths[path] = path_item_ir
 
-        # Build indexes
+        # Build operation lookup indexes
         build_operation_indexes(ir)
-        build_resource_index(ir)
-        build_constraint_tags(ir)
-        build_value_flow_indexes(ir)
 
         return ir
