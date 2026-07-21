@@ -20,6 +20,7 @@ from .request_factory import LLMRequestFactory
 from .schemas import (
     LLMMessage,
     LLMModelConfig,
+    LLMReasoningConfig,
     LLMRequest,
     LLMResponse,
     ToolCall,
@@ -48,6 +49,7 @@ __all__ = [
     "LLMRequestFactory",
     "LLMMessage",
     "LLMModelConfig",
+    "LLMReasoningConfig",
     "LLMRequest",
     "LLMResponse",
     "ToolCall",

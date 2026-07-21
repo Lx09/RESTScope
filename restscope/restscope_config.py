@@ -64,6 +64,8 @@ class ModelConfig:
     timeout: int = 60
     temperature: float = 0.7
     max_tokens: int = 128000
+    reasoning_mode: str = "default"
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,7 +108,11 @@ class RESTScopeConfig:
         values = _merged_environment(env_file or PROJECT_ROOT / ".env")
         data_dir = Path(values.get("DATA_DIR", str(PROJECT_ROOT / "data"))).expanduser()
         log_file = values.get("LOG_FILE")
-        thinking = _load_model_config(values, "THINK")
+        thinking = _load_model_config(
+            values,
+            "THINK",
+            default_reasoning_mode="enabled",
+        )
 
         return cls(
             paths=PathsConfig(data_dir=data_dir),
@@ -118,7 +124,12 @@ class RESTScopeConfig:
             ),
             llm=LLMConfig(
                 thinking=thinking,
-                fast=_load_model_config(values, "FAST", fallback=thinking),
+                fast=_load_model_config(
+                    values,
+                    "FAST",
+                    fallback=thinking,
+                    default_reasoning_mode="disabled",
+                ),
             ),
             db=DBConfig(
                 url=values.get("DB_URL", "sqlite:///./data/restscope.db"),
@@ -141,6 +152,7 @@ def _load_model_config(
     prefix: str,
     *,
     fallback: ModelConfig | None = None,
+    default_reasoning_mode: str = "default",
 ) -> ModelConfig:
     return ModelConfig(
         provider=values.get(f"{prefix}_PROVIDER", fallback.provider if fallback else "openai_compatible"),
@@ -156,6 +168,8 @@ def _load_model_config(
             values.get(f"{prefix}_MAX_TOKENS"),
             fallback.max_tokens if fallback else 128000,
         ),
+        reasoning_mode=values.get(f"{prefix}_REASONING_MODE", default_reasoning_mode),
+        reasoning_effort=values.get(f"{prefix}_REASONING_EFFORT") or None,
     )
 
 

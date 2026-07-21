@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from restscope.llm.schemas import LLMModelConfig
+from restscope.llm.schemas import LLMModelConfig, LLMReasoningConfig
 
 
 LLMRoleName = Literal[
@@ -14,6 +14,7 @@ LLMRoleName = Literal[
     "check_designer",
     "intelligence_updater",
     "operation_dependency_analyzer",
+    "openapi_retrieval",
 ]
 
 
@@ -26,6 +27,7 @@ class ModelSelector:
         "check_designer",
         "intelligence_updater",
         "operation_dependency_analyzer",
+        "openapi_retrieval",
     }
     FAST_ROLES = {"decision_maker"}
 
@@ -57,5 +59,9 @@ class ModelSelector:
             timeout_seconds=raw_config.timeout,
             response_format="json_schema",
             tool_choice="none",
+            reasoning=LLMReasoningConfig(
+                mode=getattr(raw_config, "reasoning_mode", "default"),
+                effort=getattr(raw_config, "reasoning_effort", None),
+            ),
             enabled=bool(raw_config.model),
         )

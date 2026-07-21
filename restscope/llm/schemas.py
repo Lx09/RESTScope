@@ -7,12 +7,32 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-LLMProviderName = Literal["fake", "openai_compatible", "anthropic"]
+LLMProviderName = Literal["fake", "openai_compatible", "deepseek", "anthropic"]
 LLMRole = Literal["system", "user", "assistant", "tool"]
 LLMResponseFormat = Literal["text", "json", "json_schema"]
+LLMReasoningMode = Literal["default", "enabled", "disabled"]
+LLMReasoningEffort = Literal["high", "max"]
 ToolKind = Literal["local_function", "mcp_tool", "skill", "provider_builtin"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolResultStatus = Literal["succeeded", "failed", "denied", "timed_out", "approval_required"]
+
+
+class ToolCall(BaseModel):
+    """A model-requested tool invocation."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    provider: str | None = None
+    raw: dict[str, Any] | None = None
+    provider_context: dict[str, Any] = Field(default_factory=dict, repr=False)
+
+
+class LLMReasoningConfig(BaseModel):
+    """Provider-neutral reasoning controls for one model request."""
+
+    mode: LLMReasoningMode = "default"
+    effort: LLMReasoningEffort | None = None
 
 
 class LLMMessage(BaseModel):
@@ -22,6 +42,7 @@ class LLMMessage(BaseModel):
     content: str
     tool_call_id: str | None = None
     name: str | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list)
 
 
 class ToolSpec(BaseModel):
@@ -37,16 +58,6 @@ class ToolSpec(BaseModel):
     requires_approval: bool = False
     timeout_seconds: int = 30
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class ToolCall(BaseModel):
-    """A model-requested tool invocation."""
-
-    id: str
-    name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    provider: str | None = None
-    raw: dict[str, Any] | None = None
 
 
 class ToolResult(BaseModel):
@@ -76,6 +87,7 @@ class LLMRequest(BaseModel):
     tools: list[ToolSpec] = Field(default_factory=list)
     tool_choice: str = "none"
     timeout_seconds: int = 60
+    reasoning: LLMReasoningConfig = Field(default_factory=LLMReasoningConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -107,6 +119,7 @@ class LLMModelConfig(BaseModel):
     timeout_seconds: int = 60
     response_format: LLMResponseFormat = "json_schema"
     tool_choice: str = "none"
+    reasoning: LLMReasoningConfig = Field(default_factory=LLMReasoningConfig)
     enabled: bool = True
 
 

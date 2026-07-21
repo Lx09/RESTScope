@@ -40,6 +40,7 @@ class LLMRequestFactory:
             json_schema_name=json_schema_name,
             tools=tools or [],
             tool_choice=tool_choice or model_config.tool_choice,
+            reasoning=model_config.reasoning,
             metadata={
                 "task_id": context_package.task_id,
                 "schema_id": context_package.schema_id,
@@ -58,8 +59,14 @@ class LLMRequestFactory:
         tool_results: list[ToolResult],
     ) -> LLMRequest:
         messages = list(original_request.messages)
-        if original_response.content:
-            messages.append(LLMMessage(role="assistant", content=original_response.content))
+        if original_response.content is not None or original_response.tool_calls:
+            messages.append(
+                LLMMessage(
+                    role="assistant",
+                    content=original_response.content or "",
+                    tool_calls=original_response.tool_calls,
+                )
+            )
 
         for result in tool_results:
             content = result.content or str(result.structured or result.error or "")

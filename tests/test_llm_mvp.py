@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel
@@ -67,6 +68,33 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
 
     assert LLMClient is not None
     assert request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
+
+
+def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest, ToolCall
+
+    request = LLMRequest(
+        provider="deepseek",
+        model="deepseek-v4-pro",
+        messages=[LLMMessage(role="user", content="investigate")],
+        reasoning=LLMReasoningConfig(mode="enabled", effort="high"),
+    )
+    tool_call = ToolCall(
+        id="call_search",
+        name="openapi.search_symbols",
+        arguments={"query": "orderId"},
+        provider="deepseek",
+        provider_context={"reasoning_content": "Search for producer operations."},
+    )
+
+    restored_request = LLMRequest.model_validate(request.model_dump(mode="json"))
+    restored_call = ToolCall.model_validate(tool_call.model_dump(mode="json"))
+
+    assert restored_request.reasoning.mode == "enabled"
+    assert restored_request.reasoning.effort == "high"
+    assert restored_call.provider_context == {
+        "reasoning_content": "Search for producer operations."
+    }
 
 
 def test_fake_provider_returns_contract_specific_json_and_tool_calls() -> None:
@@ -204,9 +232,109 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
     assert kwargs is not None
     assert kwargs["model"] == "gpt-test"
     assert kwargs["response_format"]["type"] == "json_schema"
-    assert kwargs["tools"][0]["function"]["name"] == "artifact.read_summary"
+    provider_tool_name = kwargs["tools"][0]["function"]["name"]
+    assert "." not in provider_tool_name
+    assert len(provider_tool_name) <= 64
     assert response.parsed_json == {"ok": True}
     assert response.provider_request_id == "chatcmpl_test"
+
+
+def test_openai_compatible_provider_serializes_assistant_tool_call_history() -> None:
+    from restscope.llm import LLMMessage, LLMRequest, ToolCall
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    fake_client = _FakeOpenAIClient()
+    provider = OpenAICompatibleProvider(api_key="test-key", client=fake_client)
+    provider.invoke(
+        LLMRequest(
+            provider="openai_compatible",
+            model="gpt-test",
+            messages=[
+                LLMMessage(role="user", content="investigate"),
+                LLMMessage(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_search",
+                            name="openapi.search_symbols",
+                            arguments={"query": "userId"},
+                        )
+                    ],
+                ),
+                LLMMessage(
+                    role="tool",
+                    content='{"results": []}',
+                    name="openapi.search_symbols",
+                    tool_call_id="call_search",
+                ),
+            ],
+        )
+    )
+
+    messages = fake_client.chat.completions.kwargs["messages"]
+    history_tool_name = messages[1]["tool_calls"][0]["function"]["name"]
+    assert "." not in history_tool_name
+    assert messages[1]["tool_calls"] == [
+        {
+            "id": "call_search",
+            "type": "function",
+            "function": {
+                "name": history_tool_name,
+                "arguments": '{"query": "userId"}',
+            },
+        }
+    ]
+    assert messages[2] == {
+        "role": "tool",
+        "content": '{"results": []}',
+        "tool_call_id": "call_search",
+    }
+
+
+def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None:
+    from restscope.llm import LLMMessage, LLMRequest, ToolSpec
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    class EchoToolCompletions:
+        def create(self, **kwargs):
+            provider_name = kwargs["tools"][0]["function"]["name"]
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[
+                    {
+                        "id": "call_search",
+                        "function": {"name": provider_name, "arguments": '{"query":"userId"}'},
+                    }
+                ],
+            )
+            return SimpleNamespace(
+                id="chatcmpl_tool",
+                choices=[SimpleNamespace(message=message, finish_reason="tool_calls")],
+                usage=None,
+            )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=EchoToolCompletions()),
+    )
+    response = OpenAICompatibleProvider(api_key="test-key", client=client).invoke(
+        LLMRequest(
+            provider="openai_compatible",
+            model="gpt-test",
+            messages=[LLMMessage(role="user", content="search")],
+            tools=[
+                ToolSpec(
+                    name="openapi.search_symbols",
+                    description="Search symbols",
+                    kind="local_function",
+                    input_schema={"type": "object", "properties": {}},
+                )
+            ],
+            tool_choice="auto",
+        )
+    )
+
+    assert response.tool_calls[0].name == "openapi.search_symbols"
 
 
 def test_request_factory_preserves_context_contract_metadata_and_tools() -> None:
@@ -239,6 +367,62 @@ def test_request_factory_preserves_context_contract_metadata_and_tools() -> None
     assert request.tool_choice == "auto"
 
 
+def test_request_factory_preserves_assistant_tool_calls_and_provider_context() -> None:
+    from restscope.llm import (
+        LLMMessage,
+        LLMRequest,
+        LLMRequestFactory,
+        LLMResponse,
+        ToolCall,
+        ToolResult,
+    )
+
+    original_request = LLMRequest(
+        provider="deepseek",
+        model="deepseek-v4-pro",
+        messages=[LLMMessage(role="user", content="Investigate")],
+        tool_choice="auto",
+    )
+    original_response = LLMResponse(
+        provider="deepseek",
+        model="deepseek-v4-pro",
+        content=None,
+        tool_calls=[
+            ToolCall(
+                id="call_search",
+                name="openapi.search_symbols",
+                arguments={"query": "orderId"},
+                provider="deepseek",
+                provider_context={"reasoning_content": "Search for producers."},
+            )
+        ],
+    )
+
+    next_request = LLMRequestFactory().with_tool_results(
+        original_request=original_request,
+        original_response=original_response,
+        tool_results=[
+            ToolResult(
+                tool_call_id="call_search",
+                name="openapi.search_symbols",
+                status="succeeded",
+                content='{"matches": []}',
+            )
+        ],
+    )
+
+    assert [message.role for message in next_request.messages] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assistant = next_request.messages[1]
+    assert assistant.content == ""
+    assert assistant.tool_calls[0].provider_context == {
+        "reasoning_content": "Search for producers."
+    }
+
+
 def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
     from restscope.llm import ModelSelector
     from restscope.restscope_config import RESTScopeConfig
@@ -267,6 +451,64 @@ def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
     assert selector.select("intelligence_updater").model == "strong-model"
     assert selector.select("decision_maker").model == "fast-model"
     assert selector.select("decision_maker").provider == "fake"
+
+
+def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider(
+    tmp_path: Path,
+) -> None:
+    from restscope.llm import ModelSelector, build_llm_registry
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "THINK_PROVIDER=deepseek",
+                "THINK_MODEL=deepseek-v4-pro",
+                "THINK_API_KEY=test-key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = RESTScopeConfig.from_environment(env_file)
+    selector = ModelSelector.from_config(config.llm)
+    registry = build_llm_registry(config.llm)
+
+    assert selector.select("openapi_retrieval").reasoning.mode == "enabled"
+    assert selector.select("decision_maker").reasoning.mode == "disabled"
+    assert registry.list_names() == ["deepseek", "fake"]
+    assert isinstance(registry.get("deepseek"), DeepSeekProvider)
+    assert registry.get("deepseek").base_url == "https://api.deepseek.com"
+
+
+def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> None:
+    from restscope.llm import ModelSelector
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "THINK_PROVIDER=deepseek",
+                "THINK_MODEL=deepseek-v4-pro",
+                "THINK_API_KEY=test-key",
+                "THINK_REASONING_MODE=enabled",
+                "THINK_REASONING_EFFORT=max",
+                "FAST_PROVIDER=deepseek",
+                "FAST_MODEL=deepseek-v4-flash",
+                "FAST_REASONING_MODE=disabled",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    selector = ModelSelector.from_config(RESTScopeConfig.from_environment(env_file).llm)
+
+    assert selector.select("openapi_retrieval").reasoning.effort == "max"
+    assert selector.select("decision_maker").reasoning.mode == "disabled"
+    assert selector.select("decision_maker").reasoning.effort is None
 
 
 def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:

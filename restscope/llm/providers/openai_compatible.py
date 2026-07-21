@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import time
 from typing import Any
 
@@ -64,7 +66,11 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if response_format is not None:
             kwargs["response_format"] = response_format
 
-        tools = [self._tool_to_openai(tool) for tool in request.tools if tool.kind in {"local_function", "mcp_tool"}]
+        tools = [
+            self._tool_to_openai(tool)
+            for tool in request.tools
+            if tool.kind in {"local_function", "mcp_tool"}
+        ]
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = request.tool_choice
@@ -73,9 +79,21 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
     def _message_to_openai(self, message: LLMMessage) -> dict[str, Any]:
         payload: dict[str, Any] = {"role": message.role, "content": message.content}
+        if message.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": _provider_tool_name(call.name),
+                        "arguments": json.dumps(call.arguments),
+                    },
+                }
+                for call in message.tool_calls
+            ]
         if message.tool_call_id:
             payload["tool_call_id"] = message.tool_call_id
-        if message.name:
+        if message.name and message.role != "tool":
             payload["name"] = message.name
         return payload
 
@@ -101,7 +119,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         return {
             "type": "function",
             "function": {
-                "name": tool.name,
+                "name": _provider_tool_name(tool.name),
                 "description": tool.description,
                 "parameters": tool.input_schema,
             },
@@ -122,7 +140,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             model=request.model,
             content=content,
             parsed_json=parsed_json,
-            tool_calls=self._extract_tool_calls(message),
+            tool_calls=self._extract_tool_calls(message, request=request),
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
             total_tokens=getattr(usage, "total_tokens", None),
@@ -131,8 +149,13 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             latency_ms=latency_ms,
         )
 
-    def _extract_tool_calls(self, message: Any) -> list[ToolCall]:
+    def _extract_tool_calls(self, message: Any, *, request: LLMRequest) -> list[ToolCall]:
         raw_tool_calls = getattr(message, "tool_calls", None) or []
+        internal_names = {
+            _provider_tool_name(tool.name): tool.name
+            for tool in request.tools
+            if tool.kind in {"local_function", "mcp_tool"}
+        }
         tool_calls: list[ToolCall] = []
         for raw_call in raw_tool_calls:
             function = getattr(raw_call, "function", None)
@@ -148,7 +171,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             tool_calls.append(
                 ToolCall(
                     id=getattr(raw_call, "id", None) or (raw_call.get("id") if isinstance(raw_call, dict) else ""),
-                    name=name,
+                    name=internal_names.get(name, name),
                     arguments=self._parse_arguments(arguments),
                     provider=self.name,
                     raw=self._raw_tool_call_dict(raw_call),
@@ -181,3 +204,14 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if hasattr(raw_call, "model_dump"):
             return raw_call.model_dump(mode="json")
         return {"repr": repr(raw_call)}
+
+
+def _provider_tool_name(name: str) -> str:
+    """Encode an internal tool name for OpenAI's function-name character set."""
+
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+        return name
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    prefix = sanitized[: 64 - len(digest) - 1]
+    return f"{prefix}_{digest}"

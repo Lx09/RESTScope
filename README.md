@@ -26,6 +26,25 @@ FAST_MODEL=glm-4.7-flash
 # FAST_PROVIDER, FAST_API_KEY, and FAST_BASE_URL default to THINK_* values
 ```
 
+The official DeepSeek API is available through the explicit `deepseek`
+provider. DeepSeek protocol differences remain inside the LLM adapter, so
+Agents use the same provider-neutral requests and tool loops:
+
+```env
+THINK_PROVIDER=deepseek
+THINK_MODEL=deepseek-v4-pro
+THINK_API_KEY=your-deepseek-api-key
+THINK_REASONING_MODE=enabled
+THINK_REASONING_EFFORT=high
+
+FAST_PROVIDER=deepseek
+FAST_MODEL=deepseek-v4-flash
+FAST_REASONING_MODE=disabled
+```
+
+`https://api.deepseek.com` is used by default. Third-party DeepSeek gateways
+are not part of the supported contract.
+
 ## Development
 
 ```bash
