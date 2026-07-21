@@ -18,4 +18,6 @@ class LLMClient:
         try:
             return provider.invoke(request)
         except (ProviderTimeoutError, ProviderRateLimitError):
+            if request.metadata.get("disable_retry"):
+                raise
             return provider.invoke(request)

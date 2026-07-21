@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..operation_test import OperationReference, OperationTestFinding, OperationTestReport
 
@@ -16,16 +16,22 @@ StopReason = Literal["completed", "operation_failed", "unresolved_dependencies",
 
 
 class FileSchemaSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["file"]
     path: str
 
 
 class UrlSchemaSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["url"]
     url: str
 
 
 class InlineSchemaSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["inline"]
     format: Literal["yaml", "json"] = "yaml"
     content: str
@@ -40,9 +46,8 @@ SchemaSource = Annotated[
 class RESTScopeRunRequest(BaseModel):
     """The only public Supervisor input for an MVP run."""
 
-    schema_source: SchemaSource
-    base_url: str | None = None
-    headers: dict[str, str] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+
     allow_live_testing: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 

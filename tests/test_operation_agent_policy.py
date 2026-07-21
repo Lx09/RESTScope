@@ -15,6 +15,27 @@ def _tool_spec(name: str, *, read_only: bool, requires_approval: bool, risk_leve
     )
 
 
+def _bind_context(executor, *, base_url=None, headers=None, schema_source=None) -> None:
+    from restscope.capabilities import ToolContext
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Runner", "version": "1.0"},
+            "paths": {"/pets": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        }
+    )
+    executor.bind_context(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source=schema_source or {"kind": "file", "path": "api.yaml"},
+            base_url=base_url,
+            headers=headers or {},
+        )
+    )
+
+
 def test_operation_tester_requires_live_testing_permission_for_start_run() -> None:
     from restscope.capabilities import ToolPolicy
 
@@ -105,17 +126,19 @@ def test_schemathesis_runner_uses_tool_executor_and_operation_filter() -> None:
                 requires_approval=requires_approval,
                 risk_level=risk_level,
             ),
-            handler=lambda _name=name, **arguments: _handle_tool_call(calls, _name, arguments),
+            handler=lambda _context, /, _name=name, **arguments: _handle_tool_call(calls, _name, arguments),
         )
     executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
+    _bind_context(
+        executor,
+        base_url="http://localhost:8000",
+        schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
+    )
     runner = SchemathesisOperationRunner(tool_executor=executor, poll_interval=0, poll_timeout=1)
 
     result = runner.run_operation(
         target=OperationTarget(
-            schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
-            base_url="http://localhost:8000",
             operation=OperationReference(method="get", path="/pets"),
-            headers={},
         ),
         state={"allow_live_testing": True},
     )
@@ -142,19 +165,19 @@ def test_schemathesis_runner_reads_at_most_twenty_compact_failure_summaries() ->
     ]:
         registry.register(
             spec=_tool_spec(name, read_only=read_only, requires_approval=requires_approval, risk_level=risk_level),
-            handler=lambda _name=name, **arguments: _handle_failure_tool_call(calls, _name, arguments),
+            handler=lambda _context, /, _name=name, **arguments: _handle_failure_tool_call(calls, _name, arguments),
         )
+    executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
+    _bind_context(executor, headers={"Authorization": "Bearer runtime-secret"})
     runner = SchemathesisOperationRunner(
-        tool_executor=ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy())),
+        tool_executor=executor,
         poll_interval=0,
         poll_timeout=1,
     )
 
     result = runner.run_operation(
         target=OperationTarget(
-            schema_source={"kind": "file", "path": "api.yaml"},
             operation=OperationReference(method="GET", path="/pets"),
-            headers={"Authorization": "Bearer runtime-secret"},
         ),
         state={"allow_live_testing": True},
     )

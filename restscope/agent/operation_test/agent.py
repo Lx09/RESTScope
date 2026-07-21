@@ -20,7 +20,7 @@ from .schemas import (
 
 
 class OperationTestState(TypedDict, total=False):
-    """Serializable attempt state; runtime headers stay outside this object."""
+    """Serializable state for one operation-test attempt."""
 
     request: dict[str, Any]
     target: dict[str, Any]
@@ -46,20 +46,19 @@ class OperationTestAgent:
         self.dependency_analyzer = dependency_analyzer
 
     def run(self, request: OperationTestRequest) -> OperationTestReport:
-        runtime_headers = dict(request.headers)
-        graph = self._build_graph(runtime_headers=runtime_headers)
+        graph = self._build_graph()
         initial_state: OperationTestState = {
-            "request": request.model_dump(exclude={"headers"}, mode="json"),
+            "request": request.model_dump(mode="json"),
             "findings": [],
         }
         final_state = graph.invoke(initial_state)
         return OperationTestReport.model_validate(final_state["final_report"])
 
-    def _build_graph(self, *, runtime_headers: dict[str, str]):
+    def _build_graph(self):
         graph = StateGraph(OperationTestState)
         graph.add_node("load_operation", self._load_operation)
         graph.add_node("check_capabilities", self._check_capabilities)
-        graph.add_node("run_operation", self._run_operation(runtime_headers=runtime_headers))
+        graph.add_node("run_operation", self._run_operation)
         graph.add_node("analyze_dependencies", self._analyze_dependencies)
         graph.add_node("evaluate_result", self._evaluate_result)
         graph.add_node("finalize_report", self._finalize_report)
@@ -95,12 +94,8 @@ class OperationTestAgent:
         try:
             request = OperationTestRequest.model_validate(state["request"])
             self.dependency_analyzer.check_configured()
-            target = OperationTarget(
-                schema_source=request.schema_source,
-                base_url=request.base_url,
-                operation=request.operation,
-            )
-            return {"target": target.model_dump(exclude={"headers"}, mode="json")}
+            target = OperationTarget(operation=request.operation)
+            return {"target": target.model_dump(mode="json")}
         except Exception as exc:
             return {"last_error": self._error_payload(exc, stage="load_operation")}
 
@@ -114,18 +109,13 @@ class OperationTestAgent:
         except Exception as exc:
             return {"last_error": self._error_payload(exc, stage="check_capabilities")}
 
-    def _run_operation(self, *, runtime_headers: dict[str, str]):
-        def node(state: OperationTestState) -> OperationTestState:
-            try:
-                target = OperationTarget.model_validate(state["target"]).model_copy(
-                    update={"headers": runtime_headers}
-                )
-                execution = self.runner.run_operation(target=target, state=self._runner_state(state))
-                return {"execution": execution.model_dump(mode="json")}
-            except Exception as exc:
-                return {"last_error": self._error_payload(exc, stage="run_operation")}
-
-        return node
+    def _run_operation(self, state: OperationTestState) -> OperationTestState:
+        try:
+            target = OperationTarget.model_validate(state["target"])
+            execution = self.runner.run_operation(target=target, state=self._runner_state(state))
+            return {"execution": execution.model_dump(mode="json")}
+        except Exception as exc:
+            return {"last_error": self._error_payload(exc, stage="run_operation")}
 
     def _analyze_dependencies(self, state: OperationTestState) -> OperationTestState:
         try:

@@ -96,7 +96,8 @@ def _adapter_for_kind(kind: str, adapter_registry: Mapping[str, Any] | None) -> 
 
 
 def _build_handler(*, tool_name: str, call_tool: CallTool):
-    def handler(**arguments: Any) -> dict[str, Any]:
+    def handler(context: Any, /, **arguments: Any) -> dict[str, Any]:
+        del context
         result = call_tool(tool_name, arguments)
         return _normalize_source_result(result)
 

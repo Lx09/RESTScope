@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+
+import pytest
 
 
 def _operation(operation_id: str, *, response: str = "200") -> dict:
@@ -21,22 +24,36 @@ def _schema(paths: dict) -> dict:
 
 def _request(spec: dict, *, headers: dict[str, str] | None = None):
     from restscope.agent import RESTScopeRunRequest
+    from restscope.capabilities import ToolContext
+    from restscope.openapi_parser import OpenAPIParser
 
-    return RESTScopeRunRequest(
-        schema_source={"kind": "inline", "format": "json", "content": __import__("json").dumps(spec)},
-        base_url="http://localhost:8000",
-        headers=headers or {},
-        allow_live_testing=True,
+    content = json.dumps(spec)
+    return SimpleNamespace(
+        request=RESTScopeRunRequest(allow_live_testing=True),
+        context=ToolContext(
+            ir=OpenAPIParser.parse(spec),
+            baseline_schema_source={"kind": "inline", "format": "json", "content": content},
+            base_url="http://localhost:8000",
+            headers=headers or {},
+        ),
     )
 
 
 def _graph(*, runner=None, analyzer=None):
     from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner, RESTScopeMainGraph
 
-    return RESTScopeMainGraph(
-        operation_runner=runner or FakeOperationTestRunner(),
-        dependency_analyzer=analyzer or FakeOperationDependencyAnalyzer(),
-    )
+    operation_runner = runner or FakeOperationTestRunner()
+    dependency_analyzer = analyzer or FakeOperationDependencyAnalyzer()
+
+    class GraphHarness:
+        def run(self, value):
+            return RESTScopeMainGraph(
+                operation_runner=operation_runner,
+                dependency_analyzer=dependency_analyzer,
+                tool_context=value.context,
+            ).run(value.request)
+
+    return GraphHarness()
 
 
 def _ref(method: str, path: str, operation_id: str):
@@ -92,14 +109,13 @@ def test_supervisor_discovers_all_operations_and_stably_sorts_by_path_depth() ->
 
 def test_supervisor_request_contract_contains_only_mvp_entry_fields() -> None:
     from restscope.agent import RESTScopeRunRequest
+    from pydantic import ValidationError
 
-    assert list(RESTScopeRunRequest.model_fields) == [
-        "schema_source",
-        "base_url",
-        "headers",
-        "allow_live_testing",
-        "metadata",
-    ]
+    assert list(RESTScopeRunRequest.model_fields) == ["allow_live_testing", "metadata"]
+    with pytest.raises(ValidationError):
+        RESTScopeRunRequest.model_validate(
+            {"schema_source": {"kind": "file", "path": "api.yaml"}}
+        )
 
 
 def test_single_blocked_operation_is_retried_only_in_the_next_round() -> None:
@@ -272,7 +288,7 @@ def test_ordinary_failure_and_technical_error_both_fail_fast_with_distinct_statu
     assert [item.path for item in errored.unattempted_operations] == ["/second"]
 
 
-def test_schema_errors_and_missing_model_fail_before_live_requests() -> None:
+def test_missing_model_fails_before_live_requests() -> None:
     from restscope.agent import (
         DependencyAnalysisError,
         FakeOperationDependencyAnalyzer,
@@ -280,9 +296,6 @@ def test_schema_errors_and_missing_model_fail_before_live_requests() -> None:
     )
 
     runner = FakeOperationTestRunner()
-    invalid_schema = _graph(runner=runner).run(
-        _request({"not": "openapi"})
-    )
     missing_model = _graph(
         runner=runner,
         analyzer=FakeOperationDependencyAnalyzer(
@@ -290,36 +303,22 @@ def test_schema_errors_and_missing_model_fail_before_live_requests() -> None:
         ),
     ).run(_request(_schema({"/pets": {"get": _operation("pets")}})))
 
-    assert invalid_schema.status == "errored"
-    assert invalid_schema.error["stage"] == "discover_operations"
     assert missing_model.status == "errored"
     assert missing_model.error["stage"] == "validate_runtime"
     assert runner.calls == []
 
 
-def test_file_url_and_inline_schema_sources_are_forwarded_to_parser(monkeypatch) -> None:
-    from restscope.agent import RESTScopeRunRequest
+def test_supervisor_uses_bound_ir_without_reparsing(monkeypatch) -> None:
     from restscope.openapi_parser import OpenAPIParser
 
-    parsed = OpenAPIParser.parse(_schema({"/pets": {"get": _operation("pets")}}))
-    seen = []
-    monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(lambda source: seen.append(source) or parsed))
+    value = _request(_schema({"/pets": {"get": _operation("pets")}}))
+    monkeypatch.setattr(
+        OpenAPIParser,
+        "parse",
+        staticmethod(lambda _source: (_ for _ in ()).throw(AssertionError("unexpected reparse"))),
+    )
 
-    requests = [
-        RESTScopeRunRequest(schema_source={"kind": "file", "path": "/tmp/api.yaml"}, allow_live_testing=True),
-        RESTScopeRunRequest(
-            schema_source={"kind": "url", "url": "https://example.test/api.yaml"},
-            allow_live_testing=True,
-        ),
-        RESTScopeRunRequest(
-            schema_source={"kind": "inline", "format": "yaml", "content": "openapi: 3.0.3"},
-            allow_live_testing=True,
-        ),
-    ]
-    for request in requests:
-        assert _graph().run(request).status == "passed"
-
-    assert seen == ["/tmp/api.yaml", "https://example.test/api.yaml", "openapi: 3.0.3"]
+    assert _graph().run(value).status == "passed"
 
 
 def test_headers_never_enter_graph_state_or_report() -> None:
@@ -336,7 +335,7 @@ def test_headers_never_enter_graph_state_or_report() -> None:
 
         def run_operation(self, *, target, state):
             self.states.append(state)
-            assert target.headers == {"Authorization": "Bearer secret-token"}
+            assert set(type(target).model_fields) == {"operation"}
             return super().run_operation(target=target, state=state)
 
     runner = RecordingRunner()
@@ -363,7 +362,16 @@ def test_restscope_app_runs_with_injected_runner_and_analyzer() -> None:
         dependency_analyzer=FakeOperationDependencyAnalyzer(),
     )
 
-    report = app.run(_request(_schema({"/pets": {"get": _operation("pets")}})))
+    app.initialize(
+        schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": json.dumps(_schema({"/pets": {"get": _operation("pets")}})),
+        }
+    )
+    from restscope.agent import RESTScopeRunRequest
+
+    report = app.run(RESTScopeRunRequest(allow_live_testing=True))
     assert report.status == "passed"
     assert report.operations[0].method == "GET"
 

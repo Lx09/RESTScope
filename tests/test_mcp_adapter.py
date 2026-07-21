@@ -74,7 +74,7 @@ def test_mcp_tool_adapter_uses_annotations_before_names() -> None:
     assert missing.risk_level == "medium"
 
 
-def test_register_tool_source_uses_external_call_bridge_and_summarizes_results() -> None:
+def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(tool_context) -> None:
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry
     from restscope.capabilities import register_tool_source
     from restscope.llm import ToolCall
@@ -115,6 +115,7 @@ def test_register_tool_source_uses_external_call_bridge_and_summarizes_results()
         },
     )
     executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
+    executor.bind_context(tool_context)
 
     result = executor.execute(
         tool_call=ToolCall(id="call_1", name="mcp.schemathesis.get_result", arguments={"run_id": "run_1"}),
@@ -175,7 +176,7 @@ def test_tool_policy_allows_read_only_mcp_tools_and_denies_unsafe_mcp_tools() ->
     assert selector.select_for_role(role="check_designer", state={}) == []
 
 
-def test_add_preset_tools_registers_schemathesis_by_default() -> None:
+def test_add_preset_tools_registers_schemathesis_by_default(tool_context) -> None:
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry, add_preset_tools
     from restscope.llm import ToolCall
 
@@ -207,6 +208,7 @@ def test_add_preset_tools_registers_schemathesis_by_default() -> None:
         },
     )
     executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
+    executor.bind_context(tool_context)
 
     result = executor.execute(
         tool_call=ToolCall(id="call_1", name="mcp.schemathesis.get_run", arguments={"run_id": "run_1"}),

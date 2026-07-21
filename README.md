@@ -26,6 +26,25 @@ FAST_MODEL=glm-4.7-flash
 # FAST_PROVIDER, FAST_API_KEY, and FAST_BASE_URL default to THINK_* values
 ```
 
+The official DeepSeek API is available through the explicit `deepseek`
+provider. DeepSeek protocol differences remain inside the LLM adapter, so
+Agents use the same provider-neutral requests and tool loops:
+
+```env
+THINK_PROVIDER=deepseek
+THINK_MODEL=deepseek-v4-pro
+THINK_API_KEY=your-deepseek-api-key
+THINK_REASONING_MODE=enabled
+THINK_REASONING_EFFORT=high
+
+FAST_PROVIDER=deepseek
+FAST_MODEL=deepseek-v4-flash
+FAST_REASONING_MODE=disabled
+```
+
+`https://api.deepseek.com` is used by default. Third-party DeepSeek gateways
+are not part of the supported contract.
+
 ## Development
 
 ```bash
@@ -137,8 +156,9 @@ source is not configured or provided, preset registration raises
 OperationTestAgent executes one Schemathesis run for one operation attempt, then
 uses the configured Thinking model to identify direct operation dependencies.
 There are no smoke/conformance/positive/negative/boundary stages. The runner
-passes only schema, target URL, runtime headers, and the method/path filter;
-other Schemathesis settings use service defaults.
+reads the baseline schema source, target URL, and runtime headers from its bound
+`ToolContext`, then sends them only to Schemathesis `start_run` together with
+the method/path filter. Other Schemathesis settings use service defaults.
 
 ```python
 from restscope.agent import (
@@ -149,12 +169,24 @@ from restscope.agent import (
     OperationTestRequest,
     SchemathesisOperationRunner,
 )
-from restscope.capabilities import build_capabilities_with_mcp_host
+from restscope.capabilities import ToolContext, build_capabilities_with_mcp_host
 from restscope.llm import ModelSelector, build_llm_client
+from restscope.openapi_parser import OpenAPIParser
 from restscope.restscope_config import RESTScopeConfig
 
 config = RESTScopeConfig.from_environment()
 runtime = build_capabilities_with_mcp_host(config="./mcp.servers.json")
+runtime.tool_executor.bind_context(
+    ToolContext(
+        ir=OpenAPIParser.parse("assets/openapi/petstore-v3.json"),
+        baseline_schema_source={
+            "kind": "file",
+            "path": "assets/openapi/petstore-v3.json",
+        },
+        base_url="http://localhost:8000",
+        headers={},
+    )
+)
 agent = OperationTestAgent(
     runner=SchemathesisOperationRunner(tool_executor=runtime.tool_executor),
     dependency_analyzer=LLMOperationDependencyAnalyzer(
@@ -166,8 +198,6 @@ agent = OperationTestAgent(
 operation = OperationReference(method="GET", path="/pets", operation_id="listPets")
 report = agent.run(
     OperationTestRequest(
-        schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
-        base_url="http://localhost:8000",
         operation=operation,
         candidate_operations=[OperationCandidate(operation=operation)],
         allow_live_testing=True,
@@ -185,16 +215,30 @@ all schema operations, and schedules them through round-based FIFO queues:
 from restscope import RESTScopeApp, RESTScopeRunRequest
 
 with RESTScopeApp.from_environment() as app:
-    report = app.run(
-        RESTScopeRunRequest(
-            schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
-            base_url="http://localhost:8000",
-            allow_live_testing=True,
-        )
+    app.initialize(
+        schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
+        base_url="http://localhost:8000",
+        headers={"Authorization": "Bearer ..."},
     )
+    report = app.run(RESTScopeRunRequest(allow_live_testing=True))
 ```
+
+Initialization validates the file, URL, or inline schema source and parses it
+exactly once for the lifetime of the App. The resulting IR and target settings
+are bound out-of-band to trusted tool handlers; they are not copied into graph
+state, tool schemas, or model arguments.
 
 Supervisor orders operations by stable path depth, retains every attempt, and
 retries blocked operations only in later rounds after all direct prerequisites
 have produced a passing run with an observed 2xx. Queue and dependency state are
 not persisted.
+
+## OpenAPI Retrieval Agent
+
+`OpenAPIRetrievalAgent` investigates the App-bound OpenAPI IR for operations
+that may produce a consumer parameter value. Its public capability is
+`restscope.openapi.retrieve`; the request contains only the retrieval query and
+does not accept a file path. Internally it exposes only IR-backed
+`openapi.inspect`, `openapi.find_operation`, `openapi.search_symbols`,
+`openapi.read_operation`, and `openapi.read_evidence` tools. Symbol searches
+scan the current IR directly and do not retain an index or raw-text fallback.

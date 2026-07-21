@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
-from restscope.openapi_parser import OpenAPIParser
+from restscope.capabilities import ToolContext
 from restscope.openapi_parser.ir import OperationIR, SchemaIR
 
 from ..operation_test import (
@@ -24,7 +24,7 @@ from .schemas import BlockedOperation, OperationAttempt, RESTScopeRunReport, RES
 
 
 class RESTScopeMainState(TypedDict, total=False):
-    """Serializable scheduler state; schema source and headers remain runtime-only."""
+    """Serializable scheduler state; ToolContext remains runtime-only."""
 
     request: dict[str, Any]
     operations: list[dict[str, Any]]
@@ -53,19 +53,17 @@ class RESTScopeMainGraph:
         *,
         operation_runner: OperationTestRunner,
         dependency_analyzer: OperationDependencyAnalyzer,
+        tool_context: ToolContext,
     ) -> None:
         self.operation_runner = operation_runner
         self.dependency_analyzer = dependency_analyzer
+        self.tool_context = tool_context
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
-        runtime_headers = dict(request.headers)
-        graph = self._build_graph(request=request, runtime_headers=runtime_headers)
+        graph = self._build_graph(request=request)
         final_state = graph.invoke(
             {
-                "request": request.model_dump(
-                    exclude={"headers", "schema_source"},
-                    mode="json",
-                ),
+                "request": request.model_dump(mode="json"),
                 "operations": [],
                 "candidates": [],
                 "ready_queue": [],
@@ -82,11 +80,11 @@ class RESTScopeMainGraph:
         )
         return RESTScopeRunReport.model_validate(final_state["final_report"])
 
-    def _build_graph(self, *, request: RESTScopeRunRequest, runtime_headers: dict[str, str]):
+    def _build_graph(self, *, request: RESTScopeRunRequest):
         graph = StateGraph(RESTScopeMainState)
         graph.add_node("validate_runtime", self._validate_runtime(request))
-        graph.add_node("discover_operations", self._discover_operations(request))
-        graph.add_node("run_next_operation", self._run_next_operation(request, runtime_headers))
+        graph.add_node("discover_operations", self._discover_operations)
+        graph.add_node("run_next_operation", self._run_next_operation(request))
         graph.add_node("advance_round", self._advance_round)
         graph.add_node("finalize_report", self._finalize_report)
 
@@ -127,44 +125,30 @@ class RESTScopeMainGraph:
 
         return node
 
-    def _discover_operations(self, request: RESTScopeRunRequest):
-        def node(state: RESTScopeMainState) -> RESTScopeMainState:
-            del state
-            try:
-                ir = OpenAPIParser.parse(_schema_source_value(request))
-                parser_errors = [
-                    *ir.diagnostics.spec_errors,
-                    *ir.diagnostics.path_errors,
-                    *ir.diagnostics.operation_errors,
-                ]
-                if parser_errors:
-                    first = parser_errors[0]
-                    raise ValueError(f"OpenAPI parsing produced {len(parser_errors)} error(s): {first.message}")
-                indexed = list(enumerate(ir.operations.values()))
-                ordered_ir = [
-                    operation
-                    for _, operation in sorted(
-                        indexed,
-                        key=lambda item: (_path_depth(item[1].path), item[0]),
-                    )
-                ]
-                if not ordered_ir:
-                    raise ValueError("OpenAPI schema contains no testable operations")
-                candidates = [_operation_candidate(operation) for operation in ordered_ir]
-                operations = [candidate.operation for candidate in candidates]
-                return {
-                    "operations": [operation.model_dump(mode="json") for operation in operations],
-                    "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
-                    "ready_queue": [operation.model_dump(mode="json") for operation in operations],
-                    "current_round": 1,
-                    "rounds": 1,
-                }
-            except Exception as exc:
-                return self._technical_error(exc, stage="discover_operations")
+    def _discover_operations(self, state: RESTScopeMainState) -> RESTScopeMainState:
+        del state
+        try:
+            indexed = list(enumerate(self.tool_context.ir.operations.values()))
+            ordered_ir = [
+                operation
+                for _, operation in sorted(
+                    indexed,
+                    key=lambda item: (_path_depth(item[1].path), item[0]),
+                )
+            ]
+            candidates = [_operation_candidate(operation) for operation in ordered_ir]
+            operations = [candidate.operation for candidate in candidates]
+            return {
+                "operations": [operation.model_dump(mode="json") for operation in operations],
+                "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+                "ready_queue": [operation.model_dump(mode="json") for operation in operations],
+                "current_round": 1,
+                "rounds": 1,
+            }
+        except Exception as exc:
+            return self._technical_error(exc, stage="discover_operations")
 
-        return node
-
-    def _run_next_operation(self, request: RESTScopeRunRequest, runtime_headers: dict[str, str]):
+    def _run_next_operation(self, request: RESTScopeRunRequest):
         def node(state: RESTScopeMainState) -> RESTScopeMainState:
             ready = list(state.get("ready_queue", []))
             if not ready:
@@ -183,11 +167,8 @@ class RESTScopeMainGraph:
                 ).run(
                     OperationTestRequest(
                         task_id=request.metadata.get("task_id"),
-                        schema_source=request.schema_source.model_dump(mode="json"),
-                        base_url=request.base_url,
                         operation=operation,
                         candidate_operations=candidates,
-                        headers=runtime_headers,
                         allow_live_testing=request.allow_live_testing,
                     )
                 )
@@ -422,15 +403,6 @@ class RESTScopeMainGraph:
         if operation is not None:
             payload["operation"] = operation.model_dump(mode="json")
         return {"status": "errored", "stop_reason": "technical_error", "last_error": payload}
-
-
-def _schema_source_value(request: RESTScopeRunRequest) -> str:
-    source = request.schema_source
-    if source.kind == "file":
-        return source.path
-    if source.kind == "url":
-        return source.url
-    return source.content
 
 
 def _path_depth(path: str) -> int:
