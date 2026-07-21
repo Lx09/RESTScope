@@ -122,6 +122,7 @@ def parse_operation(
     resolver: ReferenceResolver,
     scope: str,
     diagnostics: DiagnosticsIR,
+    shared_parameters_raw: list[dict] | None = None,
 ) -> OperationIR:
     """
     Parse an operation.
@@ -162,8 +163,28 @@ def parse_operation(
     )
 
     # Parse request body
+    request_operation_raw = operation_raw
+    if adapter.spec_format == "swagger2" and isinstance(shared_parameters_raw, list):
+        merged_raw_parameters: dict[tuple[object, object], dict] = {}
+        raw_operation_parameters = (
+            operation_parameters_raw if isinstance(operation_parameters_raw, list) else []
+        )
+        for parameter in [*shared_parameters_raw, *raw_operation_parameters]:
+            if isinstance(parameter, dict):
+                resolved_parameter = parameter
+                if isinstance(parameter.get("$ref"), str):
+                    _, resolved = resolver.resolve(parameter["$ref"])
+                    if isinstance(resolved, dict):
+                        resolved_parameter = resolved
+                merged_raw_parameters[
+                    (resolved_parameter.get("name"), resolved_parameter.get("in"))
+                ] = resolved_parameter
+        request_operation_raw = {
+            **operation_raw,
+            "parameters": list(merged_raw_parameters.values()),
+        }
     request_body = parse_request_body(
-        operation_raw=operation_raw,
+        operation_raw=request_operation_raw,
         adapter=adapter,
         resolver=resolver,
         scope=scope,
@@ -372,6 +393,7 @@ class OpenAPIParser:
                         resolver=resolver,
                         scope=scope,
                         diagnostics=diagnostics,
+                        shared_parameters_raw=resolved_path_item.get("parameters", []),
                     )
                     ir.operations[op.operation_key] = op
                     path_item_ir.operations[method] = op.operation_key

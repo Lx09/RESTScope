@@ -29,11 +29,8 @@ def test_operation_test_agent_runs_schemathesis_once_and_analyzes_every_attempt(
     candidate = _candidate()
     report = OperationTestAgent(runner=runner, dependency_analyzer=analyzer).run(
         OperationTestRequest(
-            schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
-            base_url="http://localhost:8000",
             operation=candidate.operation,
             candidate_operations=[candidate],
-            headers={"Authorization": "Bearer secret-token"},
             allow_live_testing=True,
         )
     )
@@ -48,7 +45,8 @@ def test_operation_test_agent_runs_schemathesis_once_and_analyzes_every_attempt(
 
 
 def test_candidate_summary_contract_does_not_restore_inferred_graph_fields() -> None:
-    from restscope.agent import OperationCandidate
+    from restscope.agent import OperationCandidate, OperationTarget, OperationTestRequest
+    from pydantic import ValidationError
 
     assert list(OperationCandidate.model_fields) == [
         "operation",
@@ -58,6 +56,12 @@ def test_candidate_summary_contract_does_not_restore_inferred_graph_fields() -> 
         "request_structure",
         "response_structure",
     ]
+    assert list(OperationTarget.model_fields) == ["operation"]
+    assert "schema_source" not in OperationTestRequest.model_fields
+    with pytest.raises(ValidationError):
+        OperationTarget.model_validate(
+            {"operation": _candidate().operation, "headers": {"Authorization": "secret"}}
+        )
 
 
 def test_operation_test_agent_records_outcome_and_2xx_independently() -> None:
@@ -85,7 +89,6 @@ def test_operation_test_agent_records_outcome_and_2xx_independently() -> None:
         dependency_analyzer=FakeOperationDependencyAnalyzer(),
     ).run(
         OperationTestRequest(
-            schema_source={"kind": "inline", "format": "json", "content": "{}"},
             operation=candidate.operation,
             candidate_operations=[candidate],
             allow_live_testing=True,
@@ -114,7 +117,6 @@ def test_dependency_analysis_error_preserves_the_completed_execution() -> None:
         dependency_analyzer=FakeOperationDependencyAnalyzer(error=DependencyAnalysisError("invalid output")),
     ).run(
         OperationTestRequest(
-            schema_source={"kind": "file", "path": "api.yaml"},
             operation=candidate.operation,
             candidate_operations=[candidate],
             allow_live_testing=True,
@@ -145,7 +147,6 @@ def test_missing_dependency_model_fails_before_any_live_request() -> None:
         ),
     ).run(
         OperationTestRequest(
-            schema_source={"kind": "file", "path": "api.yaml"},
             operation=candidate.operation,
             candidate_operations=[candidate],
             allow_live_testing=True,
@@ -164,7 +165,6 @@ def test_operation_test_request_requires_current_operation_in_candidates() -> No
 
     with pytest.raises(ValidationError):
         OperationTestRequest(
-            schema_source={"kind": "file", "path": "api.yaml"},
             operation=OperationReference(method="GET", path="/missing"),
             candidate_operations=[_candidate()],
         )

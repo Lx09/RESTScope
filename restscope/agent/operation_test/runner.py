@@ -121,12 +121,12 @@ class SchemathesisOperationRunner:
             raise RuntimeError(f"Tool {name} failed: {result.error or result.status}")
         return result
 
-    @staticmethod
-    def _start_run_arguments(target: OperationTarget) -> dict[str, Any]:
+    def _start_run_arguments(self, target: OperationTarget) -> dict[str, Any]:
+        context = self.tool_executor.require_context()
         arguments: dict[str, Any] = {
-            "schema": target.schema_source,
-            "base_url": target.base_url,
-            "headers": target.headers or None,
+            "schema": dict(context.baseline_schema_source),
+            "base_url": context.base_url,
+            "headers": dict(context.headers) or None,
             "include": {
                 "path": target.operation.path,
                 "method": target.operation.method,

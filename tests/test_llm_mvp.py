@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from pydantic import BaseModel
 
 
@@ -158,6 +159,39 @@ def test_fake_provider_returns_generic_test_requirement_plan() -> None:
 
     assert response.parsed_json["requirements"][0]["target"] == {"operation_id": "op_1"}
     assert "schemathesis" not in response.content.lower()
+
+
+def test_llm_client_can_disable_timeout_retry_for_deadline_bounded_calls() -> None:
+    from restscope.llm import LLMClient, LLMMessage, LLMRequest, ProviderTimeoutError
+    from restscope.llm.providers.base import BaseLLMProvider
+    from restscope.llm.registry import LLMProviderRegistry
+
+    class TimeoutProvider(BaseLLMProvider):
+        name = "timeout"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, request):
+            del request
+            self.calls += 1
+            raise ProviderTimeoutError("timed out")
+
+    provider = TimeoutProvider()
+    registry = LLMProviderRegistry()
+    registry.register(provider)
+
+    with pytest.raises(ProviderTimeoutError):
+        LLMClient(registry).invoke(
+            LLMRequest(
+                provider="timeout",
+                model="test",
+                messages=[LLMMessage(role="user", content="bounded")],
+                metadata={"disable_retry": True},
+            )
+        )
+
+    assert provider.calls == 1
 
 
 class _FakeOpenAIMessage:
@@ -545,7 +579,7 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
     assert invalid.errors
 
 
-def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools() -> None:
+def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_context) -> None:
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry, ToolSelector
     from restscope.llm import ToolCall, ToolSpec
 
@@ -558,7 +592,10 @@ def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools() -> No
             input_schema={"type": "object"},
             read_only=True,
         ),
-        handler=lambda artifact_id: {"content": f"summary:{artifact_id}", "structured": {"artifact_id": artifact_id}},
+        handler=lambda _context, /, artifact_id: {
+            "content": f"summary:{artifact_id}",
+            "structured": {"artifact_id": artifact_id},
+        },
     )
     registry.register(
         spec=ToolSpec(
@@ -570,13 +607,14 @@ def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools() -> No
             requires_approval=True,
             risk_level="high",
         ),
-        handler=lambda: {"content": "should not run"},
+        handler=lambda _context, /: {"content": "should not run"},
     )
 
     selector = ToolSelector(registry)
     selected = selector.select_for_role(role="planner", state={})
     validator = ToolCallValidator(registry, ToolPolicy())
     executor = ToolExecutor(registry, validator)
+    executor.bind_context(tool_context)
 
     success = executor.execute(
         tool_call=ToolCall(id="call_1", name="artifact.read_summary", arguments={"artifact_id": "artifact_1"}),

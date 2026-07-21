@@ -22,9 +22,14 @@ from .catalog import (
 )
 from .bootstrap import build_schema_catalog
 from .agent import (
+    OpenAPIRetrievalAgent,
+    OpenAPIRetrievalRequest,
+    OpenAPIRetrievalResult,
     OperationReference,
     RESTScopeRunReport,
     RESTScopeRunRequest,
+    build_openapi_retrieval_agent,
+    register_openapi_retrieval_tool,
 )
 
 __all__ = [
@@ -47,7 +52,12 @@ __all__ = [
     "SchemaSourceInput",
     "SchemaSourceValidationError",
     "build_schema_catalog",
+    "build_openapi_retrieval_agent",
+    "OpenAPIRetrievalAgent",
+    "OpenAPIRetrievalRequest",
+    "OpenAPIRetrievalResult",
     "RESTScopeRunRequest",
     "RESTScopeRunReport",
     "OperationReference",
+    "register_openapi_retrieval_tool",
 ]

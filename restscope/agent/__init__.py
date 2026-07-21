@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 
+from .openapi_retrieval import (
+    EvidenceConflict,
+    OpenAPIRetrievalAgent,
+    OpenAPIRetrievalOutputError,
+    OpenAPIRetrievalRequest,
+    OpenAPIRetrievalResult,
+    OpenAPIRetrievalQueryError,
+    InvestigationAction,
+    InvestigationSummary,
+    ParameterProducerCandidate,
+    ParameterValueProducerQuery,
+    RetrievalEvidence,
+    TargetParameterMatch,
+    TargetParameterSummary,
+    build_openapi_retrieval_agent,
+    register_openapi_retrieval_tool,
+)
 from .operation_test import (
     DependencyAnalysisError,
     FailureSummary,
@@ -27,15 +44,24 @@ from .supervisor import (
     RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
+    SchemaSource,
 )
 
 __all__ = [
     "BlockedOperation",
     "DependencyAnalysisError",
+    "EvidenceConflict",
     "FailureSummary",
     "FakeOperationDependencyAnalyzer",
     "FakeOperationTestRunner",
     "LLMOperationDependencyAnalyzer",
+    "OpenAPIRetrievalAgent",
+    "OpenAPIRetrievalOutputError",
+    "OpenAPIRetrievalRequest",
+    "OpenAPIRetrievalResult",
+    "OpenAPIRetrievalQueryError",
+    "InvestigationAction",
+    "InvestigationSummary",
     "OperationCandidate",
     "OperationDependencyAnalysis",
     "OperationDependencyAnalyzer",
@@ -48,8 +74,16 @@ __all__ = [
     "OperationTestReport",
     "OperationTestRequest",
     "OperationTestRunner",
+    "ParameterProducerCandidate",
+    "ParameterValueProducerQuery",
     "RESTScopeMainGraph",
     "RESTScopeRunReport",
     "RESTScopeRunRequest",
+    "SchemaSource",
+    "RetrievalEvidence",
     "SchemathesisOperationRunner",
+    "TargetParameterMatch",
+    "TargetParameterSummary",
+    "build_openapi_retrieval_agent",
+    "register_openapi_retrieval_tool",
 ]

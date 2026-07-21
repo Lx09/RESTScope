@@ -117,7 +117,7 @@ def test_mcp_host_discovers_tools_and_calls_original_tool_name() -> None:
     assert sessions[0].closed is True
 
 
-def test_mcp_source_builder_registers_discovered_tools_through_existing_runtime() -> None:
+def test_mcp_source_builder_registers_discovered_tools_through_existing_runtime(tool_context) -> None:
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry, add_preset_tools
     from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder
     from restscope.llm import ToolCall
@@ -149,6 +149,7 @@ def test_mcp_source_builder_registers_discovered_tools_through_existing_runtime(
     registry = ToolRegistry()
     registered = add_preset_tools(registry=registry, sources=sources)
     executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
+    executor.bind_context(tool_context)
 
     result = executor.execute(
         tool_call=ToolCall(id="call_1", name="mcp.schemathesis.get_run", arguments={"run_id": "run_1"}),

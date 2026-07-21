@@ -85,12 +85,11 @@ class OperationDependencyAnalysis(BaseModel):
 class OperationTestRequest(BaseModel):
     """Input for one complete operation-test attempt."""
 
+    model_config = ConfigDict(extra="forbid")
+
     task_id: str | None = None
-    schema_source: dict[str, Any]
-    base_url: str | None = None
     operation: OperationReference
     candidate_operations: list[OperationCandidate]
-    headers: dict[str, str] = Field(default_factory=dict)
     allow_live_testing: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -105,10 +104,9 @@ class OperationTestRequest(BaseModel):
 class OperationTarget(BaseModel):
     """Runtime target passed to the Schemathesis runner."""
 
-    schema_source: dict[str, Any]
-    base_url: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
     operation: OperationReference
-    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class OperationTestFinding(BaseModel):

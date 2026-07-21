@@ -14,7 +14,6 @@ _LEGACY_SCHEMA_KEYS = {
     "title",
     "description",
     "properties",
-    "required",
     "items",
     "enum",
     "default",
@@ -44,7 +43,11 @@ _LEGACY_SCHEMA_KEYS = {
 
 
 def extract_legacy_inline_schema(raw_object: dict) -> dict | None:
-    """Extract Swagger 2 schema keywords declared directly on a parameter or header."""
+    """Extract Swagger 2 schema keywords declared directly on a parameter or header.
+
+    ``required`` belongs to the surrounding parameter in this representation; it
+    is not the JSON Schema array of required property names.
+    """
     schema = {
         key: value
         for key, value in raw_object.items()
