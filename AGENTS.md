@@ -59,6 +59,26 @@ There is no mandatory project-wide governance package at this stage. Planning
 and architecture documents may be introduced later only when the user decides
 they would clarify rather than constrain the exploration.
 
+RESTScope currently follows a dynamic, runtime-driven architecture as an
+explicit project decision:
+
+- Keep exploring and allow the architecture to evolve as new evidence is
+  learned from real runs.
+- Discover operations, dependencies, scheduling decisions, and next actions at
+  runtime instead of treating a precomputed plan as the source of truth.
+- Do not persist test plans, inferred operation relationships, scheduler
+  queues, Agent intermediate state, or speculative long-term memory.
+- Persist only inputs or evidence with a concrete, user-approved need. Existing
+  schema-source persistence does not imply approval for a broader persistence
+  architecture.
+- Do not reintroduce a database-backed Planner, static operation graph, or
+  plan-first execution flow without a new explicit user decision supported by
+  current evidence.
+
+This architecture is deliberately revisable, not a claim that the present MVP
+is final. Exploration should change the system through small, evidence-backed
+iterations rather than by accumulating permanent structures in advance.
+
 Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.

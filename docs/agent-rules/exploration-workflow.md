@@ -59,6 +59,26 @@ Do not stretch approval to cover adjacent capabilities. A terminal request such
 as “finish” means persist toward the approved outcome; it does not broaden the
 authorized scope.
 
+## Dynamic architecture guardrails
+
+Default to learning and deciding during the current run:
+
+- derive operation ordering and dependency information from the current schema
+  and current execution evidence;
+- keep queues, inferred relationships, provisional plans, and Agent working
+  state in memory for the lifetime of the run;
+- prefer a small runtime rule or replaceable component over a durable planning
+  subsystem;
+- remove or revise an earlier experiment when current evidence and an approved
+  decision supersede it, while retaining a truthful historical task record.
+
+Do not create persistence merely to make an exploratory concept look complete.
+Before proposing durable state, identify the concrete recovery, audit, reuse, or
+coordination requirement that cannot be met by the current runtime model. A
+database-backed Planner, persisted operation graph, resumable scheduler, or
+long-term Agent memory always requires explicit user approval as an
+architecture change.
+
 ## Task records
 
 Create or update a file under `docs/tasks/` when approved work is multi-step,

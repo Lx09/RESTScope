@@ -58,3 +58,25 @@ smallest suitable location:
 Record what was decided, why, the approved scope, and important alternatives or
 risks. Do not describe a proposal as a decision or a partially verified change
 as completed.
+
+## Current architecture decision
+
+The user has explicitly accepted the current lightweight, dynamic architecture
+as the active project direction.
+
+- OpenAPI operations are discovered from the supplied source at runtime.
+- Testing evidence may change dependency analysis and scheduling while a run is
+  in progress.
+- Test plans, inferred operation relationships, scheduler state, and Agent
+  intermediate decisions are ephemeral and are not database records or durable
+  artifacts.
+- The database is not the architectural center of the Agent workflow. A stored
+  schema source is a narrow input-storage capability, not a precedent for
+  persisting parsed catalogs, plans, operation graphs, or Agent memory.
+- Earlier database-backed Planner and catalog documents remain historical
+  evidence only where later task records mark them as superseded.
+
+Treat a proposal to add durable planning, inferred dependency storage, queue
+recovery, Agent memory, or a database-first orchestration model as a change to
+this decision. It requires fresh evidence and explicit user approval before
+implementation.
