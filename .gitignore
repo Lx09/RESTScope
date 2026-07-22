@@ -12,6 +12,7 @@ frontend/dist/
 .venv
 .claude/
 .vscode/
+/.idea/
 *.xml
 .env
 *.log
