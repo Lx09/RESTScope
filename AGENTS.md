@@ -29,6 +29,10 @@ and task records. Do not load unrelated large documents by default.
 
 - Inspect Git status before editing. Preserve all unrelated and pre-existing
   user changes.
+- Build every new feature on its own branch in a dedicated Git worktree. After
+  the feature is complete and verified, merge it into local `main`, then remove
+  the feature worktree and branch. Commit, merge, and cleanup still require
+  their own explicit user authorization.
 - Separate facts, hypotheses, proposals, and user-approved decisions when the
   distinction affects the work.
 - Treat current code and tests as executable evidence, not proof that the

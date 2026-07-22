@@ -19,6 +19,24 @@ requests the exact operation after reviewing what will be affected.
 
 ## When to use a worktree
 
+Every new feature must be built on its own branch in a dedicated Git worktree.
+Use this lifecycle:
+
+1. inspect the current worktrees and Git status;
+2. create a feature branch and dedicated worktree from the current local
+   `main`, without fetching, pulling, or otherwise changing `main` unless that
+   action is separately authorized;
+3. implement and verify the feature in that worktree;
+4. obtain explicit authorization for the required commit, merge, and cleanup
+   actions;
+5. commit the scoped feature changes and merge the feature branch into local
+   `main`;
+6. run proportional verification on the merged `main` tree;
+7. remove the feature worktree and delete the merged feature branch.
+
+This mandatory lifecycle applies to new features. Bug fixes, documentation
+changes, and maintenance work may still use the risk-based guidance below.
+
 Prefer a separate Git worktree when work is:
 
 - risky or strongly experimental;
@@ -28,7 +46,8 @@ Prefer a separate Git worktree when work is:
 
 A worktree is not mandatory for a small, localized, approved edit when the user
 has authorized work in the current tree and the changed files do not
-meaningfully overlap unrelated changes.
+meaningfully overlap unrelated changes. This exception never applies to a new
+feature.
 
 Before creating a worktree, inspect existing worktrees and choose a branch and
 path that will not collide. Do not remove a worktree or branch without explicit
