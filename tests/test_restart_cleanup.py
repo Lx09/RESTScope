@@ -26,7 +26,7 @@ def test_flat_environment_names_configure_logging(monkeypatch) -> None:
     assert config.paths.data_dir == Path("/tmp/restscope-data")
 
 
-def test_short_environment_names_configure_dual_llm_models(monkeypatch) -> None:
+def test_short_environment_names_configure_dual_llm_models(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("THINK_MODEL", "glm-4.5-air")
     monkeypatch.setenv("THINK_API_KEY", "think-key")
     monkeypatch.setenv("THINK_BASE_URL", "https://think.example/v1")
@@ -38,7 +38,7 @@ def test_short_environment_names_configure_dual_llm_models(monkeypatch) -> None:
     monkeypatch.delenv("FAST_BASE_URL", raising=False)
 
     config_module = importlib.import_module("restscope.restscope_config")
-    config = config_module.RESTScopeConfig.from_environment()
+    config = config_module.RESTScopeConfig.from_environment(tmp_path / ".env")
 
     assert config.llm.thinking.model == "glm-4.5-air"
     assert config.llm.thinking.api_key == "think-key"
