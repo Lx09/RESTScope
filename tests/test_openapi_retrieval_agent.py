@@ -922,3 +922,121 @@ def test_openapi_retrieval_public_facades_export_the_same_agent() -> None:
     from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent as PackageAgent
 
     assert FacadeAgent is PackageAgent
+
+
+def test_live_retrieval_config_can_select_complete_fast_model_slot(tmp_path) -> None:
+    from tests import test_openapi_retrieval_agent_live as live_module
+
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "THINK_PROVIDER=deepseek",
+                "THINK_MODEL=deepseek-v4-pro",
+                "THINK_API_KEY=thinking-key",
+                "THINK_REASONING_MODE=enabled",
+                "THINK_REASONING_EFFORT=high",
+                "FAST_PROVIDER=deepseek",
+                "FAST_MODEL=deepseek-v4-flash",
+                "FAST_API_KEY=fast-key",
+                "FAST_REASONING_MODE=disabled",
+                "FAST_REASONING_EFFORT=",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = RESTScopeConfig.from_environment(env_file)
+    selector = getattr(live_module, "_config_for_live_model_slot", None)
+
+    assert selector is not None
+    selected = selector(config, "fast")
+
+    assert selected.llm.thinking == config.llm.fast
+    assert selected.llm.fast == config.llm.fast
+    assert config.llm.thinking.model == "deepseek-v4-pro"
+
+
+def test_live_retrieval_config_rejects_unknown_model_slot(tmp_path) -> None:
+    from tests.test_openapi_retrieval_agent_live import _config_for_live_model_slot
+
+    from restscope.restscope_config import RESTScopeConfig
+
+    config = RESTScopeConfig.from_environment(tmp_path / ".env")
+
+    with pytest.raises(
+        ValueError,
+        match="OPENAPI_RETRIEVAL_LIVE_MODEL_SLOT must be 'thinking' or 'fast'",
+    ):
+        _config_for_live_model_slot(config, "turbo")
+
+
+def test_live_retrieval_closes_tracing_runtime_when_agent_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tests import test_openapi_retrieval_agent_live as live_module
+
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "THINK_PROVIDER=deepseek",
+                "THINK_MODEL=deepseek-v4-pro",
+                "THINK_API_KEY=thinking-key",
+                "FAST_PROVIDER=deepseek",
+                "FAST_MODEL=deepseek-v4-flash",
+                "FAST_API_KEY=fast-key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    base_config = RESTScopeConfig.from_environment(env_file)
+    config = live_module._config_for_live_model_slot(base_config, "fast")
+    runtime_calls: list[tuple[object, tuple[str, ...]]] = []
+
+    class Runtime:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Agent:
+        def retrieve(self, request, *, ir):
+            del request, ir
+            raise RuntimeError("agent failed")
+
+    runtime = Runtime()
+
+    def build_runtime(tracing_config, *, secret_values):
+        runtime_calls.append((tracing_config, tuple(secret_values)))
+        return runtime
+
+    def build_agent(agent_config, *, tracing_runtime):
+        assert agent_config is config
+        assert tracing_runtime is runtime
+        return Agent()
+
+    monkeypatch.setattr(live_module, "build_tracing_runtime", build_runtime)
+    monkeypatch.setattr(live_module, "build_openapi_retrieval_agent", build_agent)
+    runner = getattr(live_module, "_retrieve_with_tracing", None)
+
+    assert runner is not None
+    with pytest.raises(RuntimeError, match="agent failed"):
+        runner(
+            base_config=base_config,
+            config=config,
+            request=object(),
+            ir=object(),
+        )
+
+    assert runtime.closed is True
+    assert runtime_calls == [
+        (
+            config.tracing,
+            ("thinking-key", "fast-key"),
+        )
+    ]

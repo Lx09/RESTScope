@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from restscope.agent.openapi_retrieval import (
+    OpenAPIRetrievalResult,
     OpenAPIRetrievalRequest,
     ParameterValueProducerQuery,
     build_openapi_retrieval_agent,
 )
-from restscope.openapi_parser import OpenAPIParser
+from restscope.openapi_parser import OpenAPIParser, OpenAPISpecIR
+from restscope.observability import build_tracing_runtime
 from restscope.restscope_config import RESTScopeConfig
 
 
@@ -29,20 +32,67 @@ pytestmark = [
 ]
 
 
+def _config_for_live_model_slot(
+    config: RESTScopeConfig,
+    slot: str,
+) -> RESTScopeConfig:
+    """Project one configured model slot into the Agent's thinking-model role."""
+
+    if slot not in {"thinking", "fast"}:
+        raise ValueError(
+            "OPENAPI_RETRIEVAL_LIVE_MODEL_SLOT must be 'thinking' or 'fast'"
+        )
+    selected = getattr(config.llm, slot)
+    return replace(config, llm=replace(config.llm, thinking=selected))
+
+
+def _retrieve_with_tracing(
+    *,
+    base_config: RESTScopeConfig,
+    config: RESTScopeConfig,
+    request: OpenAPIRetrievalRequest,
+    ir: OpenAPISpecIR,
+) -> OpenAPIRetrievalResult:
+    tracing_runtime = build_tracing_runtime(
+        config.tracing,
+        secret_values=(
+            base_config.llm.thinking.api_key,
+            base_config.llm.fast.api_key,
+        ),
+    )
+    try:
+        return build_openapi_retrieval_agent(
+            config,
+            tracing_runtime=tracing_runtime,
+        ).retrieve(request, ir=ir)
+    finally:
+        tracing_runtime.close()
+
+
 def test_live_model_finds_order_id_producer_in_petstore_asset() -> None:
     """Investigate a real asset and require the model to find the documented producer."""
 
-    config = RESTScopeConfig.from_environment(PROJECT_ROOT / ".env")
-    thinking = config.llm.thinking
-    if thinking.provider == "fake":
-        pytest.fail("THINK_PROVIDER must select a real provider for this live test.")
-    if not thinking.model:
-        pytest.fail("THINK_MODEL must be configured for this live test.")
-    if thinking.provider in {"openai_compatible", "deepseek"} and not thinking.api_key:
-        pytest.fail(f"THINK_API_KEY must be configured for the {thinking.provider} provider.")
+    base_config = RESTScopeConfig.from_environment(PROJECT_ROOT / ".env")
+    model_slot = os.environ.get("OPENAPI_RETRIEVAL_LIVE_MODEL_SLOT", "thinking")
+    config = _config_for_live_model_slot(base_config, model_slot)
+    selected_model = config.llm.thinking
+    if selected_model.provider == "fake":
+        pytest.fail(f"The {model_slot} model slot must select a real provider.")
+    if not selected_model.model:
+        pytest.fail(f"The {model_slot} model slot must configure a model.")
+    if (
+        selected_model.provider in {"openai_compatible", "deepseek"}
+        and not selected_model.api_key
+    ):
+        pytest.fail(
+            f"The {model_slot} model slot must configure an API key for "
+            f"the {selected_model.provider} provider."
+        )
 
-    result = build_openapi_retrieval_agent(config).retrieve(
-        OpenAPIRetrievalRequest(
+    result = _retrieve_with_tracing(
+        base_config=base_config,
+        config=config,
+        request=OpenAPIRetrievalRequest(
             query=ParameterValueProducerQuery(
                 objective="parameter_value_producer",
                 consumer_method="GET",
