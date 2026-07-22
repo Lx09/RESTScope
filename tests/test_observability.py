@@ -169,7 +169,6 @@ def test_enabled_runtime_emits_nested_sanitized_openinference_spans() -> None:
         sanitizer=TraceSanitizer(secret_values=["span-secret"], max_content_bytes=4096),
         backend=OpenTelemetryBackend(
             tracer_provider=provider,
-            instrumentor=None,
             flush_timeout_seconds=1,
         ),
     )
@@ -219,7 +218,6 @@ def test_runtime_records_sanitized_error_without_leaking_exception_message() -> 
         sanitizer=TraceSanitizer(secret_values=["error-secret"]),
         backend=OpenTelemetryBackend(
             tracer_provider=provider,
-            instrumentor=None,
             flush_timeout_seconds=1,
         ),
     )
@@ -243,7 +241,7 @@ def test_runtime_records_sanitized_error_without_leaking_exception_message() -> 
     assert "***REDACTED***" in rendered
 
 
-def test_phoenix_runtime_uses_explicit_endpoint_and_masks_sdk_content(monkeypatch) -> None:
+def test_phoenix_runtime_disables_all_automatic_instrumentation(monkeypatch) -> None:
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.trace import TracerProvider
 
@@ -252,24 +250,10 @@ def test_phoenix_runtime_uses_explicit_endpoint_and_masks_sdk_content(monkeypatc
     from restscope.restscope_config import TracingConfig
 
     register_calls: list[dict] = []
-    instrument_calls: list[dict] = []
-
-    class RecordingInstrumentor:
-        def instrument(self, **kwargs) -> None:
-            instrument_calls.append(kwargs)
-
-        def uninstrument(self) -> None:
-            instrument_calls.append({"uninstrumented": True})
-
     monkeypatch.setattr(
         phoenix_module,
         "register",
         lambda **kwargs: register_calls.append(kwargs) or TracerProvider(),
-    )
-    monkeypatch.setattr(
-        phoenix_module,
-        "OpenAIInstrumentor",
-        RecordingInstrumentor,
     )
 
     runtime = build_tracing_runtime(
@@ -298,15 +282,9 @@ def test_phoenix_runtime_uses_explicit_endpoint_and_masks_sdk_content(monkeypatc
             "verbose": False,
         }
     ]
-    trace_config = instrument_calls[0]["config"]
-    assert trace_config.hide_inputs is True
-    assert trace_config.hide_outputs is True
-    assert trace_config.hide_llm_tools is True
-    assert trace_config.hide_llm_invocation_parameters is True
-    assert instrument_calls[-1] == {"uninstrumented": True}
 
 
-def test_openai_sdk_instrumentation_creates_masked_child_span(monkeypatch) -> None:
+def test_openai_sdk_call_does_not_create_automatic_child_span(monkeypatch) -> None:
     pytest.importorskip("opentelemetry.sdk")
     import httpx
     from openai import OpenAI
@@ -389,12 +367,6 @@ def test_openai_sdk_instrumentation_creates_masked_child_span(monkeypatch) -> No
         runtime.close()
 
     spans = list(exporter.get_finished_spans())
-    parent = next(span for span in spans if span.name == "LLMClient.invoke")
-    children = [
-        span
-        for span in spans
-        if span.parent is not None and span.parent.span_id == parent.context.span_id
-    ]
     rendered = json.dumps(
         [
             {
@@ -407,12 +379,15 @@ def test_openai_sdk_instrumentation_creates_masked_child_span(monkeypatch) -> No
         default=str,
     )
 
-    assert children
-    assert all(secret not in rendered for secret in (
-        "sdk-input-secret",
-        "sdk-output-secret",
-        "sdk-tool-secret",
-    ))
+    assert [span.name for span in spans] == ["LLMClient.invoke"]
+    assert all(
+        secret not in rendered
+        for secret in (
+            "sdk-input-secret",
+            "sdk-output-secret",
+            "sdk-tool-secret",
+        )
+    )
 
 
 def test_phoenix_runtime_reuses_matching_process_registration(monkeypatch) -> None:
@@ -424,22 +399,24 @@ def test_phoenix_runtime_reuses_matching_process_registration(monkeypatch) -> No
     from restscope.restscope_config import TracingConfig
 
     register_calls: list[dict] = []
-    instrument_calls: list[str] = []
-
-    class RecordingInstrumentor:
-        def instrument(self, **kwargs) -> None:
-            del kwargs
-            instrument_calls.append("instrument")
-
-        def uninstrument(self) -> None:
-            instrument_calls.append("uninstrument")
+    shutdown_calls: list[str] = []
+    provider = TracerProvider()
+    monkeypatch.setattr(
+        provider,
+        "force_flush",
+        lambda **kwargs: shutdown_calls.append("flush") or True,
+    )
+    monkeypatch.setattr(
+        provider,
+        "shutdown",
+        lambda: shutdown_calls.append("shutdown"),
+    )
 
     monkeypatch.setattr(
         phoenix_module,
         "register",
-        lambda **kwargs: register_calls.append(kwargs) or TracerProvider(),
+        lambda **kwargs: register_calls.append(kwargs) or provider,
     )
-    monkeypatch.setattr(phoenix_module, "OpenAIInstrumentor", RecordingInstrumentor)
     config = TracingConfig(
         enabled=True,
         collector_endpoint="http://phoenix.test:6006",
@@ -453,11 +430,11 @@ def test_phoenix_runtime_reuses_matching_process_registration(monkeypatch) -> No
 
     assert second.enabled is True
     assert len(register_calls) == 1
-    assert instrument_calls == ["instrument"]
+    assert shutdown_calls == []
 
     second.close()
 
-    assert instrument_calls == ["instrument", "uninstrument"]
+    assert shutdown_calls == ["flush", "shutdown"]
 
 
 def test_phoenix_runtime_rejects_conflicting_process_configuration_fail_open(
@@ -471,15 +448,7 @@ def test_phoenix_runtime_rejects_conflicting_process_configuration_fail_open(
     from restscope.observability import build_tracing_runtime
     from restscope.restscope_config import TracingConfig
 
-    class Instrumentor:
-        def instrument(self, **kwargs) -> None:
-            del kwargs
-
-        def uninstrument(self) -> None:
-            return None
-
     monkeypatch.setattr(phoenix_module, "register", lambda **kwargs: TracerProvider())
-    monkeypatch.setattr(phoenix_module, "OpenAIInstrumentor", Instrumentor)
     active = build_tracing_runtime(
         TracingConfig(
             enabled=True,
@@ -527,7 +496,6 @@ def test_runtime_shutdown_timeout_is_fail_open(caplog) -> None:
         sanitizer=TraceSanitizer(),
         backend=OpenTelemetryBackend(
             tracer_provider=BlockingProvider(),
-            instrumentor=None,
             flush_timeout_seconds=0.01,
         ),
     )
@@ -548,13 +516,6 @@ def test_local_phoenix_runtime_temporarily_bypasses_process_proxy(monkeypatch) -
     from restscope.observability import build_tracing_runtime
     from restscope.restscope_config import TracingConfig
 
-    class Instrumentor:
-        def instrument(self, **kwargs) -> None:
-            del kwargs
-
-        def uninstrument(self) -> None:
-            return None
-
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.test:8080")
     monkeypatch.setenv("no_proxy", "existing.test")
     monkeypatch.delenv("NO_PROXY", raising=False)
@@ -563,7 +524,6 @@ def test_local_phoenix_runtime_temporarily_bypasses_process_proxy(monkeypatch) -
         "register",
         lambda **kwargs: TracerProvider(),
     )
-    monkeypatch.setattr(phoenix_module, "OpenAIInstrumentor", Instrumentor)
 
     runtime = build_tracing_runtime(
         TracingConfig(

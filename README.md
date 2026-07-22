@@ -116,8 +116,9 @@ TRACING_FLUSH_TIMEOUT_SECONDS=5
 Open [http://localhost:6006](http://localhost:6006) to inspect traces. RESTScope
 records App, Agent, LLM, and tool spans. Trace content is recursively redacted,
 DeepSeek `reasoning_content` is represented only by presence and length, and
-oversized inputs or outputs are truncated to the configured byte limit. The
-OpenAI SDK's auto-instrumented child spans hide raw inputs and outputs.
+oversized inputs or outputs are truncated to the configured byte limit. Model
+calls are represented by RESTScope's manual `LLMClient.invoke` spans; the
+OpenAI SDK is not auto-instrumented.
 
 Tracing is fail-open: missing optional packages, exporter failures, or shutdown
 timeouts do not change RESTScope results. Stop Phoenix without deleting its

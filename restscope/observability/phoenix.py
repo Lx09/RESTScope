@@ -1,4 +1,4 @@
-"""Phoenix registration and process-wide OpenAI instrumentation coordination."""
+"""Phoenix registration and process-wide tracing backend coordination."""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ from threading import RLock
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from openinference.instrumentation import TraceConfig
-from openinference.instrumentation.openai import OpenAIInstrumentor
 from phoenix.otel import register
 
 from restscope.observability.otel_backend import OpenTelemetryBackend
@@ -38,7 +36,7 @@ class _ProxyEnvironment:
 
 
 class _BackendLease:
-    """One App's reference to the process-wide OpenAI instrumentation."""
+    """One App's reference to the shared Phoenix tracing backend."""
 
     def __init__(self, shared: _SharedBackend) -> None:
         self._shared = shared
@@ -70,7 +68,7 @@ _ACTIVE_BACKEND: _SharedBackend | None = None
 
 
 def build_phoenix_backend(*, config: Any, sanitizer: TraceSanitizer) -> _BackendLease:
-    """Register or reuse the one globally patched OpenAI instrumentor."""
+    """Register or reuse the process-wide Phoenix tracing backend."""
 
     del sanitizer
     global _ACTIVE_BACKEND
@@ -107,20 +105,9 @@ def build_phoenix_backend(*, config: Any, sanitizer: TraceSanitizer) -> _Backend
                 auto_instrument=False,
                 verbose=False,
             )
-            instrumentor = OpenAIInstrumentor()
             backend = OpenTelemetryBackend(
                 tracer_provider=tracer_provider,
-                instrumentor=instrumentor,
                 flush_timeout_seconds=config.flush_timeout_seconds,
-            )
-            instrumentor.instrument(
-                tracer_provider=tracer_provider,
-                config=TraceConfig(
-                    hide_inputs=True,
-                    hide_outputs=True,
-                    hide_llm_tools=True,
-                    hide_llm_invocation_parameters=True,
-                ),
             )
         except Exception:
             try:

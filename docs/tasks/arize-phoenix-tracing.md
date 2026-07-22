@@ -1,6 +1,6 @@
 # Arize Phoenix Trace Monitoring
 
-Status: Completed
+Status: Implemented and verified (uncommitted)
 
 ## Objective
 
@@ -8,7 +8,10 @@ Add optional, local Arize Phoenix OSS monitoring for RESTScope App, Agent, LLM,
 and tool traces without changing business behavior when tracing is disabled or
 unavailable.
 
-## Approved scope
+## Original approved scope
+
+This section records the initial tracing design. Its OpenAI SDK instrumentation
+decision was superseded by the follow-up decision below.
 
 - Provide an App-owned `TracingRuntime` with explicit dependency injection.
 - Export manual OpenInference spans over OTLP/HTTP to a loopback-only Phoenix
@@ -31,16 +34,29 @@ unavailable.
 - Do not copy or commit the ignored `.env`, call DeepSeek, push, or commit this
   feature work without separate authorization.
 
+## Follow-up decision: manual LLM spans only
+
+On 2026-07-22, the user approved removing OpenAI SDK auto-instrumentation. New
+traces contain only RESTScope's manual `LLMClient.invoke` span for each model
+call; they do not contain `ChatCompletion` children. The manual span remains
+responsible for normalized request and response content, provider and model
+attributes, token counts, latency, recursive redaction, and reasoning-content
+suppression.
+
+The Phoenix tracer provider remains process-wide and reference-counted across
+compatible runtime instances. Conflicting active configurations still fail
+open. Existing Phoenix projects and their historical SDK spans are retained.
+
 ## Decisions
 
-- Manual span kinds are `CHAIN`, `AGENT`, `LLM`, and `TOOL`; OpenAI SDK spans
-  are children of the manual `LLMClient.invoke` span.
+- Manual span kinds are `CHAIN`, `AGENT`, `LLM`, and `TOOL`; model calls emit
+  only the manual `LLMClient.invoke` span.
 - Trace inputs and outputs are limited independently to 65,536 UTF-8 bytes and
   retain original-size and truncation attributes.
 - Phoenix uses image `arizephoenix/phoenix:19.0.0`, port 6006 on loopback, and
   a named volume for SQLite data.
 - Batch export is flushed during App close with a five-second upper bound.
-- One process-wide OpenAI instrumentor is reference-counted across compatible
+- One process-wide Phoenix backend is reference-counted across compatible
   runtime instances; conflicting active configurations fall back to no-op.
 - A loopback Phoenix endpoint temporarily adds `localhost`, `127.0.0.1`, and
   `::1` to both process `NO_PROXY` spellings while the shared backend is active.
@@ -67,7 +83,7 @@ slot (`deepseek-v4-flash`, reasoning disabled). The opt-in live test selects
 the model slot without changing the production role-to-model routing and owns
 the tracing runtime long enough to flush all spans before exit.
 
-## Verification
+## Initial implementation verification
 
 The repeatable test suites below used stubbed LLM behavior or an
 `httpx.MockTransport`. The separately authorized live verification is recorded
@@ -96,7 +112,26 @@ The three purpose-separated feature commits were fast-forwarded to local
 The merged tree repeated the tracing-extra suite (`164 passed, 2 skipped`),
 the Phoenix contract (`1 passed`), `compileall`, and `git diff --check`.
 
-## Live DeepSeek/Phoenix evidence
+## Manual-only LLM span verification
+
+- The new SDK behavior test first failed against the old implementation because
+  the exporter contained `ChatCompletion` and `LLMClient.invoke`; after the
+  change, the same test passed with only `LLMClient.invoke`.
+- `uv lock` resolved 86 packages and removed
+  `openinference-instrumentation-openai` plus its now-unused
+  `opentelemetry-instrumentation` dependency.
+- `uv run --extra tracing pytest -q tests/test_observability.py tests/test_observability_integration.py`
+  passed 18 tests.
+- `uv sync && uv run pytest -q` passed with 153 tests and 10 skips using only
+  core dependencies.
+- `uv sync --extra tracing && uv run --extra tracing pytest -q` installed 15
+  tracing packages and passed with 164 tests and 2 skips.
+- `uv run --extra tracing python -m compileall -q restscope` passed, and an
+  import-spec check confirmed `openinference.instrumentation.openai` is absent.
+- `git diff --check` passed. No Phoenix contract or live DeepSeek request was
+  run, and existing Phoenix trace data was unchanged.
+
+## Historical live DeepSeek/Phoenix evidence before removal
 
 - Model slot: FAST (`deepseek/deepseek-v4-flash`, reasoning disabled).
 - Phoenix project: `restscope-openapi-retrieval-live-20260722-131740`.
