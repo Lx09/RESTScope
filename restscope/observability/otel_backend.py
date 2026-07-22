@@ -13,11 +13,9 @@ class OpenTelemetryBackend:
         self,
         *,
         tracer_provider: Any,
-        instrumentor: Any | None,
         flush_timeout_seconds: float,
     ) -> None:
         self.tracer_provider = tracer_provider
-        self.instrumentor = instrumentor
         self.flush_timeout_seconds = max(0.0, flush_timeout_seconds)
         self.tracer = tracer_provider.get_tracer("restscope")
         self._closed = False
@@ -37,8 +35,6 @@ class OpenTelemetryBackend:
 
         def shutdown() -> None:
             try:
-                if self.instrumentor is not None:
-                    self.instrumentor.uninstrument()
                 self.tracer_provider.force_flush(
                     timeout_millis=int(self.flush_timeout_seconds * 1000),
                 )

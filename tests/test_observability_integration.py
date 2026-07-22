@@ -25,7 +25,6 @@ def _recording_runtime(*, secret_values=()):
         sanitizer=TraceSanitizer(secret_values=secret_values),
         backend=OpenTelemetryBackend(
             tracer_provider=provider,
-            instrumentor=None,
             flush_timeout_seconds=1,
         ),
     )
