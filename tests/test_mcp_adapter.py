@@ -299,6 +299,7 @@ def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
 
     assert runtime.skill_registry.get("testing_strategy").name == "testing_strategy"
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
+        "restscope.http.request",
         "mcp.schemathesis.get_capabilities"
     ]
     assert all(tool.kind != "skill" for tool in runtime.tool_registry.list_specs())
@@ -319,12 +320,14 @@ def test_build_capabilities_requires_default_preset_source() -> None:
         build_capabilities()
 
 
-def test_build_capabilities_can_build_empty_runtime_when_presets_are_disabled() -> None:
+def test_build_capabilities_keeps_builtin_tool_when_presets_are_disabled() -> None:
     from restscope.capabilities import build_capabilities
 
     runtime = build_capabilities(presets=())
 
-    assert runtime.tool_registry.list_specs() == []
+    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
+        "restscope.http.request"
+    ]
     assert runtime.tool_executor is not None
 
 

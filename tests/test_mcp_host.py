@@ -185,10 +185,12 @@ def test_build_capabilities_with_mcp_host_registers_read_only_tools_and_denies_d
     runtime = build_capabilities_with_mcp_host(mcp_host=host)
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
+        "restscope.http.request",
         "mcp.schemathesis.get_run",
         "mcp.schemathesis.start_run",
     ]
     assert [tool.name for tool in runtime.tool_selector.select_for_role(role="planner", state={})] == [
+        "restscope.http.request",
         "mcp.schemathesis.get_run"
     ]
 

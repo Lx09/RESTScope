@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from restscope.capabilities.http_request import HTTP_REQUEST_TOOL_NAME
 from restscope.llm.schemas import ToolSpec
 
 
@@ -24,6 +25,9 @@ class ToolPolicy:
     }
 
     def is_allowed(self, *, role: str, tool_spec: ToolSpec, state: dict) -> bool:
+        if tool_spec.name == HTTP_REQUEST_TOOL_NAME:
+            return True
+
         if role == "operation_tester" and tool_spec.kind == "mcp_tool":
             if tool_spec.read_only:
                 return True

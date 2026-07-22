@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
+from restscope.capabilities.http_request import register_http_request_tool
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_call_validator import ToolCallValidator
 from restscope.capabilities.tool_executor import ToolExecutor
@@ -51,6 +52,8 @@ def build_capabilities(
     )
     skill_registry = SkillRegistry()
     skill_policy = SkillPolicy()
+
+    register_http_request_tool(tool_registry)
 
     for skill in skills:
         skill_registry.register(skill)

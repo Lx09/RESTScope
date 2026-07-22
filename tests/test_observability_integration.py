@@ -440,3 +440,63 @@ def test_openapi_retrieval_emits_tool_agent_llm_and_internal_tool_spans() -> Non
     assert wrapper.attributes["openinference.span.kind"] == "TOOL"
     assert agent_span.attributes["openinference.span.kind"] == "AGENT"
     assert internal_tool.attributes["openinference.span.kind"] == "TOOL"
+
+
+def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> None:
+    import httpx
+
+    from restscope.capabilities import (
+        ToolContext,
+        build_capabilities,
+        register_http_request_tool,
+    )
+    from restscope.llm import ToolCall
+    from restscope.openapi_parser import OpenAPIParser
+
+    response_body = f"{'x' * 70000} Bearer runtime-secret"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={"Content-Type": "text/plain"},
+            text=response_body,
+        )
+    )
+    runtime, exporter = _recording_runtime(secret_values=["Bearer runtime-secret"])
+    capabilities = build_capabilities(presets=(), tracing_runtime=runtime)
+    register_http_request_tool(
+        capabilities.tool_registry,
+        client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),
+    )
+    capabilities.tool_executor.bind_context(
+        ToolContext(
+            ir=OpenAPIParser.parse(
+                {
+                    "openapi": "3.0.3",
+                    "info": {"title": "Trace HTTP", "version": "1"},
+                    "paths": {"/large": {"get": {"responses": {"200": {"description": "ok"}}}}},
+                }
+            ),
+            baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+            base_url="https://api.example.test",
+            headers={"Authorization": "Bearer runtime-secret"},
+        )
+    )
+
+    result = capabilities.tool_executor.execute(
+        tool_call=ToolCall(
+            id="trace-http",
+            name="restscope.http.request",
+            arguments={"method": "GET", "path": "/large"},
+        ),
+        role="future_agent",
+        state={},
+    )
+    runtime.close()
+
+    assert result.status == "succeeded"
+    assert len(result.structured["body"]) > 65536
+    assert "runtime-secret" not in result.model_dump_json()
+    span = next(span for span in exporter.get_finished_spans() if span.name == "restscope.http.request")
+    assert span.attributes["restscope.output.truncated"] is True
+    assert span.attributes["restscope.output.original_size_bytes"] > 65536
+    assert "runtime-secret" not in span.attributes["output.value"]

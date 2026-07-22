@@ -6,6 +6,7 @@ from .tool_call_validator import ToolCallValidator
 from .tool_context import ToolContext, ToolContextError
 from .tool_executor import ToolExecutor
 from .tool_policy import ToolPolicy
+from .http_request import HTTP_REQUEST_TOOL_NAME, register_http_request_tool
 from .tool_registry import ToolRegistry
 from .tool_selector import ToolSelector
 from .tool_sources import (
@@ -29,6 +30,8 @@ __all__ = [
     "ToolContextError",
     "ToolExecutor",
     "ToolPolicy",
+    "HTTP_REQUEST_TOOL_NAME",
+    "register_http_request_tool",
     "ToolRegistry",
     "ToolSelector",
     "PresetToolSourceNotFoundError",

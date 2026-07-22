@@ -90,11 +90,15 @@ class ToolExecutor:
         try:
             result = handler(self.require_context(), **tool_call.arguments)
         except TimeoutError as exc:
+            error = {"message": self._redact_error(str(exc))}
+            error_code = getattr(exc, "code", None)
+            if isinstance(error_code, str) and error_code:
+                error["code"] = error_code
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
                 status="timed_out",
-                error={"message": self._redact_error(str(exc))},
+                error=error,
             )
         except Exception as exc:
             error = {"type": type(exc).__name__, "message": self._redact_error(str(exc))}
