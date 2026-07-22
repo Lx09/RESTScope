@@ -1,0 +1,16 @@
+services:
+  phoenix:
+    image: arizephoenix/phoenix:19.0.0
+    ports:
+      - "127.0.0.1:6006:6006"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_TELEMETRY_ENABLED: "false"
+      PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
+      PHOENIX_ENABLE_MCP_SERVER: "false"
+      PHOENIX_ALLOWED_PROVIDERS: NONE
+    volumes:
+      - phoenix_data:/mnt/data
+
+volumes:
+  phoenix_data:

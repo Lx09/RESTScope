@@ -7,6 +7,7 @@ from restscope.llm.providers.deepseek import DeepSeekProvider
 from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 from restscope.llm.registry import LLMProviderRegistry
 from restscope.llm.schemas import LLMReasoningConfig
+from restscope.observability import TracingRuntime
 
 
 def build_llm_registry(config) -> LLMProviderRegistry:
@@ -42,7 +43,14 @@ def build_llm_registry(config) -> LLMProviderRegistry:
     return registry
 
 
-def build_llm_client(config) -> LLMClient:
+def build_llm_client(
+    config,
+    *,
+    tracing_runtime: TracingRuntime | None = None,
+) -> LLMClient:
     """Build an LLMClient from the short dual-model RESTScope config."""
 
-    return LLMClient(build_llm_registry(config))
+    return LLMClient(
+        build_llm_registry(config),
+        tracing_runtime=tracing_runtime,
+    )

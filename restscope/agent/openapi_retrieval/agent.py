@@ -20,6 +20,7 @@ from restscope.llm import (
     ToolCall,
 )
 from restscope.openapi_parser import OpenAPISpecIR
+from restscope.observability import TracingRuntime
 
 from .investigation import OpenAPIRetrievalQueryError, OpenAPIInvestigationTools, OpenAPIInvestigationWorkspace
 from .schemas import (
@@ -80,13 +81,37 @@ class OpenAPIRetrievalAgent:
         model: LLMModelConfig,
         validator: OutputValidator | None = None,
         clock: Any = time.monotonic,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.client = client
         self.model = model
         self.validator = validator or OutputValidator()
         self.clock = clock
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def retrieve(
+        self,
+        request: OpenAPIRetrievalRequest,
+        *,
+        ir: OpenAPISpecIR,
+    ) -> OpenAPIRetrievalResult:
+        query = request.query
+        with self.tracing_runtime.span(
+            "OpenAPIRetrievalAgent.retrieve",
+            kind="AGENT",
+            input_value=request,
+            attributes={
+                "restscope.operation.method": query.consumer_method,
+                "restscope.operation.path": query.consumer_path,
+                "restscope.openapi.parameter": query.parameter_name,
+            },
+        ) as span:
+            result = self._retrieve(request, ir=ir)
+            span.set_output(result)
+            span.set_attribute("restscope.retrieval.status", result.status)
+            return result
+
+    def _retrieve(
         self,
         request: OpenAPIRetrievalRequest,
         *,
@@ -256,16 +281,29 @@ class OpenAPIRetrievalAgent:
                     )
                     continue
                 calls += 1
-                try:
-                    payload = tools.execute(call.name, call.arguments)
-                except Exception as exc:
-                    payload = {
-                        "error": {
-                            "type": type(exc).__name__,
-                            "code": getattr(exc, "code", "internal_tool_failed"),
-                            "message": str(exc),
+                with self.tracing_runtime.span(
+                    call.name,
+                    kind="TOOL",
+                    input_value=call.arguments,
+                    attributes={"tool.name": call.name},
+                ) as trace_span:
+                    try:
+                        payload = tools.execute(call.name, call.arguments)
+                    except Exception as exc:
+                        payload = {
+                            "error": {
+                                "type": type(exc).__name__,
+                                "code": getattr(exc, "code", "internal_tool_failed"),
+                                "message": str(exc),
+                            }
                         }
-                    }
+                    trace_span.set_output(payload)
+                    trace_span.set_attribute(
+                        "restscope.tool.status",
+                        "failed" if "error" in payload else "succeeded",
+                    )
+                    if "error" in payload:
+                        trace_span.mark_error(str(payload["error"].get("message", "failed")))
                 content = json.dumps(payload, ensure_ascii=False, default=str)
                 encoded_size = len(content.encode("utf-8"))
                 if byte_count + encoded_size > MAX_TOOL_RESULT_BYTES:

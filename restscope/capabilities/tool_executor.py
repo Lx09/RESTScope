@@ -9,6 +9,7 @@ from restscope.capabilities.tool_context import ToolContext, ToolContextError
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.llm.redactor import Redactor
 from restscope.llm.schemas import ToolCall, ToolResult
+from restscope.observability import TracingRuntime
 
 
 class ToolExecutor:
@@ -19,10 +20,12 @@ class ToolExecutor:
         registry: ToolRegistry,
         validator: ToolCallValidator,
         artifact_service: Any | None = None,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.registry = registry
         self.validator = validator
         self.artifact_service = artifact_service
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self._tool_context: ToolContext | None = None
 
     @property
@@ -49,6 +52,21 @@ class ToolExecutor:
         self._tool_context = None
 
     def execute(self, *, tool_call: ToolCall, role: str, state: dict) -> ToolResult:
+        with self.tracing_runtime.span(
+            tool_call.name,
+            kind="TOOL",
+            input_value={"arguments": tool_call.arguments, "role": role},
+            attributes={"tool.name": tool_call.name},
+        ) as span:
+            result = self._execute(tool_call=tool_call, role=role, state=state)
+            span.set_output(result)
+            span.set_attribute("restscope.tool.status", result.status)
+            if result.status in {"failed", "timed_out"}:
+                message = (result.error or {}).get("message", result.status)
+                span.mark_error(str(message))
+            return result
+
+    def _execute(self, *, tool_call: ToolCall, role: str, state: dict) -> ToolResult:
         errors = self.validator.validate(tool_call=tool_call, role=role, state=state)
         if errors:
             return ToolResult(

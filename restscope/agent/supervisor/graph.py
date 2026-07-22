@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from restscope.capabilities import ToolContext
 from restscope.openapi_parser.ir import OperationIR, SchemaIR
+from restscope.observability import TracingRuntime
 
 from ..operation_test import (
     OperationCandidate,
@@ -54,31 +55,44 @@ class RESTScopeMainGraph:
         operation_runner: OperationTestRunner,
         dependency_analyzer: OperationDependencyAnalyzer,
         tool_context: ToolContext,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.operation_runner = operation_runner
         self.dependency_analyzer = dependency_analyzer
         self.tool_context = tool_context
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
-        graph = self._build_graph(request=request)
-        final_state = graph.invoke(
-            {
-                "request": request.model_dump(mode="json"),
-                "operations": [],
-                "candidates": [],
-                "ready_queue": [],
-                "blocked_queue": [],
-                "satisfied": [],
-                "attempts": [],
-                "attempt_counts": {},
-                "findings": [],
-                "current_round": 0,
-                "rounds": 0,
-                "dependency_cycles": [],
-            },
-            config={"recursion_limit": 10_000},
-        )
-        return RESTScopeRunReport.model_validate(final_state["final_report"])
+        task_id = request.metadata.get("task_id")
+        attributes = {"restscope.task_id": task_id} if task_id else {}
+        with self.tracing_runtime.span(
+            "RESTScopeMainGraph.run",
+            kind="AGENT",
+            input_value=request,
+            attributes=attributes,
+        ) as span:
+            graph = self._build_graph(request=request)
+            final_state = graph.invoke(
+                {
+                    "request": request.model_dump(mode="json"),
+                    "operations": [],
+                    "candidates": [],
+                    "ready_queue": [],
+                    "blocked_queue": [],
+                    "satisfied": [],
+                    "attempts": [],
+                    "attempt_counts": {},
+                    "findings": [],
+                    "current_round": 0,
+                    "rounds": 0,
+                    "dependency_cycles": [],
+                },
+                config={"recursion_limit": 10_000},
+            )
+            report = RESTScopeRunReport.model_validate(final_state["final_report"])
+            span.set_output(report)
+            span.set_attribute("restscope.run.status", report.status)
+            return report
 
     def _build_graph(self, *, request: RESTScopeRunRequest):
         graph = StateGraph(RESTScopeMainState)
@@ -164,6 +178,7 @@ class RESTScopeMainGraph:
                 report = OperationTestAgent(
                     runner=self.operation_runner,
                     dependency_analyzer=self.dependency_analyzer,
+                    tracing_runtime=self.tracing_runtime,
                 ).run(
                     OperationTestRequest(
                         task_id=request.metadata.get("task_id"),

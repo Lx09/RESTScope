@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
+from restscope.observability import TracingRuntime
+
 from .dependency import OperationDependencyAnalyzer
 from .runner import OperationTestRunner
 from .schemas import (
@@ -41,18 +43,40 @@ class OperationTestAgent:
         *,
         runner: OperationTestRunner,
         dependency_analyzer: OperationDependencyAnalyzer,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.runner = runner
         self.dependency_analyzer = dependency_analyzer
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(self, request: OperationTestRequest) -> OperationTestReport:
-        graph = self._build_graph()
-        initial_state: OperationTestState = {
-            "request": request.model_dump(mode="json"),
-            "findings": [],
+        operation = request.operation
+        attributes = {
+            "restscope.operation.method": operation.method,
+            "restscope.operation.path": operation.path,
         }
-        final_state = graph.invoke(initial_state)
-        return OperationTestReport.model_validate(final_state["final_report"])
+        if operation.operation_id:
+            attributes["restscope.operation.id"] = operation.operation_id
+        if request.task_id:
+            attributes["restscope.task_id"] = request.task_id
+        with self.tracing_runtime.span(
+            "OperationTestAgent.run",
+            kind="AGENT",
+            input_value=request,
+            attributes=attributes,
+        ) as span:
+            graph = self._build_graph()
+            initial_state: OperationTestState = {
+                "request": request.model_dump(mode="json"),
+                "findings": [],
+            }
+            final_state = graph.invoke(initial_state)
+            report = OperationTestReport.model_validate(final_state["final_report"])
+            span.set_output(report)
+            span.set_attribute("restscope.operation.status", report.status)
+            if report.status == "errored":
+                span.mark_error("Operation test returned an errored report")
+            return report
 
     def _build_graph(self):
         graph = StateGraph(OperationTestState)

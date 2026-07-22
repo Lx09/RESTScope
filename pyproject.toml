@@ -16,6 +16,12 @@ dependencies = [
     "langgraph>=1.0.0",
 ]
 
+[project.optional-dependencies]
+tracing = [
+    "arize-phoenix-otel>=0.16.1,<0.17",
+    "openinference-instrumentation-openai>=0.1.52,<0.2",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
@@ -29,4 +35,5 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "integration: marks tests as requiring LLM env vars (deselect with '-m \"not integration\"')",
+    "phoenix_contract: marks tests requiring the local Phoenix Docker service",
 ]

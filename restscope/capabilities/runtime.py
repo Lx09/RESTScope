@@ -15,6 +15,7 @@ from restscope.capabilities.tool_policy import ToolPolicy
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.capabilities.tool_selector import ToolSelector
 from restscope.capabilities.tool_sources import add_preset_tools
+from restscope.observability import TracingRuntime
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ def build_capabilities(
     sources: Mapping[str, Mapping[str, Any]] | None = None,
     presets: Iterable[str] = ("schemathesis",),
     skills: Iterable[SkillManifest] = (),
+    tracing_runtime: TracingRuntime | None = None,
 ) -> CapabilityRuntime:
     """Build a complete capability runtime from external sources and skills."""
 
@@ -42,7 +44,11 @@ def build_capabilities(
     tool_policy = ToolPolicy()
     tool_selector = ToolSelector(tool_registry, tool_policy)
     tool_validator = ToolCallValidator(tool_registry, tool_policy)
-    tool_executor = ToolExecutor(tool_registry, tool_validator)
+    tool_executor = ToolExecutor(
+        tool_registry,
+        tool_validator,
+        tracing_runtime=tracing_runtime,
+    )
     skill_registry = SkillRegistry()
     skill_policy = SkillPolicy()
 
@@ -69,13 +75,19 @@ def build_capabilities_with_mcp_host(
     mcp_host: MCPHost | None = None,
     presets: Iterable[str] = ("schemathesis",),
     skills: Iterable[SkillManifest] = (),
+    tracing_runtime: TracingRuntime | None = None,
 ) -> CapabilityRuntime:
     """Build capabilities after discovering tools through RESTScope's MCP host."""
 
     host = mcp_host or MCPHost(_load_mcp_configs(config))
     preset_list = tuple(presets)
     sources = MCPSourceBuilder(host).build_sources(presets=preset_list)
-    runtime = build_capabilities(sources=sources, presets=preset_list, skills=skills)
+    runtime = build_capabilities(
+        sources=sources,
+        presets=preset_list,
+        skills=skills,
+        tracing_runtime=tracing_runtime,
+    )
     return CapabilityRuntime(
         tool_registry=runtime.tool_registry,
         tool_policy=runtime.tool_policy,

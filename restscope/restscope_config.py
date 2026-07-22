@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 
@@ -94,6 +94,20 @@ class MCPConfig:
 
 
 @dataclass(frozen=True)
+class TracingConfig:
+    """Optional Phoenix/OpenTelemetry export settings."""
+
+    enabled: bool = False
+    collector_endpoint: str = "http://localhost:6006"
+    project_name: str = "restscope"
+    api_key: str = field(default="", repr=False)
+    protocol: str = "http/protobuf"
+    batch: bool = True
+    max_content_bytes: int = 65536
+    flush_timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
 class RESTScopeConfig:
     """RESTScope configuration loaded from `.env` and environment variables."""
 
@@ -102,6 +116,7 @@ class RESTScopeConfig:
     llm: LLMConfig
     db: DBConfig
     mcp: MCPConfig
+    tracing: TracingConfig = field(default_factory=TracingConfig)
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
@@ -139,6 +154,25 @@ class RESTScopeConfig:
             ),
             mcp=MCPConfig(
                 servers_file=Path(values.get("MCP_SERVERS_FILE", str(PROJECT_ROOT / "mcp.servers.json"))).expanduser(),
+            ),
+            tracing=TracingConfig(
+                enabled=_bool_value(values.get("TRACING_ENABLED"), False),
+                collector_endpoint=values.get(
+                    "PHOENIX_COLLECTOR_ENDPOINT",
+                    "http://localhost:6006",
+                ),
+                project_name=values.get("PHOENIX_PROJECT_NAME", "restscope"),
+                api_key=values.get("PHOENIX_API_KEY", ""),
+                protocol=values.get("PHOENIX_PROTOCOL", "http/protobuf"),
+                batch=_bool_value(values.get("TRACING_BATCH"), True),
+                max_content_bytes=_int_value(
+                    values.get("TRACING_MAX_CONTENT_BYTES"),
+                    65536,
+                ),
+                flush_timeout_seconds=_float_value(
+                    values.get("TRACING_FLUSH_TIMEOUT_SECONDS"),
+                    5.0,
+                ),
             ),
         )
 
