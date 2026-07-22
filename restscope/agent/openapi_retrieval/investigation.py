@@ -1,4 +1,10 @@
-"""IR-only OpenAPI investigation workspace and model-facing tools."""
+"""IR-only OpenAPI investigation workspace and model-facing tools.
+
+The workspace performs deterministic reads against ``OpenAPISpecIR``. The
+tools adapt those reads to small model-facing payloads and keep the evidence
+needed to verify the model's eventual conclusion. Neither layer reads the raw
+OpenAPI file or builds a persistent search index.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +36,13 @@ class OpenAPIRetrievalQueryError(ValueError):
 
 @dataclass(frozen=True)
 class _Symbol:
+    """One searchable IR fact, already tied to its owning operation.
+
+    ``name`` is the short value searched by the model, while ``location`` is a
+    canonical, citable pointer. ``details`` holds the larger payload that is
+    returned only when the evidence is expanded.
+    """
+
     scope: str
     name: str
     operation: OperationReference
@@ -38,12 +51,14 @@ class _Symbol:
     details: dict[str, Any]
 
 
+# Arguments accepted by the internal ``openapi.find_operation`` tool.
 class _FindOperationInput(BaseModel):
     method: str
     path: str
     parameter_name: str | None = None
 
 
+# Arguments for a case-insensitive scan over selected IR symbol kinds.
 class _SymbolSearchInput(BaseModel):
     query: str = Field(min_length=1)
     scopes: list[
@@ -58,23 +73,32 @@ class _SymbolSearchInput(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+# Arguments for expanding selected sections of one operation.
 class _ReadOperationInput(BaseModel):
     operation_key: str
     sections: list[Literal["request", "responses", "links"]] = Field(default_factory=list)
 
 
+# Arguments for expanding evidence previously returned in this request.
 class _ReadEvidenceInput(BaseModel):
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
 
 
 class OpenAPIInvestigationWorkspace:
-    """Read-only-by-convention access to one already parsed OpenAPI IR."""
+    """Deterministic, read-only-by-convention access to one parsed IR.
+
+    This object does not decide which producer is correct. It resolves the
+    consumer operation and exposes normalized IR lookups used by the model-facing
+    tool layer.
+    """
 
     def __init__(self, *, ir: OpenAPISpecIR) -> None:
         self.ir = ir
 
     def find_operation(self, *, method: str, path: str) -> OperationReference:
         normalized_method = method.strip().upper()
+        # Prefer the schema's exact template. If the caller supplied a concrete
+        # path (``/orders/123``), fall back to matching ``/orders/{orderId}``.
         exact = [
             operation
             for operation in self.ir.operations.values()
@@ -149,10 +173,16 @@ class OpenAPIInvestigationWorkspace:
 
 
 class OpenAPIInvestigationTools:
-    """Model-facing, read-only tools bound to one in-memory OpenAPI document."""
+    """Model-facing tools plus request-scoped evidence for one in-memory IR.
+
+    A new instance is created for every retrieval. Consequently evidence IDs
+    cannot leak between investigations, even when the App-level IR is reused.
+    """
 
     def __init__(self, workspace: OpenAPIInvestigationWorkspace) -> None:
         self.workspace = workspace
+        # The public evidence record stays small; the paired details payload is
+        # retained here for ``openapi.read_evidence`` within this request only.
         self._evidence: dict[str, tuple[RetrievalEvidence, dict[str, Any]]] = {}
 
     def specs(self) -> list[ToolSpec]:
@@ -203,6 +233,8 @@ class OpenAPIInvestigationTools:
         raise OpenAPIRetrievalQueryError("unknown_internal_tool", f"Unknown internal tool: {name}")
 
     def evidence(self) -> list[RetrievalEvidence]:
+        """Return every fact observed through tools during this investigation."""
+
         return [item[0] for item in self._evidence.values()]
 
     def _inspect(self) -> dict[str, Any]:
@@ -247,6 +279,9 @@ class OpenAPIInvestigationTools:
         scopes = set(query.scopes)
         needle = query.query.casefold()
         matches: list[dict[str, Any]] = []
+        # Search is deliberately rebuilt from the current IR on every call. The
+        # haystack includes semantic text and the owning operation ID, but each
+        # match already carries the operation reference used during validation.
         for symbol in self._iter_symbols():
             if scopes and symbol.scope not in scopes:
                 continue
@@ -311,6 +346,8 @@ class OpenAPIInvestigationTools:
         details: dict[str, Any],
     ) -> RetrievalEvidence:
         operation_key = "" if operation is None else "|".join(str(part) for part in operation.identity())
+        # The ID is derived from fact identity rather than discovery order, so
+        # repeated searches of the same IR fact return the same reference.
         digest = hashlib.sha256(f"{kind}\0{location}\0{operation_key}".encode()).hexdigest()[:16]
         evidence = RetrievalEvidence(
             id=f"evidence:{digest}",
@@ -323,7 +360,12 @@ class OpenAPIInvestigationTools:
         return evidence
 
     def _iter_symbols(self):
-        """Scan the current IR for symbols on every call; no derived index is retained."""
+        """Yield searchable facts directly from the IR without retaining an index.
+
+        The outer operation loop is the important association boundary: every
+        request parameter, 2xx response field/header, and Link yielded inside
+        it receives the same ``OperationReference``.
+        """
 
         for operation in self.workspace.ir.operations.values():
             reference = _operation_reference(operation)
@@ -349,6 +391,7 @@ class OpenAPIInvestigationTools:
                     details=item,
                 )
             for status, response in operation.responses.by_status.items():
+                # Producer evidence is limited to successful response contracts.
                 if not _is_success_status(status):
                     continue
                 for header_name, header in response.headers.items():
@@ -455,7 +498,7 @@ def _is_success_status(status: str) -> bool:
 
 
 def _request_items(operation: OperationIR) -> list[dict[str, Any]]:
-    """Flatten every request media type, including form and multipart bodies."""
+    """Flatten request parameters and nested body leaves into searchable items."""
 
     items: list[dict[str, Any]] = []
     for location, parameters in (
@@ -510,6 +553,10 @@ def _request_schema_fields(
     required: bool = False,
     visited: set[int] | None = None,
 ) -> list[tuple[str, SchemaIR, bool]]:
+    """Return request-body leaf paths while avoiding recursive-schema cycles."""
+
+    # Copying ``visited`` makes cycle detection local to this recursion branch;
+    # a schema reused by a sibling branch can still appear at both valid paths.
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []
@@ -554,6 +601,8 @@ def _schema_fields(
     parent: str = "",
     visited: set[int] | None = None,
 ) -> list[tuple[str, SchemaIR]]:
+    """Expand response schemas into citable dotted paths, including arrays/unions."""
+
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []

@@ -32,6 +32,8 @@ from .schemas import (
 from .skills import ParameterValueProducerSkill
 
 
+# Investigation and final summarization share one deadline. The reserve keeps a
+# slow search loop from consuming the time needed for the required final JSON.
 MAX_INTERNAL_TOOL_CALLS = 20
 MAX_TOOL_RESULT_BYTES = 200 * 1024
 MAX_INVESTIGATION_SECONDS = 120.0
@@ -47,6 +49,14 @@ class OpenAPIRetrievalOutputError(RuntimeError):
 
 
 class OpenAPIRetrievalState(TypedDict, total=False):
+    """Ephemeral LangGraph state for one retrieval request.
+
+    ``messages``/``response`` are the model conversation, ``draft`` is the
+    parsed but not-yet-trusted conclusion, and the counters/actions describe
+    only resources consumed during this request. The App-level IR is captured
+    by node closures and intentionally never enters graph state.
+    """
+
     messages: list[dict[str, Any]]
     response: dict[str, Any]
     draft: dict[str, Any]
@@ -83,7 +93,12 @@ class OpenAPIRetrievalAgent:
         ir: OpenAPISpecIR,
     ) -> OpenAPIRetrievalResult:
         self._check_configured()
+        # Workspace and tools are request-scoped views over the shared App IR.
+        # They carry deterministic lookups and evidence, not another IR copy.
         workspace = OpenAPIInvestigationWorkspace(ir=ir)
+        # Resolve caller-controlled identifiers before involving the model. This
+        # guarantees that every investigation starts from a real consumer and a
+        # parameter actually declared by that operation.
         consumer = workspace.find_operation(
             method=request.query.consumer_method,
             path=request.query.consumer_path,
@@ -138,6 +153,8 @@ class OpenAPIRetrievalAgent:
         target_parameter,
         started: float,
     ):
+        # ``workspace`` and ``tools`` are captured by these node closures rather
+        # than serialized into OpenAPIRetrievalState.
         graph = StateGraph(OpenAPIRetrievalState)
         graph.add_node("ask_model", self._ask_model(tools=tools, started=started))
         graph.add_node("execute_tools", self._execute_tools(tools=tools, started=started))
@@ -208,6 +225,8 @@ class OpenAPIRetrievalAgent:
         def node(state: OpenAPIRetrievalState) -> OpenAPIRetrievalState:
             response = LLMResponse.model_validate(state["response"])
             remaining = MAX_INTERNAL_TOOL_CALLS - int(state.get("tool_calls", 0))
+            # A provider may return several calls at once; execute only the
+            # prefix that still fits the global request budget.
             selected_calls = response.tool_calls[: max(0, remaining)]
             messages = [LLMMessage.model_validate(item) for item in state["messages"]]
             messages.append(
@@ -327,6 +346,9 @@ class OpenAPIRetrievalAgent:
             errors = [issue.message for issue in validation.errors]
             draft = validation.validated_object if validation.valid else None
             if draft is not None:
+                # Schema validation checks shape. Semantic validation below
+                # checks that operations and evidence actually came from this IR
+                # and that evidence belongs to the candidate citing it.
                 evidence_by_id = {item.id: item for item in tools.evidence()}
                 errors.extend(
                     _semantic_errors(
@@ -390,6 +412,8 @@ class OpenAPIRetrievalAgent:
             warnings = list(draft.warnings)
             if len(target_parameter.matches) > 1:
                 warnings.append("Target parameter matched multiple request locations or fields.")
+            # Trusted runtime values are attached here; the model never chooses
+            # the consumer, target parameter, evidence collection, or counters.
             result = OpenAPIRetrievalResult(
                 objective=request.query.objective,
                 status=draft.status,
@@ -486,6 +510,8 @@ class OpenAPIRetrievalAgent:
 
 
 def _semantic_errors(*, draft, workspace, evidence_by_id: dict, consumer, limit: int) -> list[str]:
+    """Reject plausible-looking conclusions that are not grounded in this IR."""
+
     errors: list[str] = []
     if len(draft.candidates) > limit:
         errors.append(f"Candidate count exceeds requested limit {limit}")

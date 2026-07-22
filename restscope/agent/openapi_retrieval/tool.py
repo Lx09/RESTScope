@@ -40,6 +40,9 @@ def register_openapi_retrieval_tool(
     )
 
     def retrieve_handler(context: ToolContext, /, **arguments: object) -> dict[str, object]:
+        # ``context`` is injected by ToolExecutor, not supplied by the model.
+        # This is how the public tool reuses the App's already parsed IR without
+        # exposing a schema path or allowing the caller to replace the target.
         request = OpenAPIRetrievalRequest.model_validate(arguments)
         result = agent.retrieve(request, ir=context.ir)
         candidate_names = [
