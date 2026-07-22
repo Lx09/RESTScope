@@ -2,7 +2,6 @@
 
 from .base import BaseLLMProvider
 from .deepseek import DeepSeekProvider
-from .fake import FakeProvider
 from .openai_compatible import OpenAICompatibleProvider
 
-__all__ = ["BaseLLMProvider", "DeepSeekProvider", "FakeProvider", "OpenAICompatibleProvider"]
+__all__ = ["BaseLLMProvider", "DeepSeekProvider", "OpenAICompatibleProvider"]

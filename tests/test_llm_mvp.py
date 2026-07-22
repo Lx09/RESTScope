@@ -8,41 +8,6 @@ import pytest
 from pydantic import BaseModel
 
 
-def _context_package():
-    from restscope.context import ContextMessage, ContextPackage, OutputContract
-
-    return ContextPackage(
-        id="context_1",
-        task_id="task_1",
-        schema_id="schema_1",
-        role="planner",
-        cycle_index=3,
-        prompt_version="planner_v1",
-        sections=[],
-        messages=[
-            ContextMessage(role="system", content="You are the planner."),
-            ContextMessage(role="user", content="Return a campaign spec."),
-        ],
-        output_contract=OutputContract(
-            name="TestCampaignSpec",
-            description="Planner contract",
-            json_schema={
-                "type": "object",
-                "required": ["campaign_type", "target_operation_ids", "hypothesis", "rationale"],
-                "properties": {
-                    "campaign_type": {"type": "string"},
-                    "target_operation_ids": {"type": "array", "items": {"type": "string"}},
-                    "hypothesis": {"type": "string"},
-                    "rationale": {"type": "string"},
-                },
-            },
-        ),
-        source_refs={"operations": ["op_1"]},
-        token_budget=2000,
-        metadata={"context_snapshot_id": "ctx_1"},
-    )
-
-
 class CampaignSpec(BaseModel):
     campaign_type: str
     target_operation_ids: list[str]
@@ -98,76 +63,13 @@ def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
     }
 
 
-def test_fake_provider_returns_contract_specific_json_and_tool_calls() -> None:
-    from restscope.llm import LLMMessage, LLMRequest, ToolSpec
-    from restscope.llm.providers.fake import FakeProvider
-
-    provider = FakeProvider()
-    response = provider.invoke(
-        LLMRequest(
-            provider="fake",
-            model="fake-model",
-            messages=[LLMMessage(role="user", content="plan")],
-            response_format="json_schema",
-            json_schema_name="TestCampaignSpec",
-        )
-    )
-
-    assert response.provider == "fake"
-    assert response.parsed_json is not None
-    assert response.parsed_json["campaign_type"] == "risk_targeted_fuzzing"
-    assert response.parsed_json["target_operation_ids"]
-
-    tool_response = provider.invoke(
-        LLMRequest(
-            provider="fake",
-            model="fake-model",
-            messages=[LLMMessage(role="user", content="need tool")],
-            tools=[
-                ToolSpec(
-                    name="artifact.read_summary",
-                    description="Read summary",
-                    kind="local_function",
-                    input_schema={"type": "object"},
-                )
-            ],
-            tool_choice="required",
-        )
-    )
-
-    assert tool_response.tool_calls[0].name == "artifact.read_summary"
-
-
-def test_fake_provider_returns_generic_test_requirement_plan() -> None:
-    from restscope.llm import LLMMessage, LLMRequest
-    from restscope.llm.providers.fake import FakeProvider
-
-    response = FakeProvider().invoke(
-        LLMRequest(
-            provider="fake",
-            model="fake-model",
-            messages=[
-                LLMMessage(
-                    role="user",
-                    content="Candidate operations\n- Operation ID: op_1\nRequired output",
-                )
-            ],
-            response_format="json_schema",
-            json_schema_name="TestRequirementPlanDraft",
-        )
-    )
-
-    assert response.parsed_json["requirements"][0]["target"] == {"operation_id": "op_1"}
-    assert "schemathesis" not in response.content.lower()
-
-
-def test_llm_client_can_disable_timeout_retry_for_deadline_bounded_calls() -> None:
-    from restscope.llm import LLMClient, LLMMessage, LLMRequest, ProviderTimeoutError
+def test_llm_client_invokes_provider_once_and_propagates_failure() -> None:
+    from restscope.llm import LLMClient, LLMMessage, LLMRequest, ProviderInvokeError
     from restscope.llm.providers.base import BaseLLMProvider
     from restscope.llm.registry import LLMProviderRegistry
 
-    class TimeoutProvider(BaseLLMProvider):
-        name = "timeout"
+    class FailingProvider(BaseLLMProvider):
+        name = "failing"
 
         def __init__(self) -> None:
             self.calls = 0
@@ -175,23 +77,53 @@ def test_llm_client_can_disable_timeout_retry_for_deadline_bounded_calls() -> No
         def invoke(self, request):
             del request
             self.calls += 1
-            raise ProviderTimeoutError("timed out")
+            raise ProviderInvokeError("failed")
 
-    provider = TimeoutProvider()
+    provider = FailingProvider()
     registry = LLMProviderRegistry()
     registry.register(provider)
 
-    with pytest.raises(ProviderTimeoutError):
+    with pytest.raises(ProviderInvokeError):
         LLMClient(registry).invoke(
             LLMRequest(
-                provider="timeout",
+                provider="failing",
                 model="test",
                 messages=[LLMMessage(role="user", content="bounded")],
-                metadata={"disable_retry": True},
             )
         )
 
     assert provider.calls == 1
+
+
+def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
+    import inspect
+
+    import restscope.llm as llm
+    import restscope.llm.providers as providers
+    from restscope.llm.output_validator import OutputValidator
+    from restscope.llm.providers.base import BaseLLMProvider
+
+    removed_llm_exports = {
+        "LLMRequestFactory",
+        "OutputValidationError",
+        "ProviderRateLimitError",
+        "ProviderTimeoutError",
+    }
+
+    assert removed_llm_exports.isdisjoint(llm.__all__)
+    assert all(not hasattr(llm, name) for name in removed_llm_exports)
+    assert "FakeProvider" not in providers.__all__
+    assert not hasattr(providers, "FakeProvider")
+    assert "context_package" not in inspect.signature(OutputValidator.validate).parameters
+    assert not hasattr(BaseLLMProvider, "ainvoke")
+
+
+def test_tool_call_does_not_retain_raw_provider_payload() -> None:
+    from restscope.llm import ToolCall
+
+    tool_call = ToolCall(id="call_1", name="openapi.inspect")
+
+    assert "raw" not in type(tool_call).model_fields
 
 
 class _FakeOpenAIMessage:
@@ -371,92 +303,6 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
     assert response.tool_calls[0].name == "openapi.search_symbols"
 
 
-def test_request_factory_preserves_context_contract_metadata_and_tools() -> None:
-    from restscope.llm import LLMModelConfig, LLMRequestFactory, ToolSpec
-
-    context = _context_package()
-    request = LLMRequestFactory().from_context(
-        context_package=context,
-        model_config=LLMModelConfig(
-            role="planner",
-            provider="fake",
-            model="fake-model",
-            tool_choice="auto",
-        ),
-        tools=[
-            ToolSpec(
-                name="artifact.read_summary",
-                description="Read summary",
-                kind="local_function",
-                input_schema={"type": "object"},
-            )
-        ],
-    )
-
-    assert [message.role for message in request.messages] == ["system", "user"]
-    assert request.json_schema_name == "TestCampaignSpec"
-    assert request.json_schema == context.output_contract.json_schema
-    assert request.metadata["task_id"] == "task_1"
-    assert request.metadata["context_snapshot_id"] == "ctx_1"
-    assert request.tool_choice == "auto"
-
-
-def test_request_factory_preserves_assistant_tool_calls_and_provider_context() -> None:
-    from restscope.llm import (
-        LLMMessage,
-        LLMRequest,
-        LLMRequestFactory,
-        LLMResponse,
-        ToolCall,
-        ToolResult,
-    )
-
-    original_request = LLMRequest(
-        provider="deepseek",
-        model="deepseek-v4-pro",
-        messages=[LLMMessage(role="user", content="Investigate")],
-        tool_choice="auto",
-    )
-    original_response = LLMResponse(
-        provider="deepseek",
-        model="deepseek-v4-pro",
-        content=None,
-        tool_calls=[
-            ToolCall(
-                id="call_search",
-                name="openapi.search_symbols",
-                arguments={"query": "orderId"},
-                provider="deepseek",
-                provider_context={"reasoning_content": "Search for producers."},
-            )
-        ],
-    )
-
-    next_request = LLMRequestFactory().with_tool_results(
-        original_request=original_request,
-        original_response=original_response,
-        tool_results=[
-            ToolResult(
-                tool_call_id="call_search",
-                name="openapi.search_symbols",
-                status="succeeded",
-                content='{"matches": []}',
-            )
-        ],
-    )
-
-    assert [message.role for message in next_request.messages] == [
-        "user",
-        "assistant",
-        "tool",
-    ]
-    assistant = next_request.messages[1]
-    assert assistant.content == ""
-    assert assistant.tool_calls[0].provider_context == {
-        "reasoning_content": "Search for producers."
-    }
-
-
 def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
     from restscope.llm import ModelSelector
     from restscope.restscope_config import RESTScopeConfig
@@ -512,7 +358,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
 
     assert selector.select("openapi_retrieval").reasoning.mode == "enabled"
     assert selector.select("decision_maker").reasoning.mode == "disabled"
-    assert registry.list_names() == ["deepseek", "fake"]
+    assert registry.list_names() == ["deepseek"]
     assert isinstance(registry.get("deepseek"), DeepSeekProvider)
     assert registry.get("deepseek").base_url == "https://api.deepseek.com"
 
@@ -549,7 +395,6 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
     from restscope.llm import LLMResponse, OutputValidator
 
     validator = OutputValidator()
-    context = _context_package()
     valid = validator.validate(
         response=LLMResponse(
             provider="fake",
@@ -563,13 +408,11 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
             },
         ),
         output_model=CampaignSpec,
-        context_package=context,
     )
 
     invalid = validator.validate(
         response=LLMResponse(provider="fake", model="fake-model", content='{"campaign_type": "only"}'),
         output_model=CampaignSpec,
-        context_package=context,
     )
 
     assert valid.valid is True

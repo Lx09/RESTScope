@@ -174,7 +174,6 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                     name=internal_names.get(name, name),
                     arguments=self._parse_arguments(arguments),
                     provider=self.name,
-                    raw=self._raw_tool_call_dict(raw_call),
                 )
             )
         return tool_calls
@@ -197,14 +196,6 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         except json.JSONDecodeError:
             return {}
         return parsed if isinstance(parsed, dict) else {}
-
-    def _raw_tool_call_dict(self, raw_call: Any) -> dict[str, Any]:
-        if isinstance(raw_call, dict):
-            return raw_call
-        if hasattr(raw_call, "model_dump"):
-            return raw_call.model_dump(mode="json")
-        return {"repr": repr(raw_call)}
-
 
 def _provider_tool_name(name: str) -> str:
     """Encode an internal tool name for OpenAI's function-name character set."""

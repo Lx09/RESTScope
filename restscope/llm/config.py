@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from restscope.llm.client import LLMClient
 from restscope.llm.providers.deepseek import DeepSeekProvider
-from restscope.llm.providers.fake import FakeProvider
 from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 from restscope.llm.registry import LLMProviderRegistry
 from restscope.llm.schemas import LLMReasoningConfig
@@ -14,7 +13,6 @@ def build_llm_registry(config) -> LLMProviderRegistry:
     """Build a registry from the short dual-model RESTScope config."""
 
     registry = LLMProviderRegistry()
-    registry.register(FakeProvider())
 
     configs = [config.thinking, config.fast]
     openai_configs = [item for item in configs if getattr(item, "provider", "") == "openai_compatible"]

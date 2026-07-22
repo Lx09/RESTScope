@@ -83,9 +83,10 @@ parsed = catalog.load(schema.id)
 ## LLM
 
 The MVP LLM layer lives in `restscope.llm`. It provides provider-neutral request
-and response schemas, a `FakeProvider` for offline tests, an OpenAI-compatible
-provider, model selection for thinking/fast roles, structured output validation,
-and a safe tool-call shell in `restscope.capabilities`.
+and response schemas, OpenAI-compatible and DeepSeek providers, model selection
+for thinking/fast roles, structured output validation, and a safe tool-call shell
+in `restscope.capabilities`. Unit tests provide their own local stub providers;
+the runtime package does not register an offline fake provider.
 
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.

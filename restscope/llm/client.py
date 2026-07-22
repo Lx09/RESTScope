@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from restscope.llm.exceptions import ProviderRateLimitError, ProviderTimeoutError
 from restscope.llm.registry import LLMProviderRegistry
 from restscope.llm.schemas import LLMRequest, LLMResponse
 
@@ -15,9 +14,4 @@ class LLMClient:
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
         provider = self.registry.get(request.provider)
-        try:
-            return provider.invoke(request)
-        except (ProviderTimeoutError, ProviderRateLimitError):
-            if request.metadata.get("disable_retry"):
-                raise
-            return provider.invoke(request)
+        return provider.invoke(request)

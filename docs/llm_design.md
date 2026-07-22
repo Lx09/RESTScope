@@ -1,5 +1,12 @@
 # Agentic API Tester LLM 模块设计书
 
+> **Historical design:** This document records an early, broader LLM design and
+> is not the current runtime contract. In particular, the production
+> `FakeProvider`, `LLMRequestFactory`, placeholder async provider interface, and
+> client retry branch were removed during the approved safe-slimming work. See
+> [`docs/tasks/llm-safe-slimming.md`](tasks/llm-safe-slimming.md) for the active
+> decision and verification record.
+
 ## 1. 设计目标
 
 LLM 模块用于为 Agentic API Tester 提供统一的大模型调用能力。

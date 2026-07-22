@@ -18,9 +18,7 @@ class OutputValidator:
         *,
         response: LLMResponse,
         output_model: Any,
-        context_package: Any | None = None,
     ) -> ValidationResult:
-        del context_package
         raw_json, parse_errors = self._load_json(response)
         if parse_errors:
             return ValidationResult(valid=False, errors=parse_errors)

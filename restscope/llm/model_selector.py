@@ -2,20 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from restscope.llm.schemas import LLMModelConfig, LLMReasoningConfig
-
-
-LLMRoleName = Literal[
-    "planner",
-    "result_analyst",
-    "decision_maker",
-    "check_designer",
-    "intelligence_updater",
-    "operation_dependency_analyzer",
-    "openapi_retrieval",
-]
 
 
 class ModelSelector:

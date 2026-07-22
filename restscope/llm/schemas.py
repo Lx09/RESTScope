@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-LLMProviderName = Literal["fake", "openai_compatible", "deepseek", "anthropic"]
 LLMRole = Literal["system", "user", "assistant", "tool"]
 LLMResponseFormat = Literal["text", "json", "json_schema"]
 LLMReasoningMode = Literal["default", "enabled", "disabled"]
@@ -24,7 +23,6 @@ class ToolCall(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     provider: str | None = None
-    raw: dict[str, Any] | None = None
     provider_context: dict[str, Any] = Field(default_factory=dict, repr=False)
 
 
