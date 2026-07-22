@@ -1,6 +1,6 @@
 # Arize Phoenix Trace Monitoring
 
-Status: In progress
+Status: Completed
 
 ## Objective
 
@@ -69,8 +69,9 @@ the tracing runtime long enough to flush all spans before exit.
 
 ## Verification
 
-All LLM behavior in these checks was stubbed or used an `httpx.MockTransport`;
-no DeepSeek request was made.
+The repeatable test suites below used stubbed LLM behavior or an
+`httpx.MockTransport`. The separately authorized live verification is recorded
+in the next section.
 
 - `uv sync` completed and removed the 17 tracing-only packages.
 - `uv run pytest -q` passed with 153 tests and 10 skips using only core
@@ -85,6 +86,37 @@ no DeepSeek request was made.
 - `docker compose -f compose.phoenix.yaml config --quiet` passed.
 - `git diff --check` passed.
 
+The three purpose-separated feature commits were fast-forwarded to local
+`main` without fetching or pushing:
+
+- `5057788 feat: add optional Arize Phoenix tracing`
+- `d3c450e test: cover Phoenix tracing workflows`
+- `d244e7e docs: document local Phoenix tracing`
+
+The merged tree repeated the tracing-extra suite (`164 passed, 2 skipped`),
+the Phoenix contract (`1 passed`), `compileall`, and `git diff --check`.
+
+## Live DeepSeek/Phoenix evidence
+
+- Model slot: FAST (`deepseek/deepseek-v4-flash`, reasoning disabled).
+- Phoenix project: `restscope-openapi-retrieval-live-20260722-131740`.
+- The one allowed live test made three successful HTTP 200 model calls and
+  consumed 8,037 prompt tokens plus 518 completion tokens (8,555 total). The
+  three manual LLM spans recorded 5,755 ms combined provider latency.
+- Phoenix stored nine spans: one `OpenAPIRetrievalAgent.retrieve` AGENT, three
+  manual `LLMClient.invoke` spans, three masked `ChatCompletion` SDK children,
+  and two TOOL spans (`openapi.inspect` and `openapi.search_symbols`).
+- Manual LLM and TOOL inputs/outputs were present. SDK raw content was hidden;
+  both configured API keys and `reasoning_content` were absent from the REST
+  payload.
+- The live pytest result was `1 failed in 6.24s`. The model proposed
+  `POST /store/order` (`placeOrder`) but cited response-field evidence owned by
+  `GET /store/order/{orderId}`. The trusted validator rejected the cross-
+  operation and operation-unbound evidence, so no valid retrieval result or
+  `investigation_summary.tool_calls` value was produced.
+- Per the approved retry policy, this semantic failure was not retried and did
+  not trigger a production-code change.
+
 The Phoenix service and named SQLite volume remain running for UI inspection.
-Feature implementation is verified on `codex/arize-phoenix-tracing`; local
-merge and the real DeepSeek/Phoenix verification are pending.
+The feature branch and worktree remain available because cleanup was not
+authorized. The ignored `.env` was not modified, staged, or copied.
