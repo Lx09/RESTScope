@@ -91,6 +91,46 @@ the runtime package does not register an offline fake provider.
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
 
+## Local trace monitoring with Phoenix
+
+Phoenix tracing is optional and disabled by default. Install the tracing extra,
+start the loopback-only Phoenix service, and enable tracing in the worktree's
+local `.env`:
+
+```bash
+uv sync --extra tracing
+docker compose -f compose.phoenix.yaml up -d
+```
+
+```env
+TRACING_ENABLED=true
+PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006
+PHOENIX_PROJECT_NAME=restscope
+PHOENIX_API_KEY=
+PHOENIX_PROTOCOL=http/protobuf
+TRACING_BATCH=true
+TRACING_MAX_CONTENT_BYTES=65536
+TRACING_FLUSH_TIMEOUT_SECONDS=5
+```
+
+Open [http://localhost:6006](http://localhost:6006) to inspect traces. RESTScope
+records App, Agent, LLM, and tool spans. Trace content is recursively redacted,
+DeepSeek `reasoning_content` is represented only by presence and length, and
+oversized inputs or outputs are truncated to the configured byte limit. The
+OpenAI SDK's auto-instrumented child spans hide raw inputs and outputs.
+
+Tracing is fail-open: missing optional packages, exporter failures, or shutdown
+timeouts do not change RESTScope results. Stop Phoenix without deleting its
+named SQLite volume with:
+
+```bash
+docker compose -f compose.phoenix.yaml down
+```
+
+The compose service disables Phoenix analytics, external UI resources, and its
+built-in MCP server. It does not enable authentication and is intended only for
+local development on `127.0.0.1`.
+
 ## MCP Tools
 
 RESTScope can run as a standalone lightweight MCP Host. The short `.env`
