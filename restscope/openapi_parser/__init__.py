@@ -2,12 +2,15 @@
 
 from .document_builder import build_openapi_document
 from .exceptions import OperationDocumentGenerationError
-from .ir import OpenAPISpecIR
+from .ir import InputNodeIR, InputNodeKind, OpenAPISpecIR, OperationIR
 from .parser import OpenAPIParser
 
 __all__ = [
     "OpenAPIParser",
     "OpenAPISpecIR",
+    "InputNodeIR",
+    "InputNodeKind",
+    "OperationIR",
     "OperationDocumentGenerationError",
     "build_openapi_document",
 ]

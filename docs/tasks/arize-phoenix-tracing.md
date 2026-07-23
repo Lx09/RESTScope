@@ -47,12 +47,33 @@ The Phoenix tracer provider remains process-wide and reference-counted across
 compatible runtime instances. Conflicting active configurations still fail
 open. Existing Phoenix projects and their historical SDK spans are retained.
 
+## Follow-up decision: unified exact-value redaction
+
+On 2026-07-23, the user superseded recursive key-name/token-pattern masking and
+reasoning suppression. `restscope.redaction.Redactor` is now the only
+redaction implementation. One App-owned instance is shared by tracing and
+capability output boundaries and replaces only exact configured THINK, FAST,
+and Phoenix API key values.
+
+New traces intentionally retain ordinary and sensitive-named parameters,
+ToolContext Authorization/Cookie values, generator configurations, HTTP
+authentication response headers, and complete DeepSeek `reasoning_content`.
+The independent 65,536-byte input/output limit remains. Phoenix is still
+loopback-only and unauthenticated, so local UI access exposes those values.
+Historical traces are not rewritten or deleted.
+
+The unified-redaction implementation was verified offline with the full core
+and tracing-extra suites (`247 passed, 2 skipped` for each), plus compileall.
+No new Phoenix contract trace or live model request was produced.
+
 ## Decisions
 
 - Manual span kinds are `CHAIN`, `AGENT`, `LLM`, and `TOOL`; model calls emit
   only the manual `LLMClient.invoke` span.
 - Trace inputs and outputs are limited independently to 65,536 UTF-8 bytes and
   retain original-size and truncation attributes.
+- Trace content encoding delegates exact-value replacement to the shared
+  Redactor; it owns only JSON serialization and the size limit.
 - Phoenix uses image `arizephoenix/phoenix:19.0.0`, port 6006 on loopback, and
   a named volume for SQLite data.
 - Batch export is flushed during App close with a five-second upper bound.

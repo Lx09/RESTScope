@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-from restscope.observability.sanitizer import PreparedContent, TraceSanitizer
+from restscope.observability.content import PreparedContent, TraceContentEncoder
+from restscope.redaction import Redactor
 
 
 LOGGER = logging.getLogger(__name__)
@@ -17,22 +18,27 @@ LOGGER = logging.getLogger(__name__)
 class TraceSpan:
     """Small span handle used by business code without importing OpenTelemetry."""
 
-    def __init__(self, *, span: Any | None = None, sanitizer: TraceSanitizer | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        span: Any | None = None,
+        content_encoder: TraceContentEncoder | None = None,
+    ) -> None:
         self._span = span
-        self._sanitizer = sanitizer
+        self._content_encoder = content_encoder
         self._has_error = False
 
     def set_output(self, value: Any) -> None:
         self._set_content("output", value)
 
     def set_attribute(self, name: str, value: Any) -> None:
-        if self._span is None or self._sanitizer is None:
+        if self._span is None or self._content_encoder is None:
             return
         try:
-            sanitized = self._sanitizer.sanitize(value)
-            if isinstance(sanitized, dict | list):
-                sanitized = self._sanitizer.prepare(sanitized).value
-            self._span.set_attribute(name, sanitized)
+            redacted = self._content_encoder.redactor.redact(value)
+            if isinstance(redacted, dict | list):
+                redacted = self._content_encoder.prepare(redacted).value
+            self._span.set_attribute(name, redacted)
         except Exception:
             return
 
@@ -40,10 +46,10 @@ class TraceSpan:
         self._set_content("input", value)
 
     def record_error(self, exc: BaseException) -> None:
-        if self._span is None or self._sanitizer is None:
+        if self._span is None or self._content_encoder is None:
             return
         try:
-            message = self._sanitizer.sanitize_text(str(exc))
+            message = self._content_encoder.redactor.redact_text(str(exc))
             self.mark_error(message)
             self._span.add_event(
                 "exception",
@@ -56,13 +62,13 @@ class TraceSpan:
             return
 
     def mark_error(self, message: str) -> None:
-        if self._span is None or self._sanitizer is None:
+        if self._span is None or self._content_encoder is None:
             return
         try:
             from opentelemetry.trace.status import Status, StatusCode
 
-            sanitized = self._sanitizer.sanitize_text(message)
-            self._span.set_status(Status(StatusCode.ERROR, sanitized))
+            redacted = self._content_encoder.redactor.redact_text(message)
+            self._span.set_status(Status(StatusCode.ERROR, redacted))
             self._has_error = True
         except Exception:
             return
@@ -78,10 +84,10 @@ class TraceSpan:
             return
 
     def _set_content(self, prefix: str, value: Any) -> None:
-        if self._span is None or self._sanitizer is None:
+        if self._span is None or self._content_encoder is None:
             return
         try:
-            prepared = self._sanitizer.prepare(value)
+            prepared = self._content_encoder.prepare(value)
             self._span.set_attribute(f"{prefix}.value", prepared.value)
             self._span.set_attribute(f"{prefix}.mime_type", "application/json")
             self._set_size_attributes(prefix, prepared)
@@ -105,20 +111,29 @@ class TracingRuntime:
     def __init__(
         self,
         *,
-        sanitizer: TraceSanitizer,
+        redactor: Redactor | None = None,
+        max_content_bytes: int = 65536,
         backend: Any | None = None,
     ) -> None:
-        self._sanitizer = sanitizer
+        self._redactor = redactor or Redactor()
+        self._content_encoder = TraceContentEncoder(
+            redactor=self._redactor,
+            max_content_bytes=max_content_bytes,
+        )
         self._backend = backend
         self._closed = False
 
     @classmethod
-    def disabled(cls) -> "TracingRuntime":
-        return cls(sanitizer=TraceSanitizer())
+    def disabled(cls, *, redactor: Redactor | None = None) -> "TracingRuntime":
+        return cls(redactor=redactor)
 
     @property
     def enabled(self) -> bool:
         return self._backend is not None and not self._closed
+
+    @property
+    def redactor(self) -> Redactor:
+        return self._redactor
 
     @contextmanager
     def span(
@@ -140,7 +155,7 @@ class TracingRuntime:
             yield TraceSpan()
             return
 
-        span = TraceSpan(span=otel_span, sanitizer=self._sanitizer)
+        span = TraceSpan(span=otel_span, content_encoder=self._content_encoder)
         span.set_attribute("openinference.span.kind", kind)
         if input_value is not None:
             span.set_input(input_value)
@@ -159,9 +174,6 @@ class TracingRuntime:
                 manager.__exit__(None, None, None)
             except Exception as exc:
                 self._warn("Tracing span finalization failed", exc)
-
-    def register_secrets(self, values: Iterable[str]) -> None:
-        self._sanitizer.register_secrets(values)
 
     def close(self) -> None:
         if self._closed:
@@ -182,31 +194,37 @@ class TracingRuntime:
         LOGGER.warning(
             "%s: %s",
             message,
-            self._sanitizer.sanitize_text(str(exc)),
+            self.redactor.redact_text(str(exc)),
         )
 
 
 def build_tracing_runtime(
     config: Any,
     *,
-    secret_values: Iterable[str] = (),
+    redactor: Redactor | None = None,
 ) -> TracingRuntime:
     """Build Phoenix tracing when enabled, otherwise return a safe no-op."""
 
-    sanitizer = TraceSanitizer(
-        secret_values=[*secret_values, getattr(config, "api_key", "")],
-        max_content_bytes=getattr(config, "max_content_bytes", 65536),
-    )
+    shared_redactor = redactor or Redactor()
+    shared_redactor.register_secrets((getattr(config, "api_key", ""),))
+    max_content_bytes = getattr(config, "max_content_bytes", 65536)
     if not getattr(config, "enabled", False):
-        return TracingRuntime(sanitizer=sanitizer)
+        return TracingRuntime(
+            redactor=shared_redactor,
+            max_content_bytes=max_content_bytes,
+        )
     try:
         from restscope.observability.phoenix import build_phoenix_backend
 
-        backend = build_phoenix_backend(config=config, sanitizer=sanitizer)
+        backend = build_phoenix_backend(config=config)
     except Exception as exc:  # Missing extras and initialization failures are fail-open.
         LOGGER.warning(
             "Tracing initialization failed; continuing without tracing: %s",
-            sanitizer.sanitize_text(str(exc)),
+            shared_redactor.redact_text(str(exc)),
         )
         backend = None
-    return TracingRuntime(sanitizer=sanitizer, backend=backend)
+    return TracingRuntime(
+        redactor=shared_redactor,
+        max_content_bytes=max_content_bytes,
+        backend=backend,
+    )

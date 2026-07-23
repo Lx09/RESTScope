@@ -13,6 +13,7 @@ from .ir import (
     SpecIndexesIR,
     SpecMetaIR,
 )
+from .input_nodes import build_operation_input_nodes
 from .loader import load_parse_input
 from .parsers import (
     parse_components,
@@ -395,6 +396,7 @@ class OpenAPIParser:
                         diagnostics=diagnostics,
                         shared_parameters_raw=resolved_path_item.get("parameters", []),
                     )
+                    op.input_nodes = build_operation_input_nodes(op)
                     ir.operations[op.operation_key] = op
                     path_item_ir.operations[method] = op.operation_key
                 except Exception as exc:

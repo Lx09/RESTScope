@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+
+def _snapshot(operation):
+    from restscope.testing.snapshot import build_operation_snapshot
+
+    snapshot, _ = build_operation_snapshot(operation)
+    return snapshot
+
+
+def test_openapi_serializer_applies_parameter_styles_and_json_body() -> None:
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratedTestCase
+    from restscope.testing.serialization import serialize_test_case
+
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Serialization", "version": "1"},
+        "paths": {
+            "/users/{userId}": {
+                "post": {
+                    "parameters": [
+                        {"name": "userId", "in": "path", "required": True, "schema": {"type": "string"}},
+                        {
+                            "name": "tags",
+                            "in": "query",
+                            "style": "form",
+                            "explode": False,
+                            "schema": {"type": "array", "items": {"type": "string"}},
+                        },
+                        {
+                            "name": "filter",
+                            "in": "query",
+                            "style": "deepObject",
+                            "explode": True,
+                            "schema": {"type": "object"},
+                        },
+                        {
+                            "name": "X-Flags",
+                            "in": "header",
+                            "style": "simple",
+                            "explode": False,
+                            "schema": {"type": "array", "items": {"type": "string"}},
+                        },
+                        {"name": "session", "in": "cookie", "schema": {"type": "string"}},
+                    ],
+                    "requestBody": {
+                        "content": {"application/json": {"schema": {"type": "object"}}}
+                    },
+                    "responses": {"200": {"description": "ok"}},
+                }
+            }
+        },
+    }
+    operation = OpenAPIParser.parse(spec).operations["POST /users/{userId}"]
+    case = GeneratedTestCase(
+        operation_key=operation.operation_key,
+        case_index=0,
+        media_type="application/json",
+        path_parameters={"userId": "a/b"},
+        query_parameters={"tags": ["new", "sale"], "filter": {"role": "admin", "active": True}},
+        header_parameters={"X-Flags": ["one", "two"]},
+        cookie_parameters={"session": "cookie-value"},
+        body={"name": "Ada"},
+        generated_values=[],
+        omitted_input_node_ids=[],
+    )
+
+    request = serialize_test_case(_snapshot(operation), case)
+
+    assert request.method == "POST"
+    assert request.path == "/users/a%2Fb"
+    assert request.query_items == [
+        ("tags", "new,sale"),
+        ("filter[active]", "true"),
+        ("filter[role]", "admin"),
+    ]
+    assert request.headers == {
+        "X-Flags": "one,two",
+        "Cookie": "session=cookie-value",
+        "Content-Type": "application/json",
+    }
+    assert request.content == b'{"name":"Ada"}'
+
+
+def test_openapi_serializer_supports_text_form_and_swagger_collection_formats() -> None:
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratedTestCase
+    from restscope.testing.serialization import serialize_test_case
+
+    swagger_operation = OpenAPIParser.parse(
+        {
+            "swagger": "2.0",
+            "info": {"title": "Legacy", "version": "1"},
+            "paths": {
+                "/search": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "tags",
+                                "in": "query",
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "collectionFormat": "pipes",
+                            },
+                            {
+                                "name": "defaultTags",
+                                "in": "query",
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["GET /search"]
+    swagger_request = serialize_test_case(
+        _snapshot(swagger_operation),
+        GeneratedTestCase(
+            operation_key=swagger_operation.operation_key,
+            case_index=0,
+            path_parameters={},
+            query_parameters={
+                "tags": ["one", "two"],
+                "defaultTags": ["three", "four"],
+            },
+            header_parameters={},
+            cookie_parameters={},
+            generated_values=[],
+            omitted_input_node_ids=[],
+        ),
+    )
+    assert swagger_request.query_items == [
+        ("tags", "one|two"),
+        ("defaultTags", "three,four"),
+    ]
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Bodies", "version": "1"},
+            "paths": {
+                "/submit": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "text/plain": {"schema": {"type": "string"}},
+                                "application/x-www-form-urlencoded": {
+                                    "schema": {"type": "object"}
+                                },
+                            }
+                        },
+                        "responses": {"204": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /submit"]
+
+    def body_case(media_type, body):
+        return GeneratedTestCase(
+            operation_key=operation.operation_key,
+            case_index=0,
+            media_type=media_type,
+            path_parameters={},
+            query_parameters={},
+            header_parameters={},
+            cookie_parameters={},
+            body=body,
+            generated_values=[],
+            omitted_input_node_ids=[],
+        )
+
+    assert serialize_test_case(_snapshot(operation), body_case("text/plain", "hello")).content == b"hello"
+    form = serialize_test_case(
+        _snapshot(operation),
+        body_case("application/x-www-form-urlencoded", {"tag": ["a", "b"], "ok": True}),
+    )
+    assert form.content == b"tag=a&tag=b&ok=true"
+
+
+def test_allow_reserved_query_values_are_preserved_by_target_url_preparation() -> None:
+    from restscope.http_transport import build_target_url
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratedTestCase
+    from restscope.testing.execution import _target_query_items
+    from restscope.testing.serialization import serialize_test_case
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Reserved query", "version": "1"},
+            "paths": {
+                "/search": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "q",
+                                "in": "query",
+                                "allowReserved": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["GET /search"]
+    request = serialize_test_case(
+        _snapshot(operation),
+        GeneratedTestCase(
+            operation_key=operation.operation_key,
+            case_index=0,
+            path_parameters={},
+            query_parameters={"q": "a/b?c&admin=true#section"},
+            header_parameters={},
+            cookie_parameters={},
+            generated_values=[],
+            omitted_input_node_ids=[],
+        ),
+    )
+
+    assert request.query_allow_reserved_indices == [0]
+    url = build_target_url(
+        "https://api.example.test",
+        request.path,
+        _target_query_items(request),
+    )
+    assert str(url) == (
+        "https://api.example.test/search?q=a/b?c&admin=true%23section"
+    )

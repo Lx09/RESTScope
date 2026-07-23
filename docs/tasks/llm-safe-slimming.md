@@ -26,6 +26,11 @@ compatible, DeepSeek, model-selection, and Agent contracts.
 - Do not rewrite the historical LLM design document.
 - Do not call real models, access external services, or run GitHub CI/CD.
 
+The earlier “do not move the redactor out of `restscope.llm`” non-goal was
+superseded by the user-approved unified-redaction decision on 2026-07-23.
+`Redactor` now lives only at `restscope.redaction`; the former LLM export and
+module have no compatibility alias.
+
 ## Safety constraints
 
 The pre-existing changes under `restscope/agent/openapi_retrieval/` and the

@@ -23,13 +23,16 @@ def _spec(*, operation_id: str = "listPets") -> dict:
     }
 
 
-def _app():
+def _app(tmp_path):
     from restscope import RESTScopeApp
     from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner
     from restscope.restscope_config import RESTScopeConfig
 
+    database = tmp_path / "app-context.sqlite"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DB_URL=sqlite:///{database}\n", encoding="utf-8")
     return RESTScopeApp.from_config(
-        RESTScopeConfig.from_environment(),
+        RESTScopeConfig.from_environment(env_file),
         operation_runner=FakeOperationTestRunner(),
         dependency_analyzer=FakeOperationDependencyAnalyzer(),
     )
@@ -41,7 +44,7 @@ def _request():
     return RESTScopeRunRequest()
 
 
-def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch) -> None:
+def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tmp_path) -> None:
     from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent, register_openapi_retrieval_tool
     from restscope.capabilities import ToolContextError
     from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
@@ -55,7 +58,7 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch) ->
         return original_parse(source)
 
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(counting_parse))
-    app = _app()
+    app = _app(tmp_path)
 
     class NotFoundClient:
         def __init__(self):
@@ -141,13 +144,18 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch) ->
         ({"kind": "inline", "format": "yaml", "content": "openapi: 3.0.3"}, "openapi: 3.0.3"),
     ],
 )
-def test_app_validates_and_forwards_supported_schema_sources(monkeypatch, schema_source, parser_input) -> None:
+def test_app_validates_and_forwards_supported_schema_sources(
+    monkeypatch,
+    schema_source,
+    parser_input,
+    tmp_path,
+) -> None:
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
     seen = []
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(lambda source: seen.append(source) or parsed))
-    app = _app()
+    app = _app(tmp_path)
 
     context = app.initialize(schema_source=schema_source)
 
@@ -155,7 +163,7 @@ def test_app_validates_and_forwards_supported_schema_sources(monkeypatch, schema
     assert dict(context.baseline_schema_source) == schema_source
 
 
-def test_app_allows_retry_after_initialization_failure(monkeypatch) -> None:
+def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) -> None:
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -168,7 +176,7 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch) -> None:
         return result
 
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(parse))
-    app = _app()
+    app = _app(tmp_path)
 
     with pytest.raises(ValueError, match="broken schema"):
         app.initialize(schema_source={"kind": "inline", "content": "broken"})
@@ -179,8 +187,8 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch) -> None:
     assert context.ir is parsed
 
 
-def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable() -> None:
-    app = _app()
+def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(tmp_path) -> None:
+    app = _app(tmp_path)
     empty = {
         "openapi": "3.0.3",
         "info": {"title": "Empty", "version": "1.0"},
@@ -198,10 +206,10 @@ def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
     ).ir.operations
 
 
-def test_app_requires_initialization_and_clears_context_on_close() -> None:
+def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> None:
     from restscope.capabilities import ToolContextError
 
-    app = _app()
+    app = _app(tmp_path)
     assert app.capability_runtime is not None
 
     with pytest.raises(ToolContextError) as exc_info:

@@ -354,13 +354,16 @@ def test_headers_never_enter_graph_state_or_report() -> None:
     assert "secret-token" not in report.model_dump_json()
 
 
-def test_restscope_app_runs_with_injected_runner_and_analyzer() -> None:
+def test_restscope_app_runs_with_injected_runner_and_analyzer(tmp_path) -> None:
     from restscope import RESTScopeApp
     from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner
     from restscope.restscope_config import RESTScopeConfig
 
+    database = tmp_path / "main-graph.sqlite"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DB_URL=sqlite:///{database}\n", encoding="utf-8")
     app = RESTScopeApp.from_config(
-        RESTScopeConfig.from_environment(),
+        RESTScopeConfig.from_environment(env_file),
         operation_runner=FakeOperationTestRunner(),
         dependency_analyzer=FakeOperationDependencyAnalyzer(),
     )

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from restscope.capabilities.http_request import HTTP_REQUEST_TOOL_NAME
+from restscope.capabilities.testing_tools import (
+    CONFIGURATION_TOOL_NAMES,
+    RUN_OPERATION_TOOL_NAME,
+)
 from restscope.llm.schemas import ToolSpec
 
 
@@ -25,8 +29,10 @@ class ToolPolicy:
     }
 
     def is_allowed(self, *, role: str, tool_spec: ToolSpec, state: dict) -> bool:
-        if tool_spec.name == HTTP_REQUEST_TOOL_NAME:
+        if tool_spec.name in {HTTP_REQUEST_TOOL_NAME, RUN_OPERATION_TOOL_NAME}:
             return True
+        if tool_spec.name in CONFIGURATION_TOOL_NAMES:
+            return False
 
         if role == "operation_tester" and tool_spec.kind == "mcp_tool":
             if tool_spec.read_only:

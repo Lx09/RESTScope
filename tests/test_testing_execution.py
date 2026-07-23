@@ -1,0 +1,575 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def _configured_catalog(tmp_path: Path, ir):
+    from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
+    from restscope.testing import GeneratorConfigCatalog
+
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'execution.sqlite'}")
+    Base.metadata.create_all(engine)
+    catalog = GeneratorConfigCatalog(
+        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
+    )
+    assert catalog.initialize_once(ir) is True
+    return catalog
+
+
+def test_operation_testing_service_executes_all_cases_without_reading_response_body(tmp_path: Path) -> None:
+    import httpx
+
+    from restscope.capabilities import ToolContext
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.execution import OperationTestingService
+
+    class UnreadableBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise AssertionError("response body must not be read")
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Execution", "version": "1"},
+            "paths": {
+                "/items/{itemId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "itemId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "integer", "minimum": 1},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /items/{itemId}"]
+    catalog = _configured_catalog(tmp_path, ir)
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        status = 200 if len(requests) == 1 else 503
+        return httpx.Response(
+            status,
+            headers={"Content-Type": "application/json", "Content-Length": "999"},
+            stream=UnreadableBody(),
+        )
+
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(respond),
+            **kwargs,
+        )
+    )
+    service = OperationTestingService(config_catalog=catalog, transport=transport)
+    context = ToolContext(
+        ir=ir,
+        baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+        base_url="https://api.example.test/v1",
+        headers={"Authorization": "Bearer runtime-secret"},
+    )
+
+    report = service.run_operation(
+        context,
+        operation_key=operation.operation_key,
+        case_count=2,
+        seed=42,
+    )
+
+    assert len(requests) == 2
+    assert all(request.headers["Authorization"] == "Bearer runtime-secret" for request in requests)
+    assert all(str(request.url).startswith("https://api.example.test/v1/items/") for request in requests)
+    assert report.status == "completed"
+    assert report.seed == 42
+    assert report.config_revision == 1
+    assert report.status_code_counts == {"200": 1, "503": 1}
+    assert report.error_count == 0
+    assert report.observed_2xx is True
+    assert report.response_validation == "not_evaluated"
+    assert [case.response.status_code for case in report.cases] == [200, 503]
+    assert all(not hasattr(case.response, "body") for case in report.cases)
+    assert "runtime-secret" in report.model_dump_json()
+
+
+def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema(
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    from restscope.capabilities import ToolContext
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.execution import OperationTestingService
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Feedback execution", "version": "1"},
+            "paths": {
+                "/items": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "mode",
+                                "in": "query",
+                                "required": True,
+                                "schema": {
+                                    "type": "integer",
+                                    "enum": [1, 2],
+                                },
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /items"]
+    catalog = _configured_catalog(tmp_path, ir)
+    initial = catalog.inspect_operation(operation.operation_key)
+    parameter_id = initial.snapshot.parameters[0].input_node_id
+    patched = catalog.patch_operation(
+        operation_key=initial.operation_key,
+        expected_revision=1,
+        updates=[
+            {
+                "input_node_id": parameter_id,
+                "strategy": {
+                    "type": "random_string",
+                    "min_length": 8,
+                    "max_length": 8,
+                    "alphabet": "f",
+                },
+            }
+        ],
+    )
+    assert patched.enabled is True
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    service = OperationTestingService(
+        config_catalog=catalog,
+        transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(respond),
+                **kwargs,
+            )
+        ),
+    )
+    context = ToolContext(
+        ir=ir,
+        baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+        base_url="https://api.example.test",
+        headers={},
+    )
+
+    report = service.run_operation(
+        context,
+        operation_key=operation.operation_key,
+        seed=19,
+    )
+
+    assert len(requests) == 1
+    assert requests[0].url.params["mode"] == "ffffffff"
+    assert report.cases[0].generated_test_case.query_parameters == {
+        "mode": "ffffffff"
+    }
+
+
+def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -> None:
+    import httpx
+    import pytest
+
+    from restscope.capabilities import ToolContext
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratorConfigCatalog, OperationTestingService
+    from restscope.testing.serialization import SerializationError
+    from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Preflight", "version": "1"},
+            "paths": {
+                "/items": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "filter",
+                                "in": "query",
+                                "required": True,
+                                "style": "deepObject",
+                                "explode": True,
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"}
+                                    },
+                                },
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /items"]
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'preflight.sqlite'}")
+    Base.metadata.create_all(engine)
+    catalog = GeneratorConfigCatalog(
+        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
+    )
+    assert catalog.initialize_once(ir) is True
+    initial = catalog.inspect_operation(operation.operation_key)
+    parameter_id = initial.snapshot.parameters[0].input_node_id
+    patched = catalog.patch_operation(
+        operation_key=initial.operation_key,
+        expected_revision=1,
+        updates=[
+            {
+                "input_node_id": parameter_id,
+                "strategy": {
+                    "type": "random_string",
+                    "min_length": 4,
+                    "max_length": 4,
+                    "alphabet": "x",
+                },
+            }
+        ],
+    )
+    assert patched.enabled is True
+    requests = []
+
+    def unexpected_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    service = OperationTestingService(
+        config_catalog=catalog,
+        transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(unexpected_request),
+                **kwargs,
+            )
+        ),
+    )
+    context = ToolContext(
+        ir=ir,
+        baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+        base_url="https://api.example.test",
+        headers={},
+    )
+
+    with pytest.raises(
+        SerializationError,
+        match="deepObject query parameters require an exploded object",
+    ):
+        service.run_operation(context, operation_key=operation.operation_key, case_count=2, seed=2)
+
+    assert requests == []
+
+
+def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors(tmp_path: Path) -> None:
+    import httpx
+
+    from restscope.capabilities import ToolContext
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import OperationTestingService
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Isolation", "version": "1"},
+            "paths": {
+                "/items/{itemId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "itemId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "integer"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /items/{itemId}"]
+    catalog = _configured_catalog(tmp_path, ir)
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert "Cookie" not in request.headers
+        if len(requests) == 1:
+            return httpx.Response(200, headers={"Set-Cookie": "session=server-cookie"})
+        raise httpx.ConnectError("not returned", request=request)
+
+    service = OperationTestingService(
+        config_catalog=catalog,
+        transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(respond),
+                **kwargs,
+            )
+        ),
+    )
+    report = service.run_operation(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+            base_url="https://api.example.test",
+            headers={},
+        ),
+        operation_key=operation.operation_key,
+        case_count=2,
+        seed=9,
+    )
+
+    assert len(requests) == 2
+    assert report.status == "partial"
+    assert report.error_count == 1
+    assert report.cases[1].transport_error.code == "request_failed"
+
+
+def test_testing_transport_overrides_ordinary_context_headers_but_not_context_cookie() -> None:
+    import httpx
+
+    from restscope.http_transport import TargetHTTPTransport
+
+    seen: list[httpx.Request] = []
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: seen.append(request) or httpx.Response(204)
+            ),
+            **kwargs,
+        )
+    )
+
+    with transport.stream(
+        method="POST",
+        base_url="https://api.example.test",
+        path="/submit",
+        context_headers={
+            "Content-Type": "text/plain",
+            "Cookie": "session=context-cookie",
+        },
+        request_headers={
+            "Content-Type": "application/json",
+            "Cookie": "session=generated-cookie; case=generated-case",
+        },
+        override_context_headers=True,
+        allowed_sensitive_request_headers={"cookie"},
+        request_kwargs={"content": b"{}"},
+    ):
+        pass
+
+    assert seen[0].headers["Content-Type"] == "application/json"
+    assert seen[0].headers["Cookie"] == (
+        "session=context-cookie; case=generated-case"
+    )
+
+
+def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(tmp_path: Path) -> None:
+    import httpx
+
+    from restscope.capabilities import ToolContext
+    from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import (
+        GeneratorConfigCatalog,
+        InputGeneratorConfig,
+        OperationTestingService,
+    )
+
+    secret = "ordinary-looking-path-secret"
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Sensitive path", "version": "1"},
+            "paths": {
+                "/users/{password}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "password",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /users/{password}"]
+    node = next(iter(operation.input_nodes.values()))
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'redacted-path.sqlite'}")
+    Base.metadata.create_all(engine)
+    catalog = GeneratorConfigCatalog(
+        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
+    )
+    assert catalog.initialize_once(ir) is True
+    catalog.patch_operation(
+        operation_key=operation.operation_key,
+        expected_revision=1,
+        updates=[
+            {
+                "input_node_id": node.input_node_id,
+                "strategy": {"type": "constant", "value": secret},
+            }
+        ],
+    )
+    sent_paths = []
+    service = OperationTestingService(
+        config_catalog=catalog,
+        transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda request: sent_paths.append(request.url.path) or httpx.Response(200)
+                ),
+                **kwargs,
+            )
+        ),
+    )
+
+    report = service.run_operation(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+            base_url="https://api.example.test",
+            headers={},
+        ),
+        operation_key=operation.operation_key,
+        seed=1,
+    )
+
+    assert sent_paths == [f"/users/{secret}"]
+    assert report.cases[0].request.path == f"/users/{secret}"
+    assert secret in report.model_dump_json()
+
+
+def test_transport_preflight_validates_every_case_before_the_first_request(tmp_path: Path) -> None:
+    import httpx
+    import pytest
+
+    from restscope.capabilities import ToolContext
+    from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
+    from restscope.http_transport import TargetHTTPTransport, TargetHTTPTransportError
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import (
+        GeneratorConfigCatalog,
+        InputGeneratorConfig,
+        OperationGeneratorConfig,
+        OperationTestingService,
+    )
+    from restscope.testing.generation import generate_test_case
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Target preflight", "version": "1"},
+            "paths": {
+                "/items/{itemId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "itemId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /items/{itemId}"]
+    node = next(iter(operation.input_nodes.values()))
+    input_config = InputGeneratorConfig(
+        input_node_id=node.input_node_id,
+        inclusion_probability=1,
+        strategy={"type": "choice", "values": ["safe", ".."]},
+    )
+    from restscope.testing.snapshot import build_operation_snapshot
+
+    snapshot, _ = build_operation_snapshot(operation)
+    config = OperationGeneratorConfig(
+        operation_key=operation.operation_key,
+        revision=1,
+        snapshot=snapshot,
+        configs=[input_config],
+    )
+    seed = next(
+        candidate
+        for candidate in range(1000)
+        if generate_test_case(snapshot, config, run_seed=candidate, case_index=0)
+        .path_parameters["itemId"]
+        == "safe"
+        and generate_test_case(snapshot, config, run_seed=candidate, case_index=1)
+        .path_parameters["itemId"]
+        == ".."
+    )
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'target-preflight.sqlite'}")
+    Base.metadata.create_all(engine)
+    catalog = GeneratorConfigCatalog(
+        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
+    )
+    assert catalog.initialize_once(ir) is True
+    catalog.replace_operation(
+        operation_key=operation.operation_key,
+        expected_revision=1,
+        active_media_type=None,
+        configs=[input_config],
+    )
+    requests = []
+    service = OperationTestingService(
+        config_catalog=catalog,
+        transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda request: requests.append(request) or httpx.Response(200)
+                ),
+                **kwargs,
+            )
+        ),
+    )
+
+    with pytest.raises(TargetHTTPTransportError) as raised:
+        service.run_operation(
+            ToolContext(
+                ir=ir,
+                baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+                base_url="https://api.example.test",
+                headers={},
+            ),
+            operation_key=operation.operation_key,
+            case_count=2,
+            seed=seed,
+        )
+
+    assert raised.value.code == "invalid_path"
+    assert requests == []

@@ -136,10 +136,15 @@ def test_replace_changes_the_whole_source_and_missing_ids_are_explicit(tmp_path:
         catalog.replace("schema_missing", SchemaSourceInput(raw_content=_raw()))
 
 
-def test_orm_metadata_and_database_constraint_contain_only_schema_sources(tmp_path: Path) -> None:
+def test_orm_metadata_contains_schema_and_generator_configuration_tables(tmp_path: Path) -> None:
     from restscope.db import Base, create_engine_from_url
 
-    assert set(Base.metadata.tables) == {"schemas"}
+    assert set(Base.metadata.tables) == {
+        "schemas",
+        "generator_catalog_state",
+        "operation_generator_configs",
+        "input_generator_configs",
+    }
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'constraint.sqlite'}")
     Base.metadata.create_all(engine)
     with pytest.raises(IntegrityError):
@@ -152,7 +157,7 @@ def test_orm_metadata_and_database_constraint_contain_only_schema_sources(tmp_pa
             )
 
 
-def test_single_table_alembic_baseline_upgrades_and_downgrades(tmp_path: Path) -> None:
+def test_alembic_chain_upgrades_and_downgrades_all_persistence_tables(tmp_path: Path) -> None:
     from alembic import command
     from alembic.config import Config
 
@@ -167,7 +172,13 @@ def test_single_table_alembic_baseline_upgrades_and_downgrades(tmp_path: Path) -
     command.upgrade(config, "head")
     engine = create_engine_from_url(f"sqlite:///{db_path}")
     inspector = inspect(engine)
-    assert set(inspector.get_table_names()) == {"alembic_version", "schemas"}
+    assert set(inspector.get_table_names()) == {
+        "alembic_version",
+        "schemas",
+        "generator_catalog_state",
+        "operation_generator_configs",
+        "input_generator_configs",
+    }
     assert {column["name"] for column in inspector.get_columns("schemas")} == {
         "id",
         "file_path",

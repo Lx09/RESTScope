@@ -108,7 +108,7 @@ def test_model_arguments_cannot_replace_the_bound_context() -> None:
     assert result.structured == {"title": "Context API"}
 
 
-def test_tool_executor_requires_context_and_redacts_bound_header_values() -> None:
+def test_tool_executor_requires_context_and_preserves_bound_header_values() -> None:
     from restscope.capabilities import ToolCallValidator, ToolContextError, ToolExecutor, ToolPolicy, ToolRegistry
     from restscope.llm import ToolCall, ToolSpec
 
@@ -139,5 +139,5 @@ def test_tool_executor_requires_context_and_redacts_bound_header_values() -> Non
 
     assert result.status == "failed"
     assert result.error is not None
-    assert result.error["message"] == "request failed with ***REDACTED***"
-    assert "runtime-secret" not in result.model_dump_json()
+    assert result.error["message"] == "request failed with Bearer runtime-secret"
+    assert "runtime-secret" in result.model_dump_json()

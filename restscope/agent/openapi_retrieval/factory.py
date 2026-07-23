@@ -17,12 +17,21 @@ def build_openapi_retrieval_agent(
 ) -> OpenAPIRetrievalAgent:
     """Build the Agent with the configured thinking model."""
 
-    runtime = tracing_runtime or TracingRuntime.disabled()
+    runtime = tracing_runtime
+    if runtime is None and llm_client is not None:
+        runtime = getattr(llm_client, "tracing_runtime", None)
+    runtime = runtime or TracingRuntime.disabled()
+    runtime.redactor.register_secrets(
+        (
+            config.llm.thinking.api_key,
+            config.llm.fast.api_key,
+        )
+    )
     client = llm_client or build_llm_client(
         config.llm,
         tracing_runtime=runtime,
     )
-    if tracing_runtime is not None and hasattr(client, "tracing_runtime"):
+    if hasattr(client, "tracing_runtime"):
         client.tracing_runtime = runtime
     model = ModelSelector.from_config(config.llm).select("openapi_retrieval")
     return OpenAPIRetrievalAgent(

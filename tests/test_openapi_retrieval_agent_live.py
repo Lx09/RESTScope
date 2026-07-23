@@ -17,6 +17,7 @@ from restscope.agent.openapi_retrieval import (
 )
 from restscope.openapi_parser import OpenAPIParser, OpenAPISpecIR
 from restscope.observability import build_tracing_runtime
+from restscope.redaction import Redactor
 from restscope.restscope_config import RESTScopeConfig
 
 
@@ -55,9 +56,11 @@ def _retrieve_with_tracing(
 ) -> OpenAPIRetrievalResult:
     tracing_runtime = build_tracing_runtime(
         config.tracing,
-        secret_values=(
-            base_config.llm.thinking.api_key,
-            base_config.llm.fast.api_key,
+        redactor=Redactor(
+            (
+                base_config.llm.thinking.api_key,
+                base_config.llm.fast.api_key,
+            )
         ),
     )
     try:

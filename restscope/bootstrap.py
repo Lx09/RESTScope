@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from restscope.catalog import SchemaCatalog
-from restscope.db import SqlAlchemySchemaUnitOfWork, create_engine_from_config, make_session_factory
+from restscope.db import (
+    SqlAlchemyGeneratorConfigUnitOfWork,
+    SqlAlchemySchemaUnitOfWork,
+    create_engine_from_config,
+    make_session_factory,
+)
 from restscope.restscope_config import RESTScopeConfig
+from restscope.testing import GeneratorConfigCatalog
 
 
 def build_schema_catalog(config: RESTScopeConfig) -> SchemaCatalog:
@@ -13,3 +19,13 @@ def build_schema_catalog(config: RESTScopeConfig) -> SchemaCatalog:
     engine = create_engine_from_config(config.db)
     session_factory = make_session_factory(engine)
     return SchemaCatalog(lambda: SqlAlchemySchemaUnitOfWork(session_factory))
+
+
+def build_generator_config_catalog(config: RESTScopeConfig) -> GeneratorConfigCatalog:
+    """Build the single-API generator catalog from the configured database."""
+
+    engine = create_engine_from_config(config.db)
+    session_factory = make_session_factory(engine)
+    return GeneratorConfigCatalog(
+        lambda: SqlAlchemyGeneratorConfigUnitOfWork(session_factory)
+    )

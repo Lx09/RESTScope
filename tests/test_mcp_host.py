@@ -203,3 +203,77 @@ def test_build_capabilities_with_mcp_host_raises_when_preset_missing() -> None:
 
     with pytest.raises(PresetToolSourceNotFoundError, match="Preset tool source not available: schemathesis"):
         build_capabilities_with_mcp_host(mcp_host=host)
+
+
+def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure(
+    monkeypatch,
+) -> None:
+    from restscope.capabilities import build_capabilities_with_mcp_host
+
+    class Host:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    host = Host()
+    monkeypatch.setattr("restscope.capabilities.runtime.MCPHost", lambda _configs: host)
+    monkeypatch.setattr(
+        "restscope.capabilities.runtime.MCPSourceBuilder.build_sources",
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("discovery failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="discovery failed"):
+        build_capabilities_with_mcp_host(config={})
+
+    assert host.closed is True
+
+
+def test_build_capabilities_with_mcp_host_keeps_injected_host_on_discovery_failure(
+    monkeypatch,
+) -> None:
+    from restscope.capabilities import build_capabilities_with_mcp_host
+
+    class Host:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    host = Host()
+    monkeypatch.setattr(
+        "restscope.capabilities.runtime.MCPSourceBuilder.build_sources",
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("discovery failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="discovery failed"):
+        build_capabilities_with_mcp_host(mcp_host=host)
+
+    assert host.closed is False
+
+
+def test_build_capabilities_with_mcp_host_closes_owned_host_on_keyboard_interrupt(
+    monkeypatch,
+) -> None:
+    from restscope.capabilities import build_capabilities_with_mcp_host
+
+    class Host:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    host = Host()
+    monkeypatch.setattr("restscope.capabilities.runtime.MCPHost", lambda _configs: host)
+    monkeypatch.setattr(
+        "restscope.capabilities.runtime.MCPSourceBuilder.build_sources",
+        lambda self, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        build_capabilities_with_mcp_host(config={})
+
+    assert host.closed is True

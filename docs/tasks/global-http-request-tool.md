@@ -16,7 +16,7 @@ tool that future Agents can opt into without depending on Schemathesis MCP.
   inherit its headers without exposing them as model arguments.
 - Support query parameters and mutually exclusive JSON, text, or URL-encoded
   form bodies.
-- Return complete, recursively redacted JSON or text responses up to 10 MiB.
+- Return complete JSON or text responses up to 10 MiB.
 - Reject absolute or escaping paths, credential and transport header overrides,
   redirects, binary responses, and oversized responses.
 - Use mocked transports for verification; do not contact a real target.
@@ -37,9 +37,19 @@ tool that future Agents can opt into without depending on Schemathesis MCP.
 - Successful non-2xx responses remain HTTP evidence rather than tool failures.
   Network errors, timeouts, invalid inputs, unsupported media, and size limits
   are tool failures with stable codes.
-- ToolResult contains the complete redacted response. Tracing retains its
+- ToolResult contains the complete response. Tracing retains its
   independent 64 KiB content limit, so trace output may be truncated without
   changing the ToolResult.
+
+## Follow-up redaction decision
+
+The 2026-07-23 unified-redaction decision supersedes this task's original
+recursive key-name and token-pattern masking. The raw HTTP result now preserves
+query values, JSON/text values, and every response header, including
+Authorization, Set-Cookie, and WWW-Authenticate. ToolExecutor applies the
+App-owned `restscope.redaction.Redactor` once at the result boundary and only
+replaces exact configured THINK, FAST, and Phoenix API key values. Target
+Authorization/Cookie values are intentionally visible.
 
 ## Non-goals
 
@@ -65,3 +75,10 @@ tool that future Agents can opt into without depending on Schemathesis MCP.
   `git diff --check` passed.
 - No real target, DeepSeek, or Phoenix contract request was executed. Changes
   remain unstaged and uncommitted in the isolated worktree.
+
+## Later reuse
+
+The later lightweight OpenAPI testing work extracted the target-bound URL,
+header, client lifecycle, redirect, timeout, and transport-error behavior into
+a shared internal transport. The raw tool's public ToolSpec and bounded
+response-body behavior remain unchanged.

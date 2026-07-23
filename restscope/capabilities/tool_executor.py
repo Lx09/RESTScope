@@ -7,7 +7,6 @@ from typing import Any
 from restscope.capabilities.tool_call_validator import ToolCallValidator
 from restscope.capabilities.tool_context import ToolContext, ToolContextError
 from restscope.capabilities.tool_registry import ToolRegistry
-from restscope.llm.redactor import Redactor
 from restscope.llm.schemas import ToolCall, ToolResult
 from restscope.observability import TracingRuntime
 
@@ -58,7 +57,10 @@ class ToolExecutor:
             input_value={"arguments": tool_call.arguments, "role": role},
             attributes={"tool.name": tool_call.name},
         ) as span:
-            result = self._execute(tool_call=tool_call, role=role, state=state)
+            raw_result = self._execute(tool_call=tool_call, role=role, state=state)
+            result = ToolResult.model_validate(
+                self.tracing_runtime.redactor.redact(raw_result)
+            )
             span.set_output(result)
             span.set_attribute("restscope.tool.status", result.status)
             if result.status in {"failed", "timed_out"}:
@@ -90,7 +92,7 @@ class ToolExecutor:
         try:
             result = handler(self.require_context(), **tool_call.arguments)
         except TimeoutError as exc:
-            error = {"message": self._redact_error(str(exc))}
+            error = {"message": str(exc)}
             error_code = getattr(exc, "code", None)
             if isinstance(error_code, str) and error_code:
                 error["code"] = error_code
@@ -101,7 +103,7 @@ class ToolExecutor:
                 error=error,
             )
         except Exception as exc:
-            error = {"type": type(exc).__name__, "message": self._redact_error(str(exc))}
+            error = {"type": type(exc).__name__, "message": str(exc)}
             error_code = getattr(exc, "code", None)
             if isinstance(error_code, str) and error_code:
                 error["code"] = error_code
@@ -125,12 +127,3 @@ class ToolExecutor:
                 "read_only": spec.read_only,
             },
         )
-
-    def _redact_error(self, message: str) -> str:
-        redacted = Redactor().redact_text(message)
-        if self._tool_context is None:
-            return redacted
-        for value in self._tool_context.headers.values():
-            if value:
-                redacted = redacted.replace(value, "***REDACTED***")
-        return redacted

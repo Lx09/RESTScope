@@ -11,7 +11,6 @@ from .exceptions import (
 )
 from .model_selector import ModelSelector
 from .output_validator import OutputValidator
-from .redactor import Redactor
 from .registry import LLMProviderRegistry
 from .schemas import (
     LLMMessage,
@@ -37,7 +36,6 @@ __all__ = [
     "UnknownProviderError",
     "ModelSelector",
     "OutputValidator",
-    "Redactor",
     "LLMProviderRegistry",
     "LLMMessage",
     "LLMModelConfig",

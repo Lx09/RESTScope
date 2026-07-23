@@ -42,12 +42,16 @@ def test_tracing_config_reads_every_explicit_environment_field(tmp_path: Path) -
     assert "phoenix-secret" not in repr(tracing)
 
 
-def test_trace_sanitizer_redacts_nested_secrets_and_summarizes_reasoning() -> None:
-    from restscope.observability.sanitizer import TraceSanitizer
+def test_trace_content_encoder_only_redacts_registered_values() -> None:
+    from restscope.observability.content import TraceContentEncoder
+    from restscope.redaction import Redactor
 
-    sanitizer = TraceSanitizer(secret_values=["literal-secret"], max_content_bytes=4096)
+    encoder = TraceContentEncoder(
+        redactor=Redactor(["literal-secret"]),
+        max_content_bytes=4096,
+    )
 
-    prepared = sanitizer.prepare(
+    prepared = encoder.prepare(
         {
             "authorization": "Bearer literal-secret",
             "set-cookie": "sensitive-cookie-value",
@@ -63,20 +67,20 @@ def test_trace_sanitizer_redacts_nested_secrets_and_summarizes_reasoning() -> No
     payload = json.loads(prepared.value)
 
     assert "literal-secret" not in prepared.value
-    assert "private chain of thought" not in prepared.value
-    assert payload["authorization"] == "***REDACTED***"
-    assert payload["set-cookie"] == "***REDACTED***"
+    assert "private chain of thought" in prepared.value
+    assert payload["authorization"] == "Bearer ***REDACTED***"
+    assert payload["set-cookie"] == "sensitive-cookie-value"
     assert payload["items"][0]["api-key"] == "***REDACTED***"
-    assert payload["provider_context"]["reasoning_content_present"] is True
-    assert payload["provider_context"]["reasoning_content_length"] == 24
+    assert payload["provider_context"]["reasoning_content"] == "private chain of thought"
     assert prepared.truncated is False
 
 
-def test_trace_sanitizer_bounds_serialized_content_and_records_original_size() -> None:
-    from restscope.observability.sanitizer import TraceSanitizer
+def test_trace_content_encoder_bounds_serialized_content_and_records_original_size() -> None:
+    from restscope.observability.content import TraceContentEncoder
+    from restscope.redaction import Redactor
 
-    sanitizer = TraceSanitizer(max_content_bytes=256)
-    prepared = sanitizer.prepare({"content": "x" * 4096})
+    encoder = TraceContentEncoder(redactor=Redactor(), max_content_bytes=256)
+    prepared = encoder.prepare({"content": "x" * 4096})
 
     assert len(prepared.value.encode("utf-8")) <= 256
     assert prepared.original_size_bytes > 4096
@@ -86,11 +90,13 @@ def test_trace_sanitizer_bounds_serialized_content_and_records_original_size() -
 
 def test_disabled_tracing_runtime_is_a_safe_noop() -> None:
     from restscope.observability import build_tracing_runtime
+    from restscope.redaction import Redactor
     from restscope.restscope_config import TracingConfig
 
+    redactor = Redactor(["not-visible"])
     runtime = build_tracing_runtime(
         TracingConfig(enabled=False),
-        secret_values=["not-visible"],
+        redactor=redactor,
     )
 
     with runtime.span(
@@ -101,7 +107,7 @@ def test_disabled_tracing_runtime_is_a_safe_noop() -> None:
         span.set_output({"ok": True})
         span.set_attribute("restscope.status", "passed")
 
-    runtime.register_secrets(["another-secret"])
+    runtime.redactor.register_secrets(["another-secret"])
     runtime.close()
     runtime.close()
 
@@ -129,7 +135,7 @@ def test_span_backend_failure_is_sanitized_and_does_not_change_business_result(
     caplog,
 ) -> None:
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability.sanitizer import TraceSanitizer
+    from restscope.redaction import Redactor
 
     class FailingBackend:
         def start_as_current_span(self, name):
@@ -140,7 +146,7 @@ def test_span_backend_failure_is_sanitized_and_does_not_change_business_result(
             return None
 
     runtime = TracingRuntime(
-        sanitizer=TraceSanitizer(secret_values=["backend-secret"]),
+        redactor=Redactor(["backend-secret"]),
         backend=FailingBackend(),
     )
 
@@ -160,13 +166,14 @@ def test_enabled_runtime_emits_nested_sanitized_openinference_spans() -> None:
 
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability.sanitizer import TraceSanitizer
+    from restscope.redaction import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     runtime = TracingRuntime(
-        sanitizer=TraceSanitizer(secret_values=["span-secret"], max_content_bytes=4096),
+        redactor=Redactor(["span-secret"]),
+        max_content_bytes=4096,
         backend=OpenTelemetryBackend(
             tracer_provider=provider,
             flush_timeout_seconds=1,
@@ -209,13 +216,13 @@ def test_runtime_records_sanitized_error_without_leaking_exception_message() -> 
 
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability.sanitizer import TraceSanitizer
+    from restscope.redaction import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     runtime = TracingRuntime(
-        sanitizer=TraceSanitizer(secret_values=["error-secret"]),
+        redactor=Redactor(["error-secret"]),
         backend=OpenTelemetryBackend(
             tracer_provider=provider,
             flush_timeout_seconds=1,
@@ -247,6 +254,7 @@ def test_phoenix_runtime_disables_all_automatic_instrumentation(monkeypatch) -> 
 
     import restscope.observability.phoenix as phoenix_module
     from restscope.observability import build_tracing_runtime
+    from restscope.redaction import Redactor
     from restscope.restscope_config import TracingConfig
 
     register_calls: list[dict] = []
@@ -294,6 +302,7 @@ def test_openai_sdk_call_does_not_create_automatic_child_span(monkeypatch) -> No
 
     import restscope.observability.phoenix as phoenix_module
     from restscope.observability import build_tracing_runtime
+    from restscope.redaction import Redactor
     from restscope.restscope_config import TracingConfig
 
     exporter = InMemorySpanExporter()
@@ -334,11 +343,13 @@ def test_openai_sdk_call_does_not_create_automatic_child_span(monkeypatch) -> No
             collector_endpoint="http://phoenix.test:6006",
             flush_timeout_seconds=1,
         ),
-        secret_values=[
-            "sdk-input-secret",
-            "sdk-output-secret",
-            "sdk-tool-secret",
-        ],
+        redactor=Redactor(
+            [
+                "sdk-input-secret",
+                "sdk-output-secret",
+                "sdk-tool-secret",
+            ]
+        ),
     )
     client = OpenAI(
         api_key="test-key",
@@ -479,7 +490,7 @@ def test_phoenix_runtime_rejects_conflicting_process_configuration_fail_open(
 def test_runtime_shutdown_timeout_is_fail_open(caplog) -> None:
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability.sanitizer import TraceSanitizer
+    from restscope.redaction import Redactor
 
     class BlockingProvider:
         def get_tracer(self, name):
@@ -493,7 +504,7 @@ def test_runtime_shutdown_timeout_is_fail_open(caplog) -> None:
             time.sleep(1)
 
     runtime = TracingRuntime(
-        sanitizer=TraceSanitizer(),
+        redactor=Redactor(),
         backend=OpenTelemetryBackend(
             tracer_provider=BlockingProvider(),
             flush_timeout_seconds=0.01,

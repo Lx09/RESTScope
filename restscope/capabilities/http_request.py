@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import json
-import re
-
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
-from urllib.parse import unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from restscope.capabilities.tool_context import ToolContext
 from restscope.capabilities.tool_registry import ToolRegistry
-from restscope.llm.redactor import Redactor
 from restscope.llm.schemas import ToolSpec
+from restscope.http_transport import (
+    TargetHTTPTimeout,
+    TargetHTTPTransport,
+    TargetHTTPTransportError,
+)
 
 
 HTTP_REQUEST_TOOL_NAME = "restscope.http.request"
@@ -26,26 +28,6 @@ ParameterValue = ParameterScalar | list[ParameterScalar] | None
 ClientFactory = Callable[..., httpx.Client]
 
 _BODY_FIELDS = {"json_body", "text_body", "form_body"}
-_HOP_BY_HOP_HEADERS = {
-    "connection",
-    "content-length",
-    "host",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-}
-_PRIVATE_RESPONSE_HEADERS = {
-    "authorization",
-    "cookie",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "set-cookie",
-    "www-authenticate",
-}
 _TEXT_MEDIA_TYPES = {
     "application/graphql",
     "application/javascript",
@@ -175,39 +157,38 @@ class TargetHTTPRequestTool:
     """Send one bounded request to the App's configured target."""
 
     def __init__(self, *, client_factory: ClientFactory = httpx.Client) -> None:
-        self.client_factory = client_factory
+        self.transport = TargetHTTPTransport(client_factory=client_factory)
 
     def execute(self, context: ToolContext, /, **arguments: Any) -> dict[str, Any]:
         request = _validate_arguments(arguments)
-        url = _target_url(context.base_url, request.path, request.query)
-        headers = _request_headers(context.headers, request.headers)
         request_kwargs = _body_arguments(request)
-        if "form_body" in request.model_fields_set and not _contains_header(headers, "content-type"):
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        request_headers = dict(request.headers)
+        if "form_body" in request.model_fields_set and not _contains_header(request_headers, "content-type"):
+            request_headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         try:
-            with self.client_factory(
-                timeout=request.timeout_seconds,
-                follow_redirects=False,
-            ) as client:
-                with client.stream(
-                    request.method,
-                    url,
-                    headers=headers,
-                    **request_kwargs,
-                ) as response:
-                    content = _read_response(response)
-                    payload = _response_payload(
-                        response,
-                        content=content,
-                        secret_values=context.headers.values(),
-                    )
-        except httpx.TimeoutException as exc:
+            with self.transport.stream(
+                method=request.method,
+                base_url=context.base_url,
+                path=request.path,
+                query_items=_parameter_items(request.query),
+                context_headers=context.headers,
+                request_headers=request_headers,
+                override_context_headers=True,
+                timeout_seconds=request.timeout_seconds,
+                request_kwargs=request_kwargs,
+            ) as response:
+                content = _read_response(response)
+                payload = _response_payload(
+                    response,
+                    content=content,
+                )
+        except TargetHTTPTimeout as exc:
             raise HTTPRequestTimeoutError("HTTP request timed out") from exc
-        except httpx.HTTPError as exc:
+        except TargetHTTPTransportError as exc:
             raise HTTPRequestToolError(
-                "request_failed",
-                f"HTTP request failed ({type(exc).__name__})",
+                exc.code,
+                str(exc),
             ) from exc
 
         return {
@@ -231,49 +212,6 @@ def _validate_arguments(arguments: Mapping[str, Any]) -> HTTPRequestArguments:
         ) from exc
 
 
-def _target_url(
-    base_url: str | None,
-    path: str,
-    query: Mapping[str, ParameterValue],
-) -> httpx.URL:
-    if not base_url:
-        raise HTTPRequestToolError(
-            "target_base_url_not_configured",
-            "The App target base URL is not configured",
-        )
-    parsed = urlsplit(base_url)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise HTTPRequestToolError("invalid_base_url", "The App target base URL is invalid")
-    _validate_relative_path(path)
-    base_path = parsed.path.rstrip("/")
-    url = httpx.URL(urlunsplit((parsed.scheme, parsed.netloc, f"{base_path}{path}", "", "")))
-    params = _parameter_items(query)
-    return url.copy_with(params=params) if params else url
-
-
-def _validate_relative_path(path: str) -> None:
-    if not path.startswith("/") or path.startswith("//") or "?" in path or "#" in path or "\\" in path:
-        raise HTTPRequestToolError(
-            "invalid_path",
-            "HTTP request path must be a single-slash relative target path",
-        )
-    decoded = path
-    for _ in range(3):
-        expanded = unquote(decoded)
-        if expanded == decoded:
-            break
-        decoded = expanded
-    if any(segment in {".", ".."} for segment in decoded.split("/")):
-        raise HTTPRequestToolError("invalid_path", "HTTP request path cannot contain dot segments")
-
-
 def _parameter_items(values: Mapping[str, ParameterValue]) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     for key, value in values.items():
@@ -288,40 +226,6 @@ def _parameter_text(value: ParameterScalar) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
-
-
-def _request_headers(
-    context_headers: Mapping[str, str],
-    call_headers: Mapping[str, str],
-) -> dict[str, str]:
-    merged = dict(context_headers)
-    existing = {name.lower(): name for name in merged}
-    for name, value in call_headers.items():
-        normalized = name.strip().lower()
-        if _is_sensitive_header(normalized) or normalized in _HOP_BY_HOP_HEADERS:
-            raise HTTPRequestToolError(
-                "forbidden_header",
-                f"HTTP request header cannot be set per call: {name}",
-            )
-        previous = existing.get(normalized)
-        if previous is not None:
-            merged.pop(previous)
-        merged[name] = value
-        existing[normalized] = name
-    return merged
-
-
-def _is_sensitive_header(name: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-    return (
-        "authorization" in normalized
-        or "cookie" in normalized
-        or "api_key" in normalized
-        or "token" in normalized
-        or "secret" in normalized
-        or normalized == "auth"
-        or normalized.endswith("_auth")
-    )
 
 
 def _body_arguments(request: HTTPRequestArguments) -> dict[str, Any]:
@@ -362,18 +266,16 @@ def _response_payload(
     response: httpx.Response,
     *,
     content: bytes,
-    secret_values: Iterable[str],
 ) -> dict[str, Any]:
     media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     body_format, body = _decode_response(response, content=content, media_type=media_type)
-    redactor = _ResponseRedactor(secret_values)
     return {
         "status_code": response.status_code,
         "reason_phrase": response.reason_phrase,
-        "url": redactor.url(response.url),
-        "headers": _response_headers(response.headers, redactor),
+        "url": str(response.url),
+        "headers": {name.lower(): value for name, value in response.headers.items()},
         "body_format": body_format,
-        "body": redactor.value(body),
+        "body": body,
         "size_bytes": len(content),
     }
 
@@ -415,61 +317,3 @@ def _decode_response(
             "unsupported_response_media_type",
             "HTTP response body is not decodable text",
         ) from exc
-
-
-def _response_headers(headers: httpx.Headers, redactor: "_ResponseRedactor") -> dict[str, str]:
-    output: dict[str, str] = {}
-    for name, value in headers.items():
-        normalized = name.lower()
-        if normalized in _PRIVATE_RESPONSE_HEADERS or _is_sensitive_header(normalized):
-            continue
-        output[normalized] = redactor.text(value)
-    return output
-
-
-class _ResponseRedactor:
-    def __init__(self, secret_values: Iterable[str]) -> None:
-        self.redactor = Redactor()
-        self.secret_values = sorted(
-            {value for value in secret_values if value},
-            key=len,
-            reverse=True,
-        )
-
-    def value(self, value: Any) -> Any:
-        if isinstance(value, Mapping):
-            output: dict[str, Any] = {}
-            for key, item in value.items():
-                normalized = str(key).strip().lower().replace("-", "_")
-                output[str(key)] = (
-                    "***REDACTED***"
-                    if normalized in self.redactor.SECRET_KEYS or _is_sensitive_header(normalized)
-                    else self.value(item)
-                )
-            return output
-        if isinstance(value, list | tuple):
-            return [self.value(item) for item in value]
-        if isinstance(value, str):
-            return self.text(value)
-        return value
-
-    def text(self, value: str) -> str:
-        redacted = self.redactor.redact_text(value)
-        for secret in self.secret_values:
-            redacted = redacted.replace(secret, "***REDACTED***")
-        return redacted
-
-    def url(self, value: httpx.URL) -> str:
-        params: list[tuple[str, str]] = []
-        for key, item in value.params.multi_items():
-            normalized = key.strip().lower().replace("-", "_")
-            params.append(
-                (
-                    key,
-                    "***REDACTED***"
-                    if normalized in self.redactor.SECRET_KEYS or _is_sensitive_header(normalized)
-                    else self.text(item),
-                )
-            )
-        sanitized = value.copy_with(params=params) if params else value
-        return self.text(str(sanitized))

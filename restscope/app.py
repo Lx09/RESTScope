@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -29,7 +30,11 @@ from restscope.capabilities import (
 from restscope.llm import ModelSelector, build_llm_client
 from restscope.openapi_parser import OpenAPIParser
 from restscope.observability import TracingRuntime, build_tracing_runtime
+from restscope.redaction import Redactor
 from restscope.restscope_config import RESTScopeConfig
+from restscope.bootstrap import build_generator_config_catalog
+from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
+from restscope.testing import OperationTestingService
 
 
 class RESTScopeApp:
@@ -44,25 +49,63 @@ class RESTScopeApp:
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        self.config = config
-        self.operation_runner = operation_runner
-        self.dependency_analyzer = dependency_analyzer
-        self._tracing_runtime = tracing_runtime or _build_app_tracing_runtime(config)
-        self._tracing_runtime.register_secrets(
-            (
-                config.llm.thinking.api_key,
-                config.llm.fast.api_key,
+        database: _FreshSQLiteDatabase | None = None
+        built_runtime: CapabilityRuntime | Any | None = None
+        built_tracing_runtime = tracing_runtime is None
+        trace_runtime: TracingRuntime | None = None
+        try:
+            if capability_runtime is None:
+                config, database = _prepare_app_database(config)
+
+            self.config = config
+            self.operation_runner = operation_runner
+            self.dependency_analyzer = dependency_analyzer
+            trace_runtime = (
+                _build_app_tracing_runtime(config)
+                if tracing_runtime is None
+                else tracing_runtime
             )
-        )
-        self.capability_runtime = capability_runtime or build_capabilities(
-            presets=(),
-            tracing_runtime=self._tracing_runtime,
-        )
-        executor = getattr(self.capability_runtime, "tool_executor", None)
-        if executor is not None:
-            executor.tracing_runtime = self._tracing_runtime
-        self._tool_context: ToolContext | None = None
-        self._closed = False
+            self._tracing_runtime = trace_runtime
+            self._tracing_runtime.redactor.register_secrets(
+                (
+                    config.llm.thinking.api_key,
+                    config.llm.fast.api_key,
+                    config.tracing.api_key,
+                )
+            )
+            if capability_runtime is None:
+                generator_catalog = build_generator_config_catalog(config)
+                built_runtime = build_capabilities(
+                    presets=(),
+                    tracing_runtime=self._tracing_runtime,
+                    generator_config_catalog=generator_catalog,
+                    operation_testing_service=OperationTestingService(
+                        config_catalog=generator_catalog,
+                        tracing_runtime=self._tracing_runtime,
+                    ),
+                )
+                capability_runtime = built_runtime
+            self.capability_runtime = capability_runtime
+            bind_tracing_runtime = getattr(
+                self.capability_runtime,
+                "bind_tracing_runtime",
+                None,
+            )
+            if callable(bind_tracing_runtime):
+                bind_tracing_runtime(self._tracing_runtime)
+            else:
+                executor = getattr(self.capability_runtime, "tool_executor", None)
+                if executor is not None:
+                    executor.tracing_runtime = self._tracing_runtime
+            self._tool_context: ToolContext | None = None
+            self._closed = False
+        except BaseException:
+            _close_runtime_host(built_runtime)
+            if built_tracing_runtime and trace_runtime is not None:
+                trace_runtime.close()
+            if database is not None:
+                database.cleanup()
+            raise
 
     @classmethod
     def from_environment(
@@ -97,39 +140,73 @@ class RESTScopeApp:
     ) -> "RESTScopeApp":
         """Build RESTScope from an explicit config object."""
 
-        trace_runtime = tracing_runtime or _build_app_tracing_runtime(config)
+        database: _FreshSQLiteDatabase | None = None
+        trace_runtime: TracingRuntime | None = None
         runtime = capability_runtime
-        runner = operation_runner
-        if runner is None:
-            runtime = runtime or build_capabilities_with_mcp_host(
-                config=config.mcp.servers_file,
-                tracing_runtime=trace_runtime,
-            )
-            runner = SchemathesisOperationRunner(tool_executor=runtime.tool_executor)
-        elif runtime is None:
-            runtime = build_capabilities(
-                presets=(),
-                tracing_runtime=trace_runtime,
-            )
+        runtime_is_owned = False
+        try:
+            if runtime is None:
+                config, database = _prepare_app_database(config)
 
-        analyzer = dependency_analyzer
-        if analyzer is None:
-            selector = ModelSelector.from_config(config.llm)
-            analyzer = LLMOperationDependencyAnalyzer(
-                client=build_llm_client(
-                    config.llm,
+            trace_runtime = (
+                _build_app_tracing_runtime(config)
+                if tracing_runtime is None
+                else tracing_runtime
+            )
+            runner = operation_runner
+            generator_catalog = None
+            operation_testing_service = None
+            if runtime is None:
+                generator_catalog = build_generator_config_catalog(config)
+                operation_testing_service = OperationTestingService(
+                    config_catalog=generator_catalog,
                     tracing_runtime=trace_runtime,
-                ),
-                model=selector.select("operation_dependency_analyzer"),
-            )
+                )
+            if runner is None:
+                if runtime is None:
+                    runtime = build_capabilities_with_mcp_host(
+                        config=config.mcp.servers_file,
+                        tracing_runtime=trace_runtime,
+                        generator_config_catalog=generator_catalog,
+                        operation_testing_service=operation_testing_service,
+                    )
+                    runtime_is_owned = True
+                runner = SchemathesisOperationRunner(tool_executor=runtime.tool_executor)
+            elif runtime is None:
+                runtime = build_capabilities(
+                    presets=(),
+                    tracing_runtime=trace_runtime,
+                    generator_config_catalog=generator_catalog,
+                    operation_testing_service=operation_testing_service,
+                )
+                runtime_is_owned = True
 
-        return cls(
-            config=config,
-            operation_runner=runner,
-            dependency_analyzer=analyzer,
-            capability_runtime=runtime,
-            tracing_runtime=trace_runtime,
-        )
+            analyzer = dependency_analyzer
+            if analyzer is None:
+                selector = ModelSelector.from_config(config.llm)
+                analyzer = LLMOperationDependencyAnalyzer(
+                    client=build_llm_client(
+                        config.llm,
+                        tracing_runtime=trace_runtime,
+                    ),
+                    model=selector.select("operation_dependency_analyzer"),
+                )
+
+            return cls(
+                config=config,
+                operation_runner=runner,
+                dependency_analyzer=analyzer,
+                capability_runtime=runtime,
+                tracing_runtime=trace_runtime,
+            )
+        except BaseException:
+            if runtime_is_owned:
+                _close_runtime_host(runtime)
+            if tracing_runtime is None and trace_runtime is not None:
+                trace_runtime.close()
+            if database is not None:
+                database.cleanup()
+            raise
 
     @property
     def tool_context(self) -> ToolContext | None:
@@ -174,7 +251,13 @@ class RESTScopeApp:
             base_url=base_url,
             headers=headers or {},
         )
-        self.tracing_runtime.register_secrets(context.headers.values())
+        testing_service = getattr(
+            self.capability_runtime,
+            "operation_testing_service",
+            None,
+        )
+        if testing_service is not None:
+            testing_service.config_catalog.initialize_once(ir)
         self.capability_runtime.tool_executor.bind_context(context)
         self._tool_context = context
         return context
@@ -254,8 +337,31 @@ def _schema_source_value(source: Any) -> str:
 def _build_app_tracing_runtime(config: RESTScopeConfig) -> TracingRuntime:
     return build_tracing_runtime(
         config.tracing,
-        secret_values=(
-            config.llm.thinking.api_key,
-            config.llm.fast.api_key,
+        redactor=Redactor(
+            (
+                config.llm.thinking.api_key,
+                config.llm.fast.api_key,
+                config.tracing.api_key,
+            )
         ),
     )
+
+
+def _prepare_app_database(
+    config: RESTScopeConfig,
+) -> tuple[RESTScopeConfig, _FreshSQLiteDatabase]:
+    """Prepare the default runtime's one-shot database and normalize its config."""
+
+    db_config, database = prepare_fresh_sqlite(config.db)
+    return replace(config, db=db_config), database
+
+
+def _close_runtime_host(runtime: Any | None) -> None:
+    if runtime is None:
+        return
+    host = getattr(runtime, "mcp_host", None)
+    if host is not None:
+        try:
+            host.close()
+        except Exception:
+            pass

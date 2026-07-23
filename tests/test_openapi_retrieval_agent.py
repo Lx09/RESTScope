@@ -903,18 +903,40 @@ def test_openapi_retrieval_tool_preserves_stable_query_error_code() -> None:
 
 def test_build_openapi_retrieval_agent_uses_configured_thinking_model(tmp_path) -> None:
     from restscope.agent.openapi_retrieval import build_openapi_retrieval_agent
+    from restscope.observability import TracingRuntime
+    from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
-    env_file.write_text("THINK_PROVIDER=fake\nTHINK_MODEL=retrieval-model\n", encoding="utf-8")
+    env_file.write_text(
+        "\n".join(
+            [
+                "THINK_PROVIDER=fake",
+                "THINK_MODEL=retrieval-model",
+                "THINK_API_KEY=thinking-key",
+                "FAST_API_KEY=fast-key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    client = _AdaptiveInvestigationClient()
+    client.tracing_runtime = TracingRuntime.disabled(
+        redactor=Redactor(["preexisting-key"])
+    )
 
     agent = build_openapi_retrieval_agent(
         RESTScopeConfig.from_environment(env_file),
-        llm_client=_AdaptiveInvestigationClient(),
+        llm_client=client,
     )
 
     assert agent.model.role == "openapi_retrieval"
     assert agent.model.model == "retrieval-model"
+    assert agent.tracing_runtime is client.tracing_runtime
+    assert agent.tracing_runtime.redactor.redact_text(
+        "preexisting-key thinking-key fast-key target-token"
+    ) == (
+        "***REDACTED*** ***REDACTED*** ***REDACTED*** target-token"
+    )
 
 
 def test_openapi_retrieval_public_facades_export_the_same_agent() -> None:
@@ -996,7 +1018,7 @@ def test_live_retrieval_closes_tracing_runtime_when_agent_fails(
     )
     base_config = RESTScopeConfig.from_environment(env_file)
     config = live_module._config_for_live_model_slot(base_config, "fast")
-    runtime_calls: list[tuple[object, tuple[str, ...]]] = []
+    runtime_calls: list[tuple[object, object]] = []
 
     class Runtime:
         closed = False
@@ -1011,8 +1033,8 @@ def test_live_retrieval_closes_tracing_runtime_when_agent_fails(
 
     runtime = Runtime()
 
-    def build_runtime(tracing_config, *, secret_values):
-        runtime_calls.append((tracing_config, tuple(secret_values)))
+    def build_runtime(tracing_config, *, redactor):
+        runtime_calls.append((tracing_config, redactor))
         return runtime
 
     def build_agent(agent_config, *, tracing_runtime):
@@ -1034,9 +1056,8 @@ def test_live_retrieval_closes_tracing_runtime_when_agent_fails(
         )
 
     assert runtime.closed is True
-    assert runtime_calls == [
-        (
-            config.tracing,
-            ("thinking-key", "fast-key"),
-        )
-    ]
+    assert len(runtime_calls) == 1
+    assert runtime_calls[0][0] is config.tracing
+    assert runtime_calls[0][1].redact_text(
+        "thinking-key fast-key target-token"
+    ) == "***REDACTED*** ***REDACTED*** target-token"

@@ -1,20 +1,23 @@
 # RESTScope Database Design
 
-Status: Active exploratory baseline (2026-07-19)
+Status: Active exploratory design (2026-07-23)
 
-The database currently owns only durable OpenAPI source locations or content.
-Operation facts and dependencies remain deliberately undefined until their
-update and identity contracts are approved.
+The database owns durable OpenAPI source locations/content and generator
+configuration for one current API. It does not persist parsed IR, operation
+facts, inferred dependencies, test plans, scheduler state, test cases, or test
+reports.
 
 ## Boundary
 
-- `restscope.catalog` owns domain DTOs, validation, repository protocols, and
-  the `SchemaCatalog` application service.
+- `restscope.catalog` owns schema-source DTOs, validation, repository protocols,
+  and the `SchemaCatalog` application service.
+- `restscope.testing` owns frozen operation request snapshots, generator
+  contracts, generation, serialization, and operation execution.
 - `restscope.db` owns SQLAlchemy ORM mappings, sessions, migrations, and the
   concrete repository and unit-of-work adapters.
-- Catalog domain code must not import SQLAlchemy, database configuration, or
-  concrete persistence adapters.
-- A composition root wires `SchemaCatalog` to the configured database.
+- Domain code must not import SQLAlchemy, database configuration, or concrete
+  persistence adapters.
+- Composition roots wire both catalogs to the configured database.
 
 ## `schemas`
 
@@ -33,18 +36,65 @@ Sources are parsed and checked for parser error diagnostics before registration
 or replacement. Parsed IR, diagnostics, catalog status, and operation counts are
 not persisted.
 
+## Generator configuration
+
+`generator_catalog_state` is a singleton initialization marker.
+`RESTScopeApp.initialize()` creates it together with every initial operation
+and input generator in one transaction. The default App never opens an existing
+database, so the marker is an internal Catalog invariant rather than a
+cross-process App reuse mechanism.
+
+`operation_generator_configs` stores one frozen test model per original
+`OperationIR.operation_key`: method, path, parameter serialization rules,
+request-body media contracts, input tree, local schema constraints,
+enabled/disabled reasons, active media type, and a monotonically increasing
+configuration revision. There is intentionally no `schema_id`: one deployment
+and database serve one API lifecycle.
+
+`input_generator_configs` stores the complete one-to-one generator set for that
+frozen operation. Each row references only the stable `input_node_id`, its
+inclusion probability, and its discriminated generator strategy.
+
+Whole-set replacement and node-level patch both use an expected revision, a
+database compare-and-swap update, and one transaction. Concurrent writers with
+an old revision fail instead of overwriting a newer revision. Required or
+structural nodes must have inclusion probability `1.0`; optional nodes may use
+`0.0` through `1.0`.
+
+There is no OpenAPI synchronization after initialization. Later constraint,
+input, or operation changes neither alter nor invalidate the frozen Catalog.
+An operation removed from the current IR remains executable from its stored
+request snapshot, using only the current App's target base URL and headers.
+
 ## Lifecycle
 
-The supported operations are register, get by ID, list, replace the whole
-source, and load the current source into `OpenAPISpecIR`. Deletion and partial
-updates are outside the current scope.
+Schema sources support register, get, list, whole-source replace, and load into
+`OpenAPISpecIR`. Generator configurations support inspect, whole-set replace,
+node-level patch, and load for preflight generation. There is no delete/reset
+tool.
 
-The migration history is a destructive single-table baseline and does not
-upgrade databases created by the former ten-table MVP.
+The default DB-backed `RESTScopeApp` accepts only a nonexistent local file
+SQLite target. Construction resolves relative paths from the startup working
+directory, exclusively creates the file, and upgrades it to the packaged
+Alembic head before composing capabilities. Existing paths and unsupported
+database URLs fail without modification. Construction failures remove only the
+database and SQLite sidecars created by that attempt; successful construction,
+`initialize()` failures, and `close()` retain the database.
+
+Each retained database is therefore a one-run artifact. A later App start must
+use a new URL or follow an explicit operational inspect/delete workflow.
+Injecting a complete custom `CapabilityRuntime` bypasses this lifecycle because
+the caller owns its persistence.
+
+The migration history has a schema-source baseline followed by generator
+configuration revision `0002`. It does not upgrade databases created by the
+former ten-table Planner MVP.
 
 ## Deferred design
 
-- `operations`: fact fields, stable identity, and synchronization semantics.
+- Multi-API generator namespaces and schema version history.
+- An explicit operational Catalog rebuild workflow.
+- `operations`: persisted fact fields and synchronization semantics.
 - `operation_dependencies`: intended to be read and replaced as a unit per
   consuming operation, with input entries containing candidate producers; the
   entry contract is intentionally not defined yet.

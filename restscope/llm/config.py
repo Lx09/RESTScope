@@ -50,7 +50,11 @@ def build_llm_client(
 ) -> LLMClient:
     """Build an LLMClient from the short dual-model RESTScope config."""
 
+    runtime = tracing_runtime or TracingRuntime.disabled()
+    runtime.redactor.register_secrets(
+        (config.thinking.api_key, config.fast.api_key)
+    )
     return LLMClient(
         build_llm_registry(config),
-        tracing_runtime=tracing_runtime,
+        tracing_runtime=runtime,
     )

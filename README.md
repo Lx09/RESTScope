@@ -26,6 +26,13 @@ FAST_MODEL=glm-4.7-flash
 # FAST_PROVIDER, FAST_API_KEY, and FAST_BASE_URL default to THINK_* values
 ```
 
+The default `RESTScopeApp` runtime accepts only a local file SQLite URL whose
+target does not yet exist. Relative database paths are resolved from the
+process startup directory. App construction exclusively creates the file and
+runs the packaged Alembic migrations; an existing file, directory, or symbolic
+link is rejected. In-memory SQLite, SQLite URI addresses, and non-SQLite URLs
+are not supported by this App lifecycle.
+
 The official DeepSeek API is available through the explicit `deepseek`
 provider. DeepSeek protocol differences remain inside the LLM adapter, so
 Agents use the same provider-neutral requests and tool loops:
@@ -61,13 +68,22 @@ The two Python projects intentionally keep separate environments and lock files.
 
 ## Database
 
-The database currently stores only OpenAPI schema sources. Domain code in
-`restscope.catalog` depends on repository and transaction protocols; SQLAlchemy
-models, sessions, and the protocol adapters remain inside `restscope.db`.
+The database stores OpenAPI schema sources plus generator configuration for the
+single current API. Domain services depend on repository and transaction
+protocols; SQLAlchemy models, sessions, and adapters remain inside
+`restscope.db`.
 
-The destructive Alembic baseline is intended for new databases. A schema stores
-either an absolute file path or verbatim JSON/YAML content. Paths are reread on
-every load, while parsed catalog metadata and operations are not persisted yet:
+Successful App construction leaves its SQLite file in place, including after
+`close()`. A later process must use a new `DB_URL` or explicitly inspect and
+delete the old run artifact before starting. RESTScope never overwrites or
+automatically deletes a successfully created database. A caller that injects a
+complete custom `CapabilityRuntime` owns its persistence and bypasses this
+default database bootstrap.
+
+The Alembic chain starts with the schema-source baseline and adds operation
+generator configuration in revision `0002_create_generator_configs`. A schema
+source stores either an absolute file path or verbatim JSON/YAML content. Paths
+are reread on every load, while parsed IR and test reports are not persisted:
 
 ```python
 from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
@@ -114,11 +130,12 @@ TRACING_FLUSH_TIMEOUT_SECONDS=5
 ```
 
 Open [http://localhost:6006](http://localhost:6006) to inspect traces. RESTScope
-records App, Agent, LLM, and tool spans. Trace content is recursively redacted,
-DeepSeek `reasoning_content` is represented only by presence and length, and
-oversized inputs or outputs are truncated to the configured byte limit. Model
-calls are represented by RESTScope's manual `LLMClient.invoke` spans; the
-OpenAI SDK is not auto-instrumented.
+records App, Agent, LLM, and tool spans. Trace inputs and outputs preserve
+parameter values, target Authorization/Cookie headers, and DeepSeek
+`reasoning_content`. Only the exact configured THINK, FAST, and Phoenix API key
+values are replaced; oversized content is truncated to the configured byte
+limit. Model calls are represented by RESTScope's manual `LLMClient.invoke`
+spans; the OpenAI SDK is not auto-instrumented.
 
 Tracing is fail-open: missing optional packages, exporter failures, or shutdown
 timeouts do not change RESTScope results. Stop Phoenix without deleting its
@@ -130,7 +147,9 @@ docker compose -f compose.phoenix.yaml down
 
 The compose service disables Phoenix analytics, external UI resources, and its
 built-in MCP server. It does not enable authentication and is intended only for
-local development on `127.0.0.1`.
+local development on `127.0.0.1`. Because traces intentionally include target
+credentials, generated test data, complete tool parameters, and model
+reasoning, anyone with local Phoenix access can inspect those values.
 
 ## MCP Tools
 
@@ -192,6 +211,67 @@ source is not configured or provided, preset registration raises
 
 `MCPToolAdapter` uses MCP annotations for read-only/risk classification, while
 `ToolPolicy` remains the final execution gate.
+
+## Lightweight generated operation tests
+
+Every default `RESTScopeApp` runtime includes a process-local testing path that
+does not call Schemathesis MCP:
+
+- `restscope.testing.inspect_operation_inputs`
+- `restscope.testing.replace_operation_generators`
+- `restscope.testing.patch_operation_generators`
+- `restscope.testing.run_operation`
+
+The three configuration capabilities are management endpoints registered in
+the runtime but excluded from model tool selection by the current policy. The
+execution capability is model-visible to every Agent role.
+
+During the first successful `RESTScopeApp.initialize()`, every OpenAPI operation
+is frozen into a persistent request snapshot. Each parameter, body, media type,
+property, array item, and composition branch has a deterministic
+`input_node_id` and exactly one initial generator. The same transaction stores
+all enabled or disabled operation records and a singleton Catalog marker. One
+default App owns one fresh database and one initialization; starting another
+App against the retained file is rejected. Testing another API requires a new
+database URL or an explicit operational deletion of the old run artifact;
+there is no runtime reset or delete tool.
+
+Initial generators treat the OpenAPI document as the source for their defaults.
+For concrete values the precedence is `enum`, `const`, `default`, then
+`example`; a non-empty enum becomes an equal-weight choice containing every
+declared value. After initialization, a management-side replace or patch is
+feedback-owned configuration and may deliberately generate values that do not
+match the frozen Schema. Required and structural nodes must still use inclusion
+probability `1.0`, and every generated case must still serialize under the
+frozen parameter and request-body contract before any request is sent. A patch
+clears recoverable default-generation failures attributed to the nodes it
+updates and enables the operation once no blocking reason remains.
+
+`run_operation` accepts a frozen Catalog `operation_key` such as
+`POST /orders`. It reads method, path, serialization rules, input constraints,
+and generators only from that persisted snapshot; it does not compare the
+operation with the current `ToolContext.ir`. It generates all requested cases
+in preflight and only then sends requests serially to the current App-bound
+target. It supports at most 20 cases, does not follow redirects or retry,
+creates an isolated HTTP client per case, and never reads response bodies. The
+report contains generated/request values, merged target headers, response
+metadata, transport errors, and
+`response_validation="not_evaluated"`. Only exact configured THINK, FAST, and
+Phoenix API key values are replaced.
+
+Both `restscope.testing.run_operation` and `restscope.http.request` are
+high-risk, non-read-only capabilities allowed for every Agent role without a
+separate approval gate. Calling either can trigger side effects on the bound
+target. The raw HTTP tool remains independent and can issue an arbitrary
+target-relative request; the generated testing tool can execute only an
+operation stored in the frozen Generator Catalog using its complete persisted
+generator configuration.
+The raw HTTP result includes all response headers, including authentication and
+Cookie headers, plus its bounded JSON or text body.
+
+The Supervisor and `OperationTestAgent` continue to use Schemathesis MCP in this
+iteration. Registration of the lightweight tool does not replace that runner or
+add a new tool loop to an Agent.
 
 ## Operation Test Agent
 
@@ -268,6 +348,11 @@ with RESTScopeApp.from_environment() as app:
 Schemathesis runner it immediately sends requests to the target bound during
 `initialize()`, including operations that may have side effects. Run it only
 against a target you are authorized to test.
+
+App construction prepares the database before building the default capability
+and LLM runtimes. If construction fails, RESTScope removes only the SQLite file
+and sidecars created by that attempt. A failure during `initialize()` does not
+remove the database and remains retryable on the same App object.
 
 Initialization validates the file, URL, or inline schema source and parses it
 exactly once for the lifetime of the App. The resulting IR and target settings

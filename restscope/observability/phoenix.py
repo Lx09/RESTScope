@@ -12,7 +12,6 @@ from urllib.parse import urlparse, urlunparse
 from phoenix.otel import register
 
 from restscope.observability.otel_backend import OpenTelemetryBackend
-from restscope.observability.sanitizer import TraceSanitizer
 
 
 @dataclass
@@ -67,10 +66,9 @@ _BACKEND_LOCK = RLock()
 _ACTIVE_BACKEND: _SharedBackend | None = None
 
 
-def build_phoenix_backend(*, config: Any, sanitizer: TraceSanitizer) -> _BackendLease:
+def build_phoenix_backend(*, config: Any) -> _BackendLease:
     """Register or reuse the process-wide Phoenix tracing backend."""
 
-    del sanitizer
     global _ACTIVE_BACKEND
 
     key = (

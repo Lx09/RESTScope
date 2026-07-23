@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 
 def _format_named_schema_item(name: str, schema: "SchemaIR | None", *, required: bool | None = None) -> str:
@@ -389,6 +389,28 @@ class ParameterIR:
     raw: dict[str, object]
 
 
+InputNodeKind = Literal[
+    "parameter",
+    "request_body",
+    "media_type",
+    "object",
+    "array",
+    "scalar",
+    "variant",
+]
+
+
+@dataclass(slots=True, frozen=True)
+class InputNodeIR:
+    """Stable, operation-scoped identity for one configurable request input."""
+
+    input_node_id: str
+    node_kind: InputNodeKind
+    canonical_path: str
+    parent_node_id: str | None
+    schema: "SchemaIR | None"
+
+
 @dataclass(slots=True)
 class RequestBodyIR:
     """Request body definition."""
@@ -452,6 +474,7 @@ class OperationIR:
     extensions: dict[str, object]
 
     diagnostics: list["DiagnosticItemIR"]
+    input_nodes: dict[str, InputNodeIR] = field(default_factory=dict)
 
     def to_request_schema_text(self) -> str:
         """Render request contract as compact itemized text for prompts."""

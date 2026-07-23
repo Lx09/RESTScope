@@ -88,3 +88,8 @@ only on that IR without reparsing files or using raw-text fallback.
 - The IR is mutable by convention rather than structurally immutable.
 - A baseline file can change after initialization before Schemathesis reads it.
 - Live model quality and real target behavior remain intentionally unverified.
+
+The 2026-07-23 unified-redaction decision supersedes the handler-error and
+ToolContext-header masking recorded above. Target headers are now intentionally
+visible; only exact configured THINK, FAST, and Phoenix API key values are
+replaced by the shared App Redactor.

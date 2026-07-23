@@ -82,6 +82,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     from restscope.llm.providers.base import BaseLLMProvider
     from restscope.observability import build_tracing_runtime
+    from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig, TracingConfig
 
     _wait_for_phoenix()
@@ -98,7 +99,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     runtime = build_tracing_runtime(
         tracing_config,
-        secret_values=["contract-secret"],
+        redactor=Redactor(["contract-secret"]),
     )
     assert runtime.enabled is True
 

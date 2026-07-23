@@ -477,13 +477,13 @@ def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_co
     assert denied.error is not None
 
 
-def test_redactor_removes_common_secret_patterns() -> None:
-    from restscope.llm import Redactor
+def test_redactor_only_removes_registered_secret_values() -> None:
+    from restscope.redaction import Redactor
 
     text = "Authorization: Bearer abc.def.ghi api_key=secret123 access_token: token-value"
-    redacted = Redactor().redact_text(text)
+    redacted = Redactor(["secret123"]).redact_text(text)
 
-    assert "abc.def.ghi" not in redacted
+    assert "abc.def.ghi" in redacted
     assert "secret123" not in redacted
-    assert "token-value" not in redacted
+    assert "token-value" in redacted
     assert "***REDACTED***" in redacted

@@ -20,7 +20,7 @@ from .catalog import (
     SchemaSourceInput,
     SchemaSourceValidationError,
 )
-from .bootstrap import build_schema_catalog
+from .bootstrap import build_generator_config_catalog, build_schema_catalog
 from .agent import (
     OpenAPIRetrievalAgent,
     OpenAPIRetrievalRequest,
@@ -52,6 +52,7 @@ __all__ = [
     "SchemaSourceInput",
     "SchemaSourceValidationError",
     "build_schema_catalog",
+    "build_generator_config_catalog",
     "build_openapi_retrieval_agent",
     "OpenAPIRetrievalAgent",
     "OpenAPIRetrievalRequest",

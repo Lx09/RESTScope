@@ -9,6 +9,7 @@ from typing import Any
 
 from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
 from restscope.capabilities.http_request import register_http_request_tool
+from restscope.capabilities.testing_tools import register_testing_tools
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_call_validator import ToolCallValidator
 from restscope.capabilities.tool_executor import ToolExecutor
@@ -17,6 +18,7 @@ from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.capabilities.tool_selector import ToolSelector
 from restscope.capabilities.tool_sources import add_preset_tools
 from restscope.observability import TracingRuntime
+from restscope.testing import GeneratorConfigCatalog, OperationTestingService
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,14 @@ class CapabilityRuntime:
     skill_registry: SkillRegistry
     skill_policy: SkillPolicy
     mcp_host: MCPHost | None = None
+    operation_testing_service: OperationTestingService | None = None
+
+    def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
+        """Bind one tracing/redaction runtime to every built-in trace consumer."""
+
+        self.tool_executor.tracing_runtime = tracing_runtime
+        if self.operation_testing_service is not None:
+            self.operation_testing_service.tracing_runtime = tracing_runtime
 
 
 def build_capabilities(
@@ -38,6 +48,8 @@ def build_capabilities(
     presets: Iterable[str] = ("schemathesis",),
     skills: Iterable[SkillManifest] = (),
     tracing_runtime: TracingRuntime | None = None,
+    generator_config_catalog: GeneratorConfigCatalog | None = None,
+    operation_testing_service: OperationTestingService | None = None,
 ) -> CapabilityRuntime:
     """Build a complete capability runtime from external sources and skills."""
 
@@ -54,6 +66,16 @@ def build_capabilities(
     skill_policy = SkillPolicy()
 
     register_http_request_tool(tool_registry)
+    if (generator_config_catalog is None) != (operation_testing_service is None):
+        raise ValueError(
+            "generator_config_catalog and operation_testing_service must be supplied together"
+        )
+    if generator_config_catalog is not None and operation_testing_service is not None:
+        register_testing_tools(
+            tool_registry,
+            generator_config_catalog=generator_config_catalog,
+            operation_testing_service=operation_testing_service,
+        )
 
     for skill in skills:
         skill_registry.register(skill)
@@ -69,6 +91,7 @@ def build_capabilities(
         tool_executor=tool_executor,
         skill_registry=skill_registry,
         skill_policy=skill_policy,
+        operation_testing_service=operation_testing_service,
     )
 
 
@@ -79,27 +102,41 @@ def build_capabilities_with_mcp_host(
     presets: Iterable[str] = ("schemathesis",),
     skills: Iterable[SkillManifest] = (),
     tracing_runtime: TracingRuntime | None = None,
+    generator_config_catalog: GeneratorConfigCatalog | None = None,
+    operation_testing_service: OperationTestingService | None = None,
 ) -> CapabilityRuntime:
     """Build capabilities after discovering tools through RESTScope's MCP host."""
 
-    host = mcp_host or MCPHost(_load_mcp_configs(config))
-    preset_list = tuple(presets)
-    sources = MCPSourceBuilder(host).build_sources(presets=preset_list)
-    runtime = build_capabilities(
-        sources=sources,
-        presets=preset_list,
-        skills=skills,
-        tracing_runtime=tracing_runtime,
-    )
-    return CapabilityRuntime(
-        tool_registry=runtime.tool_registry,
-        tool_policy=runtime.tool_policy,
-        tool_selector=runtime.tool_selector,
-        tool_executor=runtime.tool_executor,
-        skill_registry=runtime.skill_registry,
-        skill_policy=runtime.skill_policy,
-        mcp_host=host,
-    )
+    owns_host = mcp_host is None
+    host = MCPHost(_load_mcp_configs(config)) if mcp_host is None else mcp_host
+    try:
+        preset_list = tuple(presets)
+        sources = MCPSourceBuilder(host).build_sources(presets=preset_list)
+        runtime = build_capabilities(
+            sources=sources,
+            presets=preset_list,
+            skills=skills,
+            tracing_runtime=tracing_runtime,
+            generator_config_catalog=generator_config_catalog,
+            operation_testing_service=operation_testing_service,
+        )
+        return CapabilityRuntime(
+            tool_registry=runtime.tool_registry,
+            tool_policy=runtime.tool_policy,
+            tool_selector=runtime.tool_selector,
+            tool_executor=runtime.tool_executor,
+            skill_registry=runtime.skill_registry,
+            skill_policy=runtime.skill_policy,
+            mcp_host=host,
+            operation_testing_service=runtime.operation_testing_service,
+        )
+    except BaseException:
+        if owns_host:
+            try:
+                host.close()
+            except Exception:
+                pass
+        raise
 
 
 def _load_mcp_configs(config: Mapping[str, MCPServerConfig] | str | Path | None) -> dict[str, MCPServerConfig]:
