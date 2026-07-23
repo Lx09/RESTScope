@@ -38,7 +38,7 @@ def _app():
 def _request():
     from restscope.agent import RESTScopeRunRequest
 
-    return RESTScopeRunRequest(allow_live_testing=True)
+    return RESTScopeRunRequest()
 
 
 def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch) -> None:

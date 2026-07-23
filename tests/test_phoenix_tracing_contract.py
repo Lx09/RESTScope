@@ -135,7 +135,6 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     app.run(
         RESTScopeRunRequest(
-            allow_live_testing=True,
             metadata={"task_id": "phoenix-contract"},
         )
     )

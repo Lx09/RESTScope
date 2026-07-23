@@ -237,7 +237,6 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
 
     report = app.run(
         RESTScopeRunRequest(
-            allow_live_testing=True,
             metadata={"task_id": "trace-task"},
         )
     )

@@ -242,7 +242,6 @@ report = agent.run(
     OperationTestRequest(
         operation=operation,
         candidate_operations=[OperationCandidate(operation=operation)],
-        allow_live_testing=True,
     )
 )
 ```
@@ -262,8 +261,13 @@ with RESTScopeApp.from_environment() as app:
         base_url="http://localhost:8000",
         headers={"Authorization": "Bearer ..."},
     )
-    report = app.run(RESTScopeRunRequest(allow_live_testing=True))
+    report = app.run(RESTScopeRunRequest())
 ```
+
+`RESTScopeApp.run()` is an execution API, not a dry-run API. With the real
+Schemathesis runner it immediately sends requests to the target bound during
+`initialize()`, including operations that may have side effects. Run it only
+against a target you are authorized to test.
 
 Initialization validates the file, URL, or inline schema source and parses it
 exactly once for the lifetime of the App. The resulting IR and target settings

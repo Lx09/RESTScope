@@ -90,7 +90,6 @@ class OperationTestRequest(BaseModel):
     task_id: str | None = None
     operation: OperationReference
     candidate_operations: list[OperationCandidate]
-    allow_live_testing: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

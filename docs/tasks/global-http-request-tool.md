@@ -10,8 +10,8 @@ tool that future Agents can opt into without depending on Schemathesis MCP.
 ## Approved scope
 
 - Register `restscope.http.request` even when MCP presets are disabled.
-- Allow every Agent role to select and execute the tool without requiring
-  `allow_live_testing`.
+- Allow every Agent role to select and execute the tool without a separate
+  live-testing gate.
 - Resolve relative paths against the App-bound `ToolContext.base_url` and
   inherit its headers without exposing them as model arguments.
 - Support query parameters and mutually exclusive JSON, text, or URL-encoded

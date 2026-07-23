@@ -210,7 +210,6 @@ class OperationTestAgent:
         request = state.get("request", {})
         return {
             "task_id": request.get("task_id"),
-            "allow_live_testing": bool(request.get("allow_live_testing")),
         }
 
     @staticmethod

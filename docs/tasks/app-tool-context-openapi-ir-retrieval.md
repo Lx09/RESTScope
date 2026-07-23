@@ -11,7 +11,9 @@ only on that IR without reparsing files or using raw-text fallback.
 ## User-approved scope
 
 - Add `RESTScopeApp.initialize(schema_source=..., base_url=..., headers=...)`.
-- Keep only `allow_live_testing` and `metadata` on `RESTScopeRunRequest`.
+- Keep only `allow_live_testing` and `metadata` on `RESTScopeRunRequest` at the
+  time of this implementation. The run-level live-testing field was removed by
+  the later decision recorded in `remove-allow-live-testing.md`.
 - Export `ToolContext` from `restscope.capabilities` and bind it once to the
   App's `ToolExecutor`.
 - Inject context out-of-band into trusted handlers as

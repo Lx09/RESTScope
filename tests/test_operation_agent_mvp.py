@@ -31,7 +31,6 @@ def test_operation_test_agent_runs_schemathesis_once_and_analyzes_every_attempt(
         OperationTestRequest(
             operation=candidate.operation,
             candidate_operations=[candidate],
-            allow_live_testing=True,
         )
     )
 
@@ -57,7 +56,16 @@ def test_candidate_summary_contract_does_not_restore_inferred_graph_fields() -> 
         "response_structure",
     ]
     assert list(OperationTarget.model_fields) == ["operation"]
+    assert "allow_live_testing" not in OperationTestRequest.model_fields
     assert "schema_source" not in OperationTestRequest.model_fields
+    with pytest.raises(ValidationError):
+        OperationTestRequest.model_validate(
+            {
+                "operation": _candidate().operation,
+                "candidate_operations": [_candidate()],
+                "allow_live_testing": True,
+            }
+        )
     with pytest.raises(ValidationError):
         OperationTarget.model_validate(
             {"operation": _candidate().operation, "headers": {"Authorization": "secret"}}
@@ -91,7 +99,6 @@ def test_operation_test_agent_records_outcome_and_2xx_independently() -> None:
         OperationTestRequest(
             operation=candidate.operation,
             candidate_operations=[candidate],
-            allow_live_testing=True,
         )
     )
 
@@ -119,7 +126,6 @@ def test_dependency_analysis_error_preserves_the_completed_execution() -> None:
         OperationTestRequest(
             operation=candidate.operation,
             candidate_operations=[candidate],
-            allow_live_testing=True,
         )
     )
 
@@ -149,7 +155,6 @@ def test_missing_dependency_model_fails_before_any_live_request() -> None:
         OperationTestRequest(
             operation=candidate.operation,
             candidate_operations=[candidate],
-            allow_live_testing=True,
         )
     )
 

@@ -36,7 +36,7 @@ def _bind_context(executor, *, base_url=None, headers=None, schema_source=None) 
     )
 
 
-def test_operation_tester_requires_live_testing_permission_for_start_run() -> None:
+def test_operation_tester_can_start_run_without_state_permission() -> None:
     from restscope.capabilities import ToolPolicy
 
     policy = ToolPolicy()
@@ -59,21 +59,16 @@ def test_operation_tester_requires_live_testing_permission_for_start_run() -> No
         risk_level="low",
     )
 
-    assert policy.is_allowed(role="operation_tester", tool_spec=start_run, state={}) is False
-    assert policy.is_allowed(
-        role="operation_tester",
-        tool_spec=start_run,
-        state={"allow_live_testing": True},
-    ) is True
+    assert policy.is_allowed(role="operation_tester", tool_spec=start_run, state={}) is True
     assert policy.is_allowed(
         role="operation_tester",
         tool_spec=cancel_run,
-        state={"allow_live_testing": True},
+        state={},
     ) is False
     assert policy.is_allowed(role="operation_tester", tool_spec=get_result, state={}) is True
 
 
-def test_tool_validator_does_not_require_approval_for_authorized_operation_test_run() -> None:
+def test_tool_validator_does_not_require_state_permission_for_operation_test_run() -> None:
     from restscope.capabilities import ToolCallValidator, ToolPolicy, ToolRegistry
     from restscope.llm import ToolCall
 
@@ -88,18 +83,12 @@ def test_tool_validator_does_not_require_approval_for_authorized_operation_test_
     )
     validator = ToolCallValidator(registry, ToolPolicy())
 
-    denied = validator.validate(
+    allowed = validator.validate(
         tool_call=ToolCall(id="call_1", name="mcp.schemathesis.start_run", arguments={}),
         role="operation_tester",
         state={},
     )
-    allowed = validator.validate(
-        tool_call=ToolCall(id="call_2", name="mcp.schemathesis.start_run", arguments={}),
-        role="operation_tester",
-        state={"allow_live_testing": True},
-    )
 
-    assert {error["type"] for error in denied} == {"tool_not_allowed", "approval_required"}
     assert allowed == []
 
 
@@ -140,7 +129,7 @@ def test_schemathesis_runner_uses_tool_executor_and_operation_filter() -> None:
         target=OperationTarget(
             operation=OperationReference(method="get", path="/pets"),
         ),
-        state={"allow_live_testing": True},
+        state={},
     )
 
     assert result.outcome == "passed"
@@ -179,7 +168,7 @@ def test_schemathesis_runner_reads_at_most_twenty_compact_failure_summaries() ->
         target=OperationTarget(
             operation=OperationReference(method="GET", path="/pets"),
         ),
-        state={"allow_live_testing": True},
+        state={},
     )
 
     assert len(result.failure_ids) == 25

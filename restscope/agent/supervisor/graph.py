@@ -130,8 +130,6 @@ class RESTScopeMainGraph:
         def node(state: RESTScopeMainState) -> RESTScopeMainState:
             del state
             try:
-                if not request.allow_live_testing:
-                    raise PermissionError("Operation testing requires allow_live_testing=True")
                 self.dependency_analyzer.check_configured()
                 return {}
             except Exception as exc:
@@ -184,7 +182,6 @@ class RESTScopeMainGraph:
                         task_id=request.metadata.get("task_id"),
                         operation=operation,
                         candidate_operations=candidates,
-                        allow_live_testing=request.allow_live_testing,
                     )
                 )
             except Exception as exc:

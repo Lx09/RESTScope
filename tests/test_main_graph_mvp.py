@@ -29,7 +29,7 @@ def _request(spec: dict, *, headers: dict[str, str] | None = None):
 
     content = json.dumps(spec)
     return SimpleNamespace(
-        request=RESTScopeRunRequest(allow_live_testing=True),
+        request=RESTScopeRunRequest(),
         context=ToolContext(
             ir=OpenAPIParser.parse(spec),
             baseline_schema_source={"kind": "inline", "format": "json", "content": content},
@@ -111,7 +111,9 @@ def test_supervisor_request_contract_contains_only_mvp_entry_fields() -> None:
     from restscope.agent import RESTScopeRunRequest
     from pydantic import ValidationError
 
-    assert list(RESTScopeRunRequest.model_fields) == ["allow_live_testing", "metadata"]
+    assert list(RESTScopeRunRequest.model_fields) == ["metadata"]
+    with pytest.raises(ValidationError):
+        RESTScopeRunRequest.model_validate({"allow_live_testing": True})
     with pytest.raises(ValidationError):
         RESTScopeRunRequest.model_validate(
             {"schema_source": {"kind": "file", "path": "api.yaml"}}
@@ -348,6 +350,7 @@ def test_headers_never_enter_graph_state_or_report() -> None:
 
     assert report.status == "passed"
     assert all("headers" not in state for state in runner.states)
+    assert all("allow_live_testing" not in state for state in runner.states)
     assert "secret-token" not in report.model_dump_json()
 
 
@@ -371,7 +374,7 @@ def test_restscope_app_runs_with_injected_runner_and_analyzer() -> None:
     )
     from restscope.agent import RESTScopeRunRequest
 
-    report = app.run(RESTScopeRunRequest(allow_live_testing=True))
+    report = app.run(RESTScopeRunRequest())
     assert report.status == "passed"
     assert report.operations[0].method == "GET"
 

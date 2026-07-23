@@ -31,10 +31,7 @@ class ToolPolicy:
         if role == "operation_tester" and tool_spec.kind == "mcp_tool":
             if tool_spec.read_only:
                 return True
-            return (
-                tool_spec.name in self.OPERATION_TESTER_LIVE_TOOLS
-                and bool(state.get("allow_live_testing"))
-            )
+            return tool_spec.name in self.OPERATION_TESTER_LIVE_TOOLS
 
         if tool_spec.requires_approval:
             return False
