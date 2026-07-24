@@ -10,7 +10,12 @@ AGENT_ROOT = Path(__file__).resolve().parents[1] / "restscope" / "agent"
 def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
     assert {path.name for path in AGENT_ROOT.glob("*.py")} == {"__init__.py"}
 
-    for package_name in ("openapi_retrieval", "operation_test", "supervisor"):
+    for package_name in (
+        "openapi_retrieval",
+        "operation_test",
+        "resource_monitor",
+        "supervisor",
+    ):
         package = AGENT_ROOT / package_name
         assert package.is_dir(), f"missing Agent package: {package_name}"
         assert (package / "__init__.py").is_file()
@@ -22,19 +27,27 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
     from restscope.agent import (
         OpenAPIRetrievalAgent,
         OperationTestAgent,
+        ResourceMonitorAgent,
         RESTScopeMainGraph,
     )
     from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent as PackagedOpenAPIRetrievalAgent
     from restscope.agent.operation_test import OperationTestAgent as PackagedOperationTestAgent
+    from restscope.agent.resource_monitor import ResourceMonitorAgent as PackagedResourceMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
     assert OpenAPIRetrievalAgent is PackagedOpenAPIRetrievalAgent
     assert OperationTestAgent is PackagedOperationTestAgent
+    assert ResourceMonitorAgent is PackagedResourceMonitorAgent
     assert RESTScopeMainGraph is PackagedMainGraph
 
 
 def test_cross_agent_imports_use_package_facades() -> None:
-    package_names = {"openapi_retrieval", "operation_test", "supervisor"}
+    package_names = {
+        "openapi_retrieval",
+        "operation_test",
+        "resource_monitor",
+        "supervisor",
+    }
     violations: list[str] = []
 
     for package_name in package_names:

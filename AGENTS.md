@@ -90,6 +90,11 @@ explicit project decision:
 - Persist only inputs or evidence with a concrete, user-approved need. Existing
   schema-source persistence does not imply approval for a broader persistence
   architecture.
+- The Resource Monitor catalog is one explicit narrow exception: it may persist
+  resource names and aliases, learned identifier selectors, typed identifier
+  values, latest per-operation read/write usage, and latest monitor errors.
+  It must not persist raw responses, LLM reasoning, plans, queues, or general
+  Agent memory.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
   current evidence.

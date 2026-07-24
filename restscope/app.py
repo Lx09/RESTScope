@@ -17,8 +17,10 @@ from restscope.agent import (
     RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
+    ResourceMonitorResponseProcessor,
     SchemaSource,
     SchemathesisOperationRunner,
+    build_resource_monitor_agent,
 )
 from restscope.capabilities import (
     CapabilityRuntime,
@@ -28,6 +30,7 @@ from restscope.capabilities import (
     build_capabilities_with_mcp_host,
 )
 from restscope.llm import ModelSelector, build_llm_client
+from restscope.http_transport import TargetHTTPTransport
 from restscope.openapi_parser import OpenAPIParser
 from restscope.observability import TracingRuntime, build_tracing_runtime
 from restscope.redaction import Redactor
@@ -75,14 +78,26 @@ class RESTScopeApp:
             )
             if capability_runtime is None:
                 generator_catalog = build_generator_config_catalog(config)
+                resource_monitor_agent = build_resource_monitor_agent(
+                    config,
+                    tracing_runtime=self._tracing_runtime,
+                )
+                target_transport = TargetHTTPTransport(
+                    response_processor=ResourceMonitorResponseProcessor(
+                        resource_monitor_agent
+                    )
+                )
                 built_runtime = build_capabilities(
                     presets=(),
                     tracing_runtime=self._tracing_runtime,
                     generator_config_catalog=generator_catalog,
                     operation_testing_service=OperationTestingService(
                         config_catalog=generator_catalog,
+                        transport=target_transport,
                         tracing_runtime=self._tracing_runtime,
                     ),
+                    target_http_transport=target_transport,
+                    resource_monitor_agent=resource_monitor_agent,
                 )
                 capability_runtime = built_runtime
             self.capability_runtime = capability_runtime
@@ -156,10 +171,22 @@ class RESTScopeApp:
             runner = operation_runner
             generator_catalog = None
             operation_testing_service = None
+            resource_monitor_agent = None
+            target_transport = None
             if runtime is None:
                 generator_catalog = build_generator_config_catalog(config)
+                resource_monitor_agent = build_resource_monitor_agent(
+                    config,
+                    tracing_runtime=trace_runtime,
+                )
+                target_transport = TargetHTTPTransport(
+                    response_processor=ResourceMonitorResponseProcessor(
+                        resource_monitor_agent
+                    )
+                )
                 operation_testing_service = OperationTestingService(
                     config_catalog=generator_catalog,
+                    transport=target_transport,
                     tracing_runtime=trace_runtime,
                 )
             if runner is None:
@@ -169,6 +196,8 @@ class RESTScopeApp:
                         tracing_runtime=trace_runtime,
                         generator_config_catalog=generator_catalog,
                         operation_testing_service=operation_testing_service,
+                        target_http_transport=target_transport,
+                        resource_monitor_agent=resource_monitor_agent,
                     )
                     runtime_is_owned = True
                 runner = SchemathesisOperationRunner(tool_executor=runtime.tool_executor)
@@ -178,6 +207,8 @@ class RESTScopeApp:
                     tracing_runtime=trace_runtime,
                     generator_config_catalog=generator_catalog,
                     operation_testing_service=operation_testing_service,
+                    target_http_transport=target_transport,
+                    resource_monitor_agent=resource_monitor_agent,
                 )
                 runtime_is_owned = True
 

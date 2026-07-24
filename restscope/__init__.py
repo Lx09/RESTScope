@@ -28,6 +28,10 @@ from .agent import (
     OperationReference,
     RESTScopeRunReport,
     RESTScopeRunRequest,
+    ResourceLookupRequest,
+    ResourceLookupResult,
+    ResourceMonitorAgent,
+    build_resource_monitor_agent,
     build_openapi_retrieval_agent,
     register_openapi_retrieval_tool,
 )
@@ -61,4 +65,8 @@ __all__ = [
     "RESTScopeRunReport",
     "OperationReference",
     "register_openapi_retrieval_tool",
+    "ResourceLookupRequest",
+    "ResourceLookupResult",
+    "ResourceMonitorAgent",
+    "build_resource_monitor_agent",
 ]

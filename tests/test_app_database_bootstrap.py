@@ -63,6 +63,12 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
             "generator_catalog_state",
             "operation_generator_configs",
             "input_generator_configs",
+            "resources",
+            "resource_aliases",
+            "operation_resource_rules",
+            "resource_identifiers",
+            "resource_operation_usages",
+            "resource_monitor_errors",
         }
     finally:
         app.close()
@@ -690,6 +696,10 @@ def test_llm_analyzer_construction_failure_closes_runtime_and_removes_database(
     monkeypatch.setattr(
         "restscope.app.build_capabilities_with_mcp_host",
         lambda **_kwargs: runtime,
+    )
+    monkeypatch.setattr(
+        "restscope.app.build_resource_monitor_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "restscope.app.ModelSelector.from_config",

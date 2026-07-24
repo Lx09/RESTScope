@@ -68,10 +68,10 @@ The two Python projects intentionally keep separate environments and lock files.
 
 ## Database
 
-The database stores OpenAPI schema sources plus generator configuration for the
-single current API. Domain services depend on repository and transaction
-protocols; SQLAlchemy models, sessions, and adapters remain inside
-`restscope.db`.
+The database stores OpenAPI schema sources, generator configuration, and the
+narrow Resource Monitor evidence catalog for the single current API. Domain
+services depend on repository and transaction protocols; SQLAlchemy models,
+sessions, and adapters remain inside `restscope.db`.
 
 Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
@@ -80,10 +80,12 @@ automatically deletes a successfully created database. A caller that injects a
 complete custom `CapabilityRuntime` owns its persistence and bypasses this
 default database bootstrap.
 
-The Alembic chain starts with the schema-source baseline and adds operation
-generator configuration in revision `0002_create_generator_configs`. A schema
+The Alembic chain starts with the schema-source baseline, adds operation
+generator configuration in revision `0002_create_generator_configs`, and adds
+the resource evidence catalog in `0003_create_resource_catalog`. A schema
 source stores either an absolute file path or verbatim JSON/YAML content. Paths
-are reread on every load, while parsed IR and test reports are not persisted:
+are reread on every load, while parsed IR, raw responses, and test reports are
+not persisted:
 
 ```python
 from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
@@ -252,10 +254,12 @@ updates and enables the operation once no blocking reason remains.
 and generators only from that persisted snapshot; it does not compare the
 operation with the current `ToolContext.ir`. It generates all requested cases
 in preflight and only then sends requests serially to the current App-bound
-target. It supports at most 20 cases, does not follow redirects or retry,
-creates an isolated HTTP client per case, and never reads response bodies. The
+target. It supports at most 20 cases, does not follow redirects or retry, and
+creates an isolated HTTP client per case. When the default Resource Monitor is
+present, it reads at most 1 MiB from a 2xx response before returning; non-2xx
+responses and runtimes without a response processor remain body-unread. The
 report contains generated/request values, merged target headers, response
-metadata, transport errors, and
+metadata, transport errors, Resource Monitor warnings, and
 `response_validation="not_evaluated"`. Only exact configured THINK, FAST, and
 Phoenix API key values are replaced.
 
@@ -272,6 +276,30 @@ Cookie headers, plus its bounded JSON or text body.
 The Supervisor and `OperationTestAgent` continue to use Schemathesis MCP in this
 iteration. Registration of the lightweight tool does not replace that runner or
 add a new tool loop to an Agent.
+
+## Resource Monitor Agent
+
+Every default `RESTScopeApp` includes a synchronous Resource Monitor for 2xx
+JSON responses. The lightweight testing path supplies its already-known
+operation key. The open-world `restscope.http.request` contract remains
+`method + path`; after the response, a deterministic matcher resolves the
+concrete path to exactly one OpenAPI operation. An ambiguous or missing match
+adds a structured warning to the original HTTP result and does not write
+resource evidence.
+
+For an operation response group seen for the first time, an exact `id` field is
+used without a model call. Otherwise the configured FAST model selects whether
+the group represents a resource and, if so, its identifier field. The resulting
+selector is reused for later 2xx responses. A learned selector that previously
+produced an identifier but is later missing reports
+`expected_resource_id_missing`; it is not silently relearned.
+
+The catalog persists only canonical resource names and aliases, learned
+selectors, typed string/integer identifiers, latest per-operation read/write
+usage, and latest monitor errors. It does not store response bodies or model
+reasoning. `restscope.resource.lookup` is a read-only local tool that returns
+the latest reusable identifiers and the operations that observed them. Lookup
+does not automatically modify generators or schedule another test.
 
 ## Operation Test Agent
 

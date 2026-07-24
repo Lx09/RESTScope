@@ -7,7 +7,11 @@ from .bootstrap import (
     UnsupportedDatabaseURLError,
 )
 from .session import create_engine_from_config, create_engine_from_url, make_session_factory
-from .unit_of_work import SqlAlchemyGeneratorConfigUnitOfWork, SqlAlchemySchemaUnitOfWork
+from .unit_of_work import (
+    SqlAlchemyGeneratorConfigUnitOfWork,
+    SqlAlchemyResourceCatalogUnitOfWork,
+    SqlAlchemySchemaUnitOfWork,
+)
 
 __all__ = [
     "Base",
@@ -15,6 +19,7 @@ __all__ = [
     "DatabaseBootstrapError",
     "SqlAlchemySchemaUnitOfWork",
     "SqlAlchemyGeneratorConfigUnitOfWork",
+    "SqlAlchemyResourceCatalogUnitOfWork",
     "UnsupportedDatabaseURLError",
     "create_engine_from_config",
     "create_engine_from_url",

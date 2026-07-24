@@ -14,9 +14,11 @@ from restscope.capabilities.tool_context import ToolContext
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.llm.schemas import ToolSpec
 from restscope.http_transport import (
+    BufferedTargetResponse,
     TargetHTTPTimeout,
     TargetHTTPTransport,
     TargetHTTPTransportError,
+    TargetResponseOperationContext,
 )
 
 
@@ -78,6 +80,7 @@ def register_http_request_tool(
     registry: ToolRegistry,
     *,
     client_factory: ClientFactory = httpx.Client,
+    transport: TargetHTTPTransport | None = None,
 ) -> ToolSpec:
     """Register the model-visible target HTTP request contract."""
 
@@ -129,6 +132,19 @@ def register_http_request_tool(
                 "body_format": {"type": "string", "enum": ["json", "text"]},
                 "body": {},
                 "size_bytes": {"type": "integer"},
+                "resource_monitor_warning": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "issues": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["code", "message", "issues"],
+                    "additionalProperties": False,
+                },
             },
             "required": [
                 "status_code",
@@ -148,7 +164,10 @@ def register_http_request_tool(
     )
     registry.register(
         spec=spec,
-        handler=TargetHTTPRequestTool(client_factory=client_factory).execute,
+        handler=TargetHTTPRequestTool(
+            client_factory=client_factory,
+            transport=transport,
+        ).execute,
     )
     return spec
 
@@ -156,8 +175,15 @@ def register_http_request_tool(
 class TargetHTTPRequestTool:
     """Send one bounded request to the App's configured target."""
 
-    def __init__(self, *, client_factory: ClientFactory = httpx.Client) -> None:
-        self.transport = TargetHTTPTransport(client_factory=client_factory)
+    def __init__(
+        self,
+        *,
+        client_factory: ClientFactory = httpx.Client,
+        transport: TargetHTTPTransport | None = None,
+    ) -> None:
+        self.transport = transport or TargetHTTPTransport(
+            client_factory=client_factory
+        )
 
     def execute(self, context: ToolContext, /, **arguments: Any) -> dict[str, Any]:
         request = _validate_arguments(arguments)
@@ -167,7 +193,7 @@ class TargetHTTPRequestTool:
             request_headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         try:
-            with self.transport.stream(
+            prepared = self.transport.prepare(
                 method=request.method,
                 base_url=context.base_url,
                 path=request.path,
@@ -175,14 +201,16 @@ class TargetHTTPRequestTool:
                 context_headers=context.headers,
                 request_headers=request_headers,
                 override_context_headers=True,
+            )
+            response = self.transport.request_prepared(
+                prepared,
                 timeout_seconds=request.timeout_seconds,
                 request_kwargs=request_kwargs,
-            ) as response:
-                content = _read_response(response)
-                payload = _response_payload(
-                    response,
-                    content=content,
-                )
+                response_body_limit=MAX_RESPONSE_BYTES,
+                truncate_response_body=False,
+                processor_context=TargetResponseOperationContext(ir=context.ir),
+            )
+            payload = _response_payload(response)
         except TargetHTTPTimeout as exc:
             raise HTTPRequestTimeoutError("HTTP request timed out") from exc
         except TargetHTTPTransportError as exc:
@@ -250,38 +278,33 @@ def _contains_header(headers: Mapping[str, str], expected: str) -> bool:
     return any(name.lower() == expected for name in headers)
 
 
-def _read_response(response: httpx.Response) -> bytes:
-    content = bytearray()
-    for chunk in response.iter_bytes():
-        if len(content) + len(chunk) > MAX_RESPONSE_BYTES:
-            raise HTTPRequestToolError(
-                "response_too_large",
-                f"HTTP response exceeds the {MAX_RESPONSE_BYTES}-byte limit",
-            )
-        content.extend(chunk)
-    return bytes(content)
-
-
 def _response_payload(
-    response: httpx.Response,
-    *,
-    content: bytes,
+    response: BufferedTargetResponse,
 ) -> dict[str, Any]:
+    assert response.body is not None
+    content = response.body
     media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     body_format, body = _decode_response(response, content=content, media_type=media_type)
-    return {
+    payload = {
         "status_code": response.status_code,
         "reason_phrase": response.reason_phrase,
-        "url": str(response.url),
-        "headers": {name.lower(): value for name, value in response.headers.items()},
+        "url": response.url,
+        "headers": dict(response.headers),
         "body_format": body_format,
         "body": body,
         "size_bytes": len(content),
     }
+    if response.processor_warning is not None:
+        payload["resource_monitor_warning"] = {
+            "code": response.processor_warning.code,
+            "message": response.processor_warning.message,
+            "issues": list(response.processor_warning.issues),
+        }
+    return payload
 
 
 def _decode_response(
-    response: httpx.Response,
+    response: BufferedTargetResponse,
     *,
     content: bytes,
     media_type: str,

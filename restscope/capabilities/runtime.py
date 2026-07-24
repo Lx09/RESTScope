@@ -17,6 +17,7 @@ from restscope.capabilities.tool_policy import ToolPolicy
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.capabilities.tool_selector import ToolSelector
 from restscope.capabilities.tool_sources import add_preset_tools
+from restscope.http_transport import TargetHTTPTransport
 from restscope.observability import TracingRuntime
 from restscope.testing import GeneratorConfigCatalog, OperationTestingService
 
@@ -33,6 +34,7 @@ class CapabilityRuntime:
     skill_policy: SkillPolicy
     mcp_host: MCPHost | None = None
     operation_testing_service: OperationTestingService | None = None
+    resource_monitor_agent: Any | None = None
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
         """Bind one tracing/redaction runtime to every built-in trace consumer."""
@@ -40,6 +42,11 @@ class CapabilityRuntime:
         self.tool_executor.tracing_runtime = tracing_runtime
         if self.operation_testing_service is not None:
             self.operation_testing_service.tracing_runtime = tracing_runtime
+        if self.resource_monitor_agent is not None:
+            self.resource_monitor_agent.tracing_runtime = tracing_runtime
+            client = getattr(self.resource_monitor_agent, "client", None)
+            if client is not None and hasattr(client, "tracing_runtime"):
+                client.tracing_runtime = tracing_runtime
 
 
 def build_capabilities(
@@ -50,6 +57,8 @@ def build_capabilities(
     tracing_runtime: TracingRuntime | None = None,
     generator_config_catalog: GeneratorConfigCatalog | None = None,
     operation_testing_service: OperationTestingService | None = None,
+    target_http_transport: TargetHTTPTransport | None = None,
+    resource_monitor_agent: Any | None = None,
 ) -> CapabilityRuntime:
     """Build a complete capability runtime from external sources and skills."""
 
@@ -65,7 +74,14 @@ def build_capabilities(
     skill_registry = SkillRegistry()
     skill_policy = SkillPolicy()
 
-    register_http_request_tool(tool_registry)
+    register_http_request_tool(
+        tool_registry,
+        transport=target_http_transport,
+    )
+    if resource_monitor_agent is not None:
+        from restscope.agent.resource_monitor import register_resource_lookup_tool
+
+        register_resource_lookup_tool(tool_registry, resource_monitor_agent)
     if (generator_config_catalog is None) != (operation_testing_service is None):
         raise ValueError(
             "generator_config_catalog and operation_testing_service must be supplied together"
@@ -92,6 +108,7 @@ def build_capabilities(
         skill_registry=skill_registry,
         skill_policy=skill_policy,
         operation_testing_service=operation_testing_service,
+        resource_monitor_agent=resource_monitor_agent,
     )
 
 
@@ -104,6 +121,8 @@ def build_capabilities_with_mcp_host(
     tracing_runtime: TracingRuntime | None = None,
     generator_config_catalog: GeneratorConfigCatalog | None = None,
     operation_testing_service: OperationTestingService | None = None,
+    target_http_transport: TargetHTTPTransport | None = None,
+    resource_monitor_agent: Any | None = None,
 ) -> CapabilityRuntime:
     """Build capabilities after discovering tools through RESTScope's MCP host."""
 
@@ -119,6 +138,8 @@ def build_capabilities_with_mcp_host(
             tracing_runtime=tracing_runtime,
             generator_config_catalog=generator_config_catalog,
             operation_testing_service=operation_testing_service,
+            target_http_transport=target_http_transport,
+            resource_monitor_agent=resource_monitor_agent,
         )
         return CapabilityRuntime(
             tool_registry=runtime.tool_registry,
@@ -129,6 +150,7 @@ def build_capabilities_with_mcp_host(
             skill_policy=runtime.skill_policy,
             mcp_host=host,
             operation_testing_service=runtime.operation_testing_service,
+            resource_monitor_agent=runtime.resource_monitor_agent,
         )
     except BaseException:
         if owns_host:

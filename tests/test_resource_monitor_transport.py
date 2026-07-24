@@ -1,0 +1,623 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+class CapturingProcessor:
+    def __init__(self, *, warning=None) -> None:
+        self.warning = warning
+        self.calls = []
+
+    def process(self, observation, context):
+        self.calls.append((observation, context))
+        return self.warning
+
+
+def _testing_service(
+    tmp_path: Path,
+    *,
+    processor,
+    response_content: bytes,
+    status_code: int = 200,
+):
+    import httpx
+
+    from restscope.db import (
+        Base,
+        SqlAlchemyGeneratorConfigUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratorConfigCatalog, OperationTestingService
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "monitor", "version": "1"},
+            "paths": {
+                "/users/{userId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "userId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "integer", "minimum": 1},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "integer"}},
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        }
+    )
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'transport.sqlite'}")
+    Base.metadata.create_all(engine)
+    catalog = GeneratorConfigCatalog(
+        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
+    )
+    assert catalog.initialize_once(ir) is True
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    status_code,
+                    headers={"Content-Type": "application/json"},
+                    content=response_content,
+                )
+            ),
+            **kwargs,
+        ),
+        response_processor=processor,
+    )
+    return ir, OperationTestingService(config_catalog=catalog, transport=transport)
+
+
+def test_operation_testing_supplies_known_operation_and_body_to_processor(
+    tmp_path: Path,
+) -> None:
+    from restscope.capabilities import ToolContext
+
+    processor = CapturingProcessor()
+    ir, service = _testing_service(
+        tmp_path,
+        processor=processor,
+        response_content=b'{"id":7}',
+    )
+
+    report = service.run_operation(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        ),
+        operation_key="GET /users/{userId}",
+        seed=1,
+    )
+
+    assert report.status == "completed"
+    assert len(processor.calls) == 1
+    observation, context = processor.calls[0]
+    assert observation.body == b'{"id":7}'
+    assert observation.body_truncated is False
+    assert context.operation_key == "GET /users/{userId}"
+    assert context.operation_method == "GET"
+    assert context.operation_path == "/users/{userId}"
+    assert context.ir is ir
+    assert report.cases[0].resource_monitor_warning is None
+
+
+def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> None:
+    import httpx
+
+    from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
+    from restscope.http_transport import (
+        TargetHTTPTransport,
+        TargetResponseProcessorWarning,
+    )
+    from restscope.openapi_parser import OpenAPIParser
+
+    processor = CapturingProcessor(
+        warning=TargetResponseProcessorWarning(
+            code="operation_match_ambiguous",
+            message="Request matches multiple operations",
+            issues=("GET /users/{id}", "GET /{entity}/7"),
+        )
+    )
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"Content-Type": "application/json"},
+                    content=b'{"id":7}',
+                )
+            ),
+            **kwargs,
+        ),
+        response_processor=processor,
+    )
+    registry = ToolRegistry()
+    register_http_request_tool(registry, transport=transport)
+    handler = registry.get_handler("restscope.http.request")
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "raw", "version": "1"},
+            "paths": {
+                "/users/{id}": {
+                    "get": {"responses": {"200": {"description": "ok"}}}
+                }
+            },
+        }
+    )
+
+    result = handler(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        ),
+        method="GET",
+        path="/users/7",
+    )
+
+    assert result["structured"]["status_code"] == 200
+    assert result["structured"]["body"] == {"id": 7}
+    assert result["structured"]["resource_monitor_warning"] == {
+        "code": "operation_match_ambiguous",
+        "message": "Request matches multiple operations",
+        "issues": ["GET /users/{id}", "GET /{entity}/7"],
+    }
+    assert processor.calls[0][1].operation_key is None
+    assert processor.calls[0][1].ir is ir
+
+
+def test_operation_testing_truncates_monitor_body_at_one_mib(
+    tmp_path: Path,
+) -> None:
+    from restscope.capabilities import ToolContext
+    from restscope.http_transport import TargetResponseProcessorWarning
+
+    processor = CapturingProcessor(
+        warning=TargetResponseProcessorWarning(
+            code="resource_monitor_body_truncated",
+            message="Response body was truncated",
+        )
+    )
+    content = b'{"value":"' + (b"x" * (1024 * 1024)) + b'"}'
+    ir, service = _testing_service(
+        tmp_path,
+        processor=processor,
+        response_content=content,
+    )
+
+    report = service.run_operation(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        ),
+        operation_key="GET /users/{userId}",
+        seed=1,
+    )
+
+    observation, _context = processor.calls[0]
+    assert len(observation.body) == 1024 * 1024
+    assert observation.body_truncated is True
+    assert report.cases[0].response is not None
+    assert report.cases[0].resource_monitor_warning.code == (
+        "resource_monitor_body_truncated"
+    )
+
+
+def test_operation_testing_does_not_buffer_or_monitor_non_2xx_response(
+    tmp_path: Path,
+) -> None:
+    from restscope.capabilities import ToolContext
+
+    processor = CapturingProcessor()
+    ir, service = _testing_service(
+        tmp_path,
+        processor=processor,
+        response_content=b'{"error":"missing"}',
+        status_code=404,
+    )
+
+    report = service.run_operation(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        ),
+        operation_key="GET /users/{userId}",
+        seed=1,
+    )
+
+    assert report.cases[0].response is not None
+    assert report.cases[0].response.status_code == 404
+    assert processor.calls == []
+
+
+def _resource_monitor(tmp_path: Path):
+    from restscope.agent.resource_monitor import ResourceCatalog, ResourceMonitorAgent
+    from restscope.db import (
+        Base,
+        SqlAlchemyResourceCatalogUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+    from restscope.llm import LLMModelConfig
+
+    class UnexpectedLLM:
+        def invoke(self, request):
+            raise AssertionError(f"unexpected LLM request: {request}")
+
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'resource-monitor.sqlite'}")
+    Base.metadata.create_all(engine)
+    catalog = ResourceCatalog(
+        lambda: SqlAlchemyResourceCatalogUnitOfWork(make_session_factory(engine))
+    )
+    return (
+        ResourceMonitorAgent(
+            catalog=catalog,
+            client=UnexpectedLLM(),
+            model=LLMModelConfig(
+                role="resource_monitor",
+                provider="stub",
+                model="fast",
+            ),
+        ),
+        catalog,
+    )
+
+
+def test_raw_http_matches_operation_before_synchronously_updating_catalog(
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    from restscope.agent.resource_monitor import (
+        ResourceLookupRequest,
+        ResourceMonitorResponseProcessor,
+    )
+    from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+
+    agent, catalog = _resource_monitor(tmp_path)
+    processor = ResourceMonitorResponseProcessor(agent)
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"Content-Type": "application/json"},
+                    content=b'{"id":7,"name":"Ada"}',
+                )
+            ),
+            **kwargs,
+        ),
+        response_processor=processor,
+    )
+    registry = ToolRegistry()
+    register_http_request_tool(registry, transport=transport)
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "raw", "version": "1"},
+            "paths": {
+                "/users/{userId}": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {"type": "integer"}
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+
+    result = registry.get_handler("restscope.http.request")(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        ),
+        method="GET",
+        path="/users/7",
+    )
+
+    assert result["structured"]["body"] == {"id": 7, "name": "Ada"}
+    assert "resource_monitor_warning" not in result["structured"]
+    lookup = catalog.lookup(ResourceLookupRequest(resource="user"))
+    assert lookup.recommended_id == 7
+    assert lookup.operations[0].operation_key == "GET /users/{userId}"
+
+
+def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
+    tmp_path: Path,
+) -> None:
+    import httpx
+
+    from restscope.agent.resource_monitor import (
+        ResourceLookupRequest,
+        ResourceMonitorResponseProcessor,
+    )
+    from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+
+    agent, catalog = _resource_monitor(tmp_path)
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"Content-Type": "application/json"},
+                    content=b'{"id":7}',
+                )
+            ),
+            **kwargs,
+        ),
+        response_processor=ResourceMonitorResponseProcessor(agent),
+    )
+    registry = ToolRegistry()
+    register_http_request_tool(registry, transport=transport)
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "ambiguous", "version": "1"},
+            "paths": {
+                "/teams/{member}": {
+                    "get": {"responses": {"200": {"description": "ok"}}}
+                },
+                "/{collection}/me": {
+                    "get": {"responses": {"200": {"description": "ok"}}}
+                },
+            },
+        }
+    )
+
+    result = registry.get_handler("restscope.http.request")(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        ),
+        method="GET",
+        path="/teams/me",
+    )
+
+    assert result["structured"]["status_code"] == 200
+    assert result["structured"]["resource_monitor_warning"]["code"] == (
+        "operation_match_ambiguous"
+    )
+    assert catalog.lookup(ResourceLookupRequest(resource="team")).status == "not_found"
+
+
+def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.resource_monitor import (
+        MonitoredOperation,
+        ResourceLookupRequest,
+        ResourceMonitorResponseProcessor,
+        ResourceObservation,
+    )
+    from restscope.http_transport import (
+        TargetResponseObservation,
+        TargetResponseOperationContext,
+    )
+    from restscope.openapi_parser import OpenAPIParser
+
+    agent, catalog = _resource_monitor(tmp_path)
+    agent.observe(
+        ResourceObservation(
+            operation=MonitoredOperation(
+                operation_key="GET /users/{userId}",
+                method="GET",
+                path="/users/{userId}",
+            ),
+            status_code=200,
+            media_type="application/json",
+            body={"id": 7},
+        )
+    )
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "monitor-errors", "version": "1"},
+            "paths": {
+                "/users/{userId}": {
+                    "get": {"responses": {"200": {"description": "ok"}}}
+                }
+            },
+        }
+    )
+    processor = ResourceMonitorResponseProcessor(agent)
+    context = TargetResponseOperationContext(ir=ir)
+    invalid = TargetResponseObservation(
+        method="GET",
+        path="/users/7",
+        url="https://api.example.test/users/7",
+        status_code=200,
+        reason_phrase="OK",
+        headers={"content-type": "application/json"},
+        body=b"{invalid",
+        body_truncated=False,
+    )
+
+    warning = processor.process(invalid, context)
+
+    assert warning is not None
+    assert warning.code == "resource_monitor_invalid_json"
+    assert [
+        item.code
+        for item in catalog.lookup(ResourceLookupRequest(resource="user")).errors
+    ] == ["resource_monitor_invalid_json"]
+
+    assert processor.process(
+        invalid.__class__(
+            method=invalid.method,
+            path=invalid.path,
+            url=invalid.url,
+            status_code=invalid.status_code,
+            reason_phrase=invalid.reason_phrase,
+            headers=invalid.headers,
+            body=b'{"id":7}',
+            body_truncated=False,
+        ),
+        context,
+    ) is None
+    assert catalog.lookup(ResourceLookupRequest(resource="user")).errors == []
+
+
+def test_schema_only_dotted_property_fails_closed_without_learning_selector(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.resource_monitor import (
+        ResourceLookupRequest,
+        ResourceMonitorResponseProcessor,
+    )
+    from restscope.http_transport import (
+        TargetResponseObservation,
+        TargetResponseOperationContext,
+    )
+    from restscope.openapi_parser import OpenAPIParser
+
+    agent, catalog = _resource_monitor(tmp_path)
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "dotted-property", "version": "1"},
+            "paths": {
+                "/commits/{commitId}": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "bad.key": {"type": "string"}
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+    processor = ResourceMonitorResponseProcessor(agent)
+    observation = TargetResponseObservation(
+        method="GET",
+        path="/commits/abc123",
+        url="https://api.example.test/commits/abc123",
+        status_code=200,
+        reason_phrase="OK",
+        headers={"content-type": "application/json"},
+        body=b'{"message":"schema-only dotted property"}',
+        body_truncated=False,
+    )
+    context = TargetResponseOperationContext(ir=ir)
+
+    first = processor.process(observation, context)
+    second = processor.process(observation, context)
+
+    assert first is not None
+    assert first.code == "resource_monitor_evidence_limit_exceeded"
+    assert second is not None
+    assert second.code == "resource_monitor_evidence_limit_exceeded"
+    assert catalog.list_rules("GET /commits/{commitId}") == []
+    assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == "not_found"
+
+
+def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
+    tmp_path: Path,
+) -> None:
+    from restscope import RESTScopeApp
+    from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"DB_URL=sqlite:///{tmp_path / 'app.sqlite'}\n",
+        encoding="utf-8",
+    )
+    app = RESTScopeApp.from_config(
+        RESTScopeConfig.from_environment(env_file),
+        operation_runner=FakeOperationTestRunner(),
+        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+    )
+    try:
+        runtime = app.capability_runtime
+        service = runtime.operation_testing_service
+        assert service is not None
+        raw_handler = runtime.tool_registry.get_handler("restscope.http.request")
+        raw_tool = raw_handler.__self__
+
+        assert runtime.resource_monitor_agent is not None
+        assert not hasattr(runtime.resource_monitor_agent, "initialize")
+        assert service.transport is raw_tool.transport
+        assert service.transport.response_processor.agent is (
+            runtime.resource_monitor_agent
+        )
+        assert runtime.tool_registry.get_spec("restscope.resource.lookup").read_only is True
+    finally:
+        app.close()

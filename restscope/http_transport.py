@@ -6,7 +6,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit, urlunsplit
 from urllib.parse import quote
 
@@ -35,8 +35,64 @@ class PreparedTargetRequest:
     """A fully target-validated request without an opened HTTP client."""
 
     method: str
+    path: str
     url: httpx.URL
     headers: dict[str, str]
+
+
+@dataclass(slots=True, frozen=True)
+class TargetResponseOperationContext:
+    """OpenAPI context attached by a caller without coupling transport to an Agent."""
+
+    ir: object
+    operation_key: str | None = None
+    operation_method: str | None = None
+    operation_path: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class TargetResponseObservation:
+    """Bounded response evidence offered to one synchronous processor."""
+
+    method: str
+    path: str
+    url: str
+    status_code: int
+    reason_phrase: str
+    headers: Mapping[str, str]
+    body: bytes
+    body_truncated: bool
+
+
+@dataclass(slots=True, frozen=True)
+class TargetResponseProcessorWarning:
+    """A processor failure that must not replace the original HTTP result."""
+
+    code: str
+    message: str
+    issues: tuple[str, ...] = ()
+
+
+class TargetResponseProcessor(Protocol):
+    def process(
+        self,
+        observation: TargetResponseObservation,
+        context: TargetResponseOperationContext,
+    ) -> TargetResponseProcessorWarning | None: ...
+
+
+@dataclass(slots=True, frozen=True)
+class BufferedTargetResponse:
+    """Response metadata plus an optional bounded body after the stream closes."""
+
+    status_code: int
+    reason_phrase: str
+    url: str
+    headers: Mapping[str, str]
+    encoding: str | None
+    body: bytes | None
+    body_truncated: bool
+    processor_warning: TargetResponseProcessorWarning | None
 
 
 class TargetHTTPTransportError(RuntimeError):
@@ -54,8 +110,18 @@ class TargetHTTPTimeout(TimeoutError):
 class TargetHTTPTransport:
     """Open isolated response streams against one App-bound target."""
 
-    def __init__(self, *, client_factory: ClientFactory = httpx.Client) -> None:
+    def __init__(
+        self,
+        *,
+        client_factory: ClientFactory = httpx.Client,
+        response_processor: TargetResponseProcessor | None = None,
+    ) -> None:
         self.client_factory = client_factory
+        self.response_processor = response_processor
+
+    @property
+    def has_response_processor(self) -> bool:
+        return self.response_processor is not None
 
     def prepare(
         self,
@@ -73,6 +139,7 @@ class TargetHTTPTransport:
 
         return PreparedTargetRequest(
             method=method,
+            path=path,
             url=build_target_url(base_url, path, query_items),
             headers=merge_target_headers(
                 context_headers or {},
@@ -140,6 +207,100 @@ class TargetHTTPTransport:
                 "request_failed",
                 f"HTTP request failed ({type(exc).__name__})",
             ) from exc
+
+    def request_prepared(
+        self,
+        prepared: PreparedTargetRequest,
+        *,
+        timeout_seconds: float = 30,
+        request_kwargs: Mapping[str, Any] | None = None,
+        response_body_limit: int | None = None,
+        truncate_response_body: bool = False,
+        buffer_success_body_only: bool = False,
+        processor_context: TargetResponseOperationContext | None = None,
+    ) -> BufferedTargetResponse:
+        """Execute, optionally buffer, and synchronously process one response."""
+
+        with self.stream_prepared(
+            prepared,
+            timeout_seconds=timeout_seconds,
+            request_kwargs=request_kwargs,
+        ) as response:
+            body: bytes | None = None
+            body_truncated = False
+            if response_body_limit is not None and (
+                not buffer_success_body_only
+                or 200 <= response.status_code < 300
+            ):
+                body, body_truncated = _read_bounded_response(
+                    response,
+                    limit=response_body_limit,
+                    truncate=truncate_response_body,
+                )
+            warning: TargetResponseProcessorWarning | None = None
+            if (
+                self.response_processor is not None
+                and processor_context is not None
+                and body is not None
+            ):
+                observation = TargetResponseObservation(
+                    method=prepared.method,
+                    path=prepared.path,
+                    url=str(response.url),
+                    status_code=response.status_code,
+                    reason_phrase=response.reason_phrase,
+                    headers={
+                        name.lower(): value
+                        for name, value in response.headers.items()
+                    },
+                    body=body,
+                    body_truncated=body_truncated,
+                )
+                try:
+                    warning = self.response_processor.process(
+                        observation,
+                        processor_context,
+                    )
+                except Exception as exc:
+                    warning = TargetResponseProcessorWarning(
+                        code="resource_monitor_failed",
+                        message="Response resource monitoring failed",
+                        issues=(type(exc).__name__,),
+                    )
+            return BufferedTargetResponse(
+                status_code=response.status_code,
+                reason_phrase=response.reason_phrase,
+                url=str(response.url),
+                headers={
+                    name.lower(): value
+                    for name, value in response.headers.items()
+                },
+                encoding=response.encoding,
+                body=body,
+                body_truncated=body_truncated,
+                processor_warning=warning,
+            )
+
+
+def _read_bounded_response(
+    response: httpx.Response,
+    *,
+    limit: int,
+    truncate: bool,
+) -> tuple[bytes, bool]:
+    content = bytearray()
+    for chunk in response.iter_bytes():
+        remaining = limit - len(content)
+        if len(chunk) > remaining:
+            if not truncate:
+                raise TargetHTTPTransportError(
+                    "response_too_large",
+                    f"HTTP response exceeds the {limit}-byte limit",
+                )
+            content.extend(chunk[: max(0, remaining)])
+            return bytes(content), True
+        content.extend(chunk)
+    return bytes(content), False
 
 
 def build_target_url(

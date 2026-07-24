@@ -16,7 +16,7 @@ class ModelSelector:
         "operation_dependency_analyzer",
         "openapi_retrieval",
     }
-    FAST_ROLES = {"decision_maker"}
+    FAST_ROLES = {"decision_maker", "resource_monitor"}
 
     def __init__(self, *, thinking: LLMModelConfig, fast: LLMModelConfig) -> None:
         self.thinking = thinking

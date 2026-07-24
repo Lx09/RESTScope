@@ -29,6 +29,8 @@ class ToolPolicy:
     }
 
     def is_allowed(self, *, role: str, tool_spec: ToolSpec, state: dict) -> bool:
+        if tool_spec.name == "restscope.resource.lookup":
+            return True
         if tool_spec.name in {HTTP_REQUEST_TOOL_NAME, RUN_OPERATION_TOOL_NAME}:
             return True
         if tool_spec.name in CONFIGURATION_TOOL_NAMES:

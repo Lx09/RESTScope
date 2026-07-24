@@ -27,6 +27,12 @@ def test_generator_config_migration_upgrades_existing_schema_catalog(tmp_path: P
         "generator_catalog_state",
         "operation_generator_configs",
         "input_generator_configs",
+        "resources",
+        "resource_aliases",
+        "operation_resource_rules",
+        "resource_identifiers",
+        "resource_operation_usages",
+        "resource_monitor_errors",
     }
     assert {column["name"] for column in inspector.get_columns("input_generator_configs")} == {
         "input_node_id",

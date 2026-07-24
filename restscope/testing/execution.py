@@ -13,6 +13,7 @@ from restscope.http_transport import (
     TargetHTTPTimeout,
     TargetHTTPTransport,
     TargetHTTPTransportError,
+    TargetResponseOperationContext,
 )
 from restscope.observability import TracingRuntime
 
@@ -23,11 +24,15 @@ from .models import (
     OperationExecutionReport,
     PreparedRequestSummary,
     PreparedTestRequest,
+    ResourceMonitorWarningSummary,
     ResponseSummary,
     TestCaseExecutionReport,
     TransportErrorSummary,
 )
 from .serialization import serialize_test_case
+
+
+RESOURCE_MONITOR_RESPONSE_BYTES = 1024 * 1024
 
 
 class TestingExecutionError(RuntimeError):
@@ -112,6 +117,9 @@ class OperationTestingService:
             if case.response is not None
         )
         error_count = sum(case.transport_error is not None for case in reports)
+        warning_count = sum(
+            case.resource_monitor_warning is not None for case in reports
+        )
         status = "completed" if error_count == 0 else "errored" if error_count == len(reports) else "partial"
         report = OperationExecutionReport(
             run_id=run_id,
@@ -126,6 +134,7 @@ class OperationTestingService:
                 case.response is not None and 200 <= case.response.status_code < 300
                 for case in reports
             ),
+            resource_monitor_warning_count=warning_count,
         )
         return OperationExecutionReport.model_validate(
             self.tracing_runtime.redactor.redact(report)
@@ -149,6 +158,7 @@ class OperationTestingService:
         started = time.perf_counter()
         response_summary: ResponseSummary | None = None
         error_summary: TransportErrorSummary | None = None
+        monitor_warning: ResourceMonitorWarningSummary | None = None
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
             kind="TOOL",
@@ -159,22 +169,43 @@ class OperationTestingService:
             },
         ) as span:
             try:
-                with self.transport.stream_prepared(
+                response = self.transport.request_prepared(
                     target_request,
                     timeout_seconds=30,
                     request_kwargs={"content": request.content} if request.content is not None else {},
-                ) as response:
-                    elapsed = (time.perf_counter() - started) * 1000
-                    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip() or None
-                    raw_length = response.headers.get("content-length")
-                    response_summary = ResponseSummary(
-                        status_code=response.status_code,
-                        reason_phrase=response.reason_phrase,
-                        media_type=media_type,
-                        content_length=int(raw_length) if raw_length and raw_length.isdigit() else None,
-                        latency_ms=elapsed,
+                    response_body_limit=(
+                        RESOURCE_MONITOR_RESPONSE_BYTES
+                        if self.transport.has_response_processor
+                        else None
+                    ),
+                    truncate_response_body=True,
+                    buffer_success_body_only=True,
+                    processor_context=TargetResponseOperationContext(
+                        ir=context.ir,
+                        operation_key=generated.operation_key,
+                        operation_method=request.method,
+                        operation_path=self.config_catalog.require_operation(
+                            generated.operation_key
+                        ).snapshot.path,
+                    ),
+                )
+                elapsed = (time.perf_counter() - started) * 1000
+                media_type = response.headers.get("content-type", "").split(";", 1)[0].strip() or None
+                raw_length = response.headers.get("content-length")
+                response_summary = ResponseSummary(
+                    status_code=response.status_code,
+                    reason_phrase=response.reason_phrase,
+                    media_type=media_type,
+                    content_length=int(raw_length) if raw_length and raw_length.isdigit() else None,
+                    latency_ms=elapsed,
+                )
+                if response.processor_warning is not None:
+                    monitor_warning = ResourceMonitorWarningSummary(
+                        code=response.processor_warning.code,
+                        message=response.processor_warning.message,
+                        issues=list(response.processor_warning.issues),
                     )
-                    span.set_output(response_summary)
+                span.set_output(response_summary)
             except TargetHTTPTimeout:
                 error_summary = TransportErrorSummary(
                     code="request_timeout",
@@ -191,6 +222,7 @@ class OperationTestingService:
             request=request_summary,
             response=response_summary,
             transport_error=error_summary,
+            resource_monitor_warning=monitor_warning,
         )
 
 

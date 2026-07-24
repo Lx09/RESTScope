@@ -337,6 +337,14 @@ class TransportErrorSummary(BaseModel):
     message: str
 
 
+class ResourceMonitorWarningSummary(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    code: str
+    message: str
+    issues: list[str] = Field(default_factory=list)
+
+
 class TestCaseExecutionReport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -345,6 +353,7 @@ class TestCaseExecutionReport(BaseModel):
     request: PreparedRequestSummary
     response: ResponseSummary | None = None
     transport_error: TransportErrorSummary | None = None
+    resource_monitor_warning: ResourceMonitorWarningSummary | None = None
 
 
 class OperationExecutionReport(BaseModel):
@@ -362,3 +371,4 @@ class OperationExecutionReport(BaseModel):
     status_code_counts: dict[str, int]
     error_count: int
     observed_2xx: bool
+    resource_monitor_warning_count: int = 0

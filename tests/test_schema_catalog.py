@@ -136,7 +136,7 @@ def test_replace_changes_the_whole_source_and_missing_ids_are_explicit(tmp_path:
         catalog.replace("schema_missing", SchemaSourceInput(raw_content=_raw()))
 
 
-def test_orm_metadata_contains_schema_and_generator_configuration_tables(tmp_path: Path) -> None:
+def test_orm_metadata_contains_all_approved_persistence_tables(tmp_path: Path) -> None:
     from restscope.db import Base, create_engine_from_url
 
     assert set(Base.metadata.tables) == {
@@ -144,6 +144,12 @@ def test_orm_metadata_contains_schema_and_generator_configuration_tables(tmp_pat
         "generator_catalog_state",
         "operation_generator_configs",
         "input_generator_configs",
+        "resources",
+        "resource_aliases",
+        "operation_resource_rules",
+        "resource_identifiers",
+        "resource_operation_usages",
+        "resource_monitor_errors",
     }
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'constraint.sqlite'}")
     Base.metadata.create_all(engine)
@@ -178,6 +184,12 @@ def test_alembic_chain_upgrades_and_downgrades_all_persistence_tables(tmp_path: 
         "generator_catalog_state",
         "operation_generator_configs",
         "input_generator_configs",
+        "resources",
+        "resource_aliases",
+        "operation_resource_rules",
+        "resource_identifiers",
+        "resource_operation_usages",
+        "resource_monitor_errors",
     }
     assert {column["name"] for column in inspector.get_columns("schemas")} == {
         "id",
