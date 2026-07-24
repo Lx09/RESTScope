@@ -22,6 +22,7 @@ from .catalog import (
 )
 from .bootstrap import build_generator_config_catalog, build_schema_catalog
 from .agent import (
+    APIBehaviorMonitorAgent,
     OpenAPIRetrievalAgent,
     OpenAPIRetrievalRequest,
     OpenAPIRetrievalResult,
@@ -33,8 +34,7 @@ from .agent import (
     RESTScopeRunRequest,
     ResourceLookupRequest,
     ResourceLookupResult,
-    ResourceMonitorAgent,
-    build_resource_monitor_agent,
+    build_api_behavior_monitor_agent,
     build_operation_smoke_agent,
     build_openapi_retrieval_agent,
     register_openapi_retrieval_tool,
@@ -74,7 +74,7 @@ __all__ = [
     "register_openapi_retrieval_tool",
     "ResourceLookupRequest",
     "ResourceLookupResult",
-    "ResourceMonitorAgent",
-    "build_resource_monitor_agent",
+    "APIBehaviorMonitorAgent",
+    "build_api_behavior_monitor_agent",
     "build_operation_smoke_agent",
 ]

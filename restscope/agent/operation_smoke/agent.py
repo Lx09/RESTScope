@@ -149,8 +149,8 @@ class OperationSmokeAgent:
                     report=report,
                     config=current,
                 )
-                diagnoses.append(diagnosis)
                 if diagnosis.diagnosis.no_parameter_issue:
+                    diagnoses.append(diagnosis)
                     if is_candidate:
                         current = self.config_catalog.reject_candidate_and_rollback(
                             operation_key=request.operation_key,
@@ -166,6 +166,14 @@ class OperationSmokeAgent:
                         diagnoses=diagnoses,
                     )
 
+                updates = _prepare_reference_updates(
+                    self.reference_values,
+                    context=context,
+                    config=current,
+                    updates=diagnosis.updates,
+                )
+                diagnosis = diagnosis.model_copy(update={"updates": updates})
+                diagnoses.append(diagnosis)
                 if is_candidate:
                     current = self.config_catalog.reject_candidate_and_rollback(
                         operation_key=request.operation_key,
@@ -175,7 +183,7 @@ class OperationSmokeAgent:
                 current = self.config_catalog.stage_candidate(
                     operation_key=request.operation_key,
                     expected_revision=current.revision,
-                    updates=diagnosis.updates,
+                    updates=updates,
                     hypothesis=diagnosis.diagnosis.model_dump(mode="json"),
                 )
                 feedback_rounds += 1
@@ -291,3 +299,20 @@ def _missing_references(
             )
         )
     return waiting
+
+
+def _prepare_reference_updates(
+    reference_values: ReferenceValueProvider,
+    *,
+    context,
+    config: OperationGeneratorConfig,
+    updates,
+):
+    prepare = getattr(reference_values, "prepare_updates", None)
+    if not callable(prepare):
+        return updates
+    return prepare(
+        ir=context.ir,
+        config=config,
+        updates=updates,
+    )

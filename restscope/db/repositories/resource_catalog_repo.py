@@ -21,7 +21,7 @@ from ..orm import (
 from ..time import as_utc
 
 if TYPE_CHECKING:
-    from restscope.agent.resource_monitor.schemas import (
+    from restscope.agent.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         LearnedResourceRule,
         MonitoredOperation,
@@ -105,7 +105,9 @@ class SqlAlchemyResourceCatalogRepository:
         limit: int | None = None,
         aliases_per_resource: int | None = None,
     ) -> list[ResourceNameSummary]:
-        from restscope.agent.resource_monitor.schemas import ResourceNameSummary
+        from restscope.agent.api_behavior_monitor.resource_schemas import (
+            ResourceNameSummary,
+        )
 
         resource_query = select(ResourceORM).order_by(
                 func.lower(ResourceORM.canonical_name),
@@ -238,7 +240,7 @@ class SqlAlchemyResourceCatalogRepository:
         self.session.flush()
 
     def lookup(self, request: ResourceLookupRequest) -> ResourceLookupResult:
-        from restscope.agent.resource_monitor.schemas import (
+        from restscope.agent.api_behavior_monitor.resource_schemas import (
             ResourceIdentifierSummary,
             ResourceLookupResult,
             ResourceMonitorErrorSummary,
@@ -487,7 +489,7 @@ class SqlAlchemyResourceCatalogRepository:
             row.latest_seen_at = observed_at
 
     def _to_rule(self, row: OperationResourceRuleORM) -> LearnedResourceRule:
-        from restscope.agent.resource_monitor.schemas import (
+        from restscope.agent.api_behavior_monitor.resource_schemas import (
             LearnedResourceRule,
             MonitoredOperation,
         )
@@ -522,7 +524,9 @@ class SqlAlchemyResourceCatalogRepository:
         resource_id: str,
         identifier_ids: list[str] | None,
     ) -> list[ResourceOperationSummary]:
-        from restscope.agent.resource_monitor.schemas import ResourceOperationSummary
+        from restscope.agent.api_behavior_monitor.resource_schemas import (
+            ResourceOperationSummary,
+        )
 
         rules = self.session.scalars(
             select(OperationResourceRuleORM).where(

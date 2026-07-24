@@ -122,7 +122,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
     assert context.operation_method == "GET"
     assert context.operation_path == "/users/{userId}"
     assert context.ir is ir
-    assert report.cases[0].resource_monitor_warning is None
+    assert report.cases[0].behavior_monitor_warnings == []
 
 
 def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> None:
@@ -186,11 +186,14 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
 
     assert result["structured"]["status_code"] == 200
     assert result["structured"]["body"] == {"id": 7}
-    assert result["structured"]["resource_monitor_warning"] == {
-        "code": "operation_match_ambiguous",
-        "message": "Request matches multiple operations",
-        "issues": ["GET /users/{id}", "GET /{entity}/7"],
-    }
+    assert result["structured"]["response_validation"] == "partial"
+    assert result["structured"]["behavior_monitor_warnings"] == [
+        {
+            "code": "operation_match_ambiguous",
+            "message": "Request matches multiple operations",
+            "issues": ["GET /users/{id}", "GET /{entity}/7"],
+        }
+    ]
     assert processor.calls[0][1].operation_key is None
     assert processor.calls[0][1].ir is ir
 
@@ -232,12 +235,12 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
     assert len(observation.body) == 1024 * 1024
     assert observation.body_truncated is True
     assert report.cases[0].response is not None
-    assert report.cases[0].resource_monitor_warning.code == (
+    assert report.cases[0].behavior_monitor_warnings[0].code == (
         "resource_monitor_body_truncated"
     )
 
 
-def test_operation_testing_does_not_buffer_or_monitor_non_2xx_response(
+def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
     tmp_path: Path,
 ) -> None:
     from restscope.capabilities import ToolContext
@@ -266,14 +269,26 @@ def test_operation_testing_does_not_buffer_or_monitor_non_2xx_response(
 
     assert report.cases[0].response is not None
     assert report.cases[0].response.status_code == 404
-    assert processor.calls == []
+    assert len(processor.calls) == 1
+    observation, context = processor.calls[0]
+    assert observation.status_code == 404
+    assert observation.body == b'{"error":"missing"}'
+    assert context.operation_key == "GET /users/{userId}"
 
 
 def _resource_monitor(tmp_path: Path):
-    from restscope.agent.resource_monitor import ResourceCatalog, ResourceMonitorAgent
+    from restscope.agent.api_behavior_monitor import (
+        APIBehaviorMonitorAgent,
+        ResourceCatalog,
+        ResourceIdentifierTracker,
+        ResponseContractTracker,
+        ResponseValueCatalog,
+        ResponseValueTracker,
+    )
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
+        SqlAlchemyResponseValueCatalogUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -285,17 +300,28 @@ def _resource_monitor(tmp_path: Path):
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'resource-monitor.sqlite'}")
     Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
     catalog = ResourceCatalog(
-        lambda: SqlAlchemyResourceCatalogUnitOfWork(make_session_factory(engine))
+        lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
+    )
+    resource_tracker = ResourceIdentifierTracker(
+        catalog=catalog,
+        client=UnexpectedLLM(),
+        model=LLMModelConfig(
+            role="api_behavior_monitor",
+            provider="stub",
+            model="fast",
+        ),
+    )
+    response_value_catalog = ResponseValueCatalog(
+        lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
     )
     return (
-        ResourceMonitorAgent(
-            catalog=catalog,
-            client=UnexpectedLLM(),
-            model=LLMModelConfig(
-                role="resource_monitor",
-                provider="stub",
-                model="fast",
+        APIBehaviorMonitorAgent(
+            contract_tracker=ResponseContractTracker(),
+            resource_identifier_tracker=resource_tracker,
+            response_value_tracker=ResponseValueTracker(
+                catalog=response_value_catalog
             ),
         ),
         catalog,
@@ -307,16 +333,16 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
 ) -> None:
     import httpx
 
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         ResourceLookupRequest,
-        ResourceMonitorResponseProcessor,
+        APIBehaviorResponseProcessor,
     )
     from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
     agent, catalog = _resource_monitor(tmp_path)
-    processor = ResourceMonitorResponseProcessor(agent)
+    processor = APIBehaviorResponseProcessor(agent)
     transport = TargetHTTPTransport(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
@@ -375,7 +401,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
     )
 
     assert result["structured"]["body"] == {"id": 7, "name": "Ada"}
-    assert "resource_monitor_warning" not in result["structured"]
+    assert result["structured"]["behavior_monitor_warnings"] == []
     lookup = catalog.lookup(ResourceLookupRequest(resource="user"))
     assert lookup.recommended_id == 7
     assert lookup.operations[0].operation_key == "GET /users/{userId}"
@@ -386,9 +412,9 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
 ) -> None:
     import httpx
 
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         ResourceLookupRequest,
-        ResourceMonitorResponseProcessor,
+        APIBehaviorResponseProcessor,
     )
     from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
     from restscope.http_transport import TargetHTTPTransport
@@ -406,7 +432,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
             ),
             **kwargs,
         ),
-        response_processor=ResourceMonitorResponseProcessor(agent),
+        response_processor=APIBehaviorResponseProcessor(agent),
     )
     registry = ToolRegistry()
     register_http_request_tool(registry, transport=transport)
@@ -440,7 +466,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
     )
 
     assert result["structured"]["status_code"] == 200
-    assert result["structured"]["resource_monitor_warning"]["code"] == (
+    assert result["structured"]["behavior_monitor_warnings"][0]["code"] == (
         "operation_match_ambiguous"
     )
     assert catalog.lookup(ResourceLookupRequest(resource="team")).status == "not_found"
@@ -449,10 +475,10 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
 def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         MonitoredOperation,
         ResourceLookupRequest,
-        ResourceMonitorResponseProcessor,
+        APIBehaviorResponseProcessor,
         ResourceObservation,
     )
     from restscope.http_transport import (
@@ -462,7 +488,7 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     from restscope.openapi_parser import OpenAPIParser
 
     agent, catalog = _resource_monitor(tmp_path)
-    agent.observe(
+    agent.resource_identifier_tracker.observe(
         ResourceObservation(
             operation=MonitoredOperation(
                 operation_key="GET /users/{userId}",
@@ -485,7 +511,7 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
             },
         }
     )
-    processor = ResourceMonitorResponseProcessor(agent)
+    processor = APIBehaviorResponseProcessor(agent)
     context = TargetResponseOperationContext(ir=ir)
     invalid = TargetResponseObservation(
         method="GET",
@@ -498,16 +524,13 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
         body_truncated=False,
     )
 
-    warning = processor.process(invalid, context)
+    outcome = processor.process(invalid, context)
 
-    assert warning is not None
-    assert warning.code == "resource_monitor_invalid_json"
-    assert [
-        item.code
-        for item in catalog.lookup(ResourceLookupRequest(resource="user")).errors
-    ] == ["resource_monitor_invalid_json"]
+    assert outcome.response_validation == "partial"
+    assert outcome.warnings[0].code == "response_contract_pending_retry"
+    assert catalog.lookup(ResourceLookupRequest(resource="user")).errors == []
 
-    assert processor.process(
+    recovered = processor.process(
         invalid.__class__(
             method=invalid.method,
             path=invalid.path,
@@ -519,16 +542,18 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
             body_truncated=False,
         ),
         context,
-    ) is None
+    )
+    assert recovered.response_validation == "evaluated"
+    assert recovered.warnings == ()
     assert catalog.lookup(ResourceLookupRequest(resource="user")).errors == []
 
 
 def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         ResourceLookupRequest,
-        ResourceMonitorResponseProcessor,
+        APIBehaviorResponseProcessor,
     )
     from restscope.http_transport import (
         TargetResponseObservation,
@@ -564,7 +589,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
             },
         }
     )
-    processor = ResourceMonitorResponseProcessor(agent)
+    processor = APIBehaviorResponseProcessor(agent)
     observation = TargetResponseObservation(
         method="GET",
         path="/commits/abc123",
@@ -580,10 +605,8 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     first = processor.process(observation, context)
     second = processor.process(observation, context)
 
-    assert first is not None
-    assert first.code == "resource_monitor_evidence_limit_exceeded"
-    assert second is not None
-    assert second.code == "resource_monitor_evidence_limit_exceeded"
+    assert first.warnings[0].code == "resource_monitor_evidence_limit_exceeded"
+    assert second.warnings[0].code == "resource_monitor_evidence_limit_exceeded"
     assert catalog.list_rules("GET /commits/{commitId}") == []
     assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == "not_found"
 
@@ -612,11 +635,11 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
         raw_handler = runtime.tool_registry.get_handler("restscope.http.request")
         raw_tool = raw_handler.__self__
 
-        assert runtime.resource_monitor_agent is not None
-        assert not hasattr(runtime.resource_monitor_agent, "initialize")
+        assert runtime.api_behavior_monitor_agent is not None
+        assert not hasattr(runtime.api_behavior_monitor_agent, "initialize")
         assert service.transport is raw_tool.transport
         assert service.transport.response_processor.agent is (
-            runtime.resource_monitor_agent
+            runtime.api_behavior_monitor_agent
         )
         assert runtime.tool_registry.get_spec("restscope.resource.lookup").read_only is True
     finally:

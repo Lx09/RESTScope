@@ -343,6 +343,77 @@ def test_waiting_candidate_resumes_when_reference_value_arrives(
     ] == ["accepted", "accepted"]
 
 
+def test_response_value_patch_is_registered_and_uses_system_value_name(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from restscope.agent.operation_smoke import (
+        BehaviorMonitorReferenceValues,
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+
+    class BehaviorAgent:
+        def __init__(self) -> None:
+            self.registrations = []
+
+        def register_response_value(self, **kwargs):
+            self.registrations.append(kwargs)
+            return SimpleNamespace(value_name="response_system_assigned")
+
+        def response_values_for(self, value_name):
+            assert value_name == "response_system_assigned"
+            return []
+
+        def lookup(self, request):
+            raise AssertionError(f"unexpected resource lookup: {request}")
+
+    catalog, operation_key = _catalog(tmp_path)
+    config = catalog.inspect_operation(operation_key)
+    node_id = config.configs[0].input_node_id
+    behavior_agent = BehaviorAgent()
+    runner = _BatchRunner(catalog, [(0, 10)])
+    smoke = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=_Diagnoser(
+            [
+                _diagnosis(
+                    node_id=node_id,
+                    strategy={
+                        "type": "response_value",
+                        "value_name": "model-invented-name",
+                    },
+                )
+            ]
+        ),
+        reference_values=BehaviorMonitorReferenceValues(behavior_agent),
+    )
+    ir = object()
+
+    result = smoke.run(
+        SimpleNamespace(ir=ir),
+        OperationSmokeRequest(operation_key=operation_key),
+    )
+
+    assert result.status == "waiting"
+    assert behavior_agent.registrations == [
+        {
+            "ir": ir,
+            "consumer_operation_key": operation_key,
+            "consumer_input_node_id": node_id,
+            "parameter_name": "itemId",
+            "expected_type": "string",
+        }
+    ]
+    candidate = catalog.inspect_operation(operation_key)
+    assert candidate.configs[0].strategy.model_dump(mode="json") == {
+        "type": "response_value",
+        "value_name": "response_system_assigned",
+    }
+
+
 def test_reference_generator_selects_a_value_deterministically() -> None:
     from restscope.testing import (
         ResourceIdentifierGenerator,

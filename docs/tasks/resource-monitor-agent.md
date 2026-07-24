@@ -1,6 +1,11 @@
 # Resource Monitor Agent
 
-Status: Completed
+Status: Superseded by `docs/tasks/api-behavior-monitor.md`
+
+This record remains the historical source for the Resource Identifier
+subcomponent. The approved API Behavior Monitor work moves that implementation
+under a broader Agent package and adds response-contract and response-value
+tracking without discarding the behavior documented below.
 
 ## Objective
 

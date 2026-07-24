@@ -17,10 +17,10 @@ class ModelSelector:
         "openapi_retrieval",
     }
     FAST_ROLES = {
+        "api_behavior_monitor",
         "decision_maker",
         "operation_smoke_generator_patch",
         "operation_smoke_parameter_diagnosis",
-        "resource_monitor",
     }
 
     def __init__(self, *, thinking: LLMModelConfig, fast: LLMModelConfig) -> None:

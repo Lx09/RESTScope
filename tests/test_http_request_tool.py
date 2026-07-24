@@ -165,6 +165,8 @@ def test_http_request_tool_sends_target_json_and_preserves_full_response() -> No
             "echo": "Bearer runtime-secret",
         },
         "size_bytes": len(response_body),
+        "response_validation": "not_evaluated",
+        "behavior_monitor_warnings": [],
     }
     assert "runtime-secret" in result.model_dump_json()
     assert "response-secret" in result.model_dump_json()

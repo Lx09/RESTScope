@@ -14,7 +14,7 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
         "openapi_retrieval",
         "operation_smoke",
         "operation_test",
-        "resource_monitor",
+        "api_behavior_monitor",
         "supervisor",
     ):
         package = AGENT_ROOT / package_name
@@ -29,19 +29,19 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
         OpenAPIRetrievalAgent,
         OperationSmokeAgent,
         OperationTestAgent,
-        ResourceMonitorAgent,
+        APIBehaviorMonitorAgent,
         RESTScopeMainGraph,
     )
     from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent as PackagedOpenAPIRetrievalAgent
     from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
     from restscope.agent.operation_test import OperationTestAgent as PackagedOperationTestAgent
-    from restscope.agent.resource_monitor import ResourceMonitorAgent as PackagedResourceMonitorAgent
+    from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent as PackagedAPIBehaviorMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
     assert OpenAPIRetrievalAgent is PackagedOpenAPIRetrievalAgent
     assert OperationSmokeAgent is PackagedOperationSmokeAgent
     assert OperationTestAgent is PackagedOperationTestAgent
-    assert ResourceMonitorAgent is PackagedResourceMonitorAgent
+    assert APIBehaviorMonitorAgent is PackagedAPIBehaviorMonitorAgent
     assert RESTScopeMainGraph is PackagedMainGraph
 
 
@@ -50,7 +50,7 @@ def test_cross_agent_imports_use_package_facades() -> None:
         "openapi_retrieval",
         "operation_smoke",
         "operation_test",
-        "resource_monitor",
+        "api_behavior_monitor",
         "supervisor",
     }
     violations: list[str] = []

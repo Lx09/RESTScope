@@ -29,12 +29,12 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
     """Classify two resources and reject summary metadata in one observation."""
 
     try:
-        from restscope.agent.resource_monitor import (
+        from restscope.agent.api_behavior_monitor import (
             DetectedResourceGroup,
             MonitoredOperation,
             ResourceCatalog,
             ResourceLookupRequest,
-            ResourceMonitorAgent,
+            ResourceIdentifierTracker,
             ResourceObservation,
         )
         from restscope.db import (
@@ -157,13 +157,13 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
             model = ModelSelector.from_config(config.llm).select(
                 "resource_monitor"
             )
-            agent = ResourceMonitorAgent(
+            agent = ResourceIdentifierTracker(
                 catalog=catalog,
                 client=llm_client,
                 model=model,
                 tracing_runtime=runtime,
             )
-            if agent.model.role != "resource_monitor":
+            if agent.model.role != "api_behavior_monitor":
                 pytest.fail(
                     "Resource Monitor must select the resource_monitor model role.",
                     pytrace=False,

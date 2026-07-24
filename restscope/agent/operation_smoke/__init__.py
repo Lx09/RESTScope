@@ -2,7 +2,7 @@
 
 from .agent import OperationBatchRunner, OperationSmokeAgent
 from .factory import build_operation_smoke_agent
-from .references import ResourceCatalogReferenceValues
+from .references import BehaviorMonitorReferenceValues
 from .diagnosis import (
     MAX_FIRST_ROUND_USER_BYTES,
     OperationSmokeDiagnoser,
@@ -31,7 +31,7 @@ __all__ = [
     "ParameterDiagnosis",
     "ParameterSuspect",
     "TwoRoundDiagnosisResult",
-    "ResourceCatalogReferenceValues",
+    "BehaviorMonitorReferenceValues",
     "WaitingReference",
     "build_operation_smoke_agent",
     "build_parameter_diagnosis_context",

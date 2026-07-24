@@ -1,4 +1,4 @@
-"""Persistence ports for the Resource Monitor package."""
+"""Persistence ports for resource-identifier evidence."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import Protocol, TypeAlias
 
-from .schemas import (
+from .resource_schemas import (
     DetectedResourceGroup,
     LearnedResourceRule,
     MonitoredOperation,

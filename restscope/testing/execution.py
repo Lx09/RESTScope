@@ -29,7 +29,7 @@ from .models import (
     OperationExecutionReport,
     PreparedRequestSummary,
     PreparedTestRequest,
-    ResourceMonitorWarningSummary,
+    BehaviorMonitorWarningSummary,
     ResponseSummary,
     TestCaseExecutionReport,
     TransportErrorSummary,
@@ -38,7 +38,7 @@ from .ports import ReferenceValueProvider
 from .serialization import serialize_test_case
 
 
-RESOURCE_MONITOR_RESPONSE_BYTES = 1024 * 1024
+BEHAVIOR_MONITOR_RESPONSE_BYTES = 1024 * 1024
 
 
 class TestingExecutionError(RuntimeError):
@@ -128,8 +128,9 @@ class OperationTestingService:
         )
         error_count = sum(case.transport_error is not None for case in reports)
         warning_count = sum(
-            case.resource_monitor_warning is not None for case in reports
+            len(case.behavior_monitor_warnings) for case in reports
         )
+        response_validation = _response_validation(reports)
         status = "completed" if error_count == 0 else "errored" if error_count == len(reports) else "partial"
         report = OperationExecutionReport(
             run_id=run_id,
@@ -137,6 +138,7 @@ class OperationTestingService:
             seed=run_seed,
             config_revision=config.revision,
             status=status,
+            response_validation=response_validation,
             cases=reports,
             status_code_counts=dict(status_counts),
             error_count=error_count,
@@ -144,7 +146,7 @@ class OperationTestingService:
                 case.response is not None and 200 <= case.response.status_code < 300
                 for case in reports
             ),
-            resource_monitor_warning_count=warning_count,
+            behavior_monitor_warning_count=warning_count,
             failure_report=build_batch_failure_report(failure_evidence),
         )
         return OperationExecutionReport.model_validate(
@@ -169,7 +171,8 @@ class OperationTestingService:
         started = time.perf_counter()
         response_summary: ResponseSummary | None = None
         error_summary: TransportErrorSummary | None = None
-        monitor_warning: ResourceMonitorWarningSummary | None = None
+        monitor_warnings: list[BehaviorMonitorWarningSummary] = []
+        response_validation = "not_evaluated"
         failure_evidence = FailureCaseEvidence(case_id=case_id)
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
@@ -186,7 +189,7 @@ class OperationTestingService:
                     timeout_seconds=30,
                     request_kwargs={"content": request.content} if request.content is not None else {},
                     response_body_limit=(
-                        RESOURCE_MONITOR_RESPONSE_BYTES
+                        BEHAVIOR_MONITOR_RESPONSE_BYTES
                         if self.transport.has_response_processor
                         else None
                     ),
@@ -212,12 +215,18 @@ class OperationTestingService:
                     content_length=int(raw_length) if raw_length and raw_length.isdigit() else None,
                     latency_ms=elapsed,
                 )
-                if response.processor_warning is not None:
-                    monitor_warning = ResourceMonitorWarningSummary(
-                        code=response.processor_warning.code,
-                        message=response.processor_warning.message,
-                        issues=list(response.processor_warning.issues),
+                if response.processor_result is not None:
+                    response_validation = (
+                        response.processor_result.response_validation
                     )
+                    monitor_warnings = [
+                        BehaviorMonitorWarningSummary(
+                            code=warning.code,
+                            message=warning.message,
+                            issues=list(warning.issues),
+                        )
+                        for warning in response.processor_result.warnings
+                    ]
                 failure_evidence = FailureCaseEvidence(
                     case_id=case_id,
                     status_code=response.status_code,
@@ -255,7 +264,8 @@ class OperationTestingService:
                 request=request_summary,
                 response=response_summary,
                 transport_error=error_summary,
-                resource_monitor_warning=monitor_warning,
+                behavior_monitor_warnings=monitor_warnings,
+                response_validation=response_validation,
             ),
             failure_evidence,
         )
@@ -273,6 +283,21 @@ def _request_summary(
         headers=dict(target_request.headers),
         body_size_bytes=len(request.content or b""),
     )
+
+
+def _response_validation(
+    cases: list[TestCaseExecutionReport],
+) -> str:
+    statuses = [
+        case.response_validation
+        for case in cases
+        if case.response is not None
+    ]
+    if not statuses or all(status == "not_evaluated" for status in statuses):
+        return "not_evaluated"
+    if any(status == "partial" for status in statuses):
+        return "partial"
+    return "evaluated"
 
 
 def _target_query_items(

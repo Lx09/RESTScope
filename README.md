@@ -69,9 +69,11 @@ The two Python projects intentionally keep separate environments and lock files.
 ## Database
 
 The database stores OpenAPI schema sources, generator configuration, and the
-narrow Resource Monitor evidence catalog for the single current API. Domain
-services depend on repository and transaction protocols; SQLAlchemy models,
-sessions, and adapters remain inside `restscope.db`.
+narrow API Behavior Monitor evidence catalogs for the single current API.
+Those catalogs contain Resource Identifier facts and registered Response Value
+selectors and typed values; response-contract IR mutations remain in memory.
+Domain services depend on repository and transaction protocols; SQLAlchemy
+models, sessions, and adapters remain inside `restscope.db`.
 
 Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
@@ -84,10 +86,11 @@ The Alembic chain starts with the schema-source baseline, adds operation
 generator configuration in revision `0002_create_generator_configs`, and adds
 the resource evidence catalog in `0003_create_resource_catalog`. Revision
 `0004_create_generator_revision_history` adds immutable candidate, accepted,
-rejected, and compensating rollback generator revisions. A schema
-source stores either an absolute file path or verbatim JSON/YAML content. Paths
-are reread on every load, while parsed IR, raw responses, and test reports are
-not persisted:
+rejected, and compensating rollback generator revisions. Revision
+`0005_create_response_value_catalog` adds persistent Response Value monitor,
+source, and typed-value tables. A schema source stores either an absolute file
+path or verbatim JSON/YAML content. Paths are reread on every load, while
+parsed/evolved IR, raw responses, and test reports are not persisted:
 
 ```python
 from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
@@ -257,15 +260,22 @@ and generators only from that persisted snapshot; it does not compare the
 operation with the current `ToolContext.ir`. It generates all requested cases
 in preflight and only then sends requests serially to the current App-bound
 target. It supports at most 20 cases, does not follow redirects or retry, and
-creates an isolated HTTP client per case. When the default Resource Monitor is
-present, it reads at most 1 MiB from a 2xx response before returning. A non-2xx
-response is also read up to 1 MiB solely to build the batch failure report; it
-is never sent to the Resource Monitor and its complete body is not returned or
-persisted. The report contains generated/request values, merged target headers,
-response metadata, transport errors, Resource Monitor warnings, a first-seen
-list of at most 100 exact unique failure messages with case associations, and
-`response_validation="not_evaluated"`. Only exact configured THINK, FAST, and
-Phoenix API key values are replaced.
+creates an isolated HTTP client per case. When the default API Behavior Monitor
+is present, it reads at most 1 MiB from each response before returning. Every
+first `operation + exact status + normalized media type` observation is
+compared with the current OpenAPI IR. The Monitor can conservatively add an
+exact status, media type, optional field, or wider type directly to that
+in-memory IR. Invalid or truncated JSON stays pending for the next matching
+response; the evolved IR and first-observation registry are not persisted.
+
+Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
+tracking. Non-2xx bodies are also reused to build the batch failure report, but
+never become reusable input values and are not persisted. The report contains
+generated/request values, merged target headers, response metadata, transport
+errors, API Behavior Monitor warnings, a first-seen list of at most 100 exact
+unique failure messages with case associations, and a `response_validation`
+state of `evaluated`, `partial`, or `not_evaluated`. Only exact configured
+THINK, FAST, and Phoenix API key values are replaced.
 
 Both `restscope.testing.run_operation` and `restscope.http.request` are
 high-risk, non-read-only capabilities allowed for every Agent role without a
@@ -282,29 +292,35 @@ service. It does not start the Schemathesis MCP service. The older
 `OperationTestAgent` and `SchemathesisOperationRunner` remain available only
 when a caller explicitly injects the legacy runner path.
 
-## Resource Monitor Agent
+## API Behavior Monitor Agent
 
-Every default `RESTScopeApp` includes a synchronous Resource Monitor for 2xx
-JSON responses. The lightweight testing path supplies its already-known
-operation key. The open-world `restscope.http.request` contract remains
-`method + path`; after the response, a deterministic matcher resolves the
-concrete path to exactly one OpenAPI operation. An ambiguous or missing match
-adds a structured warning to the original HTTP result and does not write
-resource evidence.
+Every default `RESTScopeApp` includes one synchronous API Behavior Monitor. The
+lightweight testing path supplies its already-known operation key. The
+open-world `restscope.http.request` contract remains `method + path`; after the
+response, a deterministic matcher resolves the concrete path to exactly one
+OpenAPI operation. An ambiguous or missing match adds a structured warning to
+the original HTTP result and does not write evidence.
 
-For an operation response group seen for the first time, an exact `id` field is
-used without a model call. Otherwise the configured FAST model selects whether
-the group represents a resource and, if so, its identifier field. The resulting
-selector is reused for later 2xx responses. A learned selector that previously
-produced an identifier but is later missing reports
-`expected_resource_id_missing`; it is not silently relearned.
+The Monitor coordinates three bounded responsibilities:
 
-The catalog persists only canonical resource names and aliases, learned
-selectors, typed string/integer identifiers, latest per-operation read/write
-usage, and latest monitor errors. It does not store response bodies or model
-reasoning. `restscope.resource.lookup` is a read-only local tool that returns
-the latest reusable identifiers and the operations that observed them. Lookup
-does not automatically modify generators or schedule another test.
+- Response Contract checks every first exact status/media observation and
+  evolves only the current App's OpenAPI IR.
+- Resource Identifier reuses the exact-`id` heuristic and bounded FAST
+  classification. Learned selectors, typed identifiers, resource aliases,
+  operation usage, and errors remain in the App database.
+- Response Value registers a stable value pool when Operation Smoke selects a
+  `response_value` generator. Candidate producer fields come from the latest
+  IR; exact normalized names are selected locally and an optional bounded FAST
+  choice handles semantic names such as `commitId` and `sha`. Later matching
+  2xx JSON responses populate a deduplicated typed value pool in the database.
+
+A learned Resource Identifier selector that previously produced an identifier
+but is later missing reports `expected_resource_id_missing`; it is not silently
+relearned. Empty Resource Identifier or Response Value pools put Operation
+Smoke into `waiting` before a new batch is sent. Raw response bodies, LLM
+reasoning, evolved IR snapshots, and first-observation state are never
+persisted. `restscope.resource.lookup` remains the explicit read-only lookup
+tool; Response Value pools are consumed internally by Operation Smoke.
 
 ## Operation Smoke Agent
 
@@ -323,10 +339,10 @@ one structured-output repair call.
 
 Reference-backed generators fail closed. A candidate that requires a resource
 identifier or monitored response value does not send a batch while its value
-pool is empty; the Agent returns `waiting`. The default Resource Monitor
-adapter currently resolves persisted resource identifiers. Operation
-dependency discovery through `OpenAPIRetrievalAgent` and a generic monitored
-response-value catalog are not connected in this iteration.
+pool is empty; the Agent returns `waiting`. The default API Behavior Monitor
+adapter resolves both persistent Resource Identifier and Response Value pools.
+Operation dependency discovery through `OpenAPIRetrievalAgent` is not connected
+in this iteration.
 
 ## Program Startup
 

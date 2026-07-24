@@ -132,18 +132,25 @@ def register_http_request_tool(
                 "body_format": {"type": "string", "enum": ["json", "text"]},
                 "body": {},
                 "size_bytes": {"type": "integer"},
-                "resource_monitor_warning": {
-                    "type": "object",
-                    "properties": {
-                        "code": {"type": "string"},
-                        "message": {"type": "string"},
-                        "issues": {
-                            "type": "array",
-                            "items": {"type": "string"},
+                "response_validation": {
+                    "type": "string",
+                    "enum": ["evaluated", "partial", "not_evaluated"],
+                },
+                "behavior_monitor_warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string"},
+                            "message": {"type": "string"},
+                            "issues": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                         },
+                        "required": ["code", "message", "issues"],
+                        "additionalProperties": False,
                     },
-                    "required": ["code", "message", "issues"],
-                    "additionalProperties": False,
                 },
             },
             "required": [
@@ -154,6 +161,8 @@ def register_http_request_tool(
                 "body_format",
                 "body",
                 "size_bytes",
+                "response_validation",
+                "behavior_monitor_warnings",
             ],
         },
         risk_level="high",
@@ -293,13 +302,24 @@ def _response_payload(
         "body_format": body_format,
         "body": body,
         "size_bytes": len(content),
+        "response_validation": (
+            response.processor_result.response_validation
+            if response.processor_result is not None
+            else "not_evaluated"
+        ),
+        "behavior_monitor_warnings": [
+            {
+                "code": warning.code,
+                "message": warning.message,
+                "issues": list(warning.issues),
+            }
+            for warning in (
+                response.processor_result.warnings
+                if response.processor_result is not None
+                else ()
+            )
+        ],
     }
-    if response.processor_warning is not None:
-        payload["resource_monitor_warning"] = {
-            "code": response.processor_warning.code,
-            "message": response.processor_warning.message,
-            "issues": list(response.processor_warning.issues),
-        }
     return payload
 
 

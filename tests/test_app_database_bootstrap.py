@@ -70,6 +70,9 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
             "resource_identifiers",
             "resource_operation_usages",
             "resource_monitor_errors",
+            "response_value_monitors",
+            "response_value_sources",
+            "response_values",
         }
     finally:
         app.close()
@@ -697,7 +700,7 @@ def test_smoke_agent_construction_failure_closes_runtime_and_removes_database(
         lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(
-        "restscope.app.build_resource_monitor_agent",
+        "restscope.app.build_api_behavior_monitor_agent",
         lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
     )
     monkeypatch.setattr(
@@ -735,7 +738,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
     capability_calls = []
 
     monkeypatch.setattr(
-        "restscope.app.build_resource_monitor_agent",
+        "restscope.app.build_api_behavior_monitor_agent",
         lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
     )
     monkeypatch.setattr(

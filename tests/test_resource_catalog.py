@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _catalog(tmp_path: Path):
-    from restscope.agent.resource_monitor import ResourceCatalog
+    from restscope.agent.api_behavior_monitor import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -22,7 +22,7 @@ def _catalog(tmp_path: Path):
 
 
 def _catalog_with_engine(tmp_path: Path):
-    from restscope.agent.resource_monitor import ResourceCatalog
+    from restscope.agent.api_behavior_monitor import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -80,7 +80,7 @@ def test_resource_catalog_migration_adds_and_removes_six_tables(tmp_path: Path) 
 def test_catalog_records_aliases_typed_ids_and_latest_operation_usage(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -136,7 +136,7 @@ def test_list_resources_loads_aliases_in_one_bounded_batch_query(
 ) -> None:
     from sqlalchemy import event
 
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -190,7 +190,7 @@ def test_list_resources_loads_aliases_in_one_bounded_batch_query(
 def test_catalog_returns_delete_identifiers_and_filters_by_typed_value(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -228,7 +228,7 @@ def test_catalog_returns_delete_identifiers_and_filters_by_typed_value(
 
 
 def test_catalog_latest_error_is_cleared_by_later_group_success(tmp_path: Path) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -281,7 +281,7 @@ def test_catalog_rolls_back_whole_response_when_one_group_conflicts(
 ) -> None:
     import pytest
 
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -348,7 +348,7 @@ def test_catalog_rolls_back_whole_response_when_one_group_conflicts(
 def test_lookup_preserves_operation_specific_aliases_and_all_resource_usage(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -416,7 +416,7 @@ def test_lookup_preserves_operation_specific_aliases_and_all_resource_usage(
 def test_same_response_identifiers_have_stable_recommendation_order(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,

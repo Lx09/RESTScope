@@ -1,4 +1,4 @@
-"""Validated contracts for resource observation, persistence, and lookup."""
+"""Validated contracts for resource-identifier observation and lookup."""
 
 from __future__ import annotations
 

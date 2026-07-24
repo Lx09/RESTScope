@@ -73,11 +73,14 @@ as the active project direction.
 - The database is not the architectural center of the Agent workflow. A stored
   schema source is a narrow input-storage capability, not a precedent for
   persisting parsed catalogs, plans, operation graphs, or Agent memory.
-- The user has separately approved a narrow Resource Monitor evidence catalog:
-  resource names and aliases, learned identifier selectors, typed identifier
-  values, latest per-operation read/write usage, and latest monitor errors.
-  This exception does not authorize raw-response, LLM-reasoning, plan, queue,
-  or general Agent-memory persistence.
+- The user has separately approved a narrow API Behavior Monitor evidence
+  catalog: resource names and aliases, learned identifier selectors, typed
+  identifier values, latest per-operation read/write usage, response-value
+  monitor registrations and selectors, deduplicated typed response values, and
+  latest monitor errors. Response-contract checks and evolved OpenAPI IR stay
+  in memory for the current App lifetime. This exception does not authorize
+  raw-response, LLM-reasoning, evolved-IR snapshot, plan, queue, or general
+  Agent-memory persistence.
 - Earlier database-backed Planner and catalog documents remain historical
   evidence only where later task records mark them as superseded.
 

@@ -8,8 +8,8 @@ from restscope.capabilities.tool_context import ToolContext
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.llm import ToolSpec
 
-from .agent import ResourceMonitorAgent
-from .schemas import ResourceLookupRequest, ResourceLookupResult
+from .agent import APIBehaviorMonitorAgent
+from .resource_schemas import ResourceLookupRequest, ResourceLookupResult
 
 
 RESOURCE_LOOKUP_TOOL_NAME = "restscope.resource.lookup"
@@ -17,7 +17,7 @@ RESOURCE_LOOKUP_TOOL_NAME = "restscope.resource.lookup"
 
 def register_resource_lookup_tool(
     registry: ToolRegistry,
-    agent: ResourceMonitorAgent,
+    agent: APIBehaviorMonitorAgent,
 ) -> ToolSpec:
     """Register deterministic lookup against the synchronously updated catalog."""
 

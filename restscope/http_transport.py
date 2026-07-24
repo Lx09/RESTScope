@@ -6,7 +6,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 import re
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import unquote, urlsplit, urlunsplit
 from urllib.parse import quote
 
@@ -73,12 +73,20 @@ class TargetResponseProcessorWarning:
     issues: tuple[str, ...] = ()
 
 
+@dataclass(slots=True, frozen=True)
+class TargetResponseProcessorResult:
+    """Generic structured outcome from one synchronous response processor."""
+
+    response_validation: Literal["evaluated", "partial", "not_evaluated"]
+    warnings: tuple[TargetResponseProcessorWarning, ...] = ()
+
+
 class TargetResponseProcessor(Protocol):
     def process(
         self,
         observation: TargetResponseObservation,
         context: TargetResponseOperationContext,
-    ) -> TargetResponseProcessorWarning | None: ...
+    ) -> TargetResponseProcessorResult | TargetResponseProcessorWarning | None: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -92,7 +100,7 @@ class BufferedTargetResponse:
     encoding: str | None
     body: bytes | None
     body_truncated: bool
-    processor_warning: TargetResponseProcessorWarning | None
+    processor_result: TargetResponseProcessorResult | None
 
 
 class TargetHTTPTransportError(RuntimeError):
@@ -244,10 +252,8 @@ class TargetHTTPTransport:
                     limit=selected_body_limit,
                     truncate=truncate_response_body,
                 )
-            warning: TargetResponseProcessorWarning | None = None
+            processor_result: TargetResponseProcessorResult | None = None
             if (
-                successful
-                and
                 self.response_processor is not None
                 and processor_context is not None
                 and body is not None
@@ -266,15 +272,37 @@ class TargetHTTPTransport:
                     body_truncated=body_truncated,
                 )
                 try:
-                    warning = self.response_processor.process(
+                    raw_processor_result = self.response_processor.process(
                         observation,
                         processor_context,
                     )
+                    if isinstance(
+                        raw_processor_result,
+                        TargetResponseProcessorResult,
+                    ):
+                        processor_result = raw_processor_result
+                    elif isinstance(
+                        raw_processor_result,
+                        TargetResponseProcessorWarning,
+                    ):
+                        processor_result = TargetResponseProcessorResult(
+                            response_validation="partial",
+                            warnings=(raw_processor_result,),
+                        )
+                    else:
+                        processor_result = TargetResponseProcessorResult(
+                            response_validation="not_evaluated",
+                        )
                 except Exception as exc:
-                    warning = TargetResponseProcessorWarning(
-                        code="resource_monitor_failed",
-                        message="Response resource monitoring failed",
-                        issues=(type(exc).__name__,),
+                    processor_result = TargetResponseProcessorResult(
+                        response_validation="partial",
+                        warnings=(
+                            TargetResponseProcessorWarning(
+                                code="api_behavior_monitor_failed",
+                                message="API behavior monitoring failed",
+                                issues=(type(exc).__name__,),
+                            ),
+                        ),
                     )
             return BufferedTargetResponse(
                 status_code=response.status_code,
@@ -287,7 +315,7 @@ class TargetHTTPTransport:
                 encoding=response.encoding,
                 body=body,
                 body_truncated=body_truncated,
-                processor_warning=warning,
+                processor_result=processor_result,
             )
 
 

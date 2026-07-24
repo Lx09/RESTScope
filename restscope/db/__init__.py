@@ -10,6 +10,7 @@ from .session import create_engine_from_config, create_engine_from_url, make_ses
 from .unit_of_work import (
     SqlAlchemyGeneratorConfigUnitOfWork,
     SqlAlchemyResourceCatalogUnitOfWork,
+    SqlAlchemyResponseValueCatalogUnitOfWork,
     SqlAlchemySchemaUnitOfWork,
 )
 
@@ -20,6 +21,7 @@ __all__ = [
     "SqlAlchemySchemaUnitOfWork",
     "SqlAlchemyGeneratorConfigUnitOfWork",
     "SqlAlchemyResourceCatalogUnitOfWork",
+    "SqlAlchemyResponseValueCatalogUnitOfWork",
     "UnsupportedDatabaseURLError",
     "create_engine_from_config",
     "create_engine_from_url",

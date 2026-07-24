@@ -1,4 +1,4 @@
-"""Synchronous resource classification and identifier extraction Agent."""
+"""Synchronous resource classification and identifier extraction tracker."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from restscope.llm import (
 )
 from restscope.observability import TracingRuntime
 
-from .catalog import ResourceCatalog
-from .schemas import (
+from .resource_catalog import ResourceCatalog
+from .resource_schemas import (
     DetectedResourceGroup,
     LearnedResourceRule,
     MAX_CLASSIFICATION_GROUPS,
@@ -49,7 +49,7 @@ MAX_PROMPT_CANDIDATES_TOTAL = 100
 MAX_SCHEMA_FORMAT_CHARS = 200
 
 
-class ResourceMonitorOutputError(RuntimeError):
+class ResourceIdentifierOutputError(RuntimeError):
     """The FAST model could not return a trustworthy classification."""
 
     def __init__(self, code: str, message: str) -> None:
@@ -136,7 +136,7 @@ class _ResourcePromptContext:
     alias_to_canonical: dict[str, str]
 
 
-class ResourceMonitorAgent:
+class ResourceIdentifierTracker:
     """Learn one extraction rule per operation response group and reuse it."""
 
     def __init__(
@@ -164,7 +164,7 @@ class ResourceMonitorAgent:
             "http.response.status_code": observation.status_code,
         }
         with self.tracing_runtime.span(
-            "ResourceMonitorAgent.observe",
+            "ResourceIdentifierTracker.observe",
             kind="AGENT",
             input_value={
                 "operation_key": observation.operation.operation_key,
@@ -228,7 +228,7 @@ class ResourceMonitorAgent:
                 message="Response evidence exceeded Resource Monitor limits",
                 issues=[str(exc)],
             )
-        except ResourceMonitorOutputError as exc:
+        except ResourceIdentifierOutputError as exc:
             self.catalog.record_operation_error(
                 operation=observation.operation,
                 warning=ResourceMonitorWarning(
@@ -498,7 +498,7 @@ class ResourceMonitorAgent:
         known_resource_names: list[str],
     ) -> list[ResourceClassificationDraft]:
         if not self.model.enabled:
-            raise ResourceMonitorOutputError(
+            raise ResourceIdentifierOutputError(
                 "resource_monitor_model_not_configured",
                 "The resource_monitor FAST model is not configured",
             )
@@ -552,7 +552,7 @@ class ResourceMonitorAgent:
         repaired = self.client.invoke(self._request(repair_messages))
         parsed, errors = self._validate_response(repaired, groups)
         if errors or parsed is None:
-            raise ResourceMonitorOutputError(
+            raise ResourceIdentifierOutputError(
                 "resource_monitor_output_invalid",
                 f"Resource Monitor output remained invalid: {'; '.join(errors[:5])}",
             )
@@ -571,7 +571,7 @@ class ResourceMonitorAgent:
             tool_choice="none",
             timeout_seconds=self.model.timeout_seconds,
             reasoning=self.model.reasoning,
-            metadata={"role": "resource_monitor"},
+            metadata={"role": "api_behavior_monitor"},
         )
 
     def _validate_response(

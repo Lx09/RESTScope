@@ -1,4 +1,4 @@
-"""Transaction boundary for persisted resource facts."""
+"""Transaction boundary for persisted resource-identifier facts."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from datetime import datetime
 
 from restscope.db.time import utc_now
 
-from .ports import ResourceCatalogUnitOfWorkFactory
-from .schemas import (
+from .resource_ports import ResourceCatalogUnitOfWorkFactory
+from .resource_schemas import (
     DetectedResourceGroup,
     LearnedResourceRule,
     MonitoredOperation,

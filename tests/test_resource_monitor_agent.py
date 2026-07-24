@@ -51,7 +51,7 @@ def _classification(
 
 
 def _catalog(tmp_path: Path):
-    from restscope.agent.resource_monitor import ResourceCatalog
+    from restscope.agent.api_behavior_monitor import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -68,15 +68,15 @@ def _catalog(tmp_path: Path):
 
 
 def _agent(tmp_path: Path, client: StubLLMClient):
-    from restscope.agent.resource_monitor import ResourceMonitorAgent
+    from restscope.agent.api_behavior_monitor import ResourceIdentifierTracker
     from restscope.llm import LLMModelConfig
 
     catalog = _catalog(tmp_path)
-    agent = ResourceMonitorAgent(
+    agent = ResourceIdentifierTracker(
         catalog=catalog,
         client=client,
         model=LLMModelConfig(
-            role="resource_monitor",
+            role="api_behavior_monitor",
             provider="stub",
             model="fast-stub",
         ),
@@ -91,7 +91,7 @@ def _observation(
     path: str = "/users",
     body,
 ):
-    from restscope.agent.resource_monitor import MonitoredOperation, ResourceObservation
+    from restscope.agent.api_behavior_monitor import MonitoredOperation, ResourceObservation
 
     return ResourceObservation(
         operation=MonitoredOperation(
@@ -167,7 +167,7 @@ def test_model_prompt_is_minimal_and_never_exposes_identifier_values(
 
 
 def test_exact_id_is_recorded_without_calling_llm(tmp_path: Path) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
     agent, catalog = _agent(tmp_path, client)
@@ -185,7 +185,7 @@ def test_exact_id_is_recorded_without_calling_llm(tmp_path: Path) -> None:
 def test_semantic_identifier_uses_one_fast_model_call_without_exposing_value(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
         _classification(
@@ -206,7 +206,7 @@ def test_semantic_identifier_uses_one_fast_model_call_without_exposing_value(
 
     assert result.status == "updated"
     assert len(client.requests) == 1
-    assert client.requests[0].metadata["role"] == "resource_monitor"
+    assert client.requests[0].metadata["role"] == "api_behavior_monitor"
     prompt = "\n".join(message.content for message in client.requests[0].messages)
     assert "secret-abc123" not in prompt
     assert catalog.lookup(
@@ -217,7 +217,7 @@ def test_semantic_identifier_uses_one_fast_model_call_without_exposing_value(
 def test_unresolved_top_level_groups_are_batched_into_one_llm_call(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
         {
@@ -263,7 +263,7 @@ def test_unresolved_top_level_groups_are_batched_into_one_llm_call(
 def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
         _classification(
@@ -298,7 +298,7 @@ def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
 def test_exact_id_can_use_fast_model_to_merge_new_resource_alias(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -354,7 +354,7 @@ def test_exact_id_can_use_fast_model_to_merge_new_resource_alias(
 def test_known_resource_alias_is_exposed_as_locked_canonical_name(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -455,7 +455,7 @@ def test_nonresource_explicit_null_fields_are_repaired(tmp_path: Path) -> None:
 def test_locked_identifier_candidate_cannot_be_replaced_or_omitted(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -510,7 +510,7 @@ def test_locked_identifier_candidate_cannot_be_replaced_or_omitted(
 def test_locked_or_matched_group_cannot_be_declared_nonresource(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -561,7 +561,7 @@ def test_locked_or_matched_group_cannot_be_declared_nonresource(
 def test_locked_candidate_group_cannot_be_declared_nonresource(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -755,7 +755,7 @@ def test_non_boolean_represents_resource_is_repaired_with_group_id(
 def test_unknown_candidate_id_is_rejected(tmp_path: Path) -> None:
     import pytest
 
-    from restscope.agent.resource_monitor import ResourceMonitorOutputError
+    from restscope.agent.api_behavior_monitor import ResourceIdentifierOutputError
 
     invalid = _classification(
         represents_resource=True,
@@ -765,7 +765,7 @@ def test_unknown_candidate_id_is_rejected(tmp_path: Path) -> None:
     client = StubLLMClient(invalid, invalid)
     agent, _catalog = _agent(tmp_path, client)
 
-    with pytest.raises(ResourceMonitorOutputError) as raised:
+    with pytest.raises(ResourceIdentifierOutputError) as raised:
         agent.observe(
             _observation(body={"sha": "abc123"})
         )
@@ -776,7 +776,7 @@ def test_unknown_candidate_id_is_rejected(tmp_path: Path) -> None:
 def test_missing_group_is_repaired_without_an_unknown_candidate(tmp_path: Path) -> None:
     import pytest
 
-    from restscope.agent.resource_monitor import ResourceMonitorOutputError
+    from restscope.agent.api_behavior_monitor import ResourceIdentifierOutputError
 
     incomplete = _classification(
         represents_resource=True,
@@ -786,7 +786,7 @@ def test_missing_group_is_repaired_without_an_unknown_candidate(tmp_path: Path) 
     client = StubLLMClient(incomplete, incomplete)
     agent, _catalog = _agent(tmp_path, client)
 
-    with pytest.raises(ResourceMonitorOutputError) as raised:
+    with pytest.raises(ResourceIdentifierOutputError) as raised:
         agent.observe(
             _observation(
                 operation_key="GET /dashboard",
@@ -890,7 +890,7 @@ def test_identifier_candidate_limits_fail_closed(tmp_path: Path) -> None:
 
 
 def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
-    from restscope.agent.resource_monitor import build_resource_monitor_agent
+    from restscope.agent.api_behavior_monitor import build_api_behavior_monitor_agent
     from restscope.restscope_config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
@@ -906,20 +906,20 @@ def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
     )
     client = StubLLMClient()
 
-    agent = build_resource_monitor_agent(
+    agent = build_api_behavior_monitor_agent(
         RESTScopeConfig.from_environment(env_file),
         llm_client=client,
     )
 
     assert agent.client is client
-    assert agent.model.role == "resource_monitor"
-    assert agent.model.model == "fast-model"
+    assert agent.resource_identifier_tracker.model.role == "api_behavior_monitor"
+    assert agent.resource_identifier_tracker.model.model == "fast-model"
 
 
 def test_resource_lookup_tool_returns_complete_structured_result(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
         register_resource_lookup_tool,
@@ -1000,7 +1000,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
 def test_schema_only_identifier_rule_is_learned_then_reused_when_value_appears(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
         _classification(
@@ -1077,7 +1077,7 @@ def test_oversized_schema_format_fails_closed_without_llm(tmp_path: Path) -> Non
 def test_empty_candidate_group_is_cached_without_llm_even_when_name_is_known(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -1121,7 +1121,7 @@ def test_empty_candidate_group_is_cached_without_llm_even_when_name_is_known(
 def test_reserved_response_key_fails_closed_without_catalog_pollution(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
     agent, catalog = _agent(tmp_path, client)
@@ -1140,7 +1140,7 @@ def test_reserved_response_key_fails_closed_without_catalog_pollution(
 def test_first_observation_uses_loaded_catalog_context_without_lookup_calls(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -1228,7 +1228,7 @@ def test_first_observation_requests_bounded_alias_window_from_catalog(
 
 
 def test_invalid_model_selector_is_repaired_once(tmp_path: Path) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
         _classification(
@@ -1263,7 +1263,7 @@ def test_invalid_model_selector_is_repaired_once(tmp_path: Path) -> None:
 def test_model_generated_aliases_are_not_accepted_or_persisted(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
         {
@@ -1345,7 +1345,7 @@ def test_model_output_rejects_unrecognized_fields_before_persistence(
 def test_identifier_cardinality_limit_warns_without_partial_persistence(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
     agent, catalog = _agent(tmp_path, client)
@@ -1387,7 +1387,7 @@ def test_oversized_response_field_name_warns_before_model_call(
 def test_oversized_first_identifier_returns_bounded_warning(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.resource_monitor import ResourceLookupRequest
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     agent, catalog = _agent(tmp_path, StubLLMClient())
 
@@ -1406,11 +1406,13 @@ def test_oversized_first_identifier_returns_bounded_warning(
 def test_existing_resource_model_context_fails_closed_before_truncation() -> None:
     import pytest
 
-    from restscope.agent.resource_monitor.agent import (
+    from restscope.agent.api_behavior_monitor.resource_identifier import (
         _EvidenceLimitExceeded,
         _existing_resource_prompt,
     )
-    from restscope.agent.resource_monitor.schemas import ResourceNameSummary
+    from restscope.agent.api_behavior_monitor.resource_schemas import (
+        ResourceNameSummary,
+    )
 
     with pytest.raises(_EvidenceLimitExceeded):
         _existing_resource_prompt(
@@ -1428,11 +1430,13 @@ def test_existing_resource_model_context_fails_closed_before_truncation() -> Non
 def test_existing_resource_context_rejects_invalid_canonical_or_alias_data() -> None:
     import pytest
 
-    from restscope.agent.resource_monitor.agent import (
+    from restscope.agent.api_behavior_monitor.resource_identifier import (
         _EvidenceLimitExceeded,
         _resource_prompt_context,
     )
-    from restscope.agent.resource_monitor.schemas import ResourceNameSummary
+    from restscope.agent.api_behavior_monitor.resource_schemas import (
+        ResourceNameSummary,
+    )
 
     invalid_contexts = [
         [
@@ -1468,9 +1472,9 @@ def test_two_invalid_model_outputs_do_not_persist_partial_rules(
 ) -> None:
     import pytest
 
-    from restscope.agent.resource_monitor import (
+    from restscope.agent.api_behavior_monitor import (
         ResourceLookupRequest,
-        ResourceMonitorOutputError,
+        ResourceIdentifierOutputError,
     )
 
     invalid = _classification(
@@ -1481,7 +1485,7 @@ def test_two_invalid_model_outputs_do_not_persist_partial_rules(
     client = StubLLMClient(invalid, invalid)
     agent, catalog = _agent(tmp_path, client)
 
-    with pytest.raises(ResourceMonitorOutputError) as raised:
+    with pytest.raises(ResourceIdentifierOutputError) as raised:
         agent.observe(
             _observation(
                 operation_key="POST /commits",

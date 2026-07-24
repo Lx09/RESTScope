@@ -380,7 +380,7 @@ class TransportErrorSummary(BaseModel):
     message: str
 
 
-class ResourceMonitorWarningSummary(BaseModel):
+class BehaviorMonitorWarningSummary(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     code: str
@@ -417,11 +417,18 @@ class TestCaseExecutionReport(BaseModel):
     request: PreparedRequestSummary
     response: ResponseSummary | None = None
     transport_error: TransportErrorSummary | None = None
-    resource_monitor_warning: ResourceMonitorWarningSummary | None = None
+    behavior_monitor_warnings: list[BehaviorMonitorWarningSummary] = Field(
+        default_factory=list
+    )
+    response_validation: Literal[
+        "evaluated",
+        "partial",
+        "not_evaluated",
+    ] = "not_evaluated"
 
 
 class OperationExecutionReport(BaseModel):
-    """Batch execution evidence with response validation deliberately deferred."""
+    """Batch execution evidence including API behavior validation state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -430,10 +437,14 @@ class OperationExecutionReport(BaseModel):
     seed: int
     config_revision: int
     status: Literal["completed", "partial", "errored"]
-    response_validation: Literal["not_evaluated"] = "not_evaluated"
+    response_validation: Literal[
+        "evaluated",
+        "partial",
+        "not_evaluated",
+    ] = "not_evaluated"
     cases: list[TestCaseExecutionReport]
     status_code_counts: dict[str, int]
     error_count: int
     observed_2xx: bool
-    resource_monitor_warning_count: int = 0
+    behavior_monitor_warning_count: int = 0
     failure_report: BatchFailureReport = Field(default_factory=BatchFailureReport)
