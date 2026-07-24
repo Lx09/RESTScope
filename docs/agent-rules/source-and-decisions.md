@@ -77,10 +77,15 @@ as the active project direction.
   catalog: resource names and aliases, learned identifier selectors, typed
   identifier values, latest per-operation read/write usage, response-value
   monitor registrations and selectors, deduplicated typed response values, and
-  latest monitor errors. Response-contract checks and evolved OpenAPI IR stay
-  in memory for the current App lifetime. This exception does not authorize
-  raw-response, LLM-reasoning, evolved-IR snapshot, plan, queue, or general
-  Agent-memory persistence.
+  latest monitor errors. The catalog also retains the latest 100 valid,
+  non-truncated 2xx JSON observations per operation as flattened, typed,
+  non-null scalar evidence so a later Response Value registration can backfill
+  its pool. This deliberately includes sensitive-looking fields and therefore
+  requires the same database protection as other target evidence. Full
+  response bodies are never retained. Response-contract checks and evolved
+  OpenAPI IR stay in memory for the current App lifetime. This exception does
+  not authorize raw-response, LLM-reasoning, evolved-IR snapshot, plan, queue,
+  or general Agent-memory persistence.
 - Earlier database-backed Planner and catalog documents remain historical
   evidence only where later task records mark them as superseded.
 

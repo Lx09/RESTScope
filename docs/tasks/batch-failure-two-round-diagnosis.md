@@ -105,3 +105,8 @@ by its current generators. An empty Resource Identifier or Response Value pool
 returns `waiting`; once the required pool contains a value, a later invocation
 can resume the candidate batch. No producer-operation success list is required
 or checked.
+
+This final paragraph was superseded by
+`docs/tasks/pool-gated-smoke-retries.md`: reference-backed Generators are now
+created only from non-empty pools, and Operation Smoke no longer has a
+`waiting` result.

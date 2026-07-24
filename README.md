@@ -309,18 +309,21 @@ The Monitor coordinates three bounded responsibilities:
   classification. Learned selectors, typed identifiers, resource aliases,
   operation usage, and errors remain in the App database.
 - Response Value registers a stable value pool when Operation Smoke selects a
-  `response_value` generator. Candidate producer fields come from the latest
-  IR; exact normalized names are selected locally and an optional bounded FAST
-  choice handles semantic names such as `commitId` and `sha`. Later matching
-  2xx JSON responses populate a deduplicated typed value pool in the database.
+  system-provided `response_value` option. Candidate producer fields come from
+  the latest IR; exact normalized names are selected locally and an optional
+  bounded FAST choice handles semantic names such as `commitId` and `sha`.
+  Every valid, non-truncated 2xx JSON response contributes flattened scalar
+  evidence. The latest 100 observations per operation are persisted, allowing
+  a later monitor registration to backfill a deduplicated typed value pool.
 
 A learned Resource Identifier selector that previously produced an identifier
 but is later missing reports `expected_resource_id_missing`; it is not silently
-relearned. Empty Resource Identifier or Response Value pools put Operation
-Smoke into `waiting` before a new batch is sent. Raw response bodies, LLM
-reasoning, evolved IR snapshots, and first-observation state are never
-persisted. `restscope.resource.lookup` remains the explicit read-only lookup
-tool; Response Value pools are consumed internally by Operation Smoke.
+relearned. Raw response bodies, LLM reasoning, evolved IR snapshots, and
+response-contract first-observation state are never persisted. Flattened
+response scalar evidence is the narrow exception: all non-null scalar fields,
+including sensitive-looking names, may be retained. `restscope.resource.lookup`
+remains the explicit read-only lookup tool; Response Value pools are consumed
+internally by Operation Smoke.
 
 ## Operation Smoke Agent
 
@@ -328,8 +331,12 @@ tool; Response Value pools are consumed internally by Operation Smoke.
 success rate. When the threshold is not met, the shared FAST model is called in
 two narrow rounds. The first sees only unique failure messages, failed-case
 generated values, omitted input IDs, and temporary evidence IDs; it selects
-suspect input nodes. The second sees only that diagnosis and the current
-generators for those nodes; it proposes `InputGeneratorPatch` updates.
+suspect input nodes. The second sees only that diagnosis, the current
+generators for those nodes, and bounded reference options whose persistent
+pools are already non-empty. Actual pool values are not sent to the model.
+Ordinary changes are returned as `InputGeneratorPatch` updates; a reference
+change must select a supplied temporary option ID, which the system maps to the
+real resource or response pool.
 
 The patch is stored as a candidate revision and is never validated by replaying
 or cloning one failed case. A complete next batch accepts the candidate when it
@@ -337,9 +344,10 @@ meets the threshold. Otherwise the candidate is rejected and a compensating
 rollback revision restores its parent configuration. Each model round can make
 one structured-output repair call.
 
-Reference-backed generators fail closed. A candidate that requires a resource
-identifier or monitored response value does not send a batch while its value
-pool is empty; the Agent returns `waiting`. The default API Behavior Monitor
+Reference-backed generators fail closed. Empty pools are never exposed as
+candidate options and therefore cannot create a reference-backed Generator.
+If an existing reference Generator nevertheless points to an empty pool, that
+is an `operation_error`, not a wait state. The default API Behavior Monitor
 adapter resolves both persistent Resource Identifier and Response Value pools.
 Operation dependency discovery through `OpenAPIRetrievalAgent` is not connected
 in this iteration.
@@ -377,10 +385,15 @@ exactly once for the lifetime of the App. The resulting IR and target settings
 are bound out-of-band to trusted tool handlers; they are not copied into graph
 state, tool schemas, or model arguments.
 
-Supervisor orders operations by stable path depth, passes the set of already
-successful operation keys into each later Smoke request, and retains every
-attempt. A Smoke result waiting on an unavailable reference pool is surfaced as
-a blocked operation. Queue and dependency state are not persisted.
+Supervisor orders operations by stable path depth and retains every attempt.
+Smoke receives only the target operation key. A local `retry` or
+`operation_error` is scheduled in a later round so other operations can add
+global pool evidence first; the default is at most three attempts per
+operation. Unsupported operations are recorded without retry. Local failures
+do not interrupt later operations, and a completed run with any final failures
+returns `failed/completed_with_failures`. Only shared setup, database, or
+runtime failures stop immediately as `errored/technical_error`. Queue and retry
+state are not persisted.
 
 ## OpenAPI Retrieval Agent
 
@@ -391,3 +404,6 @@ does not accept a file path. Internally it exposes only IR-backed
 `openapi.inspect`, `openapi.find_operation`, `openapi.search_symbols`,
 `openapi.read_operation`, and `openapi.read_evidence` tools. Symbol searches
 scan the current IR directly and do not retain an index or raw-text fallback.
+The Agent remains an explicitly registered standalone investigation tool; the
+default App, Smoke loop, and Supervisor do not invoke it or use it to register
+monitors.

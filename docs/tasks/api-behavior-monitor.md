@@ -91,6 +91,11 @@ git diff --check
 
 ## Remaining boundaries
 
+The empty-pool `waiting` behavior described above was superseded by
+`docs/tasks/pool-gated-smoke-retries.md`. The Monitor now persists bounded
+scalar observation history for late backfill, while Smoke creates
+reference-backed Generators only from already non-empty pools.
+
 - No real target, external network, or live FAST-model request was executed.
 - There is intentionally no cross-process recovery for evolved IR or the
   first-observation registry.
