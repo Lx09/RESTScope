@@ -44,6 +44,31 @@ class ResponseValueObservationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ResponseValuePreview:
+    """Non-persistent proof that selected IR sources already have values."""
+
+    value_name: str
+    value_count: int
+    sources: list[ResponseValueSource]
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseValueSourceOption:
+    """One IR response field backed by compatible persisted scalar evidence."""
+
+    value_name: str
+    source: ResponseValueSource
+    compatible_scalar_type: str | None
+    value_count: int
+
+
+class ResponseValueUnavailableError(RuntimeError):
+    """The current IR and observation history cannot supply a non-empty pool."""
+
+    code = "response_value_pool_unavailable"
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceCandidate:
     source: ResponseValueSource
     field_type: str | list[str] | None
@@ -82,27 +107,140 @@ class ResponseValueTracker:
         parameter_name: str,
         expected_type: str | None,
     ) -> ResponseValueRegistrationResult:
-        value_name = _value_name(consumer_operation_key, consumer_input_node_id)
-        monitor = self.catalog.ensure_monitor(
-            ResponseValueCatalogRegistration(
-                value_name=value_name,
-                consumer_operation_key=consumer_operation_key,
-                consumer_input_node_id=consumer_input_node_id,
-                parameter_name=parameter_name,
-                expected_type=expected_type,
-            )
-        )
-        candidates = self._select_sources(
-            ir,
+        preview = self.preview(
+            ir=ir,
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
             parameter_name=parameter_name,
             expected_type=expected_type,
         )
-        sources = self.catalog.add_sources(monitor.monitor_id, candidates)
+        if preview is None:
+            raise ResponseValueUnavailableError(
+                "No IR response source has compatible persisted values"
+            )
+        return self.register_selected_sources(
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+            sources=preview.sources,
+        )
+
+    def register_selected_sources(
+        self,
+        *,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        parameter_name: str,
+        expected_type: str | None,
+        sources: list[ResponseValueSource],
+    ) -> ResponseValueRegistrationResult:
+        """Atomically register only the source fields selected by Smoke."""
+
+        value_name = _value_name(
+            consumer_operation_key,
+            consumer_input_node_id,
+        )
+        registration = ResponseValueCatalogRegistration(
+            value_name=value_name,
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+        )
+        try:
+            monitor, sources = self.catalog.register_with_backfill(
+                registration,
+                sources,
+            )
+        except ValueError as exc:
+            raise ResponseValueUnavailableError(str(exc)) from exc
         return ResponseValueRegistrationResult(
             status="registered" if monitor.created else "existing",
             monitor_id=monitor.monitor_id,
             value_name=monitor.value_name,
             sources=sources,
+        )
+
+    def available_source_options(
+        self,
+        *,
+        ir: OpenAPISpecIR,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        expected_type: str | None,
+    ) -> list[ResponseValueSourceOption]:
+        """Return every IR field that already has compatible historical values."""
+
+        value_name = _value_name(
+            consumer_operation_key,
+            consumer_input_node_id,
+        )
+        options: list[ResponseValueSourceOption] = []
+        for candidate in _source_candidates(ir, expected_type=expected_type):
+            values = [
+                value
+                for value in self.catalog.historical_values_for_source(
+                    candidate.source,
+                    limit=100,
+                )
+                if _observed_type_compatible(expected_type, value)
+            ]
+            values = _deduplicate_typed_values(values)
+            if not values:
+                continue
+            options.append(
+                ResponseValueSourceOption(
+                    value_name=value_name,
+                    source=candidate.source,
+                    compatible_scalar_type=expected_type,
+                    value_count=len(values),
+                )
+            )
+        return options[:100]
+
+    def preview(
+        self,
+        *,
+        ir: OpenAPISpecIR,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        parameter_name: str,
+        expected_type: str | None,
+    ) -> ResponseValuePreview | None:
+        """Return only IR sources backed by currently persisted observations."""
+
+        sources = self._select_sources(
+            ir,
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+        )
+        backed_sources: list[ResponseValueSource] = []
+        observed_values: list[object] = []
+        for source in sources:
+            values = self.catalog.historical_values_for_source(
+                source,
+                limit=100,
+            )
+            values = [
+                value
+                for value in values
+                if _observed_type_compatible(expected_type, value)
+            ]
+            if not values:
+                continue
+            backed_sources.append(source)
+            observed_values.extend(values)
+        deduplicated = _deduplicate_typed_values(observed_values)
+        if not backed_sources or not deduplicated:
+            return None
+        return ResponseValuePreview(
+            value_name=_value_name(
+                consumer_operation_key,
+                consumer_input_node_id,
+            ),
+            value_count=len(deduplicated),
+            sources=backed_sources,
         )
 
     def refresh_sources(
@@ -251,8 +389,18 @@ class ResponseValueTracker:
         body: Any,
     ) -> ResponseValueObservationResult:
         normalized_media = normalize_media_type(media_type)
-        if normalized_media is None:
+        if (
+            normalized_media is None
+            or not 200 <= status_code < 300
+            or not _is_json_media_type(normalized_media)
+        ):
             return ResponseValueObservationResult()
+        self.catalog.record_observation(
+            operation_key=producer_operation_key,
+            status_code=status_code,
+            media_type=normalized_media,
+            scalars=_flatten_observed_scalars(body),
+        )
         sources = [
             source
             for source in self.catalog.list_sources_for_operation(
@@ -398,9 +546,54 @@ def _extract_selector_values(body: Any, selector: str) -> list[object]:
     ]
 
 
+def _flatten_observed_scalars(
+    value: Any,
+    *,
+    selector: str = "$",
+) -> list[tuple[str, object]]:
+    if isinstance(value, dict):
+        output: list[tuple[str, object]] = []
+        for name, child in value.items():
+            output.extend(
+                _flatten_observed_scalars(
+                    child,
+                    selector=f"{selector}.{name}",
+                )
+            )
+        return output
+    if isinstance(value, list):
+        output = []
+        for child in value:
+            output.extend(
+                _flatten_observed_scalars(
+                    child,
+                    selector=f"{selector}[]",
+                )
+            )
+        return output
+    if isinstance(value, (str, int, float, bool)) and value is not None:
+        return [(selector, value)]
+    return []
+
+
 def _value_name(operation_key: str, input_node_id: str) -> str:
     digest = sha256(f"{operation_key}\0{input_node_id}".encode()).hexdigest()[:24]
     return f"response_{digest}"
+
+
+def _deduplicate_typed_values(values: list[object]) -> list[object]:
+    output: list[object] = []
+    seen: set[tuple[str, str]] = set()
+    for value in values:
+        key = (
+            type(value).__name__,
+            json.dumps(value, ensure_ascii=False, sort_keys=True),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(value)
+    return output
 
 
 def _normalize_identifier(value: str) -> str:
@@ -431,6 +624,26 @@ def _type_compatible(
     if expected in produced_types:
         return True
     return expected == "number" and "integer" in produced_types
+
+
+def _observed_type_compatible(
+    expected: str | None,
+    value: object,
+) -> bool:
+    if expected is None:
+        return True
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        )
+    return True
 
 
 def _is_json_media_type(media_type: str | None) -> bool:

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import math
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from restscope.agent.api_behavior_monitor.response_value_catalog import (
@@ -17,10 +17,14 @@ from restscope.agent.api_behavior_monitor.response_value_catalog import (
 )
 
 from ..orm.response_value_orm import (
+    ResponseObservationORM,
+    ResponseObservationScalarORM,
     ResponseValueMonitorORM,
     ResponseValueORM,
     ResponseValueSourceORM,
 )
+
+MAX_RESPONSE_OBSERVATIONS_PER_OPERATION = 100
 
 
 class SqlAlchemyResponseValueCatalogRepository:
@@ -176,6 +180,119 @@ class SqlAlchemyResponseValueCatalogRepository:
         self.session.flush()
         return recorded
 
+    def record_observation(
+        self,
+        *,
+        operation_key: str,
+        status_code: int,
+        media_type: str,
+        scalars: list[tuple[str, object]],
+        now: datetime,
+    ) -> None:
+        observation_id = f"rvo_{uuid4().hex}"
+        self.session.add(
+            ResponseObservationORM(
+                id=observation_id,
+                operation_key=operation_key,
+                status_code=status_code,
+                media_type=media_type,
+                observed_at=now,
+            )
+        )
+        seen: set[tuple[str, str, str]] = set()
+        position = 0
+        for selector, value in scalars:
+            encoded = _encode_value(value)
+            if encoded is None:
+                continue
+            value_type, value_text = encoded
+            key = (selector, value_type, value_text)
+            if key in seen:
+                continue
+            seen.add(key)
+            self.session.add(
+                ResponseObservationScalarORM(
+                    id=f"rvsnap_{uuid4().hex}",
+                    observation_id=observation_id,
+                    selector=selector,
+                    position=position,
+                    value_type=value_type,
+                    value_text=value_text,
+                )
+            )
+            position += 1
+        self.session.flush()
+        expired_ids = list(
+            self.session.scalars(
+                select(ResponseObservationORM.id)
+                .where(
+                    ResponseObservationORM.operation_key == operation_key
+                )
+                .order_by(
+                    ResponseObservationORM.observed_at.desc(),
+                    ResponseObservationORM.id.desc(),
+                )
+                .offset(MAX_RESPONSE_OBSERVATIONS_PER_OPERATION)
+            ).all()
+        )
+        if expired_ids:
+            self.session.execute(
+                delete(ResponseObservationScalarORM).where(
+                    ResponseObservationScalarORM.observation_id.in_(
+                        expired_ids
+                    )
+                )
+            )
+            self.session.execute(
+                delete(ResponseObservationORM).where(
+                    ResponseObservationORM.id.in_(expired_ids)
+                )
+            )
+        self.session.flush()
+
+    def historical_values_for_source(
+        self,
+        source: ResponseValueSource,
+        *,
+        limit: int,
+    ) -> list[object]:
+        rows = self.session.execute(
+            select(
+                ResponseObservationORM.status_code,
+                ResponseObservationScalarORM.value_type,
+                ResponseObservationScalarORM.value_text,
+            )
+            .join(
+                ResponseObservationScalarORM,
+                ResponseObservationScalarORM.observation_id
+                == ResponseObservationORM.id,
+            )
+            .where(
+                ResponseObservationORM.operation_key
+                == source.producer_operation_key,
+                ResponseObservationORM.media_type == source.media_type,
+                ResponseObservationScalarORM.selector == source.selector,
+            )
+            .order_by(
+                ResponseObservationORM.observed_at,
+                ResponseObservationORM.id,
+                ResponseObservationScalarORM.position,
+            )
+        ).all()
+        values: list[object] = []
+        seen: set[tuple[str, str]] = set()
+        for status_code, value_type, value_text in rows:
+            if not _status_matches(source.status_code, status_code):
+                continue
+            key = (value_type, value_text)
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(_decode_value(value_type, value_text))
+            if len(values) >= limit:
+                break
+        return values
+
     def values_for(self, value_name: str, *, limit: int) -> list[object]:
         monitor = self.session.scalar(
             select(ResponseValueMonitorORM).where(
@@ -262,3 +379,8 @@ def _decode_value(value_type: str, value_text: str) -> object:
     if value_type == "number":
         return float(value_text)
     raise ValueError(f"Unsupported response value type: {value_type}")
+
+
+def _status_matches(declared: str, actual: int) -> bool:
+    normalized = declared.upper()
+    return normalized == str(actual) or normalized == f"{actual // 100}XX"

@@ -15,6 +15,8 @@ from .resource_catalog_orm import (
     ResourceORM,
 )
 from .response_value_orm import (
+    ResponseObservationORM,
+    ResponseObservationScalarORM,
     ResponseValueMonitorORM,
     ResponseValueORM,
     ResponseValueSourceORM,
@@ -32,6 +34,8 @@ __all__ = [
     "ResourceMonitorErrorORM",
     "ResourceOperationUsageORM",
     "ResourceORM",
+    "ResponseObservationORM",
+    "ResponseObservationScalarORM",
     "ResponseValueMonitorORM",
     "ResponseValueORM",
     "ResponseValueSourceORM",

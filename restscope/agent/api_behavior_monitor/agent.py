@@ -35,9 +35,12 @@ from .resource_schemas import (
 )
 from .response_value import (
     ResponseValueObservationResult,
+    ResponseValuePreview,
     ResponseValueRegistrationResult,
+    ResponseValueSourceOption,
     ResponseValueTracker,
 )
+from .response_value_catalog import ResponseValueSource
 from .schemas import APIBehaviorMonitorResult, APIBehaviorWarning
 
 
@@ -227,6 +230,55 @@ class APIBehaviorMonitorAgent:
 
     def response_values_for(self, value_name: str) -> list[object]:
         return self.response_value_tracker.catalog.values_for(value_name)
+
+    def available_response_value_sources(
+        self,
+        *,
+        ir: OpenAPISpecIR,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        expected_type: str | None,
+    ) -> list[ResponseValueSourceOption]:
+        return self.response_value_tracker.available_source_options(
+            ir=ir,
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
+            expected_type=expected_type,
+        )
+
+    def register_response_value_sources(
+        self,
+        *,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        parameter_name: str,
+        expected_type: str | None,
+        sources: list[ResponseValueSource],
+    ) -> ResponseValueRegistrationResult:
+        return self.response_value_tracker.register_selected_sources(
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+            sources=sources,
+        )
+
+    def preview_response_value(
+        self,
+        *,
+        ir: OpenAPISpecIR,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        parameter_name: str,
+        expected_type: str | None,
+    ) -> ResponseValuePreview | None:
+        return self.response_value_tracker.preview(
+            ir=ir,
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+        )
 
 
 def _resolve_operation(

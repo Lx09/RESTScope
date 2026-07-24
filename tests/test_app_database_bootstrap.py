@@ -73,6 +73,8 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
             "response_value_monitors",
             "response_value_sources",
             "response_values",
+            "response_observations",
+            "response_observation_scalars",
         }
     finally:
         app.close()

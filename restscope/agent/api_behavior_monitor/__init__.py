@@ -35,8 +35,11 @@ from .response_processor import APIBehaviorResponseProcessor
 from .schemas import APIBehaviorMonitorResult, APIBehaviorWarning
 from .response_value import (
     ResponseValueObservationResult,
+    ResponseValuePreview,
     ResponseValueRegistrationResult,
+    ResponseValueSourceOption,
     ResponseValueTracker,
+    ResponseValueUnavailableError,
 )
 from .response_value_catalog import (
     PersistedResponseValueSource,
@@ -65,9 +68,12 @@ __all__ = [
     "ResponseValueCatalogRegistration",
     "ResponseValueMonitorRecord",
     "ResponseValueObservationResult",
+    "ResponseValuePreview",
     "ResponseValueRegistrationResult",
+    "ResponseValueSourceOption",
     "ResponseValueSource",
     "ResponseValueTracker",
+    "ResponseValueUnavailableError",
     "ResourceCatalog",
     "ResourceIdentifierOutputError",
     "ResourceIdentifierSummary",

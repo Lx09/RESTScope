@@ -154,6 +154,8 @@ def test_orm_metadata_contains_all_approved_persistence_tables(tmp_path: Path) -
         "response_value_monitors",
         "response_value_sources",
         "response_values",
+        "response_observations",
+        "response_observation_scalars",
     }
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'constraint.sqlite'}")
     Base.metadata.create_all(engine)
@@ -198,6 +200,8 @@ def test_alembic_chain_upgrades_and_downgrades_all_persistence_tables(tmp_path: 
         "response_value_monitors",
         "response_value_sources",
         "response_values",
+        "response_observations",
+        "response_observation_scalars",
     }
     assert {column["name"] for column in inspector.get_columns("schemas")} == {
         "id",

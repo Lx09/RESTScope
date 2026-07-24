@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
@@ -76,3 +84,40 @@ class ResponseValueORM(Base):
     value_text: Mapped[str] = mapped_column(Text, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ResponseObservationORM(Base):
+    __tablename__ = "response_observations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    operation_key: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+class ResponseObservationScalarORM(Base):
+    __tablename__ = "response_observation_scalars"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "selector",
+            "value_type",
+            "value_text",
+            name="uq_response_observation_scalar_value",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    observation_id: Mapped[str] = mapped_column(
+        ForeignKey("response_observations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    selector: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    value_type: Mapped[str] = mapped_column(String, nullable=False)
+    value_text: Mapped[str] = mapped_column(Text, nullable=False)

@@ -36,6 +36,8 @@ def test_generator_config_migration_upgrades_existing_schema_catalog(tmp_path: P
         "resource_operation_usages",
         "resource_monitor_errors",
         "response_value_monitors",
+        "response_observation_scalars",
+        "response_observations",
         "response_value_sources",
         "response_values",
     }
