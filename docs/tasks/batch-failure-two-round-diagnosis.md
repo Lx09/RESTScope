@@ -92,3 +92,16 @@ passed
 
 No GitHub CI/CD, live target traffic, external model call, commit, merge, push,
 or worktree cleanup was performed.
+
+## Follow-up decision: pool-driven readiness
+
+On 2026-07-24, the user removed `successful_operation_keys` from
+`OperationSmokeRequest`. Supervisor still tracks satisfied operations for its
+own scheduling and reporting, but no longer passes that set into Operation
+Smoke.
+
+Operation Smoke readiness is determined only by the persistent pools referenced
+by its current generators. An empty Resource Identifier or Response Value pool
+returns `waiting`; once the required pool contains a value, a later invocation
+can resume the candidate batch. No producer-operation success list is required
+or checked.

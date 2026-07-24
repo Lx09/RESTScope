@@ -73,7 +73,7 @@ class _SmokeAgent:
         )
 
 
-def test_supervisor_uses_smoke_agent_and_passes_successful_operations() -> None:
+def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() -> None:
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["passed", "passed"])
@@ -88,8 +88,10 @@ def test_supervisor_uses_smoke_agent_and_passes_successful_operations() -> None:
         "GET /first",
         "POST /second",
     ]
-    assert smoke.requests[0].successful_operation_keys == []
-    assert smoke.requests[1].successful_operation_keys == ["GET /first"]
+    assert all(
+        "successful_operation_keys" not in request.model_dump()
+        for request in smoke.requests
+    )
     assert all(
         attempt.report.metadata["agent"] == "operation_smoke_agent"
         for attempt in report.attempts

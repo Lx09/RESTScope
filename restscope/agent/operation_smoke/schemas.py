@@ -81,7 +81,6 @@ class OperationSmokeRequest(BaseModel):
     success_rate_threshold: float = Field(default=0.8, ge=0, le=1)
     max_feedback_rounds: int = Field(default=3, ge=0, le=10)
     seed: int | None = Field(default=None, ge=0)
-    successful_operation_keys: list[str] = Field(default_factory=list)
 
 
 class WaitingReference(BaseModel):

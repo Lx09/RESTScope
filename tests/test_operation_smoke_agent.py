@@ -4,6 +4,23 @@ from pathlib import Path
 from typing import Any
 
 
+def test_request_rejects_removed_successful_operation_keys() -> None:
+    from pydantic import ValidationError
+
+    from restscope.agent.operation_smoke import OperationSmokeRequest
+
+    try:
+        OperationSmokeRequest(
+            operation_key="GET /items/{itemId}",
+            successful_operation_keys=["POST /items"],
+        )
+    except ValidationError as exc:
+        assert exc.errors()[0]["type"] == "extra_forbidden"
+        assert exc.errors()[0]["loc"] == ("successful_operation_keys",)
+    else:
+        raise AssertionError("removed successful_operation_keys field was accepted")
+
+
 def _catalog(tmp_path: Path):
     from restscope.db import (
         Base,
@@ -357,6 +374,7 @@ def test_response_value_patch_is_registered_and_uses_system_value_name(
     class BehaviorAgent:
         def __init__(self) -> None:
             self.registrations = []
+            self.values = []
 
         def register_response_value(self, **kwargs):
             self.registrations.append(kwargs)
@@ -364,7 +382,7 @@ def test_response_value_patch_is_registered_and_uses_system_value_name(
 
         def response_values_for(self, value_name):
             assert value_name == "response_system_assigned"
-            return []
+            return list(self.values)
 
         def lookup(self, request):
             raise AssertionError(f"unexpected resource lookup: {request}")
@@ -373,7 +391,7 @@ def test_response_value_patch_is_registered_and_uses_system_value_name(
     config = catalog.inspect_operation(operation_key)
     node_id = config.configs[0].input_node_id
     behavior_agent = BehaviorAgent()
-    runner = _BatchRunner(catalog, [(0, 10)])
+    runner = _BatchRunner(catalog, [(0, 10), (10, 0)])
     smoke = OperationSmokeAgent(
         config_catalog=catalog,
         batch_runner=runner,
@@ -412,6 +430,15 @@ def test_response_value_patch_is_registered_and_uses_system_value_name(
         "type": "response_value",
         "value_name": "response_system_assigned",
     }
+
+    behavior_agent.values.append("item-123")
+    resumed = smoke.run(
+        SimpleNamespace(ir=ir),
+        OperationSmokeRequest(operation_key=operation_key),
+    )
+
+    assert resumed.status == "passed"
+    assert len(runner.calls) == 2
 
 
 def test_reference_generator_selects_a_value_deterministically() -> None:

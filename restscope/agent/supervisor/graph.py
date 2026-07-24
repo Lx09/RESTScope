@@ -191,17 +191,10 @@ class RESTScopeMainGraph:
 
             try:
                 if self.operation_smoke_agent is not None:
-                    successful_operation_keys = [
-                        _operation_key(
-                            OperationReference.model_validate(item)
-                        )
-                        for item in state.get("satisfied", [])
-                    ]
                     smoke_result = self.operation_smoke_agent.run(
                         self.tool_context,
                         OperationSmokeRequest(
                             operation_key=_operation_key(operation),
-                            successful_operation_keys=successful_operation_keys,
                         ),
                     )
                     report = _operation_smoke_report(
