@@ -216,7 +216,12 @@ def test_two_round_diagnosis_separates_failed_values_from_current_generators() -
     assert "Authorization" not in client.requests[0].messages[1].content
 
     second = json.loads(client.requests[1].messages[1].content)
-    assert set(second) == {"diagnosis", "current_generators"}
+    assert set(second) == {
+        "diagnosis",
+        "current_generators",
+        "available_reference_options",
+    }
+    assert second["available_reference_options"] == []
     assert "failure_messages" not in second
     assert "random-123" not in client.requests[1].messages[1].content
     assert second["current_generators"] == [
@@ -234,6 +239,138 @@ def test_two_round_diagnosis_separates_failed_values_from_current_generators() -
     assert result.diagnosis.suspects[0].input_node_id == "path/projectId"
     assert result.updates[0].strategy.type == "choice"
     assert all(request.metadata["role"].startswith("operation_smoke_") for request in client.requests)
+
+
+def test_reference_generator_must_select_a_nonempty_system_option() -> None:
+    from restscope.agent.operation_smoke import (
+        AvailableReferenceOption,
+        OperationSmokeDiagnoser,
+    )
+
+    client = StubLLMClient(
+        [
+            _response(
+                {
+                    "no_parameter_issue": False,
+                    "suspects": [
+                        {
+                            "input_node_id": "path/projectId",
+                            "confidence": 0.95,
+                            "reason": "The identifier must come from an existing project.",
+                            "evidence_refs": ["f1", "case_1"],
+                        }
+                    ],
+                }
+            ),
+            _response(
+                {
+                    "updates": [],
+                    "reference_selections": [
+                        {
+                            "input_node_id": "path/projectId",
+                            "reference_option_id": "ref_project",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    option = AvailableReferenceOption(
+        option_id="ref_project",
+        input_node_id="path/projectId",
+        kind="resource_identifier",
+        canonical_resource="project",
+        compatible_scalar_type="string",
+        value_count=2,
+        producer_operation_keys=["POST /projects"],
+    )
+
+    result = OperationSmokeDiagnoser(client=client, model=_model()).diagnose(
+        report=_report(),
+        config=_config(),
+        reference_options=[option],
+    )
+
+    second = json.loads(client.requests[1].messages[1].content)
+    assert second["available_reference_options"] == [
+        option.model_dump(mode="json")
+    ]
+    assert "project-actual-secret" not in client.requests[1].messages[1].content
+    assert result.updates[0].model_dump(mode="json") == {
+        "input_node_id": "path/projectId",
+        "inclusion_probability": None,
+        "strategy": {
+            "type": "resource_identifier",
+            "resource": "project",
+        },
+    }
+    assert result.selected_reference_options == [option]
+
+
+def test_round_two_repairs_forged_reference_option() -> None:
+    from restscope.agent.operation_smoke import (
+        AvailableReferenceOption,
+        OperationSmokeDiagnoser,
+    )
+
+    client = StubLLMClient(
+        [
+            _response(
+                {
+                    "no_parameter_issue": False,
+                    "suspects": [
+                        {
+                            "input_node_id": "path/projectId",
+                            "confidence": 0.95,
+                            "reason": "An existing project is required.",
+                            "evidence_refs": ["f1", "case_1"],
+                        }
+                    ],
+                }
+            ),
+            _response(
+                {
+                    "updates": [],
+                    "reference_selections": [
+                        {
+                            "input_node_id": "path/projectId",
+                            "reference_option_id": "invented",
+                        }
+                    ],
+                }
+            ),
+            _response(
+                {
+                    "updates": [],
+                    "reference_selections": [
+                        {
+                            "input_node_id": "path/projectId",
+                            "reference_option_id": "ref_project",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(client=client, model=_model()).diagnose(
+        report=_report(),
+        config=_config(),
+        reference_options=[
+            AvailableReferenceOption(
+                option_id="ref_project",
+                input_node_id="path/projectId",
+                kind="resource_identifier",
+                canonical_resource="project",
+                compatible_scalar_type="string",
+                value_count=1,
+                producer_operation_keys=["POST /projects"],
+            )
+        ],
+    )
+
+    assert len(client.requests) == 3
+    assert result.updates[0].strategy.type == "resource_identifier"
 
 
 def test_no_parameter_issue_stops_before_generator_round() -> None:

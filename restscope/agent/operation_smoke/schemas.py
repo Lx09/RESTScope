@@ -16,6 +16,56 @@ from pydantic import (
 from restscope.testing import InputGeneratorPatch, OperationExecutionReport
 
 
+class AvailableReferenceOption(BaseModel):
+    """One system-verified, non-empty reference pool exposed without values."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    option_id: str = Field(min_length=1, max_length=100)
+    input_node_id: str = Field(min_length=1, max_length=1000)
+    kind: Literal["resource_identifier", "response_value"]
+    canonical_resource: str | None = Field(default=None, max_length=200)
+    value_name: str | None = Field(default=None, max_length=200)
+    compatible_scalar_type: str | None = Field(default=None, max_length=50)
+    value_count: int = Field(ge=1)
+    producer_operation_keys: list[str] = Field(default_factory=list, max_length=100)
+    producer_status_code: str | None = Field(default=None, max_length=20)
+    producer_media_type: str | None = Field(default=None, max_length=200)
+    source_field: str | None = Field(default=None, max_length=1000)
+    source_selector: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_kind_fields(self) -> "AvailableReferenceOption":
+        if self.kind == "resource_identifier":
+            if not self.canonical_resource or self.value_name is not None:
+                raise ValueError(
+                    "resource_identifier requires canonical_resource only"
+                )
+        elif (
+            not self.value_name
+            or self.canonical_resource is not None
+            or len(self.producer_operation_keys) != 1
+            or not self.producer_status_code
+            or not self.producer_media_type
+            or not self.source_field
+            or not self.source_selector
+        ):
+            raise ValueError(
+                "response_value requires one complete producer source"
+            )
+        return self
+
+
+class ReferenceGeneratorSelection(BaseModel):
+    """Model selection of a system-provided reference option."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_node_id: str = Field(min_length=1, max_length=1000)
+    reference_option_id: str = Field(min_length=1, max_length=100)
+    inclusion_probability: float | None = Field(default=None, ge=0, le=1)
+
+
 class ParameterSuspect(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -61,7 +111,19 @@ class ParameterDiagnosis(BaseModel):
 class GeneratorPatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    updates: list[InputGeneratorPatch] = Field(min_length=1, max_length=100)
+    updates: list[InputGeneratorPatch] = Field(default_factory=list, max_length=100)
+    reference_selections: list[ReferenceGeneratorSelection] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+
+    @model_validator(mode="after")
+    def require_update(self) -> "GeneratorPatchDraft":
+        if not self.updates and not self.reference_selections:
+            raise ValueError("at least one generator update is required")
+        if len(self.updates) + len(self.reference_selections) > 100:
+            raise ValueError("at most 100 generator updates are allowed")
+        return self
 
 
 class TwoRoundDiagnosisResult(BaseModel):
@@ -69,6 +131,9 @@ class TwoRoundDiagnosisResult(BaseModel):
 
     diagnosis: ParameterDiagnosis
     updates: list[InputGeneratorPatch] = Field(default_factory=list)
+    selected_reference_options: list[AvailableReferenceOption] = Field(
+        default_factory=list
+    )
 
 
 class OperationSmokeRequest(BaseModel):
@@ -83,27 +148,37 @@ class OperationSmokeRequest(BaseModel):
     seed: int | None = Field(default=None, ge=0)
 
 
-class WaitingReference(BaseModel):
-    """One reference-backed input whose persistent value pool is empty."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input_node_id: str
-    type: str
-    name: str
-
-
 class OperationSmokeResult(BaseModel):
     """Audit-friendly outcome produced without replaying an individual case."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    status: Literal["passed", "failed", "waiting", "errored"]
+    status: Literal["passed", "retry", "unsupported", "errored"]
     operation_key: str
     success_rate: float = Field(ge=0, le=1)
     required_success_rate: float = Field(ge=0, le=1)
     active_config_revision: int = Field(ge=1)
     batch_reports: list[OperationExecutionReport] = Field(default_factory=list)
     diagnoses: list[TwoRoundDiagnosisResult] = Field(default_factory=list)
-    waiting_references: list[WaitingReference] = Field(default_factory=list)
+    failure_kind: Literal[
+        "threshold_exhausted",
+        "no_parameter_issue",
+        "unsupported_operation",
+        "operation_error",
+    ] | None = None
     error: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def validate_failure_kind(self) -> "OperationSmokeResult":
+        allowed = {
+            "passed": {None},
+            "retry": {"threshold_exhausted", "no_parameter_issue"},
+            "unsupported": {"unsupported_operation"},
+            "errored": {"operation_error"},
+        }
+        if self.failure_kind not in allowed[self.status]:
+            raise ValueError(
+                f"{self.status} has incompatible failure_kind "
+                f"{self.failure_kind!r}"
+            )
+        return self

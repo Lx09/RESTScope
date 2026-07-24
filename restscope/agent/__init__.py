@@ -73,6 +73,7 @@ from .operation_smoke import (
 from .supervisor import (
     BlockedOperation,
     OperationAttempt,
+    OperationFailureKind,
     RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
@@ -112,6 +113,7 @@ __all__ = [
     "OperationReference",
     "OperationTarget",
     "OperationAttempt",
+    "OperationFailureKind",
     "OperationTestAgent",
     "OperationTestFinding",
     "OperationTestReport",

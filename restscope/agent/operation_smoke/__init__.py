@@ -10,16 +10,17 @@ from .diagnosis import (
     build_parameter_diagnosis_context,
 )
 from .schemas import (
+    AvailableReferenceOption,
     GeneratorPatchDraft,
     ParameterDiagnosis,
     ParameterSuspect,
     OperationSmokeRequest,
     OperationSmokeResult,
     TwoRoundDiagnosisResult,
-    WaitingReference,
 )
 
 __all__ = [
+    "AvailableReferenceOption",
     "GeneratorPatchDraft",
     "MAX_FIRST_ROUND_USER_BYTES",
     "OperationSmokeDiagnoser",
@@ -32,7 +33,6 @@ __all__ = [
     "ParameterSuspect",
     "TwoRoundDiagnosisResult",
     "BehaviorMonitorReferenceValues",
-    "WaitingReference",
     "build_operation_smoke_agent",
     "build_parameter_diagnosis_context",
 ]

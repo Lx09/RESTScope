@@ -111,7 +111,15 @@ def test_supervisor_request_contract_contains_only_mvp_entry_fields() -> None:
     from restscope.agent import RESTScopeRunRequest
     from pydantic import ValidationError
 
-    assert list(RESTScopeRunRequest.model_fields) == ["metadata"]
+    assert list(RESTScopeRunRequest.model_fields) == [
+        "metadata",
+        "max_operation_attempts",
+    ]
+    assert RESTScopeRunRequest().max_operation_attempts == 3
+    with pytest.raises(ValidationError):
+        RESTScopeRunRequest(max_operation_attempts=0)
+    with pytest.raises(ValidationError):
+        RESTScopeRunRequest(max_operation_attempts=11)
     with pytest.raises(ValidationError):
         RESTScopeRunRequest.model_validate({"allow_live_testing": True})
     with pytest.raises(ValidationError):
@@ -225,7 +233,7 @@ def test_dependency_cycle_is_reported_without_retries() -> None:
     assert [{operation.path for operation in cycle} for cycle in report.dependency_cycles] == [{"/a", "/b"}]
 
 
-def test_failed_prerequisite_fails_fast_and_preserves_blocked_and_unattempted() -> None:
+def test_failed_prerequisite_does_not_interrupt_later_operations() -> None:
     from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner, OperationExecutionResult
 
     prerequisite = _ref("POST", "/prerequisite", "prerequisite")
@@ -254,14 +262,20 @@ def test_failed_prerequisite_fails_fast_and_preserves_blocked_and_unattempted() 
     )
 
     assert report.status == "failed"
-    assert report.stop_reason == "operation_failed"
-    assert [attempt.disposition for attempt in report.attempts] == ["blocked", "failed"]
+    assert report.stop_reason == "unresolved_dependencies"
+    assert [attempt.disposition for attempt in report.attempts] == [
+        "blocked",
+        "retrying",
+        "satisfied",
+        "retrying",
+        "failed",
+    ]
     assert report.blocked_operations[0].reason == "failed_prerequisite"
-    assert [operation.path for operation in report.unattempted_operations] == ["/later"]
+    assert report.unattempted_operations == []
     assert report.error is None
 
 
-def test_ordinary_failure_and_technical_error_both_fail_fast_with_distinct_status() -> None:
+def test_operation_failure_and_error_are_bounded_and_do_not_fail_fast() -> None:
     from restscope.agent import FakeOperationTestRunner, OperationExecutionResult
 
     spec = _schema({"/first": {"get": _operation("first")}, "/second": {"get": _operation("second")}})
@@ -280,14 +294,28 @@ def test_ordinary_failure_and_technical_error_both_fail_fast_with_distinct_statu
         runner=FakeOperationTestRunner(error_paths={"/first"})
     ).run(_request(spec))
 
-    assert (failed.status, failed.stop_reason, failed.error) == ("failed", "operation_failed", None)
-    assert failed.attempts[0].disposition == "failed"
-    assert [item.path for item in failed.unattempted_operations] == ["/second"]
-    assert errored.status == "errored"
-    assert errored.stop_reason == "technical_error"
-    assert errored.error is not None
-    assert errored.attempts[0].disposition == "errored"
-    assert [item.path for item in errored.unattempted_operations] == ["/second"]
+    assert (failed.status, failed.stop_reason, failed.error) == (
+        "failed",
+        "completed_with_failures",
+        None,
+    )
+    assert [attempt.disposition for attempt in failed.attempts] == [
+        "retrying",
+        "satisfied",
+        "retrying",
+        "failed",
+    ]
+    assert errored.status == "failed"
+    assert errored.stop_reason == "completed_with_failures"
+    assert errored.error is None
+    assert [attempt.disposition for attempt in errored.attempts] == [
+        "retrying",
+        "satisfied",
+        "retrying",
+        "errored",
+    ]
+    assert failed.unattempted_operations == []
+    assert errored.unattempted_operations == []
 
 
 def test_missing_model_fails_before_live_requests() -> None:

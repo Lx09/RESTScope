@@ -18,11 +18,15 @@ from restscope.llm import (
 )
 from restscope.testing import (
     InputGeneratorConfig,
+    InputGeneratorPatch,
     OperationExecutionReport,
     OperationGeneratorConfig,
+    ResourceIdentifierGenerator,
+    ResponseValueGenerator,
 )
 
 from .schemas import (
+    AvailableReferenceOption,
     GeneratorPatchDraft,
     ParameterDiagnosis,
     TwoRoundDiagnosisResult,
@@ -62,6 +66,10 @@ class OperationSmokeDiagnoser:
         *,
         report: OperationExecutionReport,
         config: OperationGeneratorConfig,
+        reference_options: list[AvailableReferenceOption] | None = None,
+        reference_option_provider: (
+            Callable[[set[str]], list[AvailableReferenceOption]] | None
+        ) = None,
     ) -> TwoRoundDiagnosisResult:
         if not self.model.enabled:
             raise OperationSmokeOutputError(
@@ -106,13 +114,27 @@ class OperationSmokeDiagnoser:
             return TwoRoundDiagnosisResult(diagnosis=diagnosis)
 
         suspect_ids = {item.input_node_id for item in diagnosis.suspects}
+        if reference_options is not None and reference_option_provider is not None:
+            raise ValueError(
+                "Provide reference_options or reference_option_provider, not both"
+            )
+        if reference_option_provider is not None:
+            reference_options = reference_option_provider(suspect_ids)
         selected_generators = [
             item for item in config.configs if item.input_node_id in suspect_ids
+        ]
+        selected_options = [
+            item
+            for item in (reference_options or [])
+            if item.input_node_id in suspect_ids
         ]
         second_context = {
             "diagnosis": diagnosis.model_dump(mode="json"),
             "current_generators": [
                 item.model_dump(mode="json") for item in selected_generators
+            ],
+            "available_reference_options": [
+                item.model_dump(mode="json") for item in selected_options
             ],
         }
         patch = self._call_with_repair(
@@ -130,11 +152,19 @@ class OperationSmokeDiagnoser:
                 draft,
                 suspect_ids=suspect_ids,
                 current_generators=selected_generators,
+                reference_options=selected_options,
             ),
         )
         return TwoRoundDiagnosisResult(
             diagnosis=diagnosis,
-            updates=patch.updates,
+            updates=_resolve_generator_updates(
+                patch,
+                reference_options=selected_options,
+            ),
+            selected_reference_options=_selected_reference_options(
+                patch,
+                reference_options=selected_options,
+            ),
         )
 
     def _call_with_repair(
@@ -404,9 +434,13 @@ def _generator_patch_errors(
     *,
     suspect_ids: set[str],
     current_generators: list[InputGeneratorConfig],
+    reference_options: list[AvailableReferenceOption],
 ) -> list[str]:
     del current_generators
-    ids = [item.input_node_id for item in draft.updates]
+    ids = [
+        item.input_node_id
+        for item in [*draft.updates, *draft.reference_selections]
+    ]
     errors: list[str] = []
     unknown = sorted(set(ids) - suspect_ids)
     if unknown:
@@ -416,7 +450,72 @@ def _generator_patch_errors(
     )
     if duplicates:
         errors.append(f"generator updates cannot repeat nodes: {duplicates}")
+    for update in draft.updates:
+        if isinstance(
+            update.strategy,
+            (ResourceIdentifierGenerator, ResponseValueGenerator),
+        ):
+            errors.append(
+                f"{update.input_node_id}: reference generators must select a "
+                "supplied reference_option_id"
+            )
+    options_by_id = {item.option_id: item for item in reference_options}
+    for selection in draft.reference_selections:
+        option = options_by_id.get(selection.reference_option_id)
+        if option is None:
+            errors.append(
+                "unknown reference_option_id: "
+                f"{selection.reference_option_id}"
+            )
+        elif option.input_node_id != selection.input_node_id:
+            errors.append(
+                f"{selection.reference_option_id}: option belongs to "
+                f"{option.input_node_id}, not {selection.input_node_id}"
+            )
     return errors
+
+
+def _resolve_generator_updates(
+    draft: GeneratorPatchDraft,
+    *,
+    reference_options: list[AvailableReferenceOption],
+) -> list[InputGeneratorPatch]:
+    options_by_id = {item.option_id: item for item in reference_options}
+    updates = list(draft.updates)
+    for selection in draft.reference_selections:
+        option = options_by_id[selection.reference_option_id]
+        if option.kind == "resource_identifier":
+            assert option.canonical_resource is not None
+            strategy = ResourceIdentifierGenerator(
+                type="resource_identifier",
+                resource=option.canonical_resource,
+            )
+        else:
+            assert option.value_name is not None
+            strategy = ResponseValueGenerator(
+                type="response_value",
+                value_name=option.value_name,
+            )
+        updates.append(
+            InputGeneratorPatch(
+                input_node_id=selection.input_node_id,
+                inclusion_probability=selection.inclusion_probability,
+                strategy=strategy,
+            )
+        )
+    return updates
+
+
+def _selected_reference_options(
+    draft: GeneratorPatchDraft,
+    *,
+    reference_options: list[AvailableReferenceOption],
+) -> list[AvailableReferenceOption]:
+    options_by_id = {item.option_id: item for item in reference_options}
+    return [
+        options_by_id[selection.reference_option_id]
+        for selection in draft.reference_selections
+    ]
 
 
 def _parameter_diagnosis_instructions() -> str:
@@ -434,10 +533,12 @@ def _generator_patch_instructions() -> str:
         "Convert the supplied diagnosis into InputGeneratorPatch updates. Use "
         "only supplied current_generators and only their input_node_ids. Do not "
         "request failure messages, test values, schemas, operations, or tools. "
-        "Use resource_identifier with a canonical resource name when the input "
-        "must reuse a resource ID, or response_value with a stable value_name "
-        "when the input should reuse a monitored response value. These reference "
-        "generators are resolved from persistent pools before a batch is sent. "
+        "For an ordinary generator change, use updates. Reference generators "
+        "must use reference_selections and select an available_reference_options "
+        "option_id for the same input_node_id; never return resource_identifier "
+        "or response_value directly in updates and never invent a resource or "
+        "value name. Every supplied reference option has a non-empty persistent "
+        "pool, and actual values are intentionally hidden. "
         "Return complete structured updates without explanations or chain of thought."
     )
 

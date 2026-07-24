@@ -11,8 +11,28 @@ from ..operation_test import OperationReference, OperationTestFinding, Operation
 
 
 RunStatus = Literal["passed", "failed", "errored"]
-AttemptDisposition = Literal["satisfied", "blocked", "failed", "errored"]
-StopReason = Literal["completed", "operation_failed", "unresolved_dependencies", "technical_error"]
+AttemptDisposition = Literal[
+    "satisfied",
+    "blocked",
+    "retrying",
+    "unsupported",
+    "failed",
+    "errored",
+]
+OperationFailureKind = Literal[
+    "threshold_exhausted",
+    "no_parameter_issue",
+    "unsupported_operation",
+    "operation_error",
+    "operation_failed",
+]
+StopReason = Literal[
+    "completed",
+    "completed_with_failures",
+    "operation_failed",
+    "unresolved_dependencies",
+    "technical_error",
+]
 
 
 class FileSchemaSource(BaseModel):
@@ -49,6 +69,7 @@ class RESTScopeRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata: dict[str, Any] = Field(default_factory=dict)
+    max_operation_attempts: int = Field(default=3, ge=1, le=10)
 
 
 class OperationAttempt(BaseModel):
@@ -59,6 +80,7 @@ class OperationAttempt(BaseModel):
     attempt_number: int
     report: OperationTestReport
     disposition: AttemptDisposition
+    failure_kind: OperationFailureKind | None = None
     dependency_hint: str | None = None
     direct_dependencies: list[OperationReference] = Field(default_factory=list)
     unsatisfied_dependencies: list[OperationReference] = Field(default_factory=list)

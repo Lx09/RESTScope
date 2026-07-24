@@ -5,6 +5,8 @@ from __future__ import annotations
 import secrets
 from typing import Protocol
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from restscope.testing import (
     GeneratorConfigCatalog,
     OperationExecutionReport,
@@ -16,10 +18,10 @@ from restscope.testing import (
 
 from .diagnosis import OperationSmokeDiagnoser
 from .schemas import (
+    AvailableReferenceOption,
     OperationSmokeRequest,
     OperationSmokeResult,
     TwoRoundDiagnosisResult,
-    WaitingReference,
 )
 
 
@@ -56,7 +58,33 @@ class OperationSmokeAgent:
         context,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
-        current = self.config_catalog.require_operation(request.operation_key)
+        current = self.config_catalog.get_operation(request.operation_key)
+        if current is None:
+            return OperationSmokeResult(
+                status="errored",
+                operation_key=request.operation_key,
+                success_rate=0,
+                required_success_rate=request.success_rate_threshold,
+                active_config_revision=1,
+                failure_kind="operation_error",
+                error={
+                    "type": "GeneratorConfigError",
+                    "message": (
+                        "No generator configuration exists for "
+                        f"{request.operation_key}"
+                    ),
+                },
+            )
+        if not current.enabled:
+            return self._result(
+                status="unsupported",
+                request=request,
+                current=current,
+                success_rate=0,
+                reports=[],
+                diagnoses=[],
+                failure_kind="unsupported_operation",
+            )
         reports: list[OperationExecutionReport] = []
         diagnoses: list[TwoRoundDiagnosisResult] = []
         success_rate = 0.0
@@ -74,20 +102,10 @@ class OperationSmokeAgent:
 
         try:
             while True:
-                waiting = _missing_references(
+                _assert_reference_invariants(
                     current,
                     self.reference_values,
                 )
-                if waiting:
-                    return self._result(
-                        status="waiting",
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        diagnoses=diagnoses,
-                        waiting=waiting,
-                    )
 
                 report = self.batch_runner.run_operation(
                     context,
@@ -137,17 +155,26 @@ class OperationSmokeAgent:
                             evaluation=evaluation,
                         )
                     return self._result(
-                        status="failed",
+                        status="retry",
                         request=request,
                         current=current,
                         success_rate=success_rate,
                         reports=reports,
                         diagnoses=diagnoses,
+                        failure_kind="threshold_exhausted",
                     )
 
                 diagnosis = self.diagnoser.diagnose(
                     report=report,
                     config=current,
+                    reference_option_provider=lambda input_node_ids: (
+                        _available_reference_options(
+                            self.reference_values,
+                            context=context,
+                            config=current,
+                            input_node_ids=input_node_ids,
+                        )
+                    ),
                 )
                 if diagnosis.diagnosis.no_parameter_issue:
                     diagnoses.append(diagnosis)
@@ -158,12 +185,13 @@ class OperationSmokeAgent:
                             evaluation=evaluation,
                         )
                     return self._result(
-                        status="failed",
+                        status="retry",
                         request=request,
                         current=current,
                         success_rate=success_rate,
                         reports=reports,
                         diagnoses=diagnoses,
+                        failure_kind="no_parameter_issue",
                     )
 
                 updates = _prepare_reference_updates(
@@ -171,6 +199,9 @@ class OperationSmokeAgent:
                     context=context,
                     config=current,
                     updates=diagnosis.updates,
+                    selected_reference_options=(
+                        diagnosis.selected_reference_options
+                    ),
                 )
                 diagnosis = diagnosis.model_copy(update={"updates": updates})
                 diagnoses.append(diagnosis)
@@ -187,6 +218,11 @@ class OperationSmokeAgent:
                     hypothesis=diagnosis.diagnosis.model_dump(mode="json"),
                 )
                 feedback_rounds += 1
+        except SQLAlchemyError:
+            # Database availability is a shared-run invariant. Let Supervisor
+            # stop the run as a global technical error instead of retrying one
+            # operation against the same unavailable catalog.
+            raise
         except Exception as exc:
             current = self._rollback_pending_candidate(
                 current,
@@ -200,6 +236,7 @@ class OperationSmokeAgent:
                 success_rate=success_rate,
                 reports=reports,
                 diagnoses=diagnoses,
+                failure_kind="operation_error",
                 error={
                     "type": type(exc).__name__,
                     "message": str(exc),
@@ -239,7 +276,7 @@ class OperationSmokeAgent:
         success_rate: float,
         reports: list[OperationExecutionReport],
         diagnoses: list[TwoRoundDiagnosisResult],
-        waiting: list[WaitingReference] | None = None,
+        failure_kind: str | None = None,
         error: dict[str, str] | None = None,
     ) -> OperationSmokeResult:
         return OperationSmokeResult(
@@ -250,7 +287,7 @@ class OperationSmokeAgent:
             active_config_revision=current.revision,
             batch_reports=reports,
             diagnoses=diagnoses,
-            waiting_references=waiting or [],
+            failure_kind=failure_kind,
             error=error,
         )
 
@@ -276,11 +313,10 @@ def _batch_evaluation(
     }
 
 
-def _missing_references(
+def _assert_reference_invariants(
     config: OperationGeneratorConfig,
     reference_values: ReferenceValueProvider,
-) -> list[WaitingReference]:
-    waiting: list[WaitingReference] = []
+) -> None:
     for item in config.configs:
         strategy = item.strategy
         if isinstance(strategy, ResourceIdentifierGenerator):
@@ -291,14 +327,29 @@ def _missing_references(
             continue
         if reference_values.values_for(strategy):
             continue
-        waiting.append(
-            WaitingReference(
-                input_node_id=item.input_node_id,
-                type=strategy.type,
-                name=name,
-            )
+        raise RuntimeError(
+            "Reference generator invariant violated: "
+            f"{item.input_node_id} uses empty {strategy.type} pool {name!r}"
         )
-    return waiting
+
+
+def _available_reference_options(
+    reference_values: ReferenceValueProvider,
+    *,
+    context,
+    config: OperationGeneratorConfig,
+    input_node_ids: set[str],
+) -> list[AvailableReferenceOption]:
+    available = getattr(reference_values, "available_options", None)
+    if not callable(available):
+        return []
+    return list(
+        available(
+            ir=getattr(context, "ir", None),
+            config=config,
+            input_node_ids=input_node_ids,
+        )
+    )
 
 
 def _prepare_reference_updates(
@@ -307,12 +358,28 @@ def _prepare_reference_updates(
     context,
     config: OperationGeneratorConfig,
     updates,
+    selected_reference_options,
 ):
     prepare = getattr(reference_values, "prepare_updates", None)
     if not callable(prepare):
-        return updates
-    return prepare(
-        ir=context.ir,
-        config=config,
-        updates=updates,
-    )
+        prepared = updates
+    else:
+        prepared = prepare(
+            ir=getattr(context, "ir", None),
+            config=config,
+            updates=updates,
+            selected_reference_options=selected_reference_options,
+        )
+    for update in prepared:
+        strategy = update.strategy
+        if not isinstance(
+            strategy,
+            (ResourceIdentifierGenerator, ResponseValueGenerator),
+        ):
+            continue
+        if not reference_values.values_for(strategy):
+            raise RuntimeError(
+                "Selected reference generator pool is empty for "
+                f"{update.input_node_id}"
+            )
+    return prepared
