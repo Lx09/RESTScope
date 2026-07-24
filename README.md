@@ -82,7 +82,9 @@ default database bootstrap.
 
 The Alembic chain starts with the schema-source baseline, adds operation
 generator configuration in revision `0002_create_generator_configs`, and adds
-the resource evidence catalog in `0003_create_resource_catalog`. A schema
+the resource evidence catalog in `0003_create_resource_catalog`. Revision
+`0004_create_generator_revision_history` adds immutable candidate, accepted,
+rejected, and compensating rollback generator revisions. A schema
 source stores either an absolute file path or verbatim JSON/YAML content. Paths
 are reread on every load, while parsed IR, raw responses, and test reports are
 not persisted:
@@ -256,10 +258,12 @@ operation with the current `ToolContext.ir`. It generates all requested cases
 in preflight and only then sends requests serially to the current App-bound
 target. It supports at most 20 cases, does not follow redirects or retry, and
 creates an isolated HTTP client per case. When the default Resource Monitor is
-present, it reads at most 1 MiB from a 2xx response before returning; non-2xx
-responses and runtimes without a response processor remain body-unread. The
-report contains generated/request values, merged target headers, response
-metadata, transport errors, Resource Monitor warnings, and
+present, it reads at most 1 MiB from a 2xx response before returning. A non-2xx
+response is also read up to 1 MiB solely to build the batch failure report; it
+is never sent to the Resource Monitor and its complete body is not returned or
+persisted. The report contains generated/request values, merged target headers,
+response metadata, transport errors, Resource Monitor warnings, a first-seen
+list of at most 100 exact unique failure messages with case associations, and
 `response_validation="not_evaluated"`. Only exact configured THINK, FAST, and
 Phoenix API key values are replaced.
 
@@ -273,9 +277,10 @@ generator configuration.
 The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
-The Supervisor and `OperationTestAgent` continue to use Schemathesis MCP in this
-iteration. Registration of the lightweight tool does not replace that runner or
-add a new tool loop to an Agent.
+The default Supervisor uses `OperationSmokeAgent` and this lightweight batch
+service. It does not start the Schemathesis MCP service. The older
+`OperationTestAgent` and `SchemathesisOperationRunner` remain available only
+when a caller explicitly injects the legacy runner path.
 
 ## Resource Monitor Agent
 
@@ -301,58 +306,27 @@ reasoning. `restscope.resource.lookup` is a read-only local tool that returns
 the latest reusable identifiers and the operations that observed them. Lookup
 does not automatically modify generators or schedule another test.
 
-## Operation Test Agent
+## Operation Smoke Agent
 
-OperationTestAgent executes one Schemathesis run for one operation attempt, then
-uses the configured Thinking model to identify direct operation dependencies.
-There are no smoke/conformance/positive/negative/boundary stages. The runner
-reads the baseline schema source, target URL, and runtime headers from its bound
-`ToolContext`, then sends them only to Schemathesis `start_run` together with
-the method/path filter. Other Schemathesis settings use service defaults.
+`OperationSmokeAgent` runs a bounded generated batch and measures its 2xx
+success rate. When the threshold is not met, the shared FAST model is called in
+two narrow rounds. The first sees only unique failure messages, failed-case
+generated values, omitted input IDs, and temporary evidence IDs; it selects
+suspect input nodes. The second sees only that diagnosis and the current
+generators for those nodes; it proposes `InputGeneratorPatch` updates.
 
-```python
-from restscope.agent import (
-    LLMOperationDependencyAnalyzer,
-    OperationCandidate,
-    OperationReference,
-    OperationTestAgent,
-    OperationTestRequest,
-    SchemathesisOperationRunner,
-)
-from restscope.capabilities import ToolContext, build_capabilities_with_mcp_host
-from restscope.llm import ModelSelector, build_llm_client
-from restscope.openapi_parser import OpenAPIParser
-from restscope.restscope_config import RESTScopeConfig
+The patch is stored as a candidate revision and is never validated by replaying
+or cloning one failed case. A complete next batch accepts the candidate when it
+meets the threshold. Otherwise the candidate is rejected and a compensating
+rollback revision restores its parent configuration. Each model round can make
+one structured-output repair call.
 
-config = RESTScopeConfig.from_environment()
-runtime = build_capabilities_with_mcp_host(config="./mcp.servers.json")
-runtime.tool_executor.bind_context(
-    ToolContext(
-        ir=OpenAPIParser.parse("assets/openapi/petstore-v3.json"),
-        baseline_schema_source={
-            "kind": "file",
-            "path": "assets/openapi/petstore-v3.json",
-        },
-        base_url="http://localhost:8000",
-        headers={},
-    )
-)
-agent = OperationTestAgent(
-    runner=SchemathesisOperationRunner(tool_executor=runtime.tool_executor),
-    dependency_analyzer=LLMOperationDependencyAnalyzer(
-        client=build_llm_client(config.llm),
-        model=ModelSelector.from_config(config.llm).select("operation_dependency_analyzer"),
-    ),
-)
-
-operation = OperationReference(method="GET", path="/pets", operation_id="listPets")
-report = agent.run(
-    OperationTestRequest(
-        operation=operation,
-        candidate_operations=[OperationCandidate(operation=operation)],
-    )
-)
-```
+Reference-backed generators fail closed. A candidate that requires a resource
+identifier or monitored response value does not send a batch while its value
+pool is empty; the Agent returns `waiting`. The default Resource Monitor
+adapter currently resolves persisted resource identifiers. Operation
+dependency discovery through `OpenAPIRetrievalAgent` and a generic monitored
+response-value catalog are not connected in this iteration.
 
 ## Program Startup
 
@@ -372,8 +346,8 @@ with RESTScopeApp.from_environment() as app:
     report = app.run(RESTScopeRunRequest())
 ```
 
-`RESTScopeApp.run()` is an execution API, not a dry-run API. With the real
-Schemathesis runner it immediately sends requests to the target bound during
+`RESTScopeApp.run()` is an execution API, not a dry-run API. The default Smoke
+Agent immediately sends generated requests to the target bound during
 `initialize()`, including operations that may have side effects. Run it only
 against a target you are authorized to test.
 
@@ -387,10 +361,10 @@ exactly once for the lifetime of the App. The resulting IR and target settings
 are bound out-of-band to trusted tool handlers; they are not copied into graph
 state, tool schemas, or model arguments.
 
-Supervisor orders operations by stable path depth, retains every attempt, and
-retries blocked operations only in later rounds after all direct prerequisites
-have produced a passing run with an observed 2xx. Queue and dependency state are
-not persisted.
+Supervisor orders operations by stable path depth, passes the set of already
+successful operation keys into each later Smoke request, and retains every
+attempt. A Smoke result waiting on an unavailable reference pool is surfaced as
+a blocked operation. Queue and dependency state are not persisted.
 
 ## OpenAPI Retrieval Agent
 
