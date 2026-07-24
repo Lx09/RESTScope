@@ -3,7 +3,9 @@
 from .catalog import GeneratorConfigCatalog, GeneratorConfigError, GeneratorConfigRevisionConflict
 from .execution import OperationTestingService, TestingExecutionError
 from .models import (
+    BatchFailureReport,
     GeneratorDisabledReason,
+    GeneratorConfigRevision,
     GeneratedNodeValue,
     GeneratedTestCase,
     InputGeneratorConfig,
@@ -13,15 +15,22 @@ from .models import (
     OperationTestSnapshot,
     ParameterSnapshot,
     SchemaSnapshot,
+    UniqueFailureMessage,
     OperationExecutionReport,
     PreparedTestRequest,
+    ResourceIdentifierGenerator,
+    ResponseValueGenerator,
 )
+from .generation import generate_strategy_value
+from .ports import ReferenceValueProvider
 
 __all__ = [
+    "BatchFailureReport",
     "GeneratorConfigCatalog",
     "GeneratorConfigError",
     "GeneratorConfigRevisionConflict",
     "GeneratorDisabledReason",
+    "GeneratorConfigRevision",
     "GeneratedNodeValue",
     "GeneratedTestCase",
     "InputGeneratorConfig",
@@ -34,5 +43,10 @@ __all__ = [
     "OperationExecutionReport",
     "OperationTestingService",
     "PreparedTestRequest",
+    "ReferenceValueProvider",
+    "ResourceIdentifierGenerator",
+    "ResponseValueGenerator",
     "TestingExecutionError",
+    "UniqueFailureMessage",
+    "generate_strategy_value",
 ]

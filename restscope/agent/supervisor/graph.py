@@ -13,13 +13,20 @@ from restscope.observability import TracingRuntime
 
 from ..operation_test import (
     OperationCandidate,
+    OperationDependencyAnalysis,
     OperationDependencyAnalyzer,
+    OperationExecutionResult,
     OperationReference,
     OperationTestAgent,
     OperationTestFinding,
     OperationTestReport,
     OperationTestRequest,
     OperationTestRunner,
+)
+from ..operation_smoke import (
+    OperationSmokeAgent,
+    OperationSmokeRequest,
+    OperationSmokeResult,
 )
 from .schemas import BlockedOperation, OperationAttempt, RESTScopeRunReport, RESTScopeRunRequest
 
@@ -52,13 +59,15 @@ class RESTScopeMainGraph:
     def __init__(
         self,
         *,
-        operation_runner: OperationTestRunner,
-        dependency_analyzer: OperationDependencyAnalyzer,
+        operation_runner: OperationTestRunner | None = None,
+        dependency_analyzer: OperationDependencyAnalyzer | None = None,
+        operation_smoke_agent: OperationSmokeAgent | None = None,
         tool_context: ToolContext,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.operation_runner = operation_runner
         self.dependency_analyzer = dependency_analyzer
+        self.operation_smoke_agent = operation_smoke_agent
         self.tool_context = tool_context
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
@@ -130,7 +139,15 @@ class RESTScopeMainGraph:
         def node(state: RESTScopeMainState) -> RESTScopeMainState:
             del state
             try:
-                self.dependency_analyzer.check_configured()
+                if self.operation_smoke_agent is None:
+                    if (
+                        self.operation_runner is None
+                        or self.dependency_analyzer is None
+                    ):
+                        raise RuntimeError(
+                            "Supervisor has no operation execution Agent"
+                        )
+                    self.dependency_analyzer.check_configured()
                 return {}
             except Exception as exc:
                 return self._technical_error(exc, stage="validate_runtime")
@@ -173,17 +190,39 @@ class RESTScopeMainGraph:
             counts[identity_key] = attempt_number
 
             try:
-                report = OperationTestAgent(
-                    runner=self.operation_runner,
-                    dependency_analyzer=self.dependency_analyzer,
-                    tracing_runtime=self.tracing_runtime,
-                ).run(
-                    OperationTestRequest(
-                        task_id=request.metadata.get("task_id"),
-                        operation=operation,
-                        candidate_operations=candidates,
+                if self.operation_smoke_agent is not None:
+                    successful_operation_keys = [
+                        _operation_key(
+                            OperationReference.model_validate(item)
+                        )
+                        for item in state.get("satisfied", [])
+                    ]
+                    smoke_result = self.operation_smoke_agent.run(
+                        self.tool_context,
+                        OperationSmokeRequest(
+                            operation_key=_operation_key(operation),
+                            successful_operation_keys=successful_operation_keys,
+                        ),
                     )
-                )
+                    report = _operation_smoke_report(
+                        smoke_result,
+                        operation=operation,
+                        task_id=request.metadata.get("task_id"),
+                    )
+                else:
+                    assert self.operation_runner is not None
+                    assert self.dependency_analyzer is not None
+                    report = OperationTestAgent(
+                        runner=self.operation_runner,
+                        dependency_analyzer=self.dependency_analyzer,
+                        tracing_runtime=self.tracing_runtime,
+                    ).run(
+                        OperationTestRequest(
+                            task_id=request.metadata.get("task_id"),
+                            operation=operation,
+                            candidate_operations=candidates,
+                        )
+                    )
             except Exception as exc:
                 return {
                     "ready_queue": ready,
@@ -507,6 +546,103 @@ def _schema_structure(schema: SchemaIR | None, *, depth: int = 0, seen: set[int]
 
 def _identity_key(operation: OperationReference) -> str:
     return f"{operation.method}\0{operation.path}\0{operation.operation_id or ''}"
+
+
+def _operation_key(operation: OperationReference) -> str:
+    return f"{operation.method} {operation.path}"
+
+
+def _operation_smoke_report(
+    result: OperationSmokeResult,
+    *,
+    operation: OperationReference,
+    task_id: str | None,
+) -> OperationTestReport:
+    reports = result.batch_reports
+    last = reports[-1] if reports else None
+    run_ids = [report.run_id for report in reports]
+    failure_ids = [
+        failure.failure_id
+        for report in reports
+        for failure in report.failure_report.unique_failure_messages
+    ]
+    execution = (
+        OperationExecutionResult(
+            run_id=last.run_id,
+            outcome=result.status,
+            status_code_counts=last.status_code_counts,
+            failure_ids=failure_ids,
+            stop_reason=(
+                "success_rate_threshold_not_met"
+                if result.status == "failed"
+                else None
+            ),
+        )
+        if last is not None
+        else None
+    )
+    dependency_analysis = None
+    findings: list[OperationTestFinding] = []
+    if result.status == "waiting":
+        names = [
+            f"{item.type}:{item.name}"
+            for item in result.waiting_references
+        ]
+        hint = "Reference value pools are empty"
+        if names:
+            hint = f"{hint}: {', '.join(names)}"
+        dependency_analysis = OperationDependencyAnalysis(
+            dependency_issue=True,
+            hint=hint,
+            dependencies=[],
+        )
+        findings.append(
+            OperationTestFinding(
+                severity="medium",
+                title="Operation smoke test is waiting for reference values",
+                summary=hint,
+            )
+        )
+    elif result.status == "failed":
+        findings.append(
+            OperationTestFinding(
+                severity="high",
+                title="Operation smoke success threshold was not met",
+                summary=(
+                    f"Observed success rate {result.success_rate:.3f}; "
+                    f"required {result.required_success_rate:.3f}."
+                ),
+                evidence_refs=failure_ids,
+            )
+        )
+    status = (
+        "passed"
+        if result.status == "passed"
+        else "errored"
+        if result.status == "errored"
+        else "failed"
+    )
+    observed_2xx = any(report.observed_2xx for report in reports)
+    if result.status == "passed" and not reports:
+        observed_2xx = True
+    return OperationTestReport(
+        status=status,
+        task_id=task_id,
+        operation=operation,
+        execution=execution,
+        dependency_analysis=dependency_analysis,
+        observed_2xx=observed_2xx,
+        findings=findings,
+        run_ids=run_ids,
+        error=result.error,
+        metadata={
+            "agent": "operation_smoke_agent",
+            "batch_count": len(reports),
+            "active_config_revision": result.active_config_revision,
+            "success_rate": result.success_rate,
+            "required_success_rate": result.required_success_rate,
+        },
+    )
 
 
 def _dependency_cycles(blocked: list[dict[str, Any]]) -> list[list[OperationReference]]:

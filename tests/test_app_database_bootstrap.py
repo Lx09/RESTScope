@@ -63,6 +63,7 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
             "generator_catalog_state",
             "operation_generator_configs",
             "input_generator_configs",
+            "generator_config_revisions",
             "resources",
             "resource_aliases",
             "operation_resource_rules",
@@ -679,13 +680,11 @@ def test_nul_database_path_is_reported_as_database_bootstrap_failed() -> None:
     assert str(exc_info.value) == "Failed to prepare configured SQLite database"
 
 
-def test_llm_analyzer_construction_failure_closes_runtime_and_removes_database(
+def test_smoke_agent_construction_failure_closes_runtime_and_removes_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     from restscope import RESTScopeApp
-    from restscope.agent import FakeOperationTestRunner
-
     database = tmp_path / "failed-analyzer.sqlite"
     host = SimpleNamespace(closed=False)
     host.close = lambda: setattr(host, "closed", True)
@@ -694,19 +693,21 @@ def test_llm_analyzer_construction_failure_closes_runtime_and_removes_database(
         tool_executor=SimpleNamespace(),
     )
     monkeypatch.setattr(
-        "restscope.app.build_capabilities_with_mcp_host",
+        "restscope.app.build_capabilities",
         lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(
         "restscope.app.build_resource_monitor_agent",
-        lambda *_args, **_kwargs: SimpleNamespace(),
+        lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
     )
     monkeypatch.setattr(
-        "restscope.app.ModelSelector.from_config",
-        lambda _config: (_ for _ in ()).throw(RuntimeError("analyzer failed")),
+        "restscope.app.build_operation_smoke_agent",
+        lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(RuntimeError("smoke failed")),
     )
 
-    with pytest.raises(RuntimeError, match="analyzer failed"):
+    with pytest.raises(RuntimeError, match="smoke failed"):
         RESTScopeApp.from_config(
             _config(f"sqlite:///{database}"),
             operation_runner=None,
@@ -715,6 +716,54 @@ def test_llm_analyzer_construction_failure_closes_runtime_and_removes_database(
 
     assert host.closed is True
     assert not database.exists()
+
+
+def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from restscope import RESTScopeApp
+    from restscope.observability import TracingRuntime
+
+    database = tmp_path / "smoke-default.sqlite"
+    smoke_agent = SimpleNamespace(run=lambda *_args, **_kwargs: None)
+    executor = SimpleNamespace(clear_context=lambda: None)
+    runtime = SimpleNamespace(
+        tool_executor=executor,
+        operation_testing_service=None,
+    )
+    capability_calls = []
+
+    monkeypatch.setattr(
+        "restscope.app.build_resource_monitor_agent",
+        lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "restscope.app.build_capabilities",
+        lambda **kwargs: capability_calls.append(kwargs) or runtime,
+    )
+    monkeypatch.setattr(
+        "restscope.app.build_capabilities_with_mcp_host",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("MCP host must not be constructed")
+        ),
+    )
+    monkeypatch.setattr(
+        "restscope.app.build_operation_smoke_agent",
+        lambda *_args, **_kwargs: smoke_agent,
+    )
+
+    app = RESTScopeApp.from_config(
+        _config(f"sqlite:///{database}"),
+        tracing_runtime=TracingRuntime.disabled(),
+    )
+    try:
+        assert app.operation_smoke_agent is smoke_agent
+        assert app.operation_runner is None
+        assert app.dependency_analyzer is None
+        assert len(capability_calls) == 1
+    finally:
+        app.close()
 
 
 def test_app_constructor_failure_removes_created_database(

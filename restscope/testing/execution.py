@@ -18,6 +18,11 @@ from restscope.http_transport import (
 from restscope.observability import TracingRuntime
 
 from .catalog import GeneratorConfigCatalog
+from .failure_reporting import (
+    MAX_FAILURE_RESPONSE_BYTES,
+    FailureCaseEvidence,
+    build_batch_failure_report,
+)
 from .generation import generate_test_case
 from .models import (
     GeneratedTestCase,
@@ -29,6 +34,7 @@ from .models import (
     TestCaseExecutionReport,
     TransportErrorSummary,
 )
+from .ports import ReferenceValueProvider
 from .serialization import serialize_test_case
 
 
@@ -52,10 +58,12 @@ class OperationTestingService:
         config_catalog: GeneratorConfigCatalog,
         transport: TargetHTTPTransport | None = None,
         tracing_runtime: TracingRuntime | None = None,
+        reference_values: ReferenceValueProvider | None = None,
     ) -> None:
         self.config_catalog = config_catalog
         self.transport = transport or TargetHTTPTransport()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
+        self.reference_values = reference_values
 
     def run_operation(
         self,
@@ -83,6 +91,7 @@ class OperationTestingService:
                 config,
                 run_seed=run_seed,
                 case_index=case_index,
+                reference_values=self.reference_values,
             )
             request = serialize_test_case(operation, generated)
             target_request = self.transport.prepare(
@@ -99,17 +108,18 @@ class OperationTestingService:
 
         run_id = f"test_run_{uuid4().hex}"
         reports: list[TestCaseExecutionReport] = []
+        failure_evidence: list[FailureCaseEvidence] = []
         for case_index, (generated, request, target_request) in enumerate(prepared):
-            reports.append(
-                self._execute_case(
-                    context,
-                    run_id=run_id,
-                    case_index=case_index,
-                    generated=generated,
-                    request=request,
-                    target_request=target_request,
-                )
+            case_report, case_failure_evidence = self._execute_case(
+                context,
+                run_id=run_id,
+                case_index=case_index,
+                generated=generated,
+                request=request,
+                target_request=target_request,
             )
+            reports.append(case_report)
+            failure_evidence.append(case_failure_evidence)
 
         status_counts = Counter(
             str(case.response.status_code)
@@ -135,6 +145,7 @@ class OperationTestingService:
                 for case in reports
             ),
             resource_monitor_warning_count=warning_count,
+            failure_report=build_batch_failure_report(failure_evidence),
         )
         return OperationExecutionReport.model_validate(
             self.tracing_runtime.redactor.redact(report)
@@ -149,7 +160,7 @@ class OperationTestingService:
         generated: GeneratedTestCase,
         request: PreparedTestRequest,
         target_request: PreparedTargetRequest,
-    ) -> TestCaseExecutionReport:
+    ) -> tuple[TestCaseExecutionReport, FailureCaseEvidence]:
         case_id = f"{run_id}_case_{case_index + 1}"
         request_summary = _request_summary(
             request,
@@ -159,6 +170,7 @@ class OperationTestingService:
         response_summary: ResponseSummary | None = None
         error_summary: TransportErrorSummary | None = None
         monitor_warning: ResourceMonitorWarningSummary | None = None
+        failure_evidence = FailureCaseEvidence(case_id=case_id)
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
             kind="TOOL",
@@ -178,6 +190,7 @@ class OperationTestingService:
                         if self.transport.has_response_processor
                         else None
                     ),
+                    failure_response_body_limit=MAX_FAILURE_RESPONSE_BYTES,
                     truncate_response_body=True,
                     buffer_success_body_only=True,
                     processor_context=TargetResponseOperationContext(
@@ -205,24 +218,46 @@ class OperationTestingService:
                         message=response.processor_warning.message,
                         issues=list(response.processor_warning.issues),
                     )
+                failure_evidence = FailureCaseEvidence(
+                    case_id=case_id,
+                    status_code=response.status_code,
+                    reason_phrase=response.reason_phrase,
+                    media_type=media_type,
+                    body=response.body,
+                    body_truncated=response.body_truncated,
+                    encoding=response.encoding,
+                )
                 span.set_output(response_summary)
             except TargetHTTPTimeout:
                 error_summary = TransportErrorSummary(
                     code="request_timeout",
                     message="HTTP request timed out",
                 )
+                failure_evidence = FailureCaseEvidence(
+                    case_id=case_id,
+                    transport_error_code=error_summary.code,
+                    transport_error_message=error_summary.message,
+                )
                 span.mark_error(error_summary.message)
             except TargetHTTPTransportError as exc:
                 error_summary = TransportErrorSummary(code=exc.code, message=str(exc))
+                failure_evidence = FailureCaseEvidence(
+                    case_id=case_id,
+                    transport_error_code=error_summary.code,
+                    transport_error_message=error_summary.message,
+                )
                 span.mark_error(error_summary.message)
 
-        return TestCaseExecutionReport(
-            case_id=case_id,
-            generated_test_case=generated,
-            request=request_summary,
-            response=response_summary,
-            transport_error=error_summary,
-            resource_monitor_warning=monitor_warning,
+        return (
+            TestCaseExecutionReport(
+                case_id=case_id,
+                generated_test_case=generated,
+                request=request_summary,
+                response=response_summary,
+                transport_error=error_summary,
+                resource_monitor_warning=monitor_warning,
+            ),
+            failure_evidence,
         )
 
 

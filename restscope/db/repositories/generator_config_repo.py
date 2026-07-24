@@ -6,11 +6,17 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from restscope.testing.models import InputGeneratorConfig, OperationGeneratorConfig
+from restscope.testing.models import (
+    GeneratorConfigRevision,
+    InputGeneratorConfig,
+    OperationGeneratorConfig,
+)
 from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
+from ..time import utc_now
 from ..orm import (
     GeneratorCatalogStateORM,
+    GeneratorConfigRevisionORM,
     InputGeneratorConfigORM,
     OperationGeneratorConfigORM,
 )
@@ -27,6 +33,11 @@ class SqlAlchemyGeneratorConfigRepository:
         self.session.add(GeneratorCatalogStateORM(id=1))
         for record in records:
             self._insert_record(record)
+            self._insert_revision(
+                record,
+                parent_revision=None,
+                lifecycle="accepted",
+            )
         try:
             self.session.flush()
         except IntegrityError as exc:
@@ -69,6 +80,11 @@ class SqlAlchemyGeneratorConfigRepository:
         disabled_reasons: list[dict],
         active_media_type: str | None,
         configs: list[InputGeneratorConfig],
+        lifecycle: str = "accepted",
+        hypothesis: dict | None = None,
+        evaluation: dict | None = None,
+        rollback_of_revision: int | None = None,
+        restored_from_revision: int | None = None,
     ) -> OperationGeneratorConfig:
         updated = self.session.execute(
             update(OperationGeneratorConfigORM)
@@ -94,6 +110,69 @@ class SqlAlchemyGeneratorConfigRepository:
         self._insert_input_configs(operation_key, configs)
         self.session.flush()
         record = self.get(operation_key)
+        assert record is not None
+        self._insert_revision(
+            record,
+            parent_revision=expected_revision,
+            lifecycle=lifecycle,
+            hypothesis=hypothesis,
+            evaluation=evaluation,
+            rollback_of_revision=rollback_of_revision,
+            restored_from_revision=restored_from_revision,
+        )
+        self.session.flush()
+        return record
+
+    def get_revision(
+        self,
+        operation_key: str,
+        revision: int,
+    ) -> GeneratorConfigRevision | None:
+        row = self.session.get(
+            GeneratorConfigRevisionORM,
+            (operation_key, revision),
+        )
+        return self._revision_record(row) if row is not None else None
+
+    def list_revisions(
+        self,
+        operation_key: str,
+    ) -> list[GeneratorConfigRevision]:
+        rows = self.session.scalars(
+            select(GeneratorConfigRevisionORM)
+            .where(GeneratorConfigRevisionORM.operation_key == operation_key)
+            .order_by(GeneratorConfigRevisionORM.revision)
+        ).all()
+        return [self._revision_record(row) for row in rows]
+
+    def update_revision(
+        self,
+        *,
+        operation_key: str,
+        revision: int,
+        expected_lifecycle: str,
+        lifecycle: str,
+        evaluation: dict | None,
+    ) -> GeneratorConfigRevision:
+        updated = self.session.execute(
+            update(GeneratorConfigRevisionORM)
+            .where(
+                GeneratorConfigRevisionORM.operation_key == operation_key,
+                GeneratorConfigRevisionORM.revision == revision,
+                GeneratorConfigRevisionORM.lifecycle == expected_lifecycle,
+            )
+            .values(
+                lifecycle=lifecycle,
+                evaluation=evaluation,
+                evaluated_at=utc_now(),
+            )
+        )
+        if updated.rowcount != 1:
+            raise GeneratorConfigConcurrentWrite(
+                f"{operation_key}@{revision}"
+            )
+        self.session.flush()
+        record = self.get_revision(operation_key, revision)
         assert record is not None
         return record
 
@@ -128,4 +207,48 @@ class SqlAlchemyGeneratorConfigRepository:
                 )
                 for position, config in enumerate(configs)
             ]
+        )
+
+    def _insert_revision(
+        self,
+        record: OperationGeneratorConfig,
+        *,
+        parent_revision: int | None,
+        lifecycle: str,
+        hypothesis: dict | None = None,
+        evaluation: dict | None = None,
+        rollback_of_revision: int | None = None,
+        restored_from_revision: int | None = None,
+    ) -> None:
+        self.session.add(
+            GeneratorConfigRevisionORM(
+                operation_key=record.operation_key,
+                revision=record.revision,
+                parent_revision=parent_revision,
+                lifecycle=lifecycle,
+                rollback_of_revision=rollback_of_revision,
+                restored_from_revision=restored_from_revision,
+                hypothesis=hypothesis,
+                config=record.model_dump(mode="json"),
+                evaluation=evaluation,
+                evaluated_at=utc_now() if evaluation is not None else None,
+            )
+        )
+
+    @staticmethod
+    def _revision_record(
+        row: GeneratorConfigRevisionORM,
+    ) -> GeneratorConfigRevision:
+        return GeneratorConfigRevision(
+            operation_key=row.operation_key,
+            revision=row.revision,
+            parent_revision=row.parent_revision,
+            lifecycle=row.lifecycle,
+            rollback_of_revision=row.rollback_of_revision,
+            restored_from_revision=row.restored_from_revision,
+            hypothesis=row.hypothesis,
+            config=row.config,
+            evaluation=row.evaluation,
+            created_at=row.created_at,
+            evaluated_at=row.evaluated_at,
         )

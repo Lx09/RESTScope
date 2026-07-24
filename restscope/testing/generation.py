@@ -26,9 +26,12 @@ from .models import (
     OperationTestSnapshot,
     ParameterSnapshot,
     RandomStringGenerator,
+    ResourceIdentifierGenerator,
+    ResponseValueGenerator,
     SchemaSnapshot,
 )
 from .models import InputNodeSnapshot
+from .ports import ReferenceValueProvider
 
 
 class GenerationError(ValueError):
@@ -37,7 +40,12 @@ class GenerationError(ValueError):
     code = "generation_failed"
 
 
-def generate_strategy_value(strategy: GeneratorStrategy, *, seed: int) -> Any:
+def generate_strategy_value(
+    strategy: GeneratorStrategy,
+    *,
+    seed: int,
+    reference_values: ReferenceValueProvider | None = None,
+) -> Any:
     """Generate one deterministic scalar value from a configured strategy."""
 
     generator = random.Random(seed)
@@ -56,6 +64,20 @@ def generate_strategy_value(strategy: GeneratorStrategy, *, seed: int) -> Any:
         return generator.random() < strategy.true_probability
     if isinstance(strategy, FormatGenerator):
         return _format_value(strategy.format, generator)
+    if isinstance(
+        strategy,
+        ResourceIdentifierGenerator | ResponseValueGenerator,
+    ):
+        values = (
+            list(reference_values.values_for(strategy))
+            if reference_values is not None
+            else []
+        )
+        if not values:
+            raise GenerationError(
+                f"Reference value pool is empty for {strategy.type}"
+            )
+        return deepcopy(generator.choice(values))
     raise GenerationError(f"Strategy {strategy.type} does not generate a scalar value")
 
 
@@ -65,6 +87,7 @@ def generate_test_case(
     *,
     run_seed: int,
     case_index: int,
+    reference_values: ReferenceValueProvider | None = None,
 ) -> GeneratedTestCase:
     """Generate one complete request from the persisted snapshot and configuration."""
 
@@ -78,6 +101,7 @@ def generate_test_case(
         config=config,
         run_seed=run_seed,
         case_index=case_index,
+        reference_values=reference_values,
     )
     return generator.generate()
 
@@ -90,11 +114,13 @@ class _TestCaseGenerator:
         config: OperationGeneratorConfig,
         run_seed: int,
         case_index: int,
+        reference_values: ReferenceValueProvider | None,
     ) -> None:
         self.operation = operation
         self.config = config
         self.run_seed = run_seed
         self.case_index = case_index
+        self.reference_values = reference_values
         self.nodes_by_path = {
             node.canonical_path: node for node in operation.input_nodes
         }
@@ -184,11 +210,14 @@ class _TestCaseGenerator:
             | NumberRangeGenerator
             | RandomStringGenerator
             | BooleanGenerator
-            | FormatGenerator,
+            | FormatGenerator
+            | ResourceIdentifierGenerator
+            | ResponseValueGenerator,
         ):
             value = generate_strategy_value(
                 strategy,
                 seed=self._seed(node, instance_path, "value"),
+                reference_values=self.reference_values,
             )
             self.generated_values.append(
                 GeneratedNodeValue(
@@ -261,7 +290,6 @@ class _TestCaseGenerator:
         if not isinstance(strategy, VariantGenerator):
             raise GenerationError(f"Variant node requires variant strategy: {node.canonical_path}")
         name = "oneOf" if schema.one_of else "anyOf"
-        branches_schema = schema.one_of or schema.any_of
         branches = [
             child
             for child in self.children.get(node.input_node_id, [])

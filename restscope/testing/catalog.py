@@ -13,6 +13,7 @@ from .models import (
     ChoiceGenerator,
     ConstantGenerator,
     FormatGenerator,
+    GeneratorConfigRevision,
     InputGeneratorConfig,
     InputGeneratorPatch,
     InputNodeSnapshot,
@@ -22,6 +23,8 @@ from .models import (
     ObjectGenerator,
     OperationGeneratorConfig,
     RandomStringGenerator,
+    ResourceIdentifierGenerator,
+    ResponseValueGenerator,
     RequestBodyGenerator,
     VariantGenerator,
 )
@@ -65,6 +68,21 @@ class GeneratorConfigCatalog:
 
     def inspect_operation(self, operation_key: str) -> OperationGeneratorConfig:
         return self._require_existing(operation_key)
+
+    def list_revisions(
+        self,
+        operation_key: str,
+    ) -> list[GeneratorConfigRevision]:
+        with self.unit_of_work_factory() as uow:
+            return uow.generator_configs.list_revisions(operation_key)
+
+    def get_revision(
+        self,
+        operation_key: str,
+        revision: int,
+    ) -> GeneratorConfigRevision | None:
+        with self.unit_of_work_factory() as uow:
+            return uow.generator_configs.get_revision(operation_key, revision)
 
     def initialize_once(self, ir: OpenAPISpecIR) -> bool:
         """Persist the first IR-derived generator catalog and never resync it."""
@@ -120,35 +138,7 @@ class GeneratorConfigCatalog:
         updates: Sequence[InputGeneratorPatch],
     ) -> OperationGeneratorConfig:
         current = self._require_existing(operation_key)
-        patches = [InputGeneratorPatch.model_validate(update) for update in updates]
-        if not patches:
-            raise GeneratorConfigError(
-                "generator_patch_empty",
-                "At least one generator patch is required",
-            )
-        counts = Counter(item.input_node_id for item in patches)
-        duplicates = sorted(node_id for node_id, count in counts.items() if count > 1)
-        current_by_id = {item.input_node_id: item for item in current.configs}
-        unknown = sorted(set(counts) - set(current_by_id))
-        if duplicates or unknown:
-            raise GeneratorConfigError(
-                "generator_patch_invalid_nodes",
-                f"Invalid generator patch nodes; unknown={unknown}, duplicates={duplicates}",
-            )
-        for patch in patches:
-            existing = current_by_id[patch.input_node_id]
-            payload = existing.model_dump()
-            if patch.inclusion_probability is not None:
-                payload["inclusion_probability"] = patch.inclusion_probability
-            if patch.strategy is not None:
-                payload["strategy"] = patch.strategy
-            current_by_id[patch.input_node_id] = InputGeneratorConfig.model_validate(
-                payload
-            )
-        updated = [
-            current_by_id[item.input_node_id]
-            for item in current.configs
-        ]
+        updated, patched_node_ids = _apply_patches(current, updates)
         _validate_configs(
             current,
             media_type=current.active_media_type,
@@ -161,7 +151,151 @@ class GeneratorConfigCatalog:
             active_media_type=current.active_media_type,
             configs=updated,
             clear_recoverable_reasons=False,
-            cleared_recoverable_node_ids=set(counts),
+            cleared_recoverable_node_ids=patched_node_ids,
+        )
+
+    def stage_candidate(
+        self,
+        *,
+        operation_key: str,
+        expected_revision: int,
+        updates: Sequence[InputGeneratorPatch],
+        hypothesis: dict,
+    ) -> OperationGeneratorConfig:
+        current = self._require_existing(operation_key)
+        updated, patched_node_ids = _apply_patches(current, updates)
+        _validate_configs(
+            current,
+            media_type=current.active_media_type,
+            configs=updated,
+            enforce_schema=False,
+        )
+        return self._replace(
+            current,
+            expected_revision=expected_revision,
+            active_media_type=current.active_media_type,
+            configs=updated,
+            clear_recoverable_reasons=False,
+            cleared_recoverable_node_ids=patched_node_ids,
+            lifecycle="candidate",
+            hypothesis=dict(hypothesis),
+        )
+
+    def accept_candidate(
+        self,
+        *,
+        operation_key: str,
+        candidate_revision: int,
+        evaluation: dict,
+    ) -> GeneratorConfigRevision:
+        with self.unit_of_work_factory() as uow:
+            current = uow.generator_configs.get(operation_key)
+            if current is None or current.revision != candidate_revision:
+                raise GeneratorConfigRevisionConflict(
+                    expected=candidate_revision,
+                    actual=current.revision if current is not None else 0,
+                )
+            try:
+                revision = uow.generator_configs.update_revision(
+                    operation_key=operation_key,
+                    revision=candidate_revision,
+                    expected_lifecycle="candidate",
+                    lifecycle="accepted",
+                    evaluation=dict(evaluation),
+                )
+            except GeneratorConfigConcurrentWrite as exc:
+                raise GeneratorConfigError(
+                    "generator_candidate_state_invalid",
+                    "Generator candidate is no longer pending evaluation",
+                ) from exc
+            uow.commit()
+            return revision
+
+    def reject_candidate_and_rollback(
+        self,
+        *,
+        operation_key: str,
+        candidate_revision: int,
+        evaluation: dict,
+    ) -> OperationGeneratorConfig:
+        with self.unit_of_work_factory() as uow:
+            current = uow.generator_configs.get(operation_key)
+            if current is None or current.revision != candidate_revision:
+                raise GeneratorConfigRevisionConflict(
+                    expected=candidate_revision,
+                    actual=current.revision if current is not None else 0,
+                )
+            candidate = uow.generator_configs.get_revision(
+                operation_key,
+                candidate_revision,
+            )
+            if (
+                candidate is None
+                or candidate.lifecycle != "candidate"
+                or candidate.parent_revision is None
+            ):
+                raise GeneratorConfigError(
+                    "generator_candidate_state_invalid",
+                    "Generator candidate is not pending or has no parent revision",
+                )
+            restored_from = uow.generator_configs.get_revision(
+                operation_key,
+                candidate.parent_revision,
+            )
+            if restored_from is None:
+                raise GeneratorConfigError(
+                    "generator_candidate_parent_missing",
+                    "Generator candidate parent revision does not exist",
+                )
+            try:
+                uow.generator_configs.update_revision(
+                    operation_key=operation_key,
+                    revision=candidate_revision,
+                    expected_lifecycle="candidate",
+                    lifecycle="rejected",
+                    evaluation=dict(evaluation),
+                )
+                source = restored_from.config
+                restored = uow.generator_configs.replace(
+                    operation_key=operation_key,
+                    expected_revision=candidate_revision,
+                    revision=candidate_revision + 1,
+                    snapshot=source.snapshot.model_dump(mode="json"),
+                    enabled=source.enabled,
+                    disabled_reasons=[
+                        item.model_dump(mode="json")
+                        for item in source.disabled_reasons
+                    ],
+                    active_media_type=source.active_media_type,
+                    configs=source.configs,
+                    lifecycle="rollback",
+                    rollback_of_revision=candidate_revision,
+                    restored_from_revision=restored_from.revision,
+                )
+            except GeneratorConfigConcurrentWrite as exc:
+                raise GeneratorConfigRevisionConflict(
+                    expected=candidate_revision,
+                    actual=None,
+                ) from exc
+            uow.commit()
+            return restored
+
+    def recover_interrupted_candidate(
+        self,
+        operation_key: str,
+    ) -> OperationGeneratorConfig:
+        current = self._require_existing(operation_key)
+        with self.unit_of_work_factory() as uow:
+            revision = uow.generator_configs.get_revision(
+                operation_key,
+                current.revision,
+            )
+        if revision is None or revision.lifecycle != "candidate":
+            return current
+        return self.reject_candidate_and_rollback(
+            operation_key=operation_key,
+            candidate_revision=current.revision,
+            evaluation={"stop_reason": "interrupted"},
         )
 
     def require_operation(self, operation_key: str) -> OperationGeneratorConfig:
@@ -192,6 +326,8 @@ class GeneratorConfigCatalog:
         configs: list[InputGeneratorConfig],
         clear_recoverable_reasons: bool,
         cleared_recoverable_node_ids: set[str] | None = None,
+        lifecycle: str = "accepted",
+        hypothesis: dict | None = None,
     ) -> OperationGeneratorConfig:
         if current.revision != expected_revision:
             raise GeneratorConfigRevisionConflict(
@@ -242,6 +378,8 @@ class GeneratorConfigCatalog:
                     ],
                     active_media_type=active_media_type,
                     configs=configs,
+                    lifecycle=lifecycle,
+                    hypothesis=hypothesis,
                 )
             except GeneratorConfigConcurrentWrite as exc:
                 raise GeneratorConfigRevisionConflict(
@@ -250,6 +388,46 @@ class GeneratorConfigCatalog:
                 ) from exc
             uow.commit()
             return record
+
+
+def _apply_patches(
+    current: OperationGeneratorConfig,
+    updates: Sequence[InputGeneratorPatch],
+) -> tuple[list[InputGeneratorConfig], set[str]]:
+    patches = [InputGeneratorPatch.model_validate(update) for update in updates]
+    if not patches:
+        raise GeneratorConfigError(
+            "generator_patch_empty",
+            "At least one generator patch is required",
+        )
+    counts = Counter(item.input_node_id for item in patches)
+    duplicates = sorted(
+        node_id for node_id, count in counts.items() if count > 1
+    )
+    current_by_id = {item.input_node_id: item for item in current.configs}
+    unknown = sorted(set(counts) - set(current_by_id))
+    if duplicates or unknown:
+        raise GeneratorConfigError(
+            "generator_patch_invalid_nodes",
+            f"Invalid generator patch nodes; unknown={unknown}, duplicates={duplicates}",
+        )
+    for patch in patches:
+        existing = current_by_id[patch.input_node_id]
+        payload = existing.model_dump()
+        if patch.inclusion_probability is not None:
+            payload["inclusion_probability"] = patch.inclusion_probability
+        if patch.strategy is not None:
+            payload["strategy"] = patch.strategy
+        current_by_id[patch.input_node_id] = InputGeneratorConfig.model_validate(
+            payload
+        )
+    return (
+        [
+            current_by_id[item.input_node_id]
+            for item in current.configs
+        ],
+        set(counts),
+    )
 
 
 def _normalize_media_type(
@@ -428,6 +606,21 @@ def _strategy_can_build_node(
         return isinstance(strategy, RequestBodyGenerator)
     if isinstance(strategy, RequestBodyGenerator):
         return False
+    if isinstance(
+        strategy,
+        ResourceIdentifierGenerator | ResponseValueGenerator,
+    ):
+        schema = node.schema_contract
+        return (
+            schema is not None
+            and not schema.properties
+            and schema.items is None
+            and not schema.all_of
+            and not schema.any_of
+            and not schema.one_of
+            and not _has_type(schema, "object")
+            and not _has_type(schema, "array")
+        )
     if isinstance(strategy, ArrayGenerator):
         return node.schema_contract is not None and node.schema_contract.items is not None
     if isinstance(strategy, VariantGenerator):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -113,6 +114,20 @@ class RequestBodyGenerator(_Strategy):
     type: Literal["request_body"]
 
 
+class ResourceIdentifierGenerator(_Strategy):
+    """Select an identifier already observed for one canonical resource."""
+
+    type: Literal["resource_identifier"]
+    resource: str = Field(min_length=1, max_length=200)
+
+
+class ResponseValueGenerator(_Strategy):
+    """Select a deduplicated response value from one named monitor pool."""
+
+    type: Literal["response_value"]
+    value_name: str = Field(min_length=1, max_length=200)
+
+
 GeneratorStrategy = Annotated[
     ConstantGenerator
     | ChoiceGenerator
@@ -124,6 +139,8 @@ GeneratorStrategy = Annotated[
     | ObjectGenerator
     | ArrayGenerator
     | VariantGenerator
+    | ResourceIdentifierGenerator
+    | ResponseValueGenerator
     | RequestBodyGenerator,
     Field(discriminator="type"),
 ]
@@ -265,6 +282,32 @@ class OperationGeneratorConfig(BaseModel):
     configs: list[InputGeneratorConfig]
 
 
+GeneratorRevisionLifecycle = Literal[
+    "candidate",
+    "accepted",
+    "rejected",
+    "rollback",
+]
+
+
+class GeneratorConfigRevision(BaseModel):
+    """One durable generator configuration revision and its evaluation state."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation_key: str
+    revision: int = Field(ge=1)
+    parent_revision: int | None = Field(default=None, ge=1)
+    lifecycle: GeneratorRevisionLifecycle
+    rollback_of_revision: int | None = Field(default=None, ge=1)
+    restored_from_revision: int | None = Field(default=None, ge=1)
+    hypothesis: dict[str, Any] | None = None
+    config: OperationGeneratorConfig
+    evaluation: dict[str, Any] | None = None
+    created_at: datetime
+    evaluated_at: datetime | None = None
+
+
 class GeneratedNodeValue(BaseModel):
     """One concrete scalar generated for an input-node occurrence."""
 
@@ -345,6 +388,27 @@ class ResourceMonitorWarningSummary(BaseModel):
     issues: list[str] = Field(default_factory=list)
 
 
+class UniqueFailureMessage(BaseModel):
+    """One normalized failure message and the cases that produced it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure_id: str
+    message: str
+    case_ids: list[str] = Field(default_factory=list)
+
+
+class BatchFailureReport(BaseModel):
+    """Deterministic failure messages for one bounded execution batch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    unique_failure_messages: list[UniqueFailureMessage] = Field(
+        default_factory=list
+    )
+    truncated: bool = False
+
+
 class TestCaseExecutionReport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -372,3 +436,4 @@ class OperationExecutionReport(BaseModel):
     error_count: int
     observed_2xx: bool
     resource_monitor_warning_count: int = 0
+    failure_report: BatchFailureReport = Field(default_factory=BatchFailureReport)

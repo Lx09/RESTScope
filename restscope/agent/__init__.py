@@ -55,6 +55,16 @@ from .resource_monitor import (
     build_resource_monitor_agent,
     register_resource_lookup_tool,
 )
+from .operation_smoke import (
+    OperationBatchRunner,
+    OperationSmokeAgent,
+    OperationSmokeDiagnoser,
+    OperationSmokeOutputError,
+    OperationSmokeRequest,
+    OperationSmokeResult,
+    ResourceCatalogReferenceValues,
+    build_operation_smoke_agent,
+)
 from .supervisor import (
     BlockedOperation,
     OperationAttempt,
@@ -80,6 +90,12 @@ __all__ = [
     "InvestigationAction",
     "InvestigationSummary",
     "OperationCandidate",
+    "OperationBatchRunner",
+    "OperationSmokeAgent",
+    "OperationSmokeDiagnoser",
+    "OperationSmokeOutputError",
+    "OperationSmokeRequest",
+    "OperationSmokeResult",
     "OperationDependencyAnalysis",
     "OperationDependencyAnalyzer",
     "OperationExecutionResult",
@@ -108,6 +124,7 @@ __all__ = [
     "LearnedResourceRule",
     "MonitoredOperation",
     "ResourceCatalog",
+    "ResourceCatalogReferenceValues",
     "ResourceLookupRequest",
     "ResourceLookupResult",
     "ResourceMonitorAgent",
@@ -117,5 +134,6 @@ __all__ = [
     "ResourceMonitorWarning",
     "ResourceObservation",
     "build_resource_monitor_agent",
+    "build_operation_smoke_agent",
     "register_resource_lookup_tool",
 ]

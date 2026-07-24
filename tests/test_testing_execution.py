@@ -16,7 +16,9 @@ def _configured_catalog(tmp_path: Path, ir):
     return catalog
 
 
-def test_operation_testing_service_executes_all_cases_without_reading_response_body(tmp_path: Path) -> None:
+def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
+    tmp_path: Path,
+) -> None:
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -56,6 +58,12 @@ def test_operation_testing_service_executes_all_cases_without_reading_response_b
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         status = 200 if len(requests) == 1 else 503
+        if status == 503:
+            return httpx.Response(
+                status,
+                headers={"Content-Type": "application/json"},
+                json={"message": "dependency unavailable"},
+            )
         return httpx.Response(
             status,
             headers={"Content-Type": "application/json", "Content-Length": "999"},
@@ -95,6 +103,16 @@ def test_operation_testing_service_executes_all_cases_without_reading_response_b
     assert report.response_validation == "not_evaluated"
     assert [case.response.status_code for case in report.cases] == [200, 503]
     assert all(not hasattr(case.response, "body") for case in report.cases)
+    assert report.failure_report.model_dump(mode="json") == {
+        "unique_failure_messages": [
+            {
+                "failure_id": "f1",
+                "message": "HTTP 503: dependency unavailable",
+                "case_ids": [report.cases[1].case_id],
+            }
+        ],
+        "truncated": False,
+    }
     assert "runtime-secret" in report.model_dump_json()
 
 
@@ -347,6 +365,11 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
     assert report.status == "partial"
     assert report.error_count == 1
     assert report.cases[1].transport_error.code == "request_failed"
+    assert [
+        item.message for item in report.failure_report.unique_failure_messages
+    ] == [
+        "TRANSPORT request_failed: HTTP request failed (ConnectError)",
+    ]
 
 
 def test_testing_transport_overrides_ordinary_context_headers_but_not_context_cookie() -> None:

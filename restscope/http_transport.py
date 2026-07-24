@@ -215,6 +215,7 @@ class TargetHTTPTransport:
         timeout_seconds: float = 30,
         request_kwargs: Mapping[str, Any] | None = None,
         response_body_limit: int | None = None,
+        failure_response_body_limit: int | None = None,
         truncate_response_body: bool = False,
         buffer_success_body_only: bool = False,
         processor_context: TargetResponseOperationContext | None = None,
@@ -228,17 +229,25 @@ class TargetHTTPTransport:
         ) as response:
             body: bytes | None = None
             body_truncated = False
-            if response_body_limit is not None and (
-                not buffer_success_body_only
-                or 200 <= response.status_code < 300
-            ):
+            successful = 200 <= response.status_code < 300
+            selected_body_limit = (
+                failure_response_body_limit
+                if not successful and failure_response_body_limit is not None
+                else response_body_limit
+                if response_body_limit is not None
+                and (not buffer_success_body_only or successful)
+                else None
+            )
+            if selected_body_limit is not None:
                 body, body_truncated = _read_bounded_response(
                     response,
-                    limit=response_body_limit,
+                    limit=selected_body_limit,
                     truncate=truncate_response_body,
                 )
             warning: TargetResponseProcessorWarning | None = None
             if (
+                successful
+                and
                 self.response_processor is not None
                 and processor_context is not None
                 and body is not None

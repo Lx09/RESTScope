@@ -13,14 +13,17 @@ from pydantic import TypeAdapter
 from restscope.agent import (
     LLMOperationDependencyAnalyzer,
     OperationDependencyAnalyzer,
+    OperationSmokeAgent,
     OperationTestRunner,
     RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
     ResourceMonitorResponseProcessor,
+    ResourceCatalogReferenceValues,
     SchemaSource,
     SchemathesisOperationRunner,
     build_resource_monitor_agent,
+    build_operation_smoke_agent,
 )
 from restscope.capabilities import (
     CapabilityRuntime,
@@ -47,8 +50,9 @@ class RESTScopeApp:
         self,
         *,
         config: RESTScopeConfig,
-        operation_runner: OperationTestRunner,
-        dependency_analyzer: OperationDependencyAnalyzer,
+        operation_runner: OperationTestRunner | None = None,
+        dependency_analyzer: OperationDependencyAnalyzer | None = None,
+        operation_smoke_agent: OperationSmokeAgent | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
@@ -63,6 +67,7 @@ class RESTScopeApp:
             self.config = config
             self.operation_runner = operation_runner
             self.dependency_analyzer = dependency_analyzer
+            smoke_agent = operation_smoke_agent
             trace_runtime = (
                 _build_app_tracing_runtime(config)
                 if tracing_runtime is None
@@ -82,24 +87,42 @@ class RESTScopeApp:
                     config,
                     tracing_runtime=self._tracing_runtime,
                 )
+                reference_values = ResourceCatalogReferenceValues(
+                    resource_monitor_agent.catalog
+                )
                 target_transport = TargetHTTPTransport(
                     response_processor=ResourceMonitorResponseProcessor(
                         resource_monitor_agent
                     )
                 )
+                operation_testing_service = OperationTestingService(
+                    config_catalog=generator_catalog,
+                    transport=target_transport,
+                    tracing_runtime=self._tracing_runtime,
+                    reference_values=reference_values,
+                )
                 built_runtime = build_capabilities(
                     presets=(),
                     tracing_runtime=self._tracing_runtime,
                     generator_config_catalog=generator_catalog,
-                    operation_testing_service=OperationTestingService(
-                        config_catalog=generator_catalog,
-                        transport=target_transport,
-                        tracing_runtime=self._tracing_runtime,
-                    ),
+                    operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
                     resource_monitor_agent=resource_monitor_agent,
                 )
                 capability_runtime = built_runtime
+                if (
+                    smoke_agent is None
+                    and operation_runner is None
+                    and dependency_analyzer is None
+                ):
+                    smoke_agent = build_operation_smoke_agent(
+                        config,
+                        config_catalog=generator_catalog,
+                        batch_runner=operation_testing_service,
+                        reference_values=reference_values,
+                        tracing_runtime=self._tracing_runtime,
+                    )
+            self.operation_smoke_agent = smoke_agent
             self.capability_runtime = capability_runtime
             bind_tracing_runtime = getattr(
                 self.capability_runtime,
@@ -129,6 +152,7 @@ class RESTScopeApp:
         env_file: str | Path | None = None,
         operation_runner: OperationTestRunner | None = None,
         dependency_analyzer: OperationDependencyAnalyzer | None = None,
+        operation_smoke_agent: OperationSmokeAgent | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
@@ -139,6 +163,7 @@ class RESTScopeApp:
             config,
             operation_runner=operation_runner,
             dependency_analyzer=dependency_analyzer,
+            operation_smoke_agent=operation_smoke_agent,
             capability_runtime=capability_runtime,
             tracing_runtime=tracing_runtime,
         )
@@ -150,6 +175,7 @@ class RESTScopeApp:
         *,
         operation_runner: OperationTestRunner | None = None,
         dependency_analyzer: OperationDependencyAnalyzer | None = None,
+        operation_smoke_agent: OperationSmokeAgent | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
@@ -169,6 +195,7 @@ class RESTScopeApp:
                 else tracing_runtime
             )
             runner = operation_runner
+            smoke_agent = operation_smoke_agent
             generator_catalog = None
             operation_testing_service = None
             resource_monitor_agent = None
@@ -179,6 +206,9 @@ class RESTScopeApp:
                     config,
                     tracing_runtime=trace_runtime,
                 )
+                reference_values = ResourceCatalogReferenceValues(
+                    resource_monitor_agent.catalog
+                )
                 target_transport = TargetHTTPTransport(
                     response_processor=ResourceMonitorResponseProcessor(
                         resource_monitor_agent
@@ -188,8 +218,65 @@ class RESTScopeApp:
                     config_catalog=generator_catalog,
                     transport=target_transport,
                     tracing_runtime=trace_runtime,
+                    reference_values=reference_values,
                 )
-            if runner is None:
+            use_smoke_default = (
+                runner is None and dependency_analyzer is None
+            )
+            if use_smoke_default:
+                if runtime is None:
+                    assert generator_catalog is not None
+                    assert operation_testing_service is not None
+                    assert resource_monitor_agent is not None
+                    runtime = build_capabilities(
+                        presets=(),
+                        tracing_runtime=trace_runtime,
+                        generator_config_catalog=generator_catalog,
+                        operation_testing_service=operation_testing_service,
+                        target_http_transport=target_transport,
+                        resource_monitor_agent=resource_monitor_agent,
+                    )
+                    runtime_is_owned = True
+                elif smoke_agent is None:
+                    operation_testing_service = getattr(
+                        runtime,
+                        "operation_testing_service",
+                        None,
+                    )
+                    resource_monitor_agent = getattr(
+                        runtime,
+                        "resource_monitor_agent",
+                        None,
+                    )
+                    if (
+                        operation_testing_service is None
+                        or resource_monitor_agent is None
+                    ):
+                        raise ValueError(
+                            "A custom capability runtime requires an injected "
+                            "OperationSmokeAgent or testing and resource services"
+                        )
+                    generator_catalog = (
+                        operation_testing_service.config_catalog
+                    )
+                    reference_values = (
+                        operation_testing_service.reference_values
+                        or ResourceCatalogReferenceValues(
+                            resource_monitor_agent.catalog
+                        )
+                    )
+                    operation_testing_service.reference_values = (
+                        reference_values
+                    )
+                if smoke_agent is None:
+                    smoke_agent = build_operation_smoke_agent(
+                        config,
+                        config_catalog=generator_catalog,
+                        batch_runner=operation_testing_service,
+                        reference_values=reference_values,
+                        tracing_runtime=trace_runtime,
+                    )
+            elif runner is None:
                 if runtime is None:
                     runtime = build_capabilities_with_mcp_host(
                         config=config.mcp.servers_file,
@@ -213,7 +300,7 @@ class RESTScopeApp:
                 runtime_is_owned = True
 
             analyzer = dependency_analyzer
-            if analyzer is None:
+            if not use_smoke_default and analyzer is None:
                 selector = ModelSelector.from_config(config.llm)
                 analyzer = LLMOperationDependencyAnalyzer(
                     client=build_llm_client(
@@ -227,6 +314,7 @@ class RESTScopeApp:
                 config=config,
                 operation_runner=runner,
                 dependency_analyzer=analyzer,
+                operation_smoke_agent=smoke_agent,
                 capability_runtime=runtime,
                 tracing_runtime=trace_runtime,
             )
@@ -313,6 +401,7 @@ class RESTScopeApp:
             report = RESTScopeMainGraph(
                 operation_runner=self.operation_runner,
                 dependency_analyzer=self.dependency_analyzer,
+                operation_smoke_agent=self.operation_smoke_agent,
                 tool_context=self._tool_context,
                 tracing_runtime=self.tracing_runtime,
             ).run(request)

@@ -12,6 +12,7 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 
     for package_name in (
         "openapi_retrieval",
+        "operation_smoke",
         "operation_test",
         "resource_monitor",
         "supervisor",
@@ -26,16 +27,19 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 def test_agent_package_and_public_facade_export_same_contracts() -> None:
     from restscope.agent import (
         OpenAPIRetrievalAgent,
+        OperationSmokeAgent,
         OperationTestAgent,
         ResourceMonitorAgent,
         RESTScopeMainGraph,
     )
     from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent as PackagedOpenAPIRetrievalAgent
+    from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
     from restscope.agent.operation_test import OperationTestAgent as PackagedOperationTestAgent
     from restscope.agent.resource_monitor import ResourceMonitorAgent as PackagedResourceMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
     assert OpenAPIRetrievalAgent is PackagedOpenAPIRetrievalAgent
+    assert OperationSmokeAgent is PackagedOperationSmokeAgent
     assert OperationTestAgent is PackagedOperationTestAgent
     assert ResourceMonitorAgent is PackagedResourceMonitorAgent
     assert RESTScopeMainGraph is PackagedMainGraph
@@ -44,6 +48,7 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
 def test_cross_agent_imports_use_package_facades() -> None:
     package_names = {
         "openapi_retrieval",
+        "operation_smoke",
         "operation_test",
         "resource_monitor",
         "supervisor",

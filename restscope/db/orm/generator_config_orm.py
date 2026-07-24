@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
@@ -39,3 +41,21 @@ class InputGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     inclusion_probability: Mapped[float] = mapped_column(Float, nullable=False)
     strategy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class GeneratorConfigRevisionORM(CreatedAtMixin, Base):
+    __tablename__ = "generator_config_revisions"
+
+    operation_key: Mapped[str] = mapped_column(
+        ForeignKey("operation_generator_configs.operation_key", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent_revision: Mapped[int | None] = mapped_column(Integer)
+    lifecycle: Mapped[str] = mapped_column(String(20), nullable=False)
+    rollback_of_revision: Mapped[int | None] = mapped_column(Integer)
+    restored_from_revision: Mapped[int | None] = mapped_column(Integer)
+    hypothesis: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    evaluation: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
