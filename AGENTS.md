@@ -57,6 +57,21 @@ and task records. Do not load unrelated large documents by default.
 - Never discard user work or use destructive Git operations unless the user
   explicitly requests the exact operation after reviewing its impact.
 
+## Review workflow
+
+- Do not use `subagent-driven-development` by default. Implement approved plans
+  inline with the primary Agent unless the user explicitly requests delegated
+  implementation.
+- Keep test-driven development and fresh final verification, but do not run a
+  separate specification review and code-quality review after every task.
+- Use at most one independent final review, and only when the change crosses
+  modules, changes persistence or a public contract, or has meaningful
+  security risk. Small localized changes use primary-Agent self-review.
+- Do not start additional independent review rounds unless the user explicitly
+  approves them or a newly discovered Critical issue requires confirmation.
+- A skill's preferred multi-Agent workflow does not override these project
+  rules or an explicit user instruction to work inline.
+
 ## Project posture
 
 There is no mandatory project-wide governance package at this stage. Planning
