@@ -320,6 +320,14 @@ enforces required inputs and Generator validity. Actual pool values, internal
 IDs, Generator classes, config revisions, prepared requests, headers, and
 Pydantic JSON Schemas are not sent to either round.
 
+The task card states the exact fields accepted by every Generator intent,
+including the supported `formatted_value` formats. Internal request-body
+control nodes are excluded from `P*` aliases. Observed resource/response
+choices are exposed only for scalar inputs; exact normalized field names are
+preferred before a bounded semantic match. Scalar OpenAPI parameters may reuse
+any observed scalar because their serialization is textual, while JSON body
+fields retain their declared type boundary.
+
 The patch is stored as a candidate revision and is never validated by replaying
 or cloning one failed case. A complete next batch accepts the candidate when it
 meets the threshold. Otherwise the candidate is rejected and a compensating

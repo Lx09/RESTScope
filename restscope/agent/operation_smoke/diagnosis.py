@@ -36,6 +36,7 @@ from .prompts import (
     build_generator_prompt,
     build_parameter_prompt,
     compile_generator_intents,
+    generator_intent_repair_guidance,
     resolve_parameter_decision,
     validate_generator_intents,
     validate_parameter_decision,
@@ -318,9 +319,12 @@ class OperationSmokeDiagnoser:
             output_model=output_model,
         )
         if not validation.valid:
+            if output_model is GeneratorIntentBatch:
+                return None, [generator_intent_repair_guidance()]
             return None, [
-                "Return one complete JSON object matching the example and "
-                "allowed fields."
+                "The diagnosis JSON must contain no_parameter_issue and "
+                "suspects. Each suspect must contain input, confidence, "
+                "reason, and evidence, using only the supplied aliases."
             ]
         parsed = output_model.model_validate(validation.validated_object)
         return parsed, semantic_validate(parsed)

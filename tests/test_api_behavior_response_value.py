@@ -464,10 +464,11 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
         ir=ir,
         consumer_operation_key="GET /builds/{commitId}",
         consumer_input_node_id="commit-input",
+        parameter_name="commitId",
         expected_type="string",
     )
     assert [option.source.field_name for option in options] == ["sha"]
-    assert client.requests == []
+    assert len(client.requests) == 1
 
     result = tracker.register(
         ir=ir,
@@ -478,8 +479,8 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     )
 
     assert [source.field_name for source in result.sources] == ["sha"]
-    assert len(client.requests) == 1
-    request = client.requests[0]
+    assert len(client.requests) == 2
+    request = client.requests[1]
     assert request.metadata["role"] == "api_behavior_monitor"
     prompt = request.messages[1].content
     assert 'Consumer input\n[P1] parameter "commitId"; expected type=string' in prompt
@@ -498,6 +499,81 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
         "$defs",
     ):
         assert forbidden not in prompt
+
+
+def test_available_source_options_prefer_backed_exact_name_fields() -> None:
+    from restscope.agent.api_behavior_monitor.response_value import (
+        ResponseValueTracker,
+    )
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.0",
+            "info": {"title": "assignments", "version": "1"},
+            "paths": {
+                "/assignments": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "assignments",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "collection": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "commitDate": {
+                                                                "type": "string"
+                                                            },
+                                                            "password": {
+                                                                "type": "string"
+                                                            },
+                                                            "employeeId": {
+                                                                "type": "string"
+                                                            },
+                                                        },
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+    tracker = ResponseValueTracker(catalog=_catalog())
+    tracker.observe(
+        producer_operation_key="GET /assignments",
+        status_code=200,
+        media_type="application/json",
+        body={
+            "collection": [
+                {
+                    "commitDate": "2026-07-25",
+                    "password": "visible-target-data",
+                    "employeeId": 7,
+                }
+            ]
+        },
+    )
+
+    options = tracker.available_source_options(
+        ir=ir,
+        consumer_operation_key="DELETE /assignments/{employeeId}",
+        consumer_input_node_id="employee-input",
+        parameter_name="employeeId",
+        expected_type=None,
+    )
+
+    assert [option.source.field_name for option in options] == ["employeeId"]
 
 
 def test_semantic_source_selection_fails_closed_without_repair() -> None:

@@ -32,6 +32,8 @@ from .response_value_catalog import (
     ResponseValueSource,
 )
 
+_MAX_AVAILABLE_SOURCE_OPTIONS = 10
+
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueRegistrationResult:
@@ -166,15 +168,16 @@ class ResponseValueTracker:
         ir: OpenAPISpecIR,
         consumer_operation_key: str,
         consumer_input_node_id: str,
+        parameter_name: str,
         expected_type: str | None,
     ) -> list[ResponseValueSourceOption]:
-        """Return every IR field that already has compatible historical values."""
+        """Return relevant IR fields backed by compatible historical values."""
 
         value_name = _value_name(
             consumer_operation_key,
             consumer_input_node_id,
         )
-        options: list[ResponseValueSourceOption] = []
+        backed: list[tuple[_SourceCandidate, ResponseValueSourceOption]] = []
         for candidate in _source_candidates(ir, expected_type=expected_type):
             values = [
                 value
@@ -187,15 +190,40 @@ class ResponseValueTracker:
             values = _deduplicate_typed_values(values)
             if not values:
                 continue
-            options.append(
-                ResponseValueSourceOption(
-                    value_name=value_name,
-                    source=candidate.source,
-                    compatible_scalar_type=expected_type,
-                    value_count=len(values),
+            backed.append(
+                (
+                    candidate,
+                    ResponseValueSourceOption(
+                        value_name=value_name,
+                        source=candidate.source,
+                        compatible_scalar_type=expected_type,
+                        value_count=len(values),
+                    ),
                 )
             )
-        return options[:100]
+        target_name = _normalize_identifier(parameter_name)
+        exact = [
+            option
+            for candidate, option in backed
+            if _normalize_identifier(candidate.source.field_name) == target_name
+        ]
+        if exact:
+            return exact[:_MAX_AVAILABLE_SOURCE_OPTIONS]
+
+        selected_sources = self._semantic_sources(
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+            candidates=[candidate for candidate, _ in backed],
+        )
+        option_by_source = {
+            _source_identity(option.source): option
+            for _, option in backed
+        }
+        return [
+            option_by_source[_source_identity(source)]
+            for source in selected_sources
+            if _source_identity(source) in option_by_source
+        ][:_MAX_AVAILABLE_SOURCE_OPTIONS]
 
     def preview(
         self,
@@ -573,6 +601,15 @@ def _deduplicate_typed_values(values: list[object]) -> list[object]:
 
 def _normalize_identifier(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _source_identity(source: ResponseValueSource) -> tuple[str, str, str, str]:
+    return (
+        source.producer_operation_key,
+        source.status_code,
+        source.media_type,
+        source.selector,
+    )
 
 
 def _display_field_path(selector: str) -> str:

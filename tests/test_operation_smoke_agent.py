@@ -496,7 +496,7 @@ def test_response_value_patch_is_registered_and_uses_system_value_name(
         "consumer_operation_key": operation_key,
         "consumer_input_node_id": node_id,
         "parameter_name": "itemId",
-        "expected_type": "string",
+        "expected_type": None,
     }
     source = registration_call["sources"][0]
     assert (
@@ -537,6 +537,7 @@ def test_available_reference_options_exclude_empty_pools_and_actual_values(
 
     class BehaviorAgent:
         def __init__(self) -> None:
+            self.source_requests = []
             self.catalog = SimpleNamespace(
                 list_resources=lambda **kwargs: [
                     ResourceNameSummary(
@@ -568,7 +569,7 @@ def test_available_reference_options_exclude_empty_pools_and_actual_values(
             )
 
         def available_response_value_sources(self, **kwargs):
-            del kwargs
+            self.source_requests.append(kwargs)
             return [
                 ResponseValueSourceOption(
                     value_name="response_known",
@@ -588,11 +589,14 @@ def test_available_reference_options_exclude_empty_pools_and_actual_values(
 
     catalog, operation_key = _catalog(tmp_path)
     config = catalog.inspect_operation(operation_key)
-    options = BehaviorMonitorReferenceValues(BehaviorAgent()).available_options(
+    behavior_agent = BehaviorAgent()
+    options = BehaviorMonitorReferenceValues(behavior_agent).available_options(
         ir=object(),
         config=config,
     )
 
+    assert behavior_agent.source_requests[0]["parameter_name"] == "itemId"
+    assert behavior_agent.source_requests[0]["expected_type"] is None
     assert {item.kind for item in options} == {
         "resource_identifier",
         "response_value",
@@ -601,6 +605,140 @@ def test_available_reference_options_exclude_empty_pools_and_actual_values(
     assert all("empty" != item.canonical_resource for item in options)
     serialized = str([item.model_dump(mode="json") for item in options])
     assert "secret-item-id" not in serialized
+
+
+def test_reference_options_exclude_request_body_and_object_nodes() -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from restscope.agent.api_behavior_monitor import (
+        ResourceIdentifierSummary,
+        ResourceLookupResult,
+        ResourceNameSummary,
+        ResponseValueSource,
+        ResponseValueSourceOption,
+    )
+    from restscope.agent.operation_smoke import BehaviorMonitorReferenceValues
+    from restscope.testing import (
+        InputGeneratorConfig,
+        InputNodeSnapshot,
+        OperationGeneratorConfig,
+        OperationTestSnapshot,
+        SchemaSnapshot,
+    )
+
+    class BehaviorAgent:
+        def __init__(self) -> None:
+            self.source_input_ids = []
+            self.catalog = SimpleNamespace(
+                list_resources=lambda **kwargs: [
+                    ResourceNameSummary(
+                        resource_id="resource_1",
+                        canonical_name="assignment",
+                        aliases=[],
+                    )
+                ]
+            )
+
+        def lookup(self, request):
+            return ResourceLookupResult(
+                status="found",
+                canonical_resource=request.resource,
+                identifiers=[
+                    ResourceIdentifierSummary(
+                        value=7,
+                        value_type="integer",
+                        last_seen_at=datetime.now(UTC),
+                    )
+                ],
+            )
+
+        def available_response_value_sources(self, **kwargs):
+            self.source_input_ids.append(kwargs["consumer_input_node_id"])
+            return [
+                ResponseValueSourceOption(
+                    value_name="response_name",
+                    value_count=1,
+                    compatible_scalar_type="string",
+                    source=ResponseValueSource(
+                        producer_operation_key="GET /assignments",
+                        status_code="200",
+                        media_type="application/json",
+                        selector="$.name",
+                        field_name="name",
+                    ),
+                )
+            ]
+
+    config = OperationGeneratorConfig(
+        operation_key="POST /assignments",
+        revision=1,
+        snapshot=OperationTestSnapshot(
+            operation_key="POST /assignments",
+            method="POST",
+            path="/assignments",
+            parameters=[],
+            request_body_node_id="body",
+            media_type_node_ids={"application/json": "body/application~1json"},
+            available_media_types=["application/json"],
+            input_nodes=[
+                InputNodeSnapshot(
+                    input_node_id="body",
+                    node_kind="request_body",
+                    canonical_path="body",
+                    required=True,
+                    schema_contract=None,
+                ),
+                InputNodeSnapshot(
+                    input_node_id="body/application~1json",
+                    node_kind="media_type",
+                    canonical_path="body/application~1json",
+                    parent_node_id="body",
+                    required=True,
+                    schema_contract=SchemaSnapshot(type="object"),
+                ),
+                InputNodeSnapshot(
+                    input_node_id="body/application~1json/properties/name",
+                    node_kind="property",
+                    canonical_path="body/application~1json/properties/name",
+                    parent_node_id="body/application~1json",
+                    required=False,
+                    schema_contract=SchemaSnapshot(type="string"),
+                ),
+            ],
+        ),
+        configs=[
+            InputGeneratorConfig(
+                input_node_id="body",
+                inclusion_probability=1,
+                strategy={"type": "request_body"},
+            ),
+            InputGeneratorConfig(
+                input_node_id="body/application~1json",
+                inclusion_probability=1,
+                strategy={"type": "object"},
+            ),
+            InputGeneratorConfig(
+                input_node_id="body/application~1json/properties/name",
+                inclusion_probability=0.5,
+                strategy={"type": "random_string"},
+            ),
+        ],
+        active_media_type="application/json",
+    )
+    behavior_agent = BehaviorAgent()
+
+    options = BehaviorMonitorReferenceValues(behavior_agent).available_options(
+        ir=object(),
+        config=config,
+    )
+
+    assert behavior_agent.source_input_ids == [
+        "body/application~1json/properties/name"
+    ]
+    assert {
+        option.input_node_id for option in options
+    } == {"body/application~1json/properties/name"}
 
 
 def test_reference_generator_selects_a_value_deterministically() -> None:

@@ -40,6 +40,21 @@ from .schemas import (
 
 MAX_PARAMETER_PROMPT_BYTES = 64 * 1024
 
+_GENERATOR_INTENT_FIELD_GUIDANCE = (
+    "Fields by generation kind: "
+    "exact_value: value; "
+    "sample_values: values, optional weights; "
+    "integer_between: minimum, maximum; "
+    "number_between: minimum, maximum; "
+    "random_text: minimum_length, maximum_length, optional allowed_characters; "
+    "boolean_bias: optional true_probability; "
+    "formatted_value: format (uuid, date, date-time, or email; "
+    "phone text must use exact_value or sample_values); "
+    "array_length: minimum_items, maximum_items; "
+    "variant_weights: weights; "
+    "observed_value: source (a supplied R alias)."
+)
+
 
 class _PromptModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -178,9 +193,14 @@ def build_parameter_prompt(
     report: OperationExecutionReport,
     config: OperationGeneratorConfig,
 ) -> ParameterPrompt:
+    prompt_nodes = [
+        node
+        for node in config.snapshot.input_nodes
+        if node.node_kind != "request_body"
+    ]
     input_by_alias = {
         f"P{index}": node.input_node_id
-        for index, node in enumerate(config.snapshot.input_nodes, start=1)
+        for index, node in enumerate(prompt_nodes, start=1)
     }
     alias_by_input = {
         input_node_id: alias for alias, input_node_id in input_by_alias.items()
@@ -195,7 +215,7 @@ def build_parameter_prompt(
         "Inputs",
     ]
     nodes_by_id = {
-        node.input_node_id: node for node in config.snapshot.input_nodes
+        node.input_node_id: node for node in prompt_nodes
     }
     for alias, input_node_id in input_by_alias.items():
         node = nodes_by_id[input_node_id]
@@ -610,11 +630,25 @@ def _generator_system_prompt() -> str:
         "the supplied P aliases. Available generation kinds are exact_value, "
         "sample_values, integer_between, number_between, random_text, "
         "boolean_bias, formatted_value, array_length, variant_weights, and "
-        "observed_value. observed_value must select a supplied R source. A "
-        "change may instead adjust inclusion_probability. Return JSON like "
+        "observed_value. "
+        + _GENERATOR_INTENT_FIELD_GUIDANCE
+        + " A change uses input and at least one of generation or "
+        "inclusion_probability. Return JSON like "
         '{"changes":[{"input":"P1","generation":{"kind":"sample_values",'
         '"values":["known-value"]}}]}. Return only complete changes, without '
         "explanations outside the JSON."
+    )
+
+
+def generator_intent_repair_guidance() -> str:
+    """Describe model-facing field names without exposing Python model details."""
+
+    return (
+        "The generator JSON used missing or unsupported field names. "
+        "Use source, not observed_source. "
+        "Use minimum and maximum, not min and max. "
+        "Use minimum_length and maximum_length, not length. "
+        + _GENERATOR_INTENT_FIELD_GUIDANCE
     )
 
 

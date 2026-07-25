@@ -232,6 +232,49 @@ def test_prompt_alias_maps_are_read_only() -> None:
         prompt.evidence_by_alias["F1"] = "forged"  # type: ignore[index]
 
 
+def test_parameter_prompt_excludes_request_body_control_node() -> None:
+    from restscope.agent.operation_smoke.prompts import build_parameter_prompt
+    from restscope.testing import InputGeneratorConfig, InputNodeSnapshot
+
+    config = _config()
+    config = config.model_copy(
+        update={
+            "snapshot": config.snapshot.model_copy(
+                update={
+                    "request_body_node_id": "body",
+                    "input_nodes": [
+                        InputNodeSnapshot(
+                            input_node_id="body",
+                            node_kind="request_body",
+                            canonical_path="body",
+                            required=True,
+                            schema_contract=None,
+                        ),
+                        *config.snapshot.input_nodes,
+                    ],
+                }
+            ),
+            "configs": [
+                InputGeneratorConfig(
+                    input_node_id="body",
+                    inclusion_probability=1,
+                    strategy={"type": "request_body"},
+                ),
+                *config.configs,
+            ],
+        }
+    )
+
+    prompt = build_parameter_prompt(_report(), config)
+
+    assert "body" not in prompt.input_by_alias.values()
+    assert list(prompt.input_by_alias.values()) == [
+        "path/projectId",
+        "query/region",
+    ]
+    assert 'input "body"' not in prompt.user
+
+
 def test_reference_generator_must_select_a_nonempty_system_option() -> None:
     from restscope.agent.operation_smoke import (
         AvailableReferenceOption,
@@ -370,6 +413,151 @@ def test_round_two_repairs_forged_reference_option() -> None:
 
     assert len(client.requests) == 3
     assert result.updates[0].strategy.type == "resource_identifier"
+
+
+def test_round_two_documents_generator_fields_and_repairs_live_alias_mistakes() -> None:
+    from restscope.agent.operation_smoke import (
+        AvailableReferenceOption,
+        OperationSmokeDiagnoser,
+    )
+
+    client = StubLLMClient(
+        [
+            _response(
+                {
+                    "no_parameter_issue": False,
+                    "suspects": [
+                        {
+                            "input": "P1",
+                            "confidence": 0.95,
+                            "reason": "An observed project identifier may be required.",
+                            "evidence": ["F1", "C1"],
+                        }
+                    ],
+                }
+            ),
+            _response(
+                {
+                    "changes": [
+                        {
+                            "input": "P1",
+                            "generation": {
+                                "kind": "observed_value",
+                                "observed_source": "R1",
+                            },
+                        }
+                    ]
+                }
+            ),
+            _response(
+                {
+                    "changes": [
+                        {
+                            "input": "P1",
+                            "generation": {
+                                "kind": "observed_value",
+                                "source": "R1",
+                            },
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(client=client, model=_model()).diagnose(
+        report=_report(),
+        config=_config(),
+        reference_options=[
+            AvailableReferenceOption(
+                option_id="ref_project",
+                input_node_id="path/projectId",
+                kind="response_value",
+                value_name="response_project",
+                compatible_scalar_type="string",
+                value_count=2,
+                producer_operation_keys=["GET /projects"],
+                producer_status_code="200",
+                producer_media_type="application/json",
+                source_field="projectId",
+                source_selector="$.projects[].projectId",
+            )
+        ],
+    )
+
+    system_prompt = client.requests[1].messages[0].content
+    assert "integer_between: minimum, maximum" in system_prompt
+    assert "number_between: minimum, maximum" in system_prompt
+    assert "random_text: minimum_length, maximum_length" in system_prompt
+    assert "observed_value: source" in system_prompt
+
+    repair_prompt = client.requests[2].messages[-1].content
+    assert "Use source, not observed_source" in repair_prompt
+    assert "Use minimum and maximum, not min and max" in repair_prompt
+    assert "Use minimum_length and maximum_length, not length" in repair_prompt
+    assert "GeneratorIntentBatch" not in repair_prompt
+    assert "input_node_id" not in repair_prompt
+    assert result.updates[0].strategy.type == "response_value"
+
+
+def test_round_two_repair_lists_supported_formatted_value_formats() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    client = StubLLMClient(
+        [
+            _response(
+                {
+                    "no_parameter_issue": False,
+                    "suspects": [
+                        {
+                            "input": "P1",
+                            "confidence": 0.9,
+                            "reason": "The generated text has the wrong format.",
+                            "evidence": ["F1", "C1"],
+                        }
+                    ],
+                }
+            ),
+            _response(
+                {
+                    "changes": [
+                        {
+                            "input": "P1",
+                            "generation": {
+                                "kind": "formatted_value",
+                                "format": "phone",
+                            },
+                        }
+                    ]
+                }
+            ),
+            _response(
+                {
+                    "changes": [
+                        {
+                            "input": "P1",
+                            "generation": {
+                                "kind": "sample_values",
+                                "values": ["+1-555-0100"],
+                            },
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(client=client, model=_model()).diagnose(
+        report=_report(),
+        config=_config(),
+    )
+
+    system_prompt = client.requests[1].messages[0].content
+    repair_prompt = client.requests[2].messages[-1].content
+    for prompt in (system_prompt, repair_prompt):
+        assert "uuid, date, date-time, or email" in prompt
+        assert "phone text must use exact_value or sample_values" in prompt
+    assert result.updates[0].strategy.type == "choice"
 
 
 def test_no_parameter_issue_stops_before_generator_round() -> None:

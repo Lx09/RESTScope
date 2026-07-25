@@ -311,12 +311,14 @@ class APIBehaviorMonitorAgent:
         ir: OpenAPISpecIR,
         consumer_operation_key: str,
         consumer_input_node_id: str,
+        parameter_name: str,
         expected_type: str | None,
     ) -> list[ResponseValueSourceOption]:
         return self.response_value_tracker.available_source_options(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
             consumer_input_node_id=consumer_input_node_id,
+            parameter_name=parameter_name,
             expected_type=expected_type,
         )
 

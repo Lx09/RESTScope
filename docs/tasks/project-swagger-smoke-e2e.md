@@ -134,3 +134,69 @@ Result:
   Resource Identifier observations.
 - Local evidence is retained under
   `/Users/lixin/Workplace/RESTScope/artifacts/project-swagger-smoke-e2e/project-swagger-smoke-20260725T003753Z-ede72a9f/`.
+
+## Follow-up: task-focused live trace audit
+
+On 2026-07-25 the user authorized another DeepSeek FAST/Phoenix run, including
+target-derived failures and generated request values, normal model charges, and
+potentially mutating requests to `127.0.0.1:34985`. The audit stopped after the
+same ten-operation coverage gate and changed only trace-proven infrastructure
+boundaries, not the Smoke diagnosis or candidate-evaluation algorithm.
+
+The first fresh trace exposed two prompt-boundary defects:
+
+- the Generator task card named intent kinds but omitted most required field
+  names, while structural repair collapsed validation feedback to one generic
+  sentence;
+- observed response candidates returned up to 100 type-compatible fields
+  without the exact-name/semantic selection already used by the Response Value
+  tracker.
+
+Later verification traces exposed two narrower cases: the supported
+`formatted_value` values were missing, and the internal `request_body` control
+node could be diagnosed and patched even though its Generator is fixed.
+Regression tests were added before each production change. The resulting
+boundary now:
+
+- documents every Generator intent field and the supported uuid, date,
+  date-time, and email formats in both the task and repair message;
+- prefers backed exact-name response fields, uses the existing bounded `S*`
+  semantic decision only as fallback, and returns at most ten response choices
+  per input;
+- exposes reference-backed Generators only to scalar inputs, with any observed
+  scalar accepted for text-serialized OpenAPI parameters and type-strict values
+  retained for JSON body fields;
+- excludes the request-body control node from model aliases.
+
+Final live verification:
+
+- Run: `project-swagger-smoke-20260725T051015Z-ee716486`.
+- Phoenix project:
+  `restscope-project-swagger-smoke-20260725T051015Z-ee716486`.
+- The E2E passed in 89.71 seconds. All ten operations entered Smoke.
+- Phoenix retained one 694-span trace: 28 batches, 280 cases, 21 diagnoses, and
+  42 LLM calls. All spans have `OK` status.
+- Eighteen Generator calls required no structured-output repair. Their maximum
+  trace input was 3,833 bytes, maximum observed-source count was 14, and no
+  request-body control node appeared. The pre-fix fresh trace had five failed
+  repair calls, 58–100 choices in every Generator task, and inputs up to about
+  13.1 KiB.
+- LLM inputs contain failed-case values but no internal input/reference IDs,
+  selector, Pydantic Schema, config revision, Authorization header, or prepared
+  request. Exact configured THINK, FAST, and Phoenix API key values were absent
+  from the exported spans.
+- Persisted monitors bind `employeeId`, `projectId`, and `commitDate` only to
+  same-name selectors. Parameter monitors use an unset expected type so integer
+  identifiers can be serialized into Spec-declared string paths. The final
+  database contains one resource, eight identifiers, 21 observations, and no
+  resource monitor errors.
+
+Business outcomes remain intentionally report-only. Two list operations passed
+without repair. The remaining operations produced non-2xx outcomes after one
+to four batches; one `PUT /assignments/update` candidate produced a single 200
+case but did not meet the 0.8 threshold. No production diagnosis or repair
+algorithm was changed in response to those target outcomes.
+
+On 2026-07-25 the user authorized committing these verified infrastructure
+fixes, merging them into local `main`, and removing the feature worktree and
+branch. No push was requested.

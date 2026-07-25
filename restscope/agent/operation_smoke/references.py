@@ -11,7 +11,9 @@ from restscope.agent.api_behavior_monitor import (
 )
 from restscope.testing import (
     InputGeneratorPatch,
+    InputNodeSnapshot,
     OperationGeneratorConfig,
+    ParameterSnapshot,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
@@ -20,6 +22,9 @@ from .schemas import AvailableReferenceOption
 
 
 _MAX_REFERENCE_OPTIONS = 100
+_SCALAR_REFERENCE_TYPES = frozenset(
+    {"string", "integer", "number", "boolean"}
+)
 
 
 class BehaviorMonitorReferenceValues:
@@ -54,6 +59,10 @@ class BehaviorMonitorReferenceValues:
         nodes = {
             item.input_node_id: item for item in config.snapshot.input_nodes
         }
+        parameters = {
+            item.input_node_id: item
+            for item in config.snapshot.parameters
+        }
         options: list[AvailableReferenceOption] = []
 
         # A response option is consumer-specific, so expose it before the
@@ -73,15 +82,22 @@ class BehaviorMonitorReferenceValues:
                 node = nodes.get(item.input_node_id)
                 if node is None:
                     continue
-                expected_type = (
-                    _expected_type(node.schema_contract.type)
-                    if node.schema_contract is not None
-                    else None
+                parameter = parameters.get(item.input_node_id)
+                compatible, expected_type = _reference_expected_type(
+                    node=node,
+                    parameter=parameter,
+                )
+                if not compatible:
+                    continue
+                parameter_name = _input_name(
+                    node=node,
+                    parameter=parameter,
                 )
                 source_options = available_response_value_sources(
                     ir=ir,
                     consumer_operation_key=config.operation_key,
                     consumer_input_node_id=item.input_node_id,
+                    parameter_name=parameter_name,
                     expected_type=expected_type,
                 )
                 for source_option in source_options:
@@ -145,11 +161,14 @@ class BehaviorMonitorReferenceValues:
             ):
                 continue
             node = nodes.get(item.input_node_id)
-            expected_type = (
-                _expected_type(node.schema_contract.type)
-                if node is not None and node.schema_contract is not None
-                else None
+            if node is None:
+                continue
+            compatible, expected_type = _reference_expected_type(
+                node=node,
+                parameter=parameters.get(item.input_node_id),
             )
+            if not compatible:
+                continue
             for resource, lookup in populated_resources:
                 if not _resource_pool_compatible(
                     expected_type,
@@ -214,16 +233,15 @@ class BehaviorMonitorReferenceValues:
                     f"Unknown response-value input node: {update.input_node_id}"
                 )
             parameter = parameters.get(update.input_node_id)
-            parameter_name = (
-                parameter.name
-                if parameter is not None
-                else node.canonical_path.rsplit(".", 1)[-1]
+            parameter_name = _input_name(node=node, parameter=parameter)
+            compatible, expected_type = _reference_expected_type(
+                node=node,
+                parameter=parameter,
             )
-            expected_type = (
-                _expected_type(node.schema_contract.type)
-                if node.schema_contract is not None
-                else None
-            )
+            if not compatible:
+                raise ValueError(
+                    "Response values can only be assigned to scalar inputs"
+                )
             selected = selected_by_input.get(update.input_node_id)
             register_selected = getattr(
                 self.agent,
@@ -279,6 +297,31 @@ class BehaviorMonitorReferenceValues:
                 )
             )
         return prepared
+
+
+def _input_name(
+    *,
+    node: InputNodeSnapshot,
+    parameter: ParameterSnapshot | None,
+) -> str:
+    if parameter is not None:
+        return parameter.name
+    return node.canonical_path.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _reference_expected_type(
+    *,
+    node: InputNodeSnapshot,
+    parameter: ParameterSnapshot | None,
+) -> tuple[bool, str | None]:
+    if node.schema_contract is None:
+        return False, None
+    declared_type = _expected_type(node.schema_contract.type)
+    if declared_type not in _SCALAR_REFERENCE_TYPES:
+        return False, None
+    # OpenAPI parameter serialization can safely stringify any observed scalar.
+    # Body fields retain their declared scalar type because JSON preserves types.
+    return True, None if parameter is not None else declared_type
 
 
 def _expected_type(value: str | list[str] | None) -> str | None:
