@@ -76,6 +76,20 @@ tool calls, and finish reason; token counts and latency remain attributes.
 This keeps request configuration and full tool schemas out of the prompt-like
 trace payload while preserving model-visible content.
 
+## Follow-up decision: readable semantic projection
+
+`phoenix-trace-readability.md` supersedes the generic JSON-blob presentation
+for new traces. LLM spans now use indexed OpenInference message attributes,
+while their generic input/output values contain only readable summaries.
+CHAIN, AGENT, and TOOL values use indented JSON; AGENT and TOOL spans also
+record their semantic names. App and Supervisor roots no longer duplicate the
+complete run report.
+
+Oversized values retain the existing byte boundary but now store a structured
+preview rather than an escaped JSON prefix. Provider-private tool-call context
+is not projected; this is a collection boundary and does not change the shared
+exact-value redaction policy. Historical Phoenix traces remain unchanged.
+
 ## Decisions
 
 - Manual span kinds are `CHAIN`, `AGENT`, `LLM`, and `TOOL`; model calls emit

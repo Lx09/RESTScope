@@ -122,27 +122,53 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert span.attributes["llm.tool_choice"] == "auto"
     assert span.attributes["llm.token_count.total"] == 18
     assert span.attributes["restscope.llm.latency_ms"] == 25
-    assert set(input_value) == {"messages"}
-    assert input_value["messages"][0] == {
-        "role": "user",
-        "content": "***REDACTED***",
-        "tool_call_id": None,
-        "name": None,
-        "tool_calls": [],
-    }
+    assert input_value == {"message_count": 1, "roles": ["user"]}
+    assert (
+        span.attributes["llm.input_messages.0.message.role"]
+        == "user"
+    )
+    assert (
+        span.attributes["llm.input_messages.0.message.content"]
+        == "***REDACTED***"
+    )
     assert set(output) == {
-        "content",
         "parsed_json",
         "tool_calls",
         "finish_reason",
     }
     assert output["finish_reason"] == "tool_calls"
     assert output["parsed_json"] == {"ok": True}
+    assert output["tool_calls"] == [
+        {"id": "call-1", "name": "catalog.lookup"}
+    ]
+    assert span.attributes["llm.finish_reason"] == "tool_calls"
+    assert (
+        span.attributes["llm.output_messages.0.message.role"]
+        == "assistant"
+    )
+    assert (
+        span.attributes["llm.output_messages.0.message.content"]
+        == "done"
+    )
+    assert (
+        span.attributes[
+            "llm.output_messages.0.message.tool_calls.0.tool_call.id"
+        ]
+        == "call-1"
+    )
+    assert (
+        span.attributes[
+            "llm.output_messages.0.message.tool_calls.0.tool_call.function.name"
+        ]
+        == "catalog.lookup"
+    )
+    assert json.loads(
+        span.attributes[
+            "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments"
+        ]
+    ) == {"query": "***REDACTED***"}
     assert "request-secret" not in rendered
-    assert reasoning in rendered
-    assert output["tool_calls"][0]["provider_context"] == {
-        "reasoning_content": reasoning
-    }
+    assert reasoning not in rendered
 
 
 def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
@@ -404,6 +430,28 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     assert attempt_span.attributes["openinference.span.kind"] == "AGENT"
     assert operation_span.attributes["openinference.span.kind"] == "AGENT"
     assert app_span.attributes["restscope.task_id"] == "trace-task"
+    assert json.loads(app_span.attributes["output.value"]) == {
+        "report_id": report.report_id,
+        "status": "passed",
+        "stop_reason": "completed",
+        "operation_count": 1,
+        "attempt_count": 1,
+    }
+    assert json.loads(graph_span.attributes["output.value"]) == {
+        "report_id": report.report_id,
+        "status": "passed",
+        "stop_reason": "completed",
+        "operation_count": 1,
+        "attempt_count": 1,
+        "rounds": 1,
+        "satisfied_operation_count": 1,
+        "unattempted_operation_count": 0,
+        "disposition_counts": {"satisfied": 1},
+        "failure_kind_counts": {},
+        "error": None,
+    }
+    assert app_span.attributes["restscope.output.truncated"] is False
+    assert graph_span.attributes["restscope.output.truncated"] is False
     assert "header-secret" in rendered
     assert "thinking-secret" not in rendered
     assert "fast-secret" not in rendered

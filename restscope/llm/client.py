@@ -24,26 +24,45 @@ class LLMClient:
         with self.tracing_runtime.span(
             "LLMClient.invoke",
             kind="LLM",
-            input_value={
-                "messages": [
+            attributes=_request_attributes(request),
+        ) as span:
+            span.set_llm_input_messages(
+                [
                     message.model_dump(mode="json")
                     for message in request.messages
                 ]
-            },
-            attributes=_request_attributes(request),
-        ) as span:
+            )
             response = provider.invoke(request)
-            span.set_output(
+            trace_tool_calls = [
                 {
-                    "content": response.content,
+                    "id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                }
+                for tool_call in response.tool_calls
+            ]
+            span.set_llm_output_messages(
+                [
+                    {
+                        "role": "assistant",
+                        "content": response.content,
+                        "tool_calls": trace_tool_calls,
+                    }
+                ],
+                summary={
                     "parsed_json": response.parsed_json,
                     "tool_calls": [
-                        tool_call.model_dump(mode="json")
+                        {
+                            "id": tool_call.id,
+                            "name": tool_call.name,
+                        }
                         for tool_call in response.tool_calls
                     ],
                     "finish_reason": response.finish_reason,
-                }
+                },
             )
+            if response.finish_reason is not None:
+                span.set_attribute("llm.finish_reason", response.finish_reason)
             for name, value in (
                 ("llm.token_count.prompt", response.prompt_tokens),
                 ("llm.token_count.completion", response.completion_tokens),

@@ -131,12 +131,18 @@ TRACING_FLUSH_TIMEOUT_SECONDS=5
 
 Open [http://localhost:6006](http://localhost:6006) to inspect traces. RESTScope
 records App, Agent, LLM, and tool spans. Trace inputs and outputs preserve
-parameter values, target Authorization/Cookie headers, and DeepSeek
-`reasoning_content`. Only the exact configured THINK, FAST, and Phoenix API key
-values are replaced; oversized content is truncated to the configured byte
-limit. Model calls are represented by RESTScope's manual `LLMClient.invoke`
-spans; their input contains only model-visible messages, while model settings
-and tool names are span attributes. The OpenAI SDK is not auto-instrumented.
+parameter values and target Authorization/Cookie headers. Only the exact
+configured THINK, FAST, and Phoenix API key values are replaced. Provider-private
+tool-call context is not projected into traces; model-visible reasoning remains
+visible when it is part of a recorded message.
+
+Agent, tool, and chain inputs and outputs are indented JSON. App and Supervisor
+root spans contain bounded run summaries, while operation and case details stay
+on their child spans. Manual `LLMClient.invoke` spans use OpenInference message
+attributes, so Phoenix renders system, user, and assistant messages separately;
+their generic input and output values contain only readable summaries and parsed
+JSON. Oversized content is truncated to a structured JSON preview at the
+configured byte limit. The OpenAI SDK is not auto-instrumented.
 
 Tracing is fail-open: missing optional packages, exporter failures, or shutdown
 timeouts do not change RESTScope results. Stop Phoenix without deleting its
