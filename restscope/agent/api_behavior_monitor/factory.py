@@ -67,4 +67,5 @@ def build_api_behavior_monitor_agent(
             client=client,
             model=model,
         ),
+        tracing_runtime=runtime,
     )

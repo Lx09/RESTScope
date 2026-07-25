@@ -7,6 +7,7 @@ from typing import Protocol
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from restscope.observability import TracingRuntime
 from restscope.testing import (
     GeneratorConfigCatalog,
     OperationExecutionReport,
@@ -47,13 +48,80 @@ class OperationSmokeAgent:
         batch_runner: OperationBatchRunner,
         diagnoser: OperationSmokeDiagnoser,
         reference_values: ReferenceValueProvider,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.config_catalog = config_catalog
         self.batch_runner = batch_runner
         self.diagnoser = diagnoser
         self.reference_values = reference_values
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(
+        self,
+        context,
+        request: OperationSmokeRequest,
+    ) -> OperationSmokeResult:
+        with self.tracing_runtime.span(
+            "OperationSmokeAgent.run",
+            kind="AGENT",
+            input_value={
+                "operation_key": request.operation_key,
+                "case_count": request.case_count,
+                "success_rate_threshold": request.success_rate_threshold,
+                "max_feedback_rounds": request.max_feedback_rounds,
+                "seed": request.seed,
+            },
+            attributes={
+                "restscope.operation.key": request.operation_key,
+                "restscope.smoke.case_count": request.case_count,
+                "restscope.smoke.success_rate_threshold": (
+                    request.success_rate_threshold
+                ),
+                "restscope.smoke.max_feedback_rounds": (
+                    request.max_feedback_rounds
+                ),
+            },
+        ) as span:
+            result = self._run(context, request)
+            span.set_output(
+                {
+                    "status": result.status,
+                    "success_rate": result.success_rate,
+                    "active_config_revision": result.active_config_revision,
+                    "batch_run_ids": [
+                        report.run_id for report in result.batch_reports
+                    ],
+                    "diagnosis_count": len(result.diagnoses),
+                    "failure_kind": result.failure_kind,
+                }
+            )
+            span.set_attribute("restscope.smoke.status", result.status)
+            span.set_attribute(
+                "restscope.smoke.success_rate",
+                result.success_rate,
+            )
+            span.set_attribute(
+                "restscope.smoke.active_config_revision",
+                result.active_config_revision,
+            )
+            span.set_attribute(
+                "restscope.smoke.batch_count",
+                len(result.batch_reports),
+            )
+            span.set_attribute(
+                "restscope.smoke.diagnosis_count",
+                len(result.diagnoses),
+            )
+            if result.failure_kind is not None:
+                span.set_attribute(
+                    "restscope.smoke.failure_kind",
+                    result.failure_kind,
+                )
+            if result.status == "errored":
+                span.mark_error("Operation Smoke returned an errored result")
+            return result
+
+    def _run(
         self,
         context,
         request: OperationSmokeRequest,

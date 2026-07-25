@@ -74,6 +74,67 @@ class OperationTestingService:
         case_count: int = 1,
         seed: int | None = None,
     ) -> OperationExecutionReport:
+        with self.tracing_runtime.span(
+            "OperationTestingService.run_operation",
+            kind="CHAIN",
+            input_value={
+                "operation_key": operation_key,
+                "case_count": case_count,
+                "seed": seed,
+            },
+            attributes={
+                "restscope.operation.key": operation_key,
+                "restscope.test.case_count": case_count,
+            },
+        ) as span:
+            report = self._run_operation(
+                context,
+                operation_key=operation_key,
+                case_count=case_count,
+                seed=seed,
+            )
+            span.set_output(
+                {
+                    "run_id": report.run_id,
+                    "status": report.status,
+                    "config_revision": report.config_revision,
+                    "status_code_counts": report.status_code_counts,
+                    "error_count": report.error_count,
+                    "observed_2xx": report.observed_2xx,
+                    "response_validation": report.response_validation,
+                    "behavior_monitor_warning_count": (
+                        report.behavior_monitor_warning_count
+                    ),
+                    "failure_message_count": len(
+                        report.failure_report.unique_failure_messages
+                    ),
+                }
+            )
+            span.set_attribute("restscope.test.run_id", report.run_id)
+            span.set_attribute(
+                "restscope.generator.config_revision",
+                report.config_revision,
+            )
+            span.set_attribute("restscope.test.status", report.status)
+            span.set_attribute(
+                "restscope.test.error_count",
+                report.error_count,
+            )
+            span.set_attribute(
+                "restscope.test.observed_2xx",
+                report.observed_2xx,
+            )
+            return report
+
+    def _run_operation(
+        self,
+        context: ToolContext,
+        /,
+        *,
+        operation_key: str,
+        case_count: int = 1,
+        seed: int | None = None,
+    ) -> OperationExecutionReport:
         if not 1 <= case_count <= 20:
             raise TestingExecutionError(
                 "invalid_case_count",
@@ -180,6 +241,8 @@ class OperationTestingService:
             input_value=request_summary,
             attributes={
                 "restscope.operation.key": generated.operation_key,
+                "restscope.test.run_id": run_id,
+                "restscope.test.case_id": case_id,
                 "restscope.test.case_index": case_index,
             },
         ) as span:

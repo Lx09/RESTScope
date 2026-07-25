@@ -97,8 +97,8 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert span.attributes["llm.token_count.total"] == 18
     assert span.attributes["restscope.llm.latency_ms"] == 25
     assert "request-secret" not in rendered
-    assert reasoning in rendered
-    assert output["tool_calls"][0]["provider_context"]["reasoning_content"] == reasoning
+    assert reasoning not in rendered
+    assert "provider_context" not in output["tool_calls"][0]
 
 
 def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
@@ -263,6 +263,7 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     spans = {span.name: span for span in exporter.get_finished_spans()}
     app_span = spans["RESTScopeApp.run"]
     graph_span = spans["RESTScopeMainGraph.run"]
+    attempt_span = spans["RESTScopeMainGraph.operation_attempt"]
     operation_span = spans["OperationTestAgent.run"]
     rendered = json.dumps(
         [dict(span.attributes) for span in spans.values()],
@@ -278,9 +279,11 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     with pytest.raises(AttributeError):
         app.tracing_runtime = runtime
     assert graph_span.parent.span_id == app_span.context.span_id
-    assert operation_span.parent.span_id == graph_span.context.span_id
+    assert attempt_span.parent.span_id == graph_span.context.span_id
+    assert operation_span.parent.span_id == attempt_span.context.span_id
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
     assert graph_span.attributes["openinference.span.kind"] == "AGENT"
+    assert attempt_span.attributes["openinference.span.kind"] == "AGENT"
     assert operation_span.attributes["openinference.span.kind"] == "AGENT"
     assert app_span.attributes["restscope.task_id"] == "trace-task"
     assert "header-secret" in rendered
@@ -692,9 +695,15 @@ def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path:
     assert "generated-secret" in rendered_result
     spans = list(exporter.get_finished_spans())
     wrapper = next(span for span in spans if span.name == RUN_OPERATION_TOOL_NAME)
+    batch = next(
+        span
+        for span in spans
+        if span.name == "OperationTestingService.run_operation"
+    )
     cases = [span for span in spans if span.name == "RESTScopeTestCase.execute"]
     assert len(cases) == 2
-    assert all(span.parent.span_id == wrapper.context.span_id for span in cases)
+    assert batch.parent.span_id == wrapper.context.span_id
+    assert all(span.parent.span_id == batch.context.span_id for span in cases)
     rendered_spans = json.dumps([dict(span.attributes) for span in spans], default=str)
     assert "runtime-secret" in rendered_spans
     assert "generated-secret" in rendered_spans

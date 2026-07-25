@@ -16,6 +16,7 @@ from restscope.llm import (
     LLMResponse,
     OutputValidator,
 )
+from restscope.observability import TracingRuntime
 from restscope.testing import (
     InputGeneratorConfig,
     InputGeneratorPatch,
@@ -56,12 +57,73 @@ class OperationSmokeDiagnoser:
         client: LLMClient,
         model: LLMModelConfig,
         validator: OutputValidator | None = None,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.client = client
         self.model = model
         self.validator = validator or OutputValidator()
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def diagnose(
+        self,
+        *,
+        report: OperationExecutionReport,
+        config: OperationGeneratorConfig,
+        reference_options: list[AvailableReferenceOption] | None = None,
+        reference_option_provider: (
+            Callable[[set[str]], list[AvailableReferenceOption]] | None
+        ) = None,
+    ) -> TwoRoundDiagnosisResult:
+        with self.tracing_runtime.span(
+            "OperationSmokeDiagnoser.diagnose",
+            kind="AGENT",
+            input_value={
+                "operation_key": report.operation_key,
+                "run_id": report.run_id,
+                "config_revision": config.revision,
+                "failure_message_count": len(
+                    report.failure_report.unique_failure_messages
+                ),
+            },
+            attributes={
+                "restscope.operation.key": report.operation_key,
+                "restscope.test.run_id": report.run_id,
+                "restscope.generator.config_revision": config.revision,
+            },
+        ) as span:
+            result = self._diagnose(
+                report=report,
+                config=config,
+                reference_options=reference_options,
+                reference_option_provider=reference_option_provider,
+            )
+            span.set_output(
+                {
+                    "no_parameter_issue": (
+                        result.diagnosis.no_parameter_issue
+                    ),
+                    "suspect_count": len(result.diagnosis.suspects),
+                    "update_count": len(result.updates),
+                    "reference_selection_count": len(
+                        result.selected_reference_options
+                    ),
+                }
+            )
+            span.set_attribute(
+                "restscope.smoke.no_parameter_issue",
+                result.diagnosis.no_parameter_issue,
+            )
+            span.set_attribute(
+                "restscope.smoke.suspect_count",
+                len(result.diagnosis.suspects),
+            )
+            span.set_attribute(
+                "restscope.smoke.generator_update_count",
+                len(result.updates),
+            )
+            return result
+
+    def _diagnose(
         self,
         *,
         report: OperationExecutionReport,

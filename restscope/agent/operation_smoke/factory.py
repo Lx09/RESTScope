@@ -35,6 +35,8 @@ def build_operation_smoke_agent(
             model=ModelSelector.from_config(config.llm).select(
                 "operation_smoke_parameter_diagnosis"
             ),
+            tracing_runtime=runtime,
         ),
         reference_values=reference_values,
+        tracing_runtime=runtime,
     )

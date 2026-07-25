@@ -35,5 +35,6 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "integration: marks tests as requiring LLM env vars (deselect with '-m \"not integration\"')",
+    "live_e2e: marks destructive tests requiring the configured live API and Phoenix",
     "phoenix_contract: marks tests requiring the local Phoenix Docker service",
 ]

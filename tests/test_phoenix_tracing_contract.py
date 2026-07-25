@@ -35,7 +35,11 @@ def _wait_for_phoenix() -> None:
     raise AssertionError("Local Phoenix did not become ready within 30 seconds") from last_error
 
 
-def _wait_for_traces(project_name: str) -> dict:
+def _wait_for_traces(
+    project_name: str,
+    *,
+    expected_span_names: set[str] | None = None,
+) -> dict:
     trace_url = (
         f"{PHOENIX_ENDPOINT}/v1/projects/{quote(project_name, safe='')}/traces"
         "?include_spans=true&limit=100"
@@ -50,7 +54,13 @@ def _wait_for_traces(project_name: str) -> dict:
             traces = _get_json(trace_url)
             if traces.get("data"):
                 spans = _get_json(span_url)
-                if spans.get("data"):
+                span_names = {
+                    span["name"] for span in spans.get("data", [])
+                }
+                if spans.get("data") and (
+                    expected_span_names is None
+                    or expected_span_names.issubset(span_names)
+                ):
                     return {"traces": traces, "spans": spans}
         except HTTPError as exc:
             if exc.code != 404:
@@ -188,21 +198,25 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         pass
     app.close()
 
-    payload = _wait_for_traces(project_name)
+    expected_names = {
+        "RESTScopeApp.run",
+        "RESTScopeMainGraph.run",
+        "RESTScopeMainGraph.operation_attempt",
+        "OperationTestAgent.run",
+        "contract.tool",
+        "LLMClient.invoke",
+        "contract.truncated",
+    }
+    payload = _wait_for_traces(
+        project_name,
+        expected_span_names=expected_names,
+    )
     rendered = json.dumps(payload, ensure_ascii=False, default=str)
     if "contract-secret" in rendered:
         pytest.fail("Phoenix trace payload leaked a registered secret")
     if reasoning in rendered:
         pytest.fail("Phoenix trace payload leaked reasoning_content")
 
-    expected_names = {
-        "RESTScopeApp.run",
-        "RESTScopeMainGraph.run",
-        "OperationTestAgent.run",
-        "contract.tool",
-        "LLMClient.invoke",
-        "contract.truncated",
-    }
     spans = payload["spans"]["data"]
     assert expected_names.issubset({span["name"] for span in spans})
     assert {"CHAIN", "AGENT", "TOOL", "LLM"}.issubset(
@@ -211,6 +225,12 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
 
     app_span = next(span for span in spans if span["name"] == "RESTScopeApp.run")
     graph_span = next(span for span in spans if span["name"] == "RESTScopeMainGraph.run")
+    attempt_span = next(
+        span
+        for span in spans
+        if span["name"] == "RESTScopeMainGraph.operation_attempt"
+        and span["context"]["trace_id"] == app_span["context"]["trace_id"]
+    )
     operation_span = next(
         span
         for span in spans
@@ -220,6 +240,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     truncated_span = next(span for span in spans if span["name"] == "contract.truncated")
 
     assert graph_span["parent_id"] == app_span["context"]["span_id"]
-    assert operation_span["parent_id"] == graph_span["context"]["span_id"]
+    assert attempt_span["parent_id"] == graph_span["context"]["span_id"]
+    assert operation_span["parent_id"] == attempt_span["context"]["span_id"]
     assert truncated_span["attributes"]["restscope.input.truncated"] is True
     assert truncated_span["attributes"]["restscope.input.original_size_bytes"] > 65536

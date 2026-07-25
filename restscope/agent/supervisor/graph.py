@@ -179,7 +179,7 @@ class RESTScopeMainGraph:
             return self._technical_error(exc, stage="discover_operations")
 
     def _run_next_operation(self, request: RESTScopeRunRequest):
-        def node(state: RESTScopeMainState) -> RESTScopeMainState:
+        def execute(state: RESTScopeMainState) -> RESTScopeMainState:
             ready = list(state.get("ready_queue", []))
             if not ready:
                 return {}
@@ -306,6 +306,89 @@ class RESTScopeMainGraph:
                 }
             )
             return updates
+
+        def node(state: RESTScopeMainState) -> RESTScopeMainState:
+            ready = list(state.get("ready_queue", []))
+            if not ready:
+                return execute(state)
+            operation = OperationReference.model_validate(ready[0])
+            identity_key = _identity_key(operation)
+            attempt_number = (
+                dict(state.get("attempt_counts", {})).get(identity_key, 0) + 1
+            )
+            round_number = int(state.get("current_round", 1))
+            task_id = request.metadata.get("task_id")
+            attributes: dict[str, Any] = {
+                "restscope.operation.key": _operation_key(operation),
+                "restscope.operation.method": operation.method,
+                "restscope.operation.path": operation.path,
+                "restscope.operation.round": round_number,
+                "restscope.operation.attempt": attempt_number,
+            }
+            if task_id:
+                attributes["restscope.task_id"] = task_id
+            with self.tracing_runtime.span(
+                "RESTScopeMainGraph.operation_attempt",
+                kind="AGENT",
+                input_value={
+                    "operation_key": _operation_key(operation),
+                    "round_number": round_number,
+                    "attempt_number": attempt_number,
+                },
+                attributes=attributes,
+            ) as span:
+                updates = execute(state)
+                if updates.get("last_error") is not None:
+                    error = updates["last_error"]
+                    span.set_output(
+                        {
+                            "disposition": "global_error",
+                            "error": error,
+                        }
+                    )
+                    span.set_attribute(
+                        "restscope.operation.disposition",
+                        "global_error",
+                    )
+                    span.mark_error(
+                        str(error.get("message", "Operation attempt failed"))
+                    )
+                    return updates
+                attempt_values = updates.get("attempts", [])
+                if not attempt_values:
+                    return updates
+                attempt = OperationAttempt.model_validate(attempt_values[-1])
+                span.set_output(
+                    {
+                        "disposition": attempt.disposition,
+                        "failure_kind": attempt.failure_kind,
+                        "report_status": attempt.report.status,
+                        "observed_2xx": attempt.report.observed_2xx,
+                        "run_ids": attempt.report.run_ids,
+                        "batch_count": attempt.report.metadata.get(
+                            "batch_count",
+                            0,
+                        ),
+                    }
+                )
+                span.set_attribute(
+                    "restscope.operation.disposition",
+                    attempt.disposition,
+                )
+                span.set_attribute(
+                    "restscope.operation.report_status",
+                    attempt.report.status,
+                )
+                span.set_attribute(
+                    "restscope.operation.observed_2xx",
+                    attempt.report.observed_2xx,
+                )
+                if attempt.failure_kind is not None:
+                    span.set_attribute(
+                        "restscope.operation.failure_kind",
+                        attempt.failure_kind,
+                    )
+                return updates
 
         return node
 

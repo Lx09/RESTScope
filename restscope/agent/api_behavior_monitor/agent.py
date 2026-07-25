@@ -15,6 +15,7 @@ from restscope.openapi_parser import (
     match_operation,
 )
 from restscope.openapi_parser.ir import OperationIR, SchemaIR
+from restscope.observability import TracingRuntime
 
 from .contract_tracker import (
     ContractCheckResult,
@@ -59,10 +60,16 @@ class APIBehaviorMonitorAgent:
         contract_tracker: ResponseContractTracker,
         resource_identifier_tracker: ResourceIdentifierTracker,
         response_value_tracker: ResponseValueTracker,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.contract_tracker = contract_tracker
         self.resource_identifier_tracker = resource_identifier_tracker
         self.response_value_tracker = response_value_tracker
+        self._tracing_runtime = (
+            tracing_runtime
+            or getattr(resource_identifier_tracker, "tracing_runtime", None)
+            or TracingRuntime.disabled()
+        )
 
     @property
     def catalog(self):
@@ -74,13 +81,80 @@ class APIBehaviorMonitorAgent:
 
     @property
     def tracing_runtime(self):
-        return self.resource_identifier_tracker.tracing_runtime
+        return self._tracing_runtime
 
     @tracing_runtime.setter
     def tracing_runtime(self, value) -> None:
-        self.resource_identifier_tracker.tracing_runtime = value
+        self._tracing_runtime = value
+        if hasattr(self.resource_identifier_tracker, "tracing_runtime"):
+            self.resource_identifier_tracker.tracing_runtime = value
 
     def observe_response(
+        self,
+        observation: TargetResponseObservation,
+        context: TargetResponseOperationContext,
+    ) -> APIBehaviorMonitorResult:
+        media_type = normalize_media_type(
+            observation.headers.get("content-type")
+        )
+        attributes: dict[str, Any] = {
+            "http.request.method": observation.method,
+            "http.response.status_code": observation.status_code,
+        }
+        if context.operation_key is not None:
+            attributes["restscope.operation.key"] = context.operation_key
+        with self.tracing_runtime.span(
+            "APIBehaviorMonitorAgent.observe_response",
+            kind="AGENT",
+            input_value={
+                "operation_key": context.operation_key,
+                "method": observation.method,
+                "path": observation.path,
+                "status_code": observation.status_code,
+                "media_type": media_type,
+                "body_truncated": observation.body_truncated,
+            },
+            attributes=attributes,
+        ) as span:
+            result = self._observe_response(observation, context)
+            span.set_output(_monitor_trace_summary(result))
+            span.set_attribute(
+                "restscope.operation.key",
+                result.contract.key.operation_key,
+            )
+            span.set_attribute(
+                "restscope.response_contract.status",
+                result.contract.status,
+            )
+            span.set_attribute(
+                "restscope.response_contract.change_count",
+                len(result.contract.changes),
+            )
+            span.set_attribute(
+                "restscope.behavior_monitor.warning_count",
+                len(result.warnings),
+            )
+            if result.resource_identifier is not None:
+                span.set_attribute(
+                    "restscope.resource_monitor.status",
+                    result.resource_identifier.status,
+                )
+                span.set_attribute(
+                    "restscope.resource_monitor.identifiers_recorded",
+                    getattr(
+                        result.resource_identifier,
+                        "identifiers_recorded",
+                        0,
+                    ),
+                )
+            if result.response_values is not None:
+                span.set_attribute(
+                    "restscope.response_value.values_recorded",
+                    result.response_values.values_recorded,
+                )
+            return result
+
+    def _observe_response(
         self,
         observation: TargetResponseObservation,
         context: TargetResponseOperationContext,
@@ -401,3 +475,48 @@ def _is_json_media_type(media_type: str | None) -> bool:
     return media_type == "application/json" or bool(
         media_type and media_type.endswith("+json")
     )
+
+
+def _monitor_trace_summary(
+    result: APIBehaviorMonitorResult,
+) -> dict[str, Any]:
+    resource = result.resource_identifier
+    response_values = result.response_values
+    return {
+        "operation_key": result.contract.key.operation_key,
+        "status_code": result.contract.key.status_code,
+        "media_type": result.contract.key.media_type,
+        "contract_status": result.contract.status,
+        "contract_changes": list(result.contract.changes),
+        "resource_identifier": (
+                {
+                    "status": resource.status,
+                    "groups_processed": getattr(
+                        resource,
+                        "groups_processed",
+                        0,
+                    ),
+                    "identifiers_recorded": getattr(
+                        resource,
+                        "identifiers_recorded",
+                        0,
+                    ),
+                "warning_code": (
+                    resource.warning.code
+                    if resource.warning is not None
+                    else None
+                ),
+            }
+            if resource is not None
+            else None
+        ),
+        "response_values": (
+            {
+                "sources_processed": response_values.sources_processed,
+                "values_recorded": response_values.values_recorded,
+            }
+            if response_values is not None
+            else None
+        ),
+        "warning_codes": [warning.code for warning in result.warnings],
+    }
