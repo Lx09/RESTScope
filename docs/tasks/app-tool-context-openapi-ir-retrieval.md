@@ -1,6 +1,11 @@
 # App ToolContext and OpenAPI IR Retrieval
 
-Status: Implemented and verified
+Status: Superseded
+
+The ToolContext and one-time IR initialization parts remain active. The
+OpenAPI Retrieval Agent, its public capability, and its internal investigation
+tools were deleted by `task-focused-main-flow-prompts.md`; the implementation
+and verification below are retained as historical evidence only.
 
 ## Objective
 

@@ -152,12 +152,18 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         *,
         request: LLMRequest,
     ) -> list[dict[str, Any]]:
+        converted = [dict(message) for message in messages]
+        if request.response_format == "json" and any(
+            "json" in str(message.get("content", "")).casefold()
+            for message in converted
+        ):
+            return converted
+
         instruction = "Return only valid JSON."
         if request.response_format == "json_schema" and request.json_schema:
             schema = json.dumps(request.json_schema, ensure_ascii=False, separators=(",", ":"))
             instruction = f"{instruction} The JSON value must satisfy this schema: {schema}"
 
-        converted = [dict(message) for message in messages]
         for message in converted:
             if message["role"] == "system":
                 message["content"] = f"{message['content']}\n\n{instruction}"

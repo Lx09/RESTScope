@@ -18,7 +18,6 @@ from restscope.llm import (
 )
 from restscope.observability import TracingRuntime
 from restscope.testing import (
-    InputGeneratorConfig,
     InputGeneratorPatch,
     OperationExecutionReport,
     OperationGeneratorConfig,
@@ -29,8 +28,17 @@ from restscope.testing import (
 from .schemas import (
     AvailableReferenceOption,
     GeneratorPatchDraft,
-    ParameterDiagnosis,
     TwoRoundDiagnosisResult,
+)
+from .prompts import (
+    GeneratorIntentBatch,
+    ParameterDiagnosisDecision,
+    build_generator_prompt,
+    build_parameter_prompt,
+    compile_generator_intents,
+    resolve_parameter_decision,
+    validate_generator_intents,
+    validate_parameter_decision,
 )
 
 
@@ -80,7 +88,6 @@ class OperationSmokeDiagnoser:
             input_value={
                 "operation_key": report.operation_key,
                 "run_id": report.run_id,
-                "config_revision": config.revision,
                 "failure_message_count": len(
                     report.failure_report.unique_failure_messages
                 ),
@@ -88,7 +95,6 @@ class OperationSmokeDiagnoser:
             attributes={
                 "restscope.operation.key": report.operation_key,
                 "restscope.test.run_id": report.run_id,
-                "restscope.generator.config_revision": config.revision,
             },
         ) as span:
             result = self._diagnose(
@@ -143,34 +149,28 @@ class OperationSmokeDiagnoser:
                 "operation_smoke_report_mismatch",
                 "Execution report and generator config identify different operations",
             )
-        first_context = build_parameter_diagnosis_context(report)
-        known_nodes = {
-            node.input_node_id for node in config.snapshot.input_nodes
-        }
-        allowed_evidence = {
-            item["failure_id"] for item in first_context["failure_messages"]
-        } | {
-            item["case_id"] for item in first_context["test_inputs"]
-        }
-        diagnosis = self._call_with_repair(
+        first_prompt = build_parameter_prompt(report, config)
+        diagnosis_decision = self._call_with_repair(
             messages=[
                 LLMMessage(
                     role="system",
-                    content=_parameter_diagnosis_instructions(),
+                    content=first_prompt.system,
                 ),
                 LLMMessage(
                     role="user",
-                    content=_json(first_context),
+                    content=first_prompt.user,
                 ),
             ],
-            output_model=ParameterDiagnosis,
-            schema_name="OperationSmokeParameterDiagnosis",
+            output_model=ParameterDiagnosisDecision,
             role="operation_smoke_parameter_diagnosis",
-            semantic_validate=lambda draft: _diagnosis_errors(
+            semantic_validate=lambda draft: validate_parameter_decision(
                 draft,
-                known_nodes=known_nodes,
-                allowed_evidence=allowed_evidence,
+                first_prompt,
             ),
+        )
+        diagnosis = resolve_parameter_decision(
+            diagnosis_decision,
+            first_prompt,
         )
         if diagnosis.no_parameter_issue:
             return TwoRoundDiagnosisResult(diagnosis=diagnosis)
@@ -182,51 +182,45 @@ class OperationSmokeDiagnoser:
             )
         if reference_option_provider is not None:
             reference_options = reference_option_provider(suspect_ids)
-        selected_generators = [
-            item for item in config.configs if item.input_node_id in suspect_ids
-        ]
         selected_options = [
             item
             for item in (reference_options or [])
             if item.input_node_id in suspect_ids
         ]
-        second_context = {
-            "diagnosis": diagnosis.model_dump(mode="json"),
-            "current_generators": [
-                item.model_dump(mode="json") for item in selected_generators
-            ],
-            "available_reference_options": [
-                item.model_dump(mode="json") for item in selected_options
-            ],
-        }
-        patch = self._call_with_repair(
+        second_prompt = build_generator_prompt(
+            diagnosis,
+            config,
+            selected_options,
+            alias_by_input=first_prompt.alias_by_input,
+            alias_by_evidence=first_prompt.alias_by_evidence,
+        )
+        intent_batch = self._call_with_repair(
             messages=[
                 LLMMessage(
                     role="system",
-                    content=_generator_patch_instructions(),
+                    content=second_prompt.system,
                 ),
-                LLMMessage(role="user", content=_json(second_context)),
+                LLMMessage(role="user", content=second_prompt.user),
             ],
-            output_model=GeneratorPatchDraft,
-            schema_name="OperationSmokeGeneratorPatch",
+            output_model=GeneratorIntentBatch,
             role="operation_smoke_generator_patch",
-            semantic_validate=lambda draft: _generator_patch_errors(
+            semantic_validate=lambda draft: validate_generator_intents(
                 draft,
-                suspect_ids=suspect_ids,
-                current_generators=selected_generators,
-                reference_options=selected_options,
+                second_prompt,
+                config,
             ),
+        )
+        patch, selected_reference_options = compile_generator_intents(
+            intent_batch,
+            second_prompt,
         )
         return TwoRoundDiagnosisResult(
             diagnosis=diagnosis,
             updates=_resolve_generator_updates(
                 patch,
-                reference_options=selected_options,
+                reference_options=selected_reference_options,
             ),
-            selected_reference_options=_selected_reference_options(
-                patch,
-                reference_options=selected_options,
-            ),
+            selected_reference_options=selected_reference_options,
         )
 
     def _call_with_repair(
@@ -234,15 +228,12 @@ class OperationSmokeDiagnoser:
         *,
         messages: list[LLMMessage],
         output_model: type[_OutputT],
-        schema_name: str,
         role: str,
         semantic_validate: Callable[[_OutputT], list[str]],
     ) -> _OutputT:
         response = self.client.invoke(
             self._request(
                 messages=messages,
-                output_model=output_model,
-                schema_name=schema_name,
                 role=role,
             )
         )
@@ -266,22 +257,20 @@ class OperationSmokeDiagnoser:
             ),
             LLMMessage(
                 role="user",
-                content=_json(
-                    {
-                        "instruction": (
-                            "Repair the output using only the supplied IDs and "
-                            "return the complete result."
-                        ),
-                        "validation_errors": errors[:_MAX_REPAIR_ERRORS],
-                    }
+                content=(
+                    "Your previous JSON could not be used.\n"
+                    + "\n".join(
+                        f"- {error}"
+                        for error in errors[:_MAX_REPAIR_ERRORS]
+                    )
+                    + "\nReturn one complete corrected JSON object using only "
+                    "the aliases supplied in the original task."
                 ),
             ),
         ]
         repaired_response = self.client.invoke(
             self._request(
                 messages=repair_messages,
-                output_model=output_model,
-                schema_name=schema_name,
                 role=role,
             )
         )
@@ -302,8 +291,6 @@ class OperationSmokeDiagnoser:
         self,
         *,
         messages: list[LLMMessage],
-        output_model: type[BaseModel],
-        schema_name: str,
         role: str,
     ) -> LLMRequest:
         return LLMRequest(
@@ -312,9 +299,7 @@ class OperationSmokeDiagnoser:
             messages=messages,
             temperature=self.model.temperature,
             max_tokens=self.model.max_tokens,
-            response_format="json_schema",
-            json_schema=output_model.model_json_schema(),
-            json_schema_name=schema_name,
+            response_format="json",
             tool_choice="none",
             timeout_seconds=self.model.timeout_seconds,
             reasoning=self.model.reasoning,
@@ -334,12 +319,8 @@ class OperationSmokeDiagnoser:
         )
         if not validation.valid:
             return None, [
-                ": ".join(
-                    part
-                    for part in (error.location, error.message)
-                    if part
-                )
-                for error in validation.errors
+                "Return one complete JSON object matching the example and "
+                "allowed fields."
             ]
         parsed = output_model.model_validate(validation.validated_object)
         return parsed, semantic_validate(parsed)
@@ -467,76 +448,6 @@ def _project_case_values(
     return base, truncated
 
 
-def _diagnosis_errors(
-    draft: ParameterDiagnosis,
-    *,
-    known_nodes: set[str],
-    allowed_evidence: set[str],
-) -> list[str]:
-    errors: list[str] = []
-    ids = [item.input_node_id for item in draft.suspects]
-    duplicates = sorted(
-        node_id for node_id in set(ids) if ids.count(node_id) > 1
-    )
-    if duplicates:
-        errors.append(f"suspect input_node_ids cannot repeat: {duplicates}")
-    for suspect in draft.suspects:
-        if suspect.input_node_id not in known_nodes:
-            errors.append(f"unknown input_node_id: {suspect.input_node_id}")
-        unknown_refs = sorted(set(suspect.evidence_refs) - allowed_evidence)
-        if unknown_refs:
-            errors.append(
-                f"{suspect.input_node_id}: unknown evidence refs {unknown_refs}"
-            )
-    return errors
-
-
-def _generator_patch_errors(
-    draft: GeneratorPatchDraft,
-    *,
-    suspect_ids: set[str],
-    current_generators: list[InputGeneratorConfig],
-    reference_options: list[AvailableReferenceOption],
-) -> list[str]:
-    del current_generators
-    ids = [
-        item.input_node_id
-        for item in [*draft.updates, *draft.reference_selections]
-    ]
-    errors: list[str] = []
-    unknown = sorted(set(ids) - suspect_ids)
-    if unknown:
-        errors.append(f"updates must target suspect input_node_ids only: {unknown}")
-    duplicates = sorted(
-        node_id for node_id in set(ids) if ids.count(node_id) > 1
-    )
-    if duplicates:
-        errors.append(f"generator updates cannot repeat nodes: {duplicates}")
-    for update in draft.updates:
-        if isinstance(
-            update.strategy,
-            (ResourceIdentifierGenerator, ResponseValueGenerator),
-        ):
-            errors.append(
-                f"{update.input_node_id}: reference generators must select a "
-                "supplied reference_option_id"
-            )
-    options_by_id = {item.option_id: item for item in reference_options}
-    for selection in draft.reference_selections:
-        option = options_by_id.get(selection.reference_option_id)
-        if option is None:
-            errors.append(
-                "unknown reference_option_id: "
-                f"{selection.reference_option_id}"
-            )
-        elif option.input_node_id != selection.input_node_id:
-            errors.append(
-                f"{selection.reference_option_id}: option belongs to "
-                f"{option.input_node_id}, not {selection.input_node_id}"
-            )
-    return errors
-
-
 def _resolve_generator_updates(
     draft: GeneratorPatchDraft,
     *,
@@ -566,43 +477,6 @@ def _resolve_generator_updates(
             )
         )
     return updates
-
-
-def _selected_reference_options(
-    draft: GeneratorPatchDraft,
-    *,
-    reference_options: list[AvailableReferenceOption],
-) -> list[AvailableReferenceOption]:
-    options_by_id = {item.option_id: item for item in reference_options}
-    return [
-        options_by_id[selection.reference_option_id]
-        for selection in draft.reference_selections
-    ]
-
-
-def _parameter_diagnosis_instructions() -> str:
-    return (
-        "Identify which supplied input_node_ids may explain the supplied failure "
-        "messages. Use only concrete test values, omitted IDs, and the temporary "
-        "failure/case references. Do not propose generators, schemas, requests, "
-        "or tools. Return no_parameter_issue=true only when no supplied input is "
-        "a plausible cause. Keep reasons concise and do not include chain of thought."
-    )
-
-
-def _generator_patch_instructions() -> str:
-    return (
-        "Convert the supplied diagnosis into InputGeneratorPatch updates. Use "
-        "only supplied current_generators and only their input_node_ids. Do not "
-        "request failure messages, test values, schemas, operations, or tools. "
-        "For an ordinary generator change, use updates. Reference generators "
-        "must use reference_selections and select an available_reference_options "
-        "option_id for the same input_node_id; never return resource_identifier "
-        "or response_value directly in updates and never invent a resource or "
-        "value name. Every supplied reference option has a non-empty persistent "
-        "pool, and actual values are intentionally hidden. "
-        "Return complete structured updates without explanations or chain of thought."
-    )
 
 
 def _json(value: Any) -> str:

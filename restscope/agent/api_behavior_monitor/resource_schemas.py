@@ -230,24 +230,3 @@ class ResourceMonitorResult(BaseModel):
     groups_processed: int = 0
     identifiers_recorded: int = 0
     warning: ResourceMonitorWarning | None = None
-
-
-class ResourceIdentifierSelection(BaseModel):
-    """One bounded model choice mapped back to local identifier evidence."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    identifier_candidate_id: str | None = Field(
-        default=None,
-        max_length=100,
-    )
-
-    @field_validator("identifier_candidate_id")
-    @classmethod
-    def reject_blank_candidate_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("identifier candidate id cannot be blank")
-        return normalized

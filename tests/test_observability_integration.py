@@ -36,9 +36,11 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
         LLMClient,
         LLMMessage,
         LLMProviderRegistry,
+        LLMReasoningConfig,
         LLMRequest,
         LLMResponse,
         ToolCall,
+        ToolSpec,
     )
     from restscope.llm.providers.base import BaseLLMProvider
 
@@ -52,16 +54,19 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
                 provider=self.name,
                 model=request.model,
                 content="done",
+                parsed_json={"ok": True},
                 tool_calls=[
                     ToolCall(
                         id="call-1",
-                        name="openapi.inspect",
+                        name="catalog.lookup",
+                        arguments={"query": "request-secret"},
                         provider_context={"reasoning_content": reasoning},
                     )
                 ],
                 prompt_tokens=11,
                 completion_tokens=7,
                 total_tokens=18,
+                finish_reason="tool_calls",
                 latency_ms=25,
             )
 
@@ -75,6 +80,19 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
             provider="stub",
             model="stub-model",
             messages=[LLMMessage(role="user", content="request-secret")],
+            temperature=0.25,
+            max_tokens=321,
+            response_format="json",
+            reasoning=LLMReasoningConfig(mode="enabled", effort="high"),
+            tools=[
+                ToolSpec(
+                    name="catalog.lookup",
+                    description="Lookup a catalog entry",
+                    kind="local_function",
+                    input_schema={"type": "object"},
+                )
+            ],
+            tool_choice="auto",
         )
     )
     runtime.close()
@@ -89,16 +107,118 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
         default=str,
     )
     output = json.loads(span.attributes["output.value"])
+    input_value = json.loads(span.attributes["input.value"])
 
     assert span.name == "LLMClient.invoke"
     assert span.attributes["openinference.span.kind"] == "LLM"
     assert span.attributes["llm.provider"] == "stub"
     assert span.attributes["llm.model_name"] == "stub-model"
+    assert span.attributes["llm.temperature"] == 0.25
+    assert span.attributes["llm.max_tokens"] == 321
+    assert span.attributes["llm.response_format"] == "json"
+    assert span.attributes["llm.reasoning.mode"] == "enabled"
+    assert span.attributes["llm.reasoning.effort"] == "high"
+    assert json.loads(span.attributes["llm.tool_names"]) == ["catalog.lookup"]
+    assert span.attributes["llm.tool_choice"] == "auto"
     assert span.attributes["llm.token_count.total"] == 18
     assert span.attributes["restscope.llm.latency_ms"] == 25
+    assert set(input_value) == {"messages"}
+    assert input_value["messages"][0] == {
+        "role": "user",
+        "content": "***REDACTED***",
+        "tool_call_id": None,
+        "name": None,
+        "tool_calls": [],
+    }
+    assert set(output) == {
+        "content",
+        "parsed_json",
+        "tool_calls",
+        "finish_reason",
+    }
+    assert output["finish_reason"] == "tool_calls"
+    assert output["parsed_json"] == {"ok": True}
     assert "request-secret" not in rendered
-    assert reasoning not in rendered
-    assert "provider_context" not in output["tool_calls"][0]
+    assert reasoning in rendered
+    assert output["tool_calls"][0]["provider_context"] == {
+        "reasoning_content": reasoning
+    }
+
+
+def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.llm import LLMClient, LLMProviderRegistry
+    from restscope.llm.providers.base import BaseLLMProvider
+    from tests.test_operation_smoke_diagnosis import (
+        _config,
+        _model,
+        _report,
+        _response,
+    )
+
+    runtime, exporter = _recording_runtime()
+    responses = [
+        _response(
+            {
+                "no_parameter_issue": False,
+                "suspects": [
+                    {
+                        "input": "P1",
+                        "confidence": 0.9,
+                        "reason": "The generated identifier was rejected.",
+                        "evidence": ["F1", "C1"],
+                    }
+                ],
+            }
+        ),
+        _response(
+            {
+                "changes": [
+                    {
+                        "input": "P1",
+                        "generation": {
+                            "kind": "exact_value",
+                            "value": "known-project",
+                        },
+                    }
+                ]
+            }
+        ),
+    ]
+
+    class PromptProvider(BaseLLMProvider):
+        name = "stub"
+
+        def invoke(self, request):
+            return responses.pop(0)
+
+    registry = LLMProviderRegistry()
+    registry.register(PromptProvider())
+    client = LLMClient(registry, tracing_runtime=runtime)
+
+    OperationSmokeDiagnoser(
+        client=client,
+        model=_model(),
+        tracing_runtime=runtime,
+    ).diagnose(report=_report(), config=_config())
+    runtime.close()
+
+    rendered = json.dumps(
+        [dict(span.attributes) for span in exporter.get_finished_spans()],
+        default=str,
+    )
+    assert "[P1] required path parameter" in rendered
+    assert "random-123" in rendered
+    for forbidden in (
+        "$defs",
+        "input_node_id",
+        "reference_option_id",
+        "config_revision",
+        "Authorization",
+        "PreparedRequestSummary",
+        "RandomStringGenerator",
+    ):
+        assert forbidden not in rendered
 
 
 def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
@@ -332,172 +452,6 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
 
     app.close()
     old_runtime.close()
-
-
-def test_openapi_retrieval_emits_tool_agent_llm_and_internal_tool_spans() -> None:
-    from restscope.agent.openapi_retrieval import (
-        OpenAPIRetrievalAgent,
-        OpenAPIRetrievalRequest,
-        ParameterValueProducerQuery,
-        register_openapi_retrieval_tool,
-    )
-    from restscope.capabilities import ToolContext, build_capabilities
-    from restscope.llm import (
-        LLMClient,
-        LLMMessage,
-        LLMModelConfig,
-        LLMProviderRegistry,
-        LLMRequest,
-        LLMResponse,
-        ToolCall,
-    )
-    from restscope.llm.providers.base import BaseLLMProvider
-    from restscope.openapi_parser import OpenAPIParser
-
-    schema = {
-        "openapi": "3.0.0",
-        "info": {"title": "Retrieval Trace", "version": "1"},
-        "paths": {
-            "/users": {
-                "post": {
-                    "operationId": "createUser",
-                    "responses": {
-                        "201": {
-                            "description": "created",
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {"userId": {"type": "string"}},
-                                    }
-                                }
-                            },
-                        }
-                    },
-                }
-            },
-            "/users/{userId}": {
-                "get": {
-                    "operationId": "getUser",
-                    "parameters": [
-                        {
-                            "name": "userId",
-                            "in": "path",
-                            "required": True,
-                            "schema": {"type": "string"},
-                        }
-                    ],
-                    "responses": {"200": {"description": "ok"}},
-                }
-            },
-        },
-    }
-
-    class RetrievalProvider(BaseLLMProvider):
-        name = "stub"
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def invoke(self, request: LLMRequest) -> LLMResponse:
-            self.calls += 1
-            if self.calls == 1:
-                return LLMResponse(
-                    provider=self.name,
-                    model=request.model,
-                    tool_calls=[
-                        ToolCall(
-                            id="search",
-                            name="openapi.search_symbols",
-                            arguments={
-                                "query": "userId",
-                                "scopes": ["response_field"],
-                                "limit": 5,
-                            },
-                        )
-                    ],
-                )
-            match = json.loads(request.messages[-1].content)["results"][0]
-            return LLMResponse(
-                provider=self.name,
-                model=request.model,
-                parsed_json={
-                    "status": "found",
-                    "candidates": [
-                        {
-                            "operation": match["operation"],
-                            "confidence": "high",
-                            "value_locations": [match["location"]],
-                            "rationale": "The response contains userId.",
-                            "evidence_refs": [match["evidence_id"]],
-                        }
-                    ],
-                    "conflicts": [],
-                    "evidence_sufficient": True,
-                    "limitations": [],
-                    "warnings": [],
-                },
-            )
-
-    runtime, exporter = _recording_runtime()
-    registry = LLMProviderRegistry()
-    registry.register(RetrievalProvider())
-    agent = OpenAPIRetrievalAgent(
-        client=LLMClient(registry, tracing_runtime=runtime),
-        model=LLMModelConfig(
-            role="openapi_retrieval",
-            provider="stub",
-            model="stub-model",
-            tool_choice="auto",
-        ),
-        tracing_runtime=runtime,
-    )
-    capabilities = build_capabilities(presets=(), tracing_runtime=runtime)
-    spec = register_openapi_retrieval_tool(capabilities.tool_registry, agent)
-    serialized_schema = json.dumps(schema)
-    capabilities.tool_executor.bind_context(
-        ToolContext(
-            ir=OpenAPIParser.parse(serialized_schema),
-            baseline_schema_source={"kind": "inline", "content": serialized_schema},
-            base_url=None,
-            headers={},
-        )
-    )
-    request = OpenAPIRetrievalRequest(
-        query=ParameterValueProducerQuery(
-            objective="parameter_value_producer",
-            consumer_method="GET",
-            consumer_path="/users/{userId}",
-            parameter_name="userId",
-        )
-    )
-
-    result = capabilities.tool_executor.execute(
-        tool_call=ToolCall(
-            id="retrieve",
-            name=spec.name,
-            arguments=request.model_dump(mode="json"),
-        ),
-        role="decision_maker",
-        state={},
-    )
-    runtime.close()
-
-    assert result.status == "succeeded"
-    spans = list(exporter.get_finished_spans())
-    by_name = {span.name: span for span in spans}
-    wrapper = by_name["restscope.openapi.retrieve"]
-    agent_span = by_name["OpenAPIRetrievalAgent.retrieve"]
-    internal_tool = by_name["openapi.search_symbols"]
-    llm_spans = [span for span in spans if span.name == "LLMClient.invoke"]
-
-    assert agent_span.parent.span_id == wrapper.context.span_id
-    assert internal_tool.parent.span_id == agent_span.context.span_id
-    assert len(llm_spans) == 2
-    assert all(span.parent.span_id == agent_span.context.span_id for span in llm_spans)
-    assert wrapper.attributes["openinference.span.kind"] == "TOOL"
-    assert agent_span.attributes["openinference.span.kind"] == "AGENT"
-    assert internal_tool.attributes["openinference.span.kind"] == "TOOL"
 
 
 def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> None:

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any
-
 from restscope.llm.registry import LLMProviderRegistry
 from restscope.llm.schemas import LLMRequest, LLMResponse
 from restscope.observability import TracingRuntime
@@ -27,14 +24,26 @@ class LLMClient:
         with self.tracing_runtime.span(
             "LLMClient.invoke",
             kind="LLM",
-            input_value=_trace_payload(request),
-            attributes={
-                "llm.provider": request.provider,
-                "llm.model_name": request.model,
+            input_value={
+                "messages": [
+                    message.model_dump(mode="json")
+                    for message in request.messages
+                ]
             },
+            attributes=_request_attributes(request),
         ) as span:
             response = provider.invoke(request)
-            span.set_output(_trace_payload(response))
+            span.set_output(
+                {
+                    "content": response.content,
+                    "parsed_json": response.parsed_json,
+                    "tool_calls": [
+                        tool_call.model_dump(mode="json")
+                        for tool_call in response.tool_calls
+                    ],
+                    "finish_reason": response.finish_reason,
+                }
+            )
             for name, value in (
                 ("llm.token_count.prompt", response.prompt_tokens),
                 ("llm.token_count.completion", response.completion_tokens),
@@ -46,20 +55,18 @@ class LLMClient:
             return response
 
 
-def _trace_payload(value: Any) -> Any:
-    """Remove provider-private reasoning state from an LLM trace projection."""
-
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    if isinstance(value, Mapping):
-        return {
-            str(key): _trace_payload(item)
-            for key, item in value.items()
-            if key not in {"provider_context", "reasoning_content"}
-        }
-    if isinstance(value, Sequence) and not isinstance(
-        value,
-        str | bytes | bytearray,
-    ):
-        return [_trace_payload(item) for item in value]
-    return value
+def _request_attributes(request: LLMRequest) -> dict[str, object]:
+    attributes: dict[str, object] = {
+        "llm.provider": request.provider,
+        "llm.model_name": request.model,
+        "llm.temperature": request.temperature,
+        "llm.max_tokens": request.max_tokens,
+        "llm.response_format": request.response_format,
+        "llm.reasoning.mode": request.reasoning.mode,
+        "llm.tool_choice": request.tool_choice,
+    }
+    if request.reasoning.effort is not None:
+        attributes["llm.reasoning.effort"] = request.reasoning.effort
+    if request.tools:
+        attributes["llm.tool_names"] = tuple(tool.name for tool in request.tools)
+    return attributes

@@ -23,9 +23,6 @@ from .catalog import (
 from .bootstrap import build_generator_config_catalog, build_schema_catalog
 from .agent import (
     APIBehaviorMonitorAgent,
-    OpenAPIRetrievalAgent,
-    OpenAPIRetrievalRequest,
-    OpenAPIRetrievalResult,
     OperationReference,
     OperationSmokeAgent,
     OperationSmokeRequest,
@@ -36,8 +33,6 @@ from .agent import (
     ResourceLookupResult,
     build_api_behavior_monitor_agent,
     build_operation_smoke_agent,
-    build_openapi_retrieval_agent,
-    register_openapi_retrieval_tool,
 )
 
 __all__ = [
@@ -61,17 +56,12 @@ __all__ = [
     "SchemaSourceValidationError",
     "build_schema_catalog",
     "build_generator_config_catalog",
-    "build_openapi_retrieval_agent",
-    "OpenAPIRetrievalAgent",
-    "OpenAPIRetrievalRequest",
-    "OpenAPIRetrievalResult",
     "RESTScopeRunRequest",
     "RESTScopeRunReport",
     "OperationReference",
     "OperationSmokeAgent",
     "OperationSmokeRequest",
     "OperationSmokeResult",
-    "register_openapi_retrieval_tool",
     "ResourceLookupRequest",
     "ResourceLookupResult",
     "APIBehaviorMonitorAgent",

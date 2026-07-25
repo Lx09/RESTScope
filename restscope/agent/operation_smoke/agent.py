@@ -87,7 +87,6 @@ class OperationSmokeAgent:
                 {
                     "status": result.status,
                     "success_rate": result.success_rate,
-                    "active_config_revision": result.active_config_revision,
                     "batch_run_ids": [
                         report.run_id for report in result.batch_reports
                     ],
@@ -99,10 +98,6 @@ class OperationSmokeAgent:
             span.set_attribute(
                 "restscope.smoke.success_rate",
                 result.success_rate,
-            )
-            span.set_attribute(
-                "restscope.smoke.active_config_revision",
-                result.active_config_revision,
             )
             span.set_attribute(
                 "restscope.smoke.batch_count",

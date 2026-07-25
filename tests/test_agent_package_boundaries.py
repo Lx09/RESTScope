@@ -11,7 +11,6 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
     assert {path.name for path in AGENT_ROOT.glob("*.py")} == {"__init__.py"}
 
     for package_name in (
-        "openapi_retrieval",
         "operation_smoke",
         "operation_test",
         "api_behavior_monitor",
@@ -26,19 +25,16 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 
 def test_agent_package_and_public_facade_export_same_contracts() -> None:
     from restscope.agent import (
-        OpenAPIRetrievalAgent,
         OperationSmokeAgent,
         OperationTestAgent,
         APIBehaviorMonitorAgent,
         RESTScopeMainGraph,
     )
-    from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent as PackagedOpenAPIRetrievalAgent
     from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
     from restscope.agent.operation_test import OperationTestAgent as PackagedOperationTestAgent
     from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent as PackagedAPIBehaviorMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
-    assert OpenAPIRetrievalAgent is PackagedOpenAPIRetrievalAgent
     assert OperationSmokeAgent is PackagedOperationSmokeAgent
     assert OperationTestAgent is PackagedOperationTestAgent
     assert APIBehaviorMonitorAgent is PackagedAPIBehaviorMonitorAgent
@@ -47,7 +43,6 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
 
 def test_cross_agent_imports_use_package_facades() -> None:
     package_names = {
-        "openapi_retrieval",
         "operation_smoke",
         "operation_test",
         "api_behavior_monitor",
@@ -66,23 +61,5 @@ def test_cross_agent_imports_use_package_facades() -> None:
                     violations.append(f"{path.name}:{node.lineno} imports {node.module}")
                 if parts[:2] == ["restscope", "agent"] and len(parts) > 3:
                     violations.append(f"{path.name}:{node.lineno} imports {node.module}")
-
-    assert violations == []
-
-
-def test_openapi_retrieval_agent_has_no_persistence_dependencies() -> None:
-    forbidden_prefixes = ("restscope.db", "restscope.catalog", "restscope.memory")
-    violations: list[str] = []
-
-    for path in (AGENT_ROOT / "openapi_retrieval").rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module.startswith(forbidden_prefixes):
-                    violations.append(f"{path.name}:{node.lineno} imports {node.module}")
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith(forbidden_prefixes):
-                        violations.append(f"{path.name}:{node.lineno} imports {alias.name}")
 
     assert violations == []

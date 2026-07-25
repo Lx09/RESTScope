@@ -18,6 +18,13 @@ from restscope.llm import (
 from restscope.observability import TracingRuntime
 
 from .resource_catalog import ResourceCatalog
+from .prompts import (
+    IdentifierCandidateView,
+    IdentifierPrompt,
+    IdentifierSelectionDecision,
+    build_identifier_prompt,
+    validate_identifier_decision,
+)
 from .resource_schemas import (
     DetectedResourceGroup,
     LearnedResourceRule,
@@ -26,7 +33,6 @@ from .resource_schemas import (
     MAX_RESOURCE_NAME_CHARS,
     MAX_RESOURCE_SELECTOR_CHARS,
     MonitoredOperation,
-    ResourceIdentifierSelection,
     ResourceLookupRequest,
     ResourceLookupResult,
     ResourceMonitorResult,
@@ -580,22 +586,23 @@ class ResourceIdentifierTracker:
         if not selected_pool:
             return None
         numbered = [
-            (f"c{index}", field)
+            (f"I{index}", field)
             for index, field in enumerate(selected_pool, start=1)
         ]
         batches = [
             numbered[index : index + MAX_PROMPT_CANDIDATES_PER_GROUP]
             for index in range(0, len(numbered), MAX_PROMPT_CANDIDATES_PER_GROUP)
         ]
-        first_messages = _selection_messages(
+        first_prompt = _selection_prompt(
             observation=observation,
             group=group,
             resource_name=resource_name,
             candidates=batches[0],
         )
+        first_messages = _prompt_messages(first_prompt)
         selection, errors, response = self._invoke_selection(
             first_messages,
-            batches[0],
+            first_prompt,
         )
         if errors:
             repair_messages = [
@@ -611,21 +618,16 @@ class ResourceIdentifierTracker:
                 ),
                 LLMMessage(
                     role="user",
-                    content=json.dumps(
-                        {
-                            "instruction": (
-                                "Repair the identifier selection. Return only "
-                                "the required JSON object."
-                            ),
-                            "validation_errors": errors[:10],
-                        },
-                        ensure_ascii=False,
+                    content=(
+                        "Your previous JSON could not be used.\n"
+                        + "\n".join(f"- {error}" for error in errors[:10])
+                        + "\nReturn one corrected JSON object."
                     ),
                 ),
             ]
             repaired, repair_errors, _response = self._invoke_selection(
                 repair_messages,
-                batches[0],
+                first_prompt,
             )
             if repair_errors or repaired is None:
                 raise ResourceIdentifierOutputError(
@@ -639,15 +641,16 @@ class ResourceIdentifierTracker:
         if selected is not None or len(batches) == 1:
             return selected
 
-        second_messages = _selection_messages(
+        second_prompt = _selection_prompt(
             observation=observation,
             group=group,
             resource_name=resource_name,
             candidates=batches[1],
         )
+        second_messages = _prompt_messages(second_prompt)
         second, second_errors, _response = self._invoke_selection(
             second_messages,
-            batches[1],
+            second_prompt,
         )
         if second_errors or second is None:
             raise ResourceIdentifierOutputError(
@@ -660,9 +663,9 @@ class ResourceIdentifierTracker:
     def _invoke_selection(
         self,
         messages: list[LLMMessage],
-        candidates: list[tuple[str, _FieldCandidate]],
+        prompt: IdentifierPrompt,
     ) -> tuple[
-        ResourceIdentifierSelection | None,
+        IdentifierSelectionDecision | None,
         list[str],
         LLMResponse,
     ]:
@@ -674,34 +677,18 @@ class ResourceIdentifierTracker:
         response = self.client.invoke(self._selection_request(messages))
         validation = self.validator.validate(
             response=response,
-            output_model=ResourceIdentifierSelection,
+            output_model=IdentifierSelectionDecision,
         )
         if not validation.valid:
             return (
                 None,
-                [
-                    f"{item.location or 'output'}: {item.message}"
-                    for item in validation.errors
-                ],
+                ["Return one JSON object with only the identifier field."],
                 response,
             )
-        selection = ResourceIdentifierSelection.model_validate(
+        selection = IdentifierSelectionDecision.model_validate(
             validation.validated_object
         )
-        candidate_ids = {candidate_id for candidate_id, _field in candidates}
-        if (
-            selection.identifier_candidate_id is not None
-            and selection.identifier_candidate_id not in candidate_ids
-        ):
-            return (
-                selection,
-                [
-                    "identifier_candidate_id must be one of "
-                    f"{sorted(candidate_ids)}"
-                ],
-                response,
-            )
-        return selection, [], response
+        return selection, validate_identifier_decision(selection, prompt), response
 
     def _selection_request(
         self,
@@ -713,9 +700,7 @@ class ResourceIdentifierTracker:
             messages=messages,
             temperature=self.model.temperature,
             max_tokens=self.model.max_tokens,
-            response_format="json_schema",
-            json_schema=ResourceIdentifierSelection.model_json_schema(),
-            json_schema_name="ResourceIdentifierSelection",
+            response_format="json",
             tool_choice="none",
             timeout_seconds=self.model.timeout_seconds,
             reasoning=self.model.reasoning,
@@ -1222,79 +1207,48 @@ def _resource_prompt_context(
     return _ResourcePromptContext(alias_to_canonical=alias_to_canonical)
 
 
-def _selection_messages(
+def _selection_prompt(
     *,
     observation: ResourceObservation,
     group: _ResponseGroup,
     resource_name: str,
     candidates: list[tuple[str, _FieldCandidate]],
-) -> list[LLMMessage]:
-    return [
-        LLMMessage(role="system", content=_selection_instructions()),
-        LLMMessage(
-            role="user",
-            content=json.dumps(
-                {
-                    "operation": {
-                        "method": observation.operation.method,
-                        "path": observation.operation.path,
-                    },
-                    "resource": {"canonical_name": resource_name},
-                    "candidates": [
-                        _selection_candidate_prompt(
-                            group,
-                            candidate_id=candidate_id,
-                            field=field,
-                        )
-                        for candidate_id, field in candidates
-                    ],
-                },
-                ensure_ascii=False,
-            ),
-        ),
-    ]
-
-
-def _selection_candidate_prompt(
-    group: _ResponseGroup,
-    *,
-    candidate_id: str,
-    field: _FieldCandidate,
-) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "candidate_id": candidate_id,
-        "field_path": _relative_field_path(
-            group.group_path,
-            field.selector,
-        ),
-        "value_types": sorted(field.types & {"string", "integer"}),
-        "observed_in_response": bool(_identifier_values(field.values)),
-    }
-    if field.schema_format is not None:
-        result["schema_format"] = field.schema_format
-    if field.description:
-        result["description"] = field.description[:200]
-    return result
-
-
-def _selection_instructions() -> str:
-    return (
-        "Return JSON only. Choose a supplied candidate only when its field "
-        "uniquely identifies one persistent resource instance and its value "
-        "can be reused by another API operation. Return null when none is "
-        "trustworthy. identifier_candidate_id is an ephemeral option ID. "
-        "Do not invent IDs, fields, selectors, resource names, aliases, "
-        "explanations, or reasoning."
+) -> IdentifierPrompt:
+    return build_identifier_prompt(
+        method=observation.operation.method,
+        path=observation.operation.path,
+        resource_name=resource_name,
+        response_location=group.group_path,
+        candidates=[
+            IdentifierCandidateView(
+                alias=alias,
+                field_path=_relative_field_path(group.group_path, field.selector),
+                value_types=tuple(
+                    sorted(field.types & {"string", "integer"})
+                ),
+                observed=bool(_identifier_values(field.values)),
+                schema_format=field.schema_format,
+                description=field.description,
+            )
+            for alias, field in candidates
+        ],
     )
 
 
+def _prompt_messages(prompt: IdentifierPrompt) -> list[LLMMessage]:
+    return [
+        LLMMessage(role="system", content=prompt.system),
+        LLMMessage(role="user", content=prompt.user),
+    ]
+
+
 def _selected_field(
-    selection: ResourceIdentifierSelection,
+    selection: IdentifierSelectionDecision,
     candidates: list[tuple[str, _FieldCandidate]],
 ) -> _FieldCandidate | None:
-    if selection.identifier_candidate_id is None:
+    if selection.identifier is None:
         return None
-    return dict(candidates)[selection.identifier_candidate_id]
+    return dict(candidates)[selection.identifier]
 
 
 def _identifier_candidates(

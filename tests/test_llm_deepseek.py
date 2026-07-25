@@ -89,6 +89,34 @@ def test_deepseek_provider_translates_reasoning_and_json_schema_request() -> Non
     assert response.parsed_json == {"ok": True}
 
 
+def test_deepseek_json_mode_does_not_duplicate_an_existing_json_instruction() -> None:
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    client = RecordingClient()
+    system = (
+        'Task: choose one option. Return JSON like {"choice":"A1"}. '
+        "Do not explain."
+    )
+
+    DeepSeekProvider(api_key="test-key", client=client).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[
+                LLMMessage(role="system", content=system),
+                LLMMessage(role="user", content="[A1] first option"),
+            ],
+            response_format="json",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    kwargs = client.chat.completions.kwargs
+    assert kwargs is not None
+    assert kwargs["messages"][0]["content"] == system
+
+
 def test_deepseek_provider_applies_configured_reasoning_without_agent_changes() -> None:
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
@@ -138,8 +166,8 @@ def _search_tool():
     from restscope.llm import ToolSpec
 
     return ToolSpec(
-        name="openapi.search_symbols",
-        description="Search OpenAPI symbols.",
+        name="catalog.search",
+        description="Search catalog entries.",
         kind="local_function",
         input_schema={
             "type": "object",
@@ -350,7 +378,7 @@ def test_deepseek_provider_rejects_thinking_history_without_reasoning() -> None:
                         tool_calls=[
                             ToolCall(
                                 id="call_search",
-                                name="openapi.search_symbols",
+                                name="catalog.search",
                                 arguments={"query": "orderId"},
                                 provider="deepseek",
                             )

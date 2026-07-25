@@ -2,6 +2,10 @@
 
 Status: Completed
 
+Historical note: references below to the OpenAPI Retrieval Agent describe the
+tree at the time of this task. That Agent and its tests were later deleted by
+`task-focused-main-flow-prompts.md`.
+
 ## Objective
 
 Remove LLM-layer code that has no production consumer or cannot be reached by

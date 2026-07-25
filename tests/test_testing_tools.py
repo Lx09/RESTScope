@@ -97,7 +97,6 @@ def test_testing_tools_register_with_run_allowed_for_every_role_and_config_tools
         "result_analyst",
         "operation_tester",
         "decision_maker",
-        "openapi_retrieval",
         "future_agent",
     ):
         selected = {

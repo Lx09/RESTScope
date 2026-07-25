@@ -172,7 +172,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
                 tool_calls=[
                     ToolCall(
                         id="reasoning",
-                        name="openapi.inspect",
+                        name="catalog.inspect",
                         provider_context={"reasoning_content": reasoning},
                     )
                 ],
