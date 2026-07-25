@@ -429,6 +429,7 @@ def _schema_fields(
     selector: str = "$",
     path_segments: tuple[str, ...] = (),
     required: bool = False,
+    resource_name: str | None = None,
     visited: set[int] | None = None,
 ) -> list[dict[str, Any]]:
     visited = set() if visited is None else set(visited)
@@ -436,6 +437,7 @@ def _schema_fields(
         return []
     visited.add(id(schema))
     output: list[dict[str, Any]] = []
+    current_resource_name = schema.title or resource_name
     if schema.type == "object" or schema.properties:
         for name, child in schema.properties.items():
             output.extend(
@@ -444,6 +446,7 @@ def _schema_fields(
                     selector=f"{selector}.{name}",
                     path_segments=(*path_segments, name),
                     required=name in schema.required,
+                    resource_name=current_resource_name,
                     visited=visited,
                 )
             )
@@ -454,6 +457,7 @@ def _schema_fields(
             selector=f"{selector}[]",
             path_segments=path_segments,
             required=required,
+            resource_name=schema.items.title or current_resource_name,
             visited=visited,
         )
     name = selector.rsplit(".", 1)[-1].removesuffix("[]")
@@ -466,6 +470,7 @@ def _schema_fields(
             "format": schema.format,
             "description": schema.description,
             "required": required,
+            "resource_name": current_resource_name,
         }
     )
     return output

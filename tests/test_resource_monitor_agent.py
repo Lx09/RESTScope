@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -21,33 +22,8 @@ class StubLLMClient:
         )
 
 
-def _classification(
-    *,
-    group_id: str = "g1",
-    represents_resource: bool,
-    canonical_resource_name: str | None = None,
-    identifier_candidate_id: str | None = None,
-) -> dict:
-    """Build the deliberately minimal Resource Monitor LLM result."""
-
-    return {
-        "groups": [
-            {
-                "group_id": group_id,
-                "represents_resource": represents_resource,
-                **(
-                    {"canonical_resource_name": canonical_resource_name}
-                    if canonical_resource_name is not None
-                    else {}
-                ),
-                **(
-                    {"identifier_candidate_id": identifier_candidate_id}
-                    if identifier_candidate_id is not None
-                    else {}
-                ),
-            }
-        ]
-    }
+def _selection(identifier_candidate_id: str | None) -> dict:
+    return {"identifier_candidate_id": identifier_candidate_id}
 
 
 def _catalog(tmp_path: Path):
@@ -72,7 +48,7 @@ def _agent(tmp_path: Path, client: StubLLMClient):
     from restscope.llm import LLMModelConfig
 
     catalog = _catalog(tmp_path)
-    agent = ResourceIdentifierTracker(
+    tracker = ResourceIdentifierTracker(
         catalog=catalog,
         client=client,
         model=LLMModelConfig(
@@ -81,7 +57,7 @@ def _agent(tmp_path: Path, client: StubLLMClient):
             model="fast-stub",
         ),
     )
-    return agent, catalog
+    return tracker, catalog
 
 
 def _observation(
@@ -91,7 +67,10 @@ def _observation(
     path: str = "/users",
     body,
 ):
-    from restscope.agent.api_behavior_monitor import MonitoredOperation, ResourceObservation
+    from restscope.agent.api_behavior_monitor import (
+        MonitoredOperation,
+        ResourceObservation,
+    )
 
     return ResourceObservation(
         operation=MonitoredOperation(
@@ -105,74 +84,39 @@ def _observation(
     )
 
 
-def test_model_prompt_is_minimal_and_never_exposes_identifier_values(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="POST /commits",
-            path="/commits",
-            body={"sha": "secret-abc123", "message": "initial"},
-        )
+def _record_user_resource(catalog, *, aliases: list[str] | None = None) -> None:
+    from restscope.agent.api_behavior_monitor import (
+        DetectedResourceGroup,
+        MonitoredOperation,
     )
 
-    assert result.status == "updated"
-    payload = __import__("json").loads(client.requests[0].messages[1].content)
-    assert set(payload) == {"operation", "known_resource_names", "groups"}
-    assert payload["operation"] == {"method": "POST", "path": "/commits"}
-    assert payload["known_resource_names"] == []
-    group = payload["groups"][0]
-    assert set(group) == {
-        "group_id",
-        "response_location",
-        "resource_name_hint",
-        "identifier_candidates",
-    }
-    assert group["group_id"] == "g1"
-    assert group["response_location"] == "$"
-    assert group["resource_name_hint"] == "commit"
-    candidate = group["identifier_candidates"][0]
-    assert set(candidate) == {
-        "candidate_id",
-        "field_path",
-        "value_types",
-        "observed_in_response",
-    }
-    assert candidate["candidate_id"] == "c1"
-    assert candidate["field_path"] == "sha"
-    assert candidate["value_types"] == ["string"]
-    assert candidate["observed_in_response"] is True
-    prompt = "\n".join(message.content for message in client.requests[0].messages)
-    for forbidden in (
-        "secret-abc123",
-        "operation_key",
-        "selector",
-        "required",
-        "observed_count",
-        "resource_id",
-        "aliases",
-        "truncated",
-        "total",
-    ):
-        assert forbidden not in prompt
+    catalog.record_groups(
+        operation=MonitoredOperation(
+            operation_key="POST /users",
+            method="POST",
+            path="/users",
+        ),
+        groups=[
+            DetectedResourceGroup(
+                group_path="$",
+                resource_name="user",
+                resource_aliases=aliases or ["user"],
+                id_field_name="id",
+                id_selector="$.id",
+                identifier_values=[1],
+                classification_source="exact_id",
+            )
+        ],
+    )
 
 
 def test_exact_id_is_recorded_without_calling_llm(tmp_path: Path) -> None:
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
-    agent, catalog = _agent(tmp_path, client)
+    tracker, catalog = _agent(tmp_path, client)
 
-    result = agent.observe(_observation(body={"id": 42, "name": "Ada"}))
+    result = tracker.observe(_observation(body={"id": 42, "name": "Ada"}))
 
     assert result.status == "updated"
     assert result.identifiers_recorded == 1
@@ -182,21 +126,31 @@ def test_exact_id_is_recorded_without_calling_llm(tmp_path: Path) -> None:
     assert lookup.operations[0].id_field_aliases == ["id"]
 
 
-def test_semantic_identifier_uses_one_fast_model_call_without_exposing_value(
+def test_exact_id_wins_over_other_id_suffix_fields(tmp_path: Path) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient()
+    tracker, catalog = _agent(tmp_path, client)
+
+    result = tracker.observe(
+        _observation(body={"userId": 7, "id": 42, "project_id": 9})
+    )
+
+    assert result.status == "updated"
+    assert client.requests == []
+    lookup = catalog.lookup(ResourceLookupRequest(resource="user", limit=100))
+    assert [item.value for item in lookup.identifiers] == [42]
+
+
+def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     tmp_path: Path,
 ) -> None:
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
+    client = StubLLMClient(_selection("c1"))
+    tracker, catalog = _agent(tmp_path, client)
 
-    result = agent.observe(
+    result = tracker.observe(
         _observation(
             operation_key="POST /commits",
             path="/commits",
@@ -206,637 +160,77 @@ def test_semantic_identifier_uses_one_fast_model_call_without_exposing_value(
 
     assert result.status == "updated"
     assert len(client.requests) == 1
-    assert client.requests[0].metadata["role"] == "api_behavior_monitor"
-    prompt = "\n".join(message.content for message in client.requests[0].messages)
-    assert "secret-abc123" not in prompt
+    request = client.requests[0]
+    assert request.metadata["role"] == "api_behavior_monitor"
+    payload = json.loads(request.messages[1].content)
+    assert payload == {
+        "operation": {"method": "POST", "path": "/commits"},
+        "resource": {"canonical_name": "commit"},
+        "candidates": [
+            {
+                "candidate_id": "c1",
+                "field_path": "sha",
+                "value_types": ["string"],
+                "observed_in_response": True,
+            },
+            {
+                "candidate_id": "c2",
+                "field_path": "message",
+                "value_types": ["string"],
+                "observed_in_response": True,
+            },
+        ],
+    }
+    prompt = request.messages[1].content
+    for forbidden in (
+        "secret-abc123",
+        "operation_key",
+        "selector",
+        "resource_id",
+        "aliases",
+        "known_resource_names",
+        "represents_resource",
+    ):
+        assert forbidden not in prompt
     assert catalog.lookup(
         ResourceLookupRequest(resource="commit")
     ).recommended_id == "secret-abc123"
 
 
-def test_unresolved_top_level_groups_are_batched_into_one_llm_call(
+def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+    client = StubLLMClient(_selection("c1"))
+    tracker, _catalog = _agent(tmp_path, client)
 
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "user",
-                    "identifier_candidate_id": "c1",
-                },
-                {
-                    "group_id": "g2",
-                    "represents_resource": True,
-                    "canonical_resource_name": "project",
-                    "identifier_candidate_id": "c1",
-                },
-            ]
-        }
-    )
-    agent, catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
+    result = tracker.observe(
         _observation(
-            operation_key="GET /dashboard",
-            method="GET",
-            path="/dashboard",
-            body={
-                "user": {"userId": 7, "name": "Ada"},
-                "project": {"projectKey": "restscope"},
-            },
+            body={"sha": "abc123", "userId": 7, "message": "initial"},
         )
     )
 
-    assert result.groups_processed == 2
-    assert len(client.requests) == 1
-    assert catalog.lookup(ResourceLookupRequest(resource="user")).recommended_id == 7
-    assert (
-        catalog.lookup(ResourceLookupRequest(resource="project")).recommended_id
-        == "restscope"
-    )
-
-
-def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
-    first = _observation(
-        operation_key="GET /commits/{commitId}",
-        method="GET",
-        path="/commits/{commitId}",
-        body={"sha": "first"},
-    )
-
-    assert agent.observe(first).status == "updated"
-    assert agent.observe(first.model_copy(update={"body": {"sha": "second"}})).status == "updated"
-    missing = agent.observe(first.model_copy(update={"body": {"message": "missing"}}))
-
-    assert len(client.requests) == 1
-    assert missing.status == "warning"
-    assert missing.warning is not None
-    assert missing.warning.code == "expected_resource_id_missing"
-    lookup = catalog.lookup(ResourceLookupRequest(resource="commit"))
-    assert [item.value for item in lookup.identifiers] == ["second", "first"]
-    assert [error.code for error in lookup.errors] == [
-        "expected_resource_id_missing"
+    assert result.status == "updated"
+    payload = json.loads(client.requests[0].messages[1].content)
+    assert [item["field_path"] for item in payload["candidates"]] == [
+        "userId"
     ]
 
 
-def test_exact_id_can_use_fast_model_to_merge_new_resource_alias(
+def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-        ResourceLookupRequest,
-    )
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-                DetectedResourceGroup(
-                    group_path="$",
-                    resource_name="user",
-                    resource_aliases=["user"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /documents/{documentId}",
-            method="GET",
-            path="/documents/{documentId}",
-            body={"owner": {"id": 2, "name": "Grace"}},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 1
-    payload = __import__("json").loads(client.requests[0].messages[1].content)
-    assert payload["known_resource_names"] == ["user"]
-    assert "matched_canonical_name" not in payload["groups"][0]
-    assert payload["groups"][0]["locked_identifier_candidate_id"] == "c1"
-    lookup = catalog.lookup(ResourceLookupRequest(resource="owner"))
-    assert lookup.canonical_resource == "user"
-    assert {item.value for item in lookup.identifiers} == {1, 2}
-
-
-def test_known_resource_alias_is_exposed_as_locked_canonical_name(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user", "owner"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /documents/{documentId}",
-            method="GET",
-            path="/documents/{documentId}",
-            body={"owner": {"userKey": 2}},
-        )
-    )
-
-    assert result.status == "updated"
-    payload = __import__("json").loads(client.requests[0].messages[1].content)
-    assert payload["groups"][0]["matched_canonical_name"] == "user"
-
-
-def test_no_resource_decision_is_cached_for_later_success_responses(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        _classification(represents_resource=False)
-    )
-    agent, _catalog = _agent(tmp_path, client)
-    observation = _observation(
-        operation_key="GET /health",
-        method="GET",
-        path="/health",
-        body={"status": "ok", "uptime": 100},
-    )
-
-    assert agent.observe(observation).status == "ignored"
-    assert agent.observe(
-        observation.model_copy(update={"body": {"status": "ok", "uptime": 200}})
-    ).status == "ignored"
-    assert len(client.requests) == 1
-
-
-def test_nonresource_explicit_null_fields_are_repaired(tmp_path: Path) -> None:
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": False,
-                    "canonical_resource_name": None,
-                    "identifier_candidate_id": None,
-                }
-            ]
-        },
-        _classification(represents_resource=False),
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /health",
-            method="GET",
-            path="/health",
-            body={"status": "ok"},
-        )
-    )
-
-    assert result.status == "ignored"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert "g1" in " ".join(repair["validation_errors"])
-
-
-def test_locked_identifier_candidate_cannot_be_replaced_or_omitted(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c2",
-        ),
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c1",
-        ),
-    )
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /documents/{documentId}",
-            method="GET",
-            path="/documents/{documentId}",
-            body={"owner": {"id": 2, "name": "Grace"}},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert "g1" in " ".join(repair["validation_errors"])
-
-
-def test_locked_or_matched_group_cannot_be_declared_nonresource(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    client = StubLLMClient(
-        _classification(represents_resource=False),
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c1",
-        ),
-    )
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user", "owner"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /documents/{documentId}",
-            method="GET",
-            path="/documents/{documentId}",
-            body={"owner": {"userKey": 2}},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert "g1" in " ".join(repair["validation_errors"])
-
-
-def test_locked_candidate_group_cannot_be_declared_nonresource(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    client = StubLLMClient(
-        _classification(represents_resource=False),
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c1",
-        ),
-    )
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /documents/{documentId}",
-            method="GET",
-            path="/documents/{documentId}",
-            body={"owner": {"id": 2}},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert "g1" in " ".join(repair["validation_errors"])
-
-
-def test_model_output_requires_complete_unique_group_ids_and_repairs_once(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "user",
-                    "identifier_candidate_id": "c1",
-                },
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "project",
-                    "identifier_candidate_id": "c1",
-                },
-            ]
-        },
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "user",
-                    "identifier_candidate_id": "c1",
-                },
-                {
-                    "group_id": "g2",
-                    "represents_resource": True,
-                    "canonical_resource_name": "project",
-                    "identifier_candidate_id": "c1",
-                },
-            ]
-        },
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /dashboard",
-            method="GET",
-            path="/dashboard",
-            body={"user": {"userId": 7}, "project": {"projectKey": "p"}},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert len(repair["validation_errors"]) <= 10
-    assert "g1" in " ".join(repair["validation_errors"])
-    assert "$.user" not in " ".join(repair["validation_errors"])
-
-
-def test_schema_validation_error_uses_actual_raw_group_id_when_output_is_reordered(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g2",
-                    "represents_resource": True,
-                    "canonical_resource_name": "project",
-                    "identifier_candidate_id": "c1",
-                    "unexpected": True,
-                },
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "user",
-                    "identifier_candidate_id": "c1",
-                },
-            ]
-        },
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "user",
-                    "identifier_candidate_id": "c1",
-                },
-                {
-                    "group_id": "g2",
-                    "represents_resource": True,
-                    "canonical_resource_name": "project",
-                    "identifier_candidate_id": "c1",
-                },
-            ]
-        },
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /dashboard",
-            method="GET",
-            path="/dashboard",
-            body={"user": {"userId": 7}, "project": {"projectKey": "p"}},
-        )
-    )
-
-    assert result.status == "updated"
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    errors = " ".join(repair["validation_errors"])
-    assert "g2" in errors
-    assert "g1" not in errors
-
-
-def test_non_boolean_represents_resource_is_repaired_with_group_id(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": "false",
-                }
-            ]
-        },
-        _classification(represents_resource=False),
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /health",
-            method="GET",
-            path="/health",
-            body={"status": "ok"},
-        )
-    )
-
-    assert result.status == "ignored"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert "g1" in " ".join(repair["validation_errors"])
-
-
-def test_unknown_candidate_id_is_rejected(tmp_path: Path) -> None:
-    import pytest
-
-    from restscope.agent.api_behavior_monitor import ResourceIdentifierOutputError
-
-    invalid = _classification(
-        represents_resource=True,
-        canonical_resource_name="commit",
-        identifier_candidate_id="c99",
-    )
-    client = StubLLMClient(invalid, invalid)
-    agent, _catalog = _agent(tmp_path, client)
-
-    with pytest.raises(ResourceIdentifierOutputError) as raised:
-        agent.observe(
-            _observation(body={"sha": "abc123"})
-        )
-
-    assert raised.value.code == "resource_monitor_output_invalid"
-
-
-def test_missing_group_is_repaired_without_an_unknown_candidate(tmp_path: Path) -> None:
-    import pytest
-
-    from restscope.agent.api_behavior_monitor import ResourceIdentifierOutputError
-
-    incomplete = _classification(
-        represents_resource=True,
-        canonical_resource_name="commit",
-        identifier_candidate_id="c1",
-    )
-    client = StubLLMClient(incomplete, incomplete)
-    agent, _catalog = _agent(tmp_path, client)
-
-    with pytest.raises(ResourceIdentifierOutputError) as raised:
-        agent.observe(
-            _observation(
-                operation_key="GET /dashboard",
-                method="GET",
-                path="/dashboard",
-                body={"commit": {"sha": "abc123"}, "project": {"key": "p"}},
-            )
-        )
-
-    assert raised.value.code == "resource_monitor_output_invalid"
-
-
-def test_prompt_excludes_non_identifier_scalar_types(tmp_path: Path) -> None:
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    agent.observe(
-        _observation(
-            operation_key="POST /commits",
-            path="/commits",
-            body={"sha": "abc123", "active": True, "ratio": 1.5, "none": None},
-        )
-    )
-
-    payload = __import__("json").loads(client.requests[0].messages[1].content)
-    candidates = payload["groups"][0]["identifier_candidates"]
-    assert [item["field_path"] for item in candidates] == ["sha"]
-
-
-def test_prompt_excludes_candidates_with_mixed_valid_and_invalid_types(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, _catalog = _agent(tmp_path, client)
+    client = StubLLMClient(_selection("c1"))
+    tracker, _catalog = _agent(tmp_path, client)
     observation = _observation(
         operation_key="POST /commits",
         path="/commits",
-        body={"mixed": "value", "sha": "abc123"},
+        body={
+            "mixed": "value",
+            "sha": "abc123",
+            "active": True,
+            "ratio": 1.5,
+            "none": None,
+        },
     ).model_copy(
         update={
             "response_schema_fields": [
@@ -849,44 +243,568 @@ def test_prompt_excludes_candidates_with_mixed_valid_and_invalid_types(
         }
     )
 
-    result = agent.observe(observation)
+    assert tracker.observe(observation).status == "updated"
+    payload = json.loads(client.requests[0].messages[1].content)
+    assert [item["field_path"] for item in payload["candidates"]] == ["sha"]
+
+
+def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
+    tmp_path: Path,
+) -> None:
+    client = StubLLMClient(_selection("c1"))
+    tracker, _catalog = _agent(tmp_path, client)
+
+    result = tracker.observe(
+        _observation(
+            operation_key="POST /commits",
+            path="/commits",
+            body={"id": True, "sha": "abc123"},
+        )
+    )
 
     assert result.status == "updated"
-    payload = __import__("json").loads(client.requests[0].messages[1].content)
-    assert [
-        item["field_path"] for item in payload["groups"][0]["identifier_candidates"]
-    ] == ["sha"]
+    payload = json.loads(client.requests[0].messages[1].content)
+    assert [item["field_path"] for item in payload["candidates"]] == ["sha"]
 
 
-def test_identifier_candidate_limits_fail_closed(tmp_path: Path) -> None:
-    client = StubLLMClient()
-    agent, _catalog = _agent(tmp_path, client)
+def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
+    tmp_path: Path,
+) -> None:
+    client = StubLLMClient(_selection(None), _selection("c51"))
+    tracker, _catalog = _agent(tmp_path, client)
+    body = {f"field{index}": f"value-{index}" for index in range(51)}
 
-    per_group = agent.observe(
-        _observation(body={f"field_{index}": str(index) for index in range(21)})
+    result = tracker.observe(_observation(body=body))
+
+    assert result.status == "updated"
+    assert len(client.requests) == 2
+    first = json.loads(client.requests[0].messages[1].content)
+    second = json.loads(client.requests[1].messages[1].content)
+    assert [item["candidate_id"] for item in first["candidates"]] == [
+        f"c{index}" for index in range(1, 51)
+    ]
+    assert second["candidates"] == [
+        {
+            "candidate_id": "c51",
+            "field_path": "field50",
+            "value_types": ["string"],
+            "observed_in_response": True,
+        }
+    ]
+
+
+def test_semantic_identifier_ignores_candidates_after_first_100(
+    tmp_path: Path,
+) -> None:
+    client = StubLLMClient(_selection(None), _selection(None))
+    tracker, catalog = _agent(tmp_path, client)
+    body = {f"field{index}": f"value-{index}" for index in range(101)}
+
+    result = tracker.observe(_observation(body=body))
+
+    assert result.status == "ignored"
+    assert len(client.requests) == 2
+    rendered = "\n".join(
+        message.content
+        for request in client.requests
+        for message in request.messages
     )
-    total = agent.observe(
+    assert '"field99"' in rendered
+    assert '"field100"' not in rendered
+    assert catalog.list_rules("POST /users") == []
+
+
+def test_invalid_first_selection_uses_second_and_final_call_for_repair(
+    tmp_path: Path,
+) -> None:
+    client = StubLLMClient(_selection("forged"), _selection("c1"))
+    tracker, _catalog = _agent(tmp_path, client)
+    body = {f"field{index}": f"value-{index}" for index in range(51)}
+
+    result = tracker.observe(_observation(body=body))
+
+    assert result.status == "updated"
+    assert len(client.requests) == 2
+    repair = json.loads(client.requests[1].messages[-1].content)
+    assert repair["instruction"].startswith("Repair")
+    assert "forged" not in {
+        item["candidate_id"]
+        for item in json.loads(client.requests[0].messages[1].content)[
+            "candidates"
+        ]
+    }
+
+
+def test_two_invalid_model_outputs_do_not_persist_partial_rules(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from restscope.agent.api_behavior_monitor import (
+        ResourceIdentifierOutputError,
+        ResourceLookupRequest,
+    )
+
+    client = StubLLMClient(_selection("forged"), _selection("forged"))
+    tracker, catalog = _agent(tmp_path, client)
+
+    with pytest.raises(ResourceIdentifierOutputError) as raised:
+        tracker.observe(
+            _observation(
+                operation_key="POST /commits",
+                path="/commits",
+                body={"sha": "abc123"},
+            )
+        )
+
+    assert raised.value.code == "resource_monitor_output_invalid"
+    assert len(client.requests) == 2
+    assert catalog.list_rules("POST /commits") == []
+    assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == (
+        "not_found"
+    )
+
+
+def test_extra_model_fields_are_repaired_and_not_persisted(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient(
+        {
+            "identifier_candidate_id": "c1",
+            "aliases": ["revision"],
+        },
+        _selection("c1"),
+    )
+    tracker, catalog = _agent(tmp_path, client)
+
+    result = tracker.observe(
         _observation(
-            operation_key="GET /many",
-            method="GET",
-            path="/many",
-            body={
-                f"group_{group_index}": {
-                    f"field_{field_index}": str(field_index)
-                    for field_index in range(17)
+            operation_key="POST /commits",
+            path="/commits",
+            body={"sha": "abc123"},
+        )
+    )
+
+    assert result.status == "updated"
+    assert len(client.requests) == 2
+    repair = json.loads(client.requests[1].messages[-1].content)
+    assert "aliases" in " ".join(repair["validation_errors"])
+    assert catalog.lookup(ResourceLookupRequest(resource="revision")).status == (
+        "not_found"
+    )
+
+
+def test_null_identifier_selection_is_retried_without_negative_rule(
+    tmp_path: Path,
+) -> None:
+    client = StubLLMClient(_selection(None), _selection(None))
+    tracker, catalog = _agent(tmp_path, client)
+    observation = _observation(
+        operation_key="GET /health",
+        method="GET",
+        path="/health",
+        body={"status": "ok"},
+    )
+
+    assert tracker.observe(observation).status == "ignored"
+    assert tracker.observe(observation).status == "ignored"
+    assert len(client.requests) == 2
+    assert catalog.list_rules("GET /health") == []
+
+
+def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient(_selection("c1"))
+    tracker, catalog = _agent(tmp_path, client)
+    first = _observation(
+        operation_key="GET /commits/{commitId}",
+        method="GET",
+        path="/commits/{commitId}",
+        body={"sha": "first"},
+    )
+
+    assert tracker.observe(first).status == "updated"
+    assert tracker.observe(
+        first.model_copy(update={"body": {"sha": "second"}})
+    ).status == "updated"
+    missing = tracker.observe(
+        first.model_copy(update={"body": {"message": "missing"}})
+    )
+
+    assert len(client.requests) == 1
+    assert missing.status == "warning"
+    assert missing.warning is not None
+    assert missing.warning.code == "expected_resource_id_missing"
+    lookup = catalog.lookup(ResourceLookupRequest(resource="commit"))
+    assert [item.value for item in lookup.identifiers] == ["second", "first"]
+    assert [error.code for error in lookup.errors] == [
+        "expected_resource_id_missing"
+    ]
+
+
+def test_schema_only_semantic_identifier_retries_until_value_is_observed(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient(_selection("c2"), _selection("c1"))
+    tracker, catalog = _agent(tmp_path, client)
+    observation = _observation(
+        operation_key="GET /commits/{commitId}",
+        method="GET",
+        path="/commits/{commitId}",
+        body={"message": "identifier omitted"},
+    ).model_copy(
+        update={
+            "response_schema_fields": [
+                {
+                    "selector": "$.sha",
+                    "name": "sha",
+                    "path_segments": ["sha"],
+                    "type": "string",
+                    "format": "sha1",
+                    "description": "Canonical commit hash",
                 }
-                for group_index in range(6)
+            ]
+        }
+    )
+
+    first = tracker.observe(observation)
+    assert first.status == "warning"
+    assert first.warning is not None
+    assert first.warning.code == "expected_resource_id_missing"
+    assert catalog.list_rules("GET /commits/{commitId}") == []
+    second = tracker.observe(
+        observation.model_copy(update={"body": {"sha": "abc123"}})
+    )
+    assert second.status == "updated"
+    assert len(client.requests) == 2
+    prompt = "\n".join(
+        message.content
+        for request in client.requests
+        for message in request.messages
+    )
+    assert "Canonical commit hash" in prompt
+    assert '"schema_format": "sha1"' in prompt
+    assert catalog.lookup(
+        ResourceLookupRequest(resource="commit")
+    ).recommended_id == "abc123"
+
+
+def test_schema_only_exact_id_warns_without_rule_or_llm(tmp_path: Path) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient()
+    tracker, catalog = _agent(tmp_path, client)
+    observation = _observation(body={"name": "Ada"}).model_copy(
+        update={
+            "response_schema_fields": [
+                {
+                    "selector": "$.id",
+                    "name": "id",
+                    "path_segments": ["id"],
+                    "type": "integer",
+                    "resource_name": "User",
+                }
+            ]
+        }
+    )
+
+    result = tracker.observe(observation)
+
+    assert result.status == "warning"
+    assert result.warning is not None
+    assert result.warning.code == "expected_resource_id_missing"
+    assert client.requests == []
+    assert catalog.list_rules("POST /users") == []
+    assert catalog.lookup(ResourceLookupRequest(resource="user")).status == (
+        "not_found"
+    )
+
+
+def test_wrapped_collection_items_are_one_resource_group(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient()
+    tracker, catalog = _agent(tmp_path, client)
+
+    result = tracker.observe(
+        _observation(
+            operation_key="GET /app/api/assignments",
+            method="GET",
+            path="/app/api/assignments",
+            body={
+                "collection": [
+                    {"id": 1, "owner": {"id": 71}},
+                    {"id": 2, "owner": {"id": 72}},
+                ],
+                "total": 2,
             },
         )
     )
 
-    assert per_group.status == "warning"
-    assert per_group.warning is not None
-    assert per_group.warning.code == "resource_monitor_evidence_limit_exceeded"
-    assert total.status == "warning"
-    assert total.warning is not None
-    assert total.warning.code == "resource_monitor_evidence_limit_exceeded"
+    assert result.status == "updated"
+    assert result.groups_processed == 1
+    assert result.identifiers_recorded == 2
     assert client.requests == []
+    lookup = catalog.lookup(
+        ResourceLookupRequest(resource="assignment", limit=100)
+    )
+    assert {item.value for item in lookup.identifiers} == {1, 2}
+    assert catalog.lookup(ResourceLookupRequest(resource="collection")).status == (
+        "not_found"
+    )
+    assert [
+        (item.group_path, item.id_selector)
+        for item in catalog.list_rules("GET /app/api/assignments")
+    ] == [("$.collection[]", "$.collection[].id")]
+
+
+def test_generic_wrapper_uses_schema_resource_name_without_llm(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient()
+    tracker, catalog = _agent(tmp_path, client)
+    observation = _observation(
+        operation_key="GET /dashboard",
+        method="GET",
+        path="/dashboard",
+        body={"data": [{"id": 9, "label": "ready"}]},
+    ).model_copy(
+        update={
+            "response_schema_fields": [
+                {
+                    "selector": "$.data[].id",
+                    "name": "id",
+                    "path_segments": ["data", "id"],
+                    "type": "integer",
+                    "resource_name": "Assignment",
+                }
+            ]
+        }
+    )
+
+    assert tracker.observe(observation).status == "updated"
+    assert client.requests == []
+    assert catalog.lookup(
+        ResourceLookupRequest(resource="assignment")
+    ).recommended_id == 9
+    assert catalog.lookup(ResourceLookupRequest(resource="data")).status == (
+        "not_found"
+    )
+
+
+def test_existing_alias_resolves_canonical_name_locally(tmp_path: Path) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient(_selection("c1"))
+    tracker, catalog = _agent(tmp_path, client)
+    _record_user_resource(catalog, aliases=["user", "owner"])
+
+    result = tracker.observe(
+        _observation(
+            operation_key="GET /owners",
+            method="GET",
+            path="/owners",
+            body={"userKey": 2},
+        )
+    )
+
+    assert result.status == "updated"
+    payload = json.loads(client.requests[0].messages[1].content)
+    assert payload["resource"] == {"canonical_name": "user"}
+    lookup = catalog.lookup(ResourceLookupRequest(resource="owner", limit=100))
+    assert lookup.canonical_resource == "user"
+    assert {item.value for item in lookup.identifiers} == {1, 2}
+
+
+def test_collection_truncates_after_1000_and_persists_first_1000(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    tracker, catalog = _agent(tmp_path, StubLLMClient())
+
+    result = tracker.observe(
+        _observation(
+            operation_key="GET /users",
+            method="GET",
+            path="/users",
+            body=[{"id": value} for value in range(1001)],
+        )
+    )
+
+    assert result.status == "warning"
+    assert result.warning is not None
+    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
+    assert result.identifiers_recorded == 1000
+    lookup = catalog.lookup(ResourceLookupRequest(resource="user", limit=100))
+    assert lookup.total == 1000
+    assert {item.value for item in lookup.identifiers}.issubset(set(range(1000)))
+
+
+def test_oversized_collection_item_is_skipped_without_losing_other_ids(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    tracker, catalog = _agent(tmp_path, StubLLMClient())
+
+    result = tracker.observe(
+        _observation(
+            operation_key="GET /users",
+            method="GET",
+            path="/users",
+            body=[
+                {"id": 1, "payload": list(range(1001))},
+                {"id": 2, "name": "usable"},
+            ],
+        )
+    )
+
+    assert result.status == "warning"
+    assert result.warning is not None
+    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
+    lookup = catalog.lookup(ResourceLookupRequest(resource="user", limit=100))
+    assert [item.value for item in lookup.identifiers] == [2]
+
+
+def test_learned_collection_rule_saves_present_ids_and_warns_for_missing(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    tracker, catalog = _agent(tmp_path, StubLLMClient())
+    first = _observation(
+        operation_key="GET /users",
+        method="GET",
+        path="/users",
+        body=[{"id": 1}, {"id": 2}],
+    )
+
+    assert tracker.observe(first).status == "updated"
+    second = tracker.observe(
+        first.model_copy(update={"body": [{"id": 3}, {"name": "missing"}]})
+    )
+
+    assert second.status == "warning"
+    assert second.warning is not None
+    assert second.warning.code == "expected_resource_id_missing"
+    assert "$[1]" in second.warning.issues
+    lookup = catalog.lookup(ResourceLookupRequest(resource="user", limit=100))
+    assert {item.value for item in lookup.identifiers} == {1, 2, 3}
+
+
+def test_oversized_schema_format_fails_closed_without_llm(
+    tmp_path: Path,
+) -> None:
+    client = StubLLMClient()
+    tracker, _catalog = _agent(tmp_path, client)
+    observation = _observation(body={"sha": "abc123"}).model_copy(
+        update={
+            "response_schema_fields": [
+                {
+                    "selector": "$.sha",
+                    "name": "sha",
+                    "type": "string",
+                    "format": "x" * 201,
+                }
+            ]
+        }
+    )
+
+    result = tracker.observe(observation)
+
+    assert result.status == "warning"
+    assert result.warning is not None
+    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
+    assert client.requests == []
+
+
+def test_invalid_response_field_names_fail_without_catalog_pollution(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    client = StubLLMClient()
+    tracker, catalog = _agent(tmp_path, client)
+    for body in ({"bad.key": "value"}, {"x" * 201: "value"}):
+        result = tracker.observe(_observation(body=body))
+        assert result.status == "warning"
+        assert result.warning is not None
+        assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
+
+    assert client.requests == []
+    assert catalog.list_rules("POST /users") == []
+    assert catalog.lookup(ResourceLookupRequest(resource="user")).status == (
+        "not_found"
+    )
+
+
+def test_oversized_identifier_returns_bounded_warning(tmp_path: Path) -> None:
+    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
+
+    tracker, catalog = _agent(tmp_path, StubLLMClient())
+
+    result = tracker.observe(_observation(body={"id": "x" * 4097}))
+
+    assert result.status == "warning"
+    assert result.warning is not None
+    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
+    assert catalog.lookup(ResourceLookupRequest(resource="user")).status == (
+        "not_found"
+    )
+
+
+def test_legacy_negative_rule_is_replaced_by_positive_evidence(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.api_behavior_monitor import (
+        DetectedResourceGroup,
+        MonitoredOperation,
+        ResourceLookupRequest,
+    )
+
+    tracker, catalog = _agent(tmp_path, StubLLMClient())
+    operation = MonitoredOperation(
+        operation_key="GET /users",
+        method="GET",
+        path="/users",
+    )
+    catalog.record_groups(
+        operation=operation,
+        groups=[
+            DetectedResourceGroup(
+                group_path="$",
+                has_resource=False,
+                classification_source="llm",
+            )
+        ],
+    )
+
+    result = tracker.observe(
+        _observation(
+            operation_key=operation.operation_key,
+            method=operation.method,
+            path=operation.path,
+            body={"id": 9},
+        )
+    )
+
+    assert result.status == "updated"
+    assert catalog.lookup(
+        ResourceLookupRequest(resource="user")
+    ).recommended_id == 9
+    assert catalog.list_rules(operation.operation_key)[0].has_resource is True
 
 
 def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
@@ -934,7 +852,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
     from restscope.llm import ToolCall
     from restscope.openapi_parser import OpenAPIParser
 
-    agent, catalog = _agent(tmp_path, StubLLMClient())
+    tracker, catalog = _agent(tmp_path, StubLLMClient())
     catalog.record_groups(
         operation=MonitoredOperation(
             operation_key="GET /users/{userId}",
@@ -954,7 +872,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
         ],
     )
     registry = ToolRegistry()
-    spec = register_resource_lookup_tool(registry, agent)
+    spec = register_resource_lookup_tool(registry, tracker)
     executor = ToolExecutor(
         registry,
         ToolCallValidator(registry, ToolPolicy()),
@@ -997,437 +915,39 @@ def test_resource_lookup_tool_returns_complete_structured_result(
     )
 
 
-def test_schema_only_identifier_rule_is_learned_then_reused_when_value_appears(
+def test_first_observation_requests_bounded_alias_window(
     tmp_path: Path,
 ) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c2",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
-    observation = _observation(
-        operation_key="GET /commits/{commitId}",
-        method="GET",
-        path="/commits/{commitId}",
-        body={"message": "identifier omitted"},
-    ).model_copy(
-        update={
-            "response_schema_fields": [
-                {
-                    "selector": "$.sha",
-                    "name": "sha",
-                    "path_segments": ["sha"],
-                    "type": "string",
-                    "format": "sha1",
-                    "description": "Canonical commit hash",
-                    "required": False,
-                }
-            ]
-        }
-    )
-
-    first = agent.observe(observation)
-    second = agent.observe(
-        observation.model_copy(update={"body": {"sha": "abc123"}})
-    )
-
-    assert first.status == "updated"
-    assert first.identifiers_recorded == 0
-    assert second.status == "updated"
-    assert len(client.requests) == 1
-    prompt = "\n".join(message.content for message in client.requests[0].messages)
-    assert "Canonical commit hash" in prompt
-    assert '"schema_format": "sha1"' in prompt
-    assert "response_schema_fields" not in prompt
-    assert "path_segments" not in prompt
-    assert catalog.lookup(
-        ResourceLookupRequest(resource="commit")
-    ).recommended_id == "abc123"
-
-
-def test_oversized_schema_format_fails_closed_without_llm(tmp_path: Path) -> None:
-    client = StubLLMClient()
-    agent, _catalog = _agent(tmp_path, client)
-    observation = _observation(body={"sha": "abc123"}).model_copy(
-        update={
-            "response_schema_fields": [
-                {
-                    "selector": "$.sha",
-                    "name": "sha",
-                    "type": "string",
-                    "format": "x" * 201,
-                }
-            ]
-        }
-    )
-
-    result = agent.observe(observation)
-
-    assert result.status == "warning"
-    assert result.warning is not None
-    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
-    assert client.requests == []
-
-
-def test_empty_candidate_group_is_cached_without_llm_even_when_name_is_known(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    client = StubLLMClient()
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user", "owner"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-    observation = _observation(
-        operation_key="GET /documents/{documentId}",
-        method="GET",
-        path="/documents/{documentId}",
-        body={"owner": {"active": True, "ratio": 1.5}},
-    )
-
-    assert agent.observe(observation).status == "ignored"
-    second_observation = observation.model_copy(
-        update={"body": {"owner": {"active": False, "ratio": 2.5}}}
-    )
-    assert agent.observe(second_observation).status == "ignored"
-    assert client.requests == []
-    assert catalog.list_rules("GET /documents/{documentId}")[0].has_resource is False
-
-
-def test_reserved_response_key_fails_closed_without_catalog_pollution(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    client = StubLLMClient()
-    agent, catalog = _agent(tmp_path, client)
-    observation = _observation(body={"bad.key": "abc123"})
-
-    first = agent.observe(observation)
-    second = agent.observe(observation)
-
-    assert first.status == "warning"
-    assert second.status == "warning"
-    assert client.requests == []
-    assert catalog.list_rules("POST /users") == []
-    assert catalog.lookup(ResourceLookupRequest(resource="user")).status == "not_found"
-
-
-def test_first_observation_uses_loaded_catalog_context_without_lookup_calls(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="user",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user", "owner"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    def lookup_must_not_be_called(*_args, **_kwargs):
-        raise AssertionError("first-observation catalog context must not call lookup")
-
-    catalog.lookup = lookup_must_not_be_called
-    result = agent.observe(
-        _observation(
-            operation_key="GET /documents/{documentId}",
-            method="GET",
-            path="/documents/{documentId}",
-            body={"owner": {"userKey": 2}},
-        )
-    )
-
-    assert result.status == "updated"
-
-
-def test_first_observation_requests_bounded_alias_window_from_catalog(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        )
-    )
-    agent, catalog = _agent(tmp_path, client)
-    original_list_resources = catalog.list_resources
+    client = StubLLMClient(_selection("c1"))
+    tracker, catalog = _agent(tmp_path, client)
+    original = catalog.list_resources
     calls: list[dict[str, int | None]] = []
 
-    def capture_list_resources(*, limit=None, aliases_per_resource=None):
+    def capture(*, limit=None, aliases_per_resource=None):
         calls.append(
             {
                 "limit": limit,
                 "aliases_per_resource": aliases_per_resource,
             }
         )
-        return original_list_resources(
+        return original(
             limit=limit,
             aliases_per_resource=aliases_per_resource,
         )
 
-    catalog.list_resources = capture_list_resources
-    result = agent.observe(
+    catalog.list_resources = capture
+
+    assert tracker.observe(
         _observation(
             operation_key="POST /commits",
             path="/commits",
             body={"sha": "abc123"},
         )
-    )
-
-    assert result.status == "updated"
+    ).status == "updated"
     assert calls == [{"limit": 101, "aliases_per_resource": 21}]
 
 
-def test_invalid_model_selector_is_repaired_once(tmp_path: Path) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    client = StubLLMClient(
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c99",
-        ),
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        ),
-    )
-    agent, catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="POST /commits",
-            path="/commits",
-            body={"sha": "abc123"},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-    assert "unknown candidate id c99" in client.requests[1].messages[-1].content
-    assert catalog.lookup(
-        ResourceLookupRequest(resource="commit")
-    ).recommended_id == "abc123"
-
-
-def test_model_generated_aliases_are_not_accepted_or_persisted(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "commit",
-                    "identifier_candidate_id": "c1",
-                    "resource_aliases": ["revision"],
-                }
-            ]
-        },
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        ),
-    )
-    agent, catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="POST /commits",
-            path="/commits",
-            body={"sha": "abc123"},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-    repair = __import__("json").loads(client.requests[1].messages[-1].content)
-    assert "g1" in " ".join(repair["validation_errors"])
-    assert "groups.0" not in " ".join(repair["validation_errors"])
-    assert catalog.lookup(
-        ResourceLookupRequest(resource="commit")
-    ).recommended_id == "abc123"
-    assert (
-        catalog.lookup(ResourceLookupRequest(resource="revision")).status
-        == "not_found"
-    )
-
-
-def test_model_output_rejects_unrecognized_fields_before_persistence(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient(
-        {
-            "groups": [
-                {
-                    "group_id": "g1",
-                    "represents_resource": True,
-                    "canonical_resource_name": "commit",
-                    "identifier_candidate_id": "c1",
-                    "resource_aliases": [f"alias-{index}" for index in range(20)],
-                }
-            ]
-        },
-        _classification(
-            represents_resource=True,
-            canonical_resource_name="commit",
-            identifier_candidate_id="c1",
-        ),
-    )
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="POST /commits",
-            path="/commits",
-            body={"sha": "abc123"},
-        )
-    )
-
-    assert result.status == "updated"
-    assert len(client.requests) == 2
-
-
-def test_identifier_cardinality_limit_warns_without_partial_persistence(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    client = StubLLMClient()
-    agent, catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(
-            operation_key="GET /users",
-            method="GET",
-            path="/users",
-            body=[{"id": value} for value in range(1001)],
-        )
-    )
-
-    assert result.status == "warning"
-    assert result.warning is not None
-    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
-    assert client.requests == []
-    assert catalog.lookup(ResourceLookupRequest(resource="user")).status == (
-        "not_found"
-    )
-
-
-def test_oversized_response_field_name_warns_before_model_call(
-    tmp_path: Path,
-) -> None:
-    client = StubLLMClient()
-    agent, _catalog = _agent(tmp_path, client)
-
-    result = agent.observe(
-        _observation(body={"x" * 201: "value"})
-    )
-
-    assert result.status == "warning"
-    assert result.warning is not None
-    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
-    assert client.requests == []
-
-
-def test_oversized_first_identifier_returns_bounded_warning(
-    tmp_path: Path,
-) -> None:
-    from restscope.agent.api_behavior_monitor import ResourceLookupRequest
-
-    agent, catalog = _agent(tmp_path, StubLLMClient())
-
-    result = agent.observe(
-        _observation(body={"id": "x" * 4097})
-    )
-
-    assert result.status == "warning"
-    assert result.warning is not None
-    assert result.warning.code == "resource_monitor_evidence_limit_exceeded"
-    assert catalog.lookup(ResourceLookupRequest(resource="user")).status == (
-        "not_found"
-    )
-
-
-def test_existing_resource_model_context_fails_closed_before_truncation() -> None:
-    import pytest
-
-    from restscope.agent.api_behavior_monitor.resource_identifier import (
-        _EvidenceLimitExceeded,
-        _existing_resource_prompt,
-    )
-    from restscope.agent.api_behavior_monitor.resource_schemas import (
-        ResourceNameSummary,
-    )
-
-    with pytest.raises(_EvidenceLimitExceeded):
-        _existing_resource_prompt(
-            [
-                ResourceNameSummary(
-                    resource_id=f"resource_{index}",
-                    canonical_name=f"resource-{index}",
-                    aliases=[f"alias-{index}"],
-                )
-                for index in range(101)
-            ]
-        )
-
-
-def test_existing_resource_context_rejects_invalid_canonical_or_alias_data() -> None:
+def test_existing_resource_context_limits_fail_closed() -> None:
     import pytest
 
     from restscope.agent.api_behavior_monitor.resource_identifier import (
@@ -1437,6 +957,18 @@ def test_existing_resource_context_rejects_invalid_canonical_or_alias_data() -> 
     from restscope.agent.api_behavior_monitor.resource_schemas import (
         ResourceNameSummary,
     )
+
+    with pytest.raises(_EvidenceLimitExceeded):
+        _resource_prompt_context(
+            [
+                ResourceNameSummary(
+                    resource_id=f"resource_{index}",
+                    canonical_name=f"resource-{index}",
+                    aliases=[f"alias-{index}"],
+                )
+                for index in range(101)
+            ]
+        )
 
     invalid_contexts = [
         [
@@ -1461,41 +993,6 @@ def test_existing_resource_context_rejects_invalid_canonical_or_alias_data() -> 
             )
         ],
     ]
-
     for resources in invalid_contexts:
         with pytest.raises(_EvidenceLimitExceeded):
             _resource_prompt_context(resources)
-
-
-def test_two_invalid_model_outputs_do_not_persist_partial_rules(
-    tmp_path: Path,
-) -> None:
-    import pytest
-
-    from restscope.agent.api_behavior_monitor import (
-        ResourceLookupRequest,
-        ResourceIdentifierOutputError,
-    )
-
-    invalid = _classification(
-        represents_resource=True,
-        canonical_resource_name="commit",
-        identifier_candidate_id="c99",
-    )
-    client = StubLLMClient(invalid, invalid)
-    agent, catalog = _agent(tmp_path, client)
-
-    with pytest.raises(ResourceIdentifierOutputError) as raised:
-        agent.observe(
-            _observation(
-                operation_key="POST /commits",
-                path="/commits",
-                body={"sha": "abc123"},
-            )
-        )
-
-    assert raised.value.code == "resource_monitor_output_invalid"
-    assert catalog.list_rules("POST /commits") == []
-    assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == (
-        "not_found"
-    )

@@ -419,6 +419,18 @@ class SqlAlchemyResourceCatalogRepository:
                 id_observed=observed,
             )
             self.session.add(rule)
+        elif not rule.has_resource and group.has_resource:
+            assert resource is not None
+            rule.resource_id = resource.id
+            rule.method = operation.method
+            rule.path = operation.path
+            rule.has_resource = True
+            rule.resource_aliases = group.resource_aliases
+            rule.id_field_name = group.id_field_name
+            rule.id_selector = group.id_selector
+            rule.access_mode = operation.access_mode
+            rule.classification_source = group.classification_source
+            rule.id_observed = observed
         else:
             if (
                 rule.resource_id != (resource.id if resource is not None else None)

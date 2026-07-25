@@ -9,7 +9,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    StrictBool,
     StrictInt,
     StrictStr,
     field_validator,
@@ -233,39 +232,22 @@ class ResourceMonitorResult(BaseModel):
     warning: ResourceMonitorWarning | None = None
 
 
-class ResourceClassificationDraft(BaseModel):
-    """One model-proposed classification without actual identifier values."""
+class ResourceIdentifierSelection(BaseModel):
+    """One bounded model choice mapped back to local identifier evidence."""
 
     model_config = ConfigDict(extra="forbid")
 
-    group_id: str = Field(
-        min_length=1,
-        max_length=100,
-    )
-    represents_resource: StrictBool
-    canonical_resource_name: str | None = Field(
-        default=None,
-        max_length=MAX_RESOURCE_NAME_CHARS,
-    )
     identifier_candidate_id: str | None = Field(
         default=None,
         max_length=100,
     )
 
-    @field_validator("group_id", "canonical_resource_name", "identifier_candidate_id")
+    @field_validator("identifier_candidate_id")
     @classmethod
-    def reject_blank_model_text(cls, value: str | None) -> str | None:
+    def reject_blank_candidate_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()
         if not normalized:
-            raise ValueError("model classification text cannot be blank")
+            raise ValueError("identifier candidate id cannot be blank")
         return normalized
-
-
-class ResourceClassificationBatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    groups: list[ResourceClassificationDraft] = Field(
-        max_length=MAX_CLASSIFICATION_GROUPS
-    )

@@ -611,6 +611,65 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == "not_found"
 
 
+def test_response_schema_fields_include_collection_item_resource_name() -> None:
+    from restscope.agent.api_behavior_monitor.agent import _response_schema_fields
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "schema-name", "version": "1"},
+            "paths": {
+                "/dashboard": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "data": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "title": "Assignment",
+                                                        "properties": {
+                                                            "id": {
+                                                                "type": "integer"
+                                                            },
+                                                            "label": {
+                                                                "type": "string"
+                                                            },
+                                                        },
+                                                    },
+                                                }
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+
+    fields = _response_schema_fields(
+        ir.operations["GET /dashboard"],
+        status_code=200,
+        media_type="application/json",
+    )
+
+    assert {item["selector"] for item in fields} == {
+        "$.data[].id",
+        "$.data[].label",
+    }
+    assert {item["resource_name"] for item in fields} == {"Assignment"}
+
+
 def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
     tmp_path: Path,
 ) -> None:

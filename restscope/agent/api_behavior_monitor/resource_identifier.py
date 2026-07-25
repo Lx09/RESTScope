@@ -26,8 +26,7 @@ from .resource_schemas import (
     MAX_RESOURCE_NAME_CHARS,
     MAX_RESOURCE_SELECTOR_CHARS,
     MonitoredOperation,
-    ResourceClassificationBatch,
-    ResourceClassificationDraft,
+    ResourceIdentifierSelection,
     ResourceLookupRequest,
     ResourceLookupResult,
     ResourceMonitorResult,
@@ -38,15 +37,18 @@ from .resource_schemas import (
 
 
 MAX_RESPONSE_GROUPS = MAX_CLASSIFICATION_GROUPS
-MAX_CANDIDATE_FIELDS = 500
 MAX_OBSERVED_SCALARS = 1000
-MAX_VALUES_PER_FIELD = 100
+MAX_RESOURCE_ITEMS = 1000
+MAX_VALUES_PER_FIELD = MAX_RESOURCE_ITEMS
 MAX_IDENTIFIER_BYTES = 4096
 MAX_SCHEMA_EVIDENCE_ITEMS = 1000
 MAX_EXISTING_RESOURCES_IN_PROMPT = 100
-MAX_PROMPT_CANDIDATES_PER_GROUP = 20
+MAX_PROMPT_CANDIDATES_PER_GROUP = 50
 MAX_PROMPT_CANDIDATES_TOTAL = 100
 MAX_SCHEMA_FORMAT_CHARS = 200
+GENERIC_RESOURCE_WRAPPERS = frozenset(
+    {"collection", "data", "items", "results"}
+)
 
 
 class ResourceIdentifierOutputError(RuntimeError):
@@ -64,8 +66,6 @@ class _EvidenceLimitExceeded(ValueError):
 @dataclass(slots=True)
 class _EvidenceBudget:
     groups: int = 0
-    fields: int = 0
-    values: int = 0
     schema_items: int = 0
 
     def add_group(self) -> None:
@@ -73,24 +73,6 @@ class _EvidenceBudget:
         if self.groups > MAX_RESPONSE_GROUPS:
             raise _EvidenceLimitExceeded(
                 f"response groups exceed {MAX_RESPONSE_GROUPS}"
-            )
-
-    def add_field(self) -> None:
-        self.fields += 1
-        if self.fields > MAX_CANDIDATE_FIELDS:
-            raise _EvidenceLimitExceeded(
-                f"candidate fields exceed {MAX_CANDIDATE_FIELDS}"
-            )
-
-    def add_value(self, current_field_values: int) -> None:
-        self.values += 1
-        if current_field_values >= MAX_VALUES_PER_FIELD:
-            raise _EvidenceLimitExceeded(
-                f"values for one field exceed {MAX_VALUES_PER_FIELD}"
-            )
-        if self.values > MAX_OBSERVED_SCALARS:
-            raise _EvidenceLimitExceeded(
-                f"observed scalar values exceed {MAX_OBSERVED_SCALARS}"
             )
 
     def add_schema_item(self) -> None:
@@ -116,24 +98,26 @@ class _ResponseGroup:
     group_path: str
     suggested_alias: str
     fields: dict[str, _FieldCandidate]
-    exact_id_selector: str | None = None
-
-
-@dataclass(slots=True)
-class _PromptGroup:
-    """Ephemeral model-facing IDs mapped back to private response evidence."""
-
-    group_id: str
-    group: _ResponseGroup
-    candidates: dict[str, _FieldCandidate]
-    matched_canonical_name: str | None
-    locked_identifier_candidate_id: str | None
+    schema_resource_name: str | None = None
+    evidence_issues: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class _ResourcePromptContext:
-    canonical_names: list[str]
     alias_to_canonical: dict[str, str]
+
+
+@dataclass(slots=True)
+class _FirstObservationOutcome:
+    detections: list[DetectedResourceGroup] = field(default_factory=list)
+    warnings: list[tuple[str, ResourceMonitorWarning]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _SelectorExtraction:
+    values: list[str | int] = field(default_factory=list)
+    missing_locations: list[str] = field(default_factory=list)
+    evidence_issues: list[str] = field(default_factory=list)
 
 
 class ResourceIdentifierTracker:
@@ -193,7 +177,13 @@ class ResourceIdentifierTracker:
                 message="Response body was truncated before resource monitoring",
             )
 
-        rules = self.catalog.list_rules(observation.operation.operation_key)
+        rules = [
+            rule
+            for rule in self.catalog.list_rules(
+                observation.operation.operation_key
+            )
+            if rule.has_resource
+        ]
         if rules:
             try:
                 return self._apply_rules(observation, rules)
@@ -220,7 +210,7 @@ class ResourceIdentifierTracker:
         if not groups:
             return ResourceMonitorResult(status="ignored")
         try:
-            detections = self._classify_first_observation(observation, groups)
+            outcome = self._classify_first_observation(observation, groups)
         except _EvidenceLimitExceeded as exc:
             return self._record_warning(
                 operation=observation.operation,
@@ -237,13 +227,29 @@ class ResourceIdentifierTracker:
                 ),
             )
             raise
-        if not detections:
+        if not outcome.detections:
+            if outcome.warnings:
+                return self._persist_observation_warnings(
+                    operation=observation.operation,
+                    warnings=outcome.warnings,
+                )
             return ResourceMonitorResult(status="ignored")
         self.catalog.record_groups(
             operation=observation.operation,
-            groups=detections,
+            groups=outcome.detections,
         )
-        resource_groups = [item for item in detections if item.has_resource]
+        resource_groups = [
+            item for item in outcome.detections if item.has_resource
+        ]
+        if outcome.warnings:
+            return self._persist_observation_warnings(
+                operation=observation.operation,
+                warnings=outcome.warnings,
+                groups_processed=len(resource_groups),
+                identifiers_recorded=sum(
+                    len(item.identifier_values) for item in resource_groups
+                ),
+            )
         return ResourceMonitorResult(
             status="updated" if resource_groups else "ignored",
             groups_processed=len(resource_groups),
@@ -258,68 +264,70 @@ class ResourceIdentifierTracker:
         rules: list[LearnedResourceRule],
     ) -> ResourceMonitorResult:
         detections: list[DetectedResourceGroup] = []
-        missing: list[LearnedResourceRule] = []
-        identifier_count = 0
+        warnings: list[tuple[str, ResourceMonitorWarning]] = []
         for rule in rules:
             if not rule.has_resource:
                 continue
             assert rule.resource_name is not None
             assert rule.id_field_name is not None
             assert rule.id_selector is not None
-            values = _identifier_values(
-                _extract_selector_values(observation.body, rule.id_selector)
+            extraction = _extract_group_identifier_values(
+                observation.body,
+                group_path=rule.group_path,
+                selector=rule.id_selector,
             )
-            identifier_count += len(values)
-            if identifier_count > MAX_OBSERVED_SCALARS:
-                raise _EvidenceLimitExceeded(
-                    f"identifier values exceed {MAX_OBSERVED_SCALARS}"
+            if extraction.values:
+                detections.append(
+                    DetectedResourceGroup(
+                        group_path=rule.group_path,
+                        resource_name=rule.resource_name,
+                        resource_aliases=rule.resource_aliases,
+                        id_field_name=rule.id_field_name,
+                        id_selector=rule.id_selector,
+                        identifier_values=extraction.values,
+                        classification_source=rule.classification_source,
+                    )
                 )
-            if rule.id_observed and not values:
-                missing.append(rule)
-                continue
-            detections.append(
-                DetectedResourceGroup(
-                    group_path=rule.group_path,
-                    resource_name=rule.resource_name,
-                    resource_aliases=rule.resource_aliases,
-                    id_field_name=rule.id_field_name,
-                    id_selector=rule.id_selector,
-                    identifier_values=values,
-                    classification_source=rule.classification_source,
+            if extraction.missing_locations:
+                warnings.append(
+                    (
+                        rule.group_path,
+                        ResourceMonitorWarning(
+                            code="expected_resource_id_missing",
+                            message=(
+                                "One or more resource items omitted a learned "
+                                "identifier"
+                            ),
+                            issues=extraction.missing_locations[:20],
+                        ),
+                    )
                 )
-            )
+            if extraction.evidence_issues:
+                warnings.append(
+                    (
+                        rule.group_path,
+                        ResourceMonitorWarning(
+                            code="resource_monitor_evidence_limit_exceeded",
+                            message=(
+                                "Some resource evidence was skipped or "
+                                "truncated"
+                            ),
+                            issues=extraction.evidence_issues[:20],
+                        ),
+                    )
+                )
         if detections:
             self.catalog.record_groups(
                 operation=observation.operation,
                 groups=detections,
             )
-        for rule in missing:
-            assert rule.id_selector is not None
-            warning = ResourceMonitorWarning(
-                code="expected_resource_id_missing",
-                message="A learned resource identifier was missing from a 2xx response",
-                issues=[rule.id_selector],
-            )
-            self.catalog.record_error(
+        if warnings:
+            return self._persist_observation_warnings(
                 operation=observation.operation,
-                group_path=rule.group_path,
-                warning=warning,
-            )
-        if missing:
-            return ResourceMonitorResult(
-                status="warning",
+                warnings=warnings,
                 groups_processed=len(detections),
                 identifiers_recorded=sum(
                     len(item.identifier_values) for item in detections
-                ),
-                warning=ResourceMonitorWarning(
-                    code="expected_resource_id_missing",
-                    message="One or more learned resource identifiers were missing",
-                    issues=[
-                        rule.id_selector
-                        for rule in missing
-                        if rule.id_selector is not None
-                    ][:20],
                 ),
             )
         if not detections:
@@ -332,233 +340,373 @@ class ResourceIdentifierTracker:
             ),
         )
 
+    def _persist_observation_warnings(
+        self,
+        *,
+        operation: MonitoredOperation,
+        warnings: list[tuple[str, ResourceMonitorWarning]],
+        groups_processed: int = 0,
+        identifiers_recorded: int = 0,
+    ) -> ResourceMonitorResult:
+        for group_path, warning in warnings:
+            self.catalog.record_error(
+                operation=operation,
+                group_path=group_path,
+                warning=warning,
+            )
+        primary = next(
+            (
+                warning
+                for _group_path, warning in warnings
+                if warning.code == "expected_resource_id_missing"
+            ),
+            warnings[0][1],
+        )
+        return ResourceMonitorResult(
+            status="warning",
+            groups_processed=groups_processed,
+            identifiers_recorded=identifiers_recorded,
+            warning=primary,
+        )
+
     def _classify_first_observation(
         self,
         observation: ResourceObservation,
         groups: list[_ResponseGroup],
-    ) -> list[DetectedResourceGroup]:
+    ) -> _FirstObservationOutcome:
         existing_resources = self.catalog.list_resources(
             limit=MAX_EXISTING_RESOURCES_IN_PROMPT + 1,
             aliases_per_resource=MAX_RESOURCE_ALIAS_COUNT + 1,
         )
         resource_context = _resource_prompt_context(existing_resources)
-        detections: list[DetectedResourceGroup] = []
+        outcome = _FirstObservationOutcome()
         unresolved: list[_ResponseGroup] = []
         for group in groups:
-            exact = [
-                field
-                for field in group.fields.values()
-                if _normalize_identifier_name(field.name) == "id"
-                and _identifier_values(field.values)
-            ]
-            if len(exact) == 1:
-                group.exact_id_selector = exact[0].selector
-                known_canonical_name = resource_context.alias_to_canonical.get(
-                    _normalize_resource_name(group.suggested_alias)
-                )
-                if known_canonical_name is not None:
-                    detections.append(
-                        DetectedResourceGroup(
-                            group_path=group.group_path,
-                            resource_name=known_canonical_name,
-                            resource_aliases=[group.suggested_alias],
-                            id_field_name=exact[0].name,
-                            id_selector=exact[0].selector,
-                            identifier_values=_identifier_values(exact[0].values),
-                            classification_source="exact_id",
-                        )
-                    )
-                elif not resource_context.canonical_names:
-                    detections.append(
-                        DetectedResourceGroup(
-                            group_path=group.group_path,
-                            resource_name=group.suggested_alias,
-                            resource_aliases=[group.suggested_alias],
-                            id_field_name=exact[0].name,
-                            id_selector=exact[0].selector,
-                            identifier_values=_identifier_values(exact[0].values),
-                            classification_source="exact_id",
-                        )
-                    )
-                else:
-                    unresolved.append(group)
-            else:
-                unresolved.append(group)
-
-        if unresolved:
-            prompt_groups = self._prompt_groups(
-                unresolved,
-                alias_to_canonical=resource_context.alias_to_canonical,
-            )
-            empty_candidate_groups = [
-                group for group in prompt_groups if not group.candidates
-            ]
-            for prompt_group in empty_candidate_groups:
-                detections.append(
-                    DetectedResourceGroup(
-                        group_path=prompt_group.group.group_path,
-                        has_resource=False,
-                        classification_source="llm",
-                    )
-                )
-            prompt_groups = [
-                group for group in prompt_groups if group.candidates
-            ]
-            if not prompt_groups:
-                return detections
-            drafts = self._classify_with_model(
-                observation=observation,
-                groups=prompt_groups,
-                known_resource_names=resource_context.canonical_names,
-            )
-            by_id = {group.group_id: group for group in prompt_groups}
-            for draft in drafts:
-                prompt_group = by_id[draft.group_id]
-                group = prompt_group.group
-                if not draft.represents_resource:
-                    detections.append(
-                        DetectedResourceGroup(
-                            group_path=group.group_path,
-                            has_resource=False,
-                            classification_source="llm",
-                        )
-                    )
-                    continue
-                assert draft.canonical_resource_name is not None
-                assert draft.identifier_candidate_id is not None
-                field = prompt_group.candidates[draft.identifier_candidate_id]
-                detections.append(
-                    DetectedResourceGroup(
-                        group_path=group.group_path,
-                        resource_name=draft.canonical_resource_name,
-                        resource_aliases=[group.suggested_alias],
-                        id_field_name=field.name,
-                        id_selector=field.selector,
-                        identifier_values=_identifier_values(field.values),
-                        classification_source=(
-                            "exact_id" if group.exact_id_selector else "llm"
+            if group.evidence_issues:
+                outcome.warnings.append(
+                    (
+                        group.group_path,
+                        ResourceMonitorWarning(
+                            code="resource_monitor_evidence_limit_exceeded",
+                            message=(
+                                "Some resource evidence was skipped or "
+                                "truncated"
+                            ),
+                            issues=group.evidence_issues[:20],
                         ),
                     )
                 )
-        return detections
+            exact = [
+                field
+                for field in _identifier_candidates(group.fields.values())
+                if _normalize_identifier_name(field.name) == "id"
+            ]
+            if exact:
+                field = exact[0]
+                extraction = _extract_group_identifier_values(
+                    observation.body,
+                    group_path=group.group_path,
+                    selector=field.selector,
+                )
+                if not extraction.values:
+                    if extraction.evidence_issues:
+                        outcome.warnings.append(
+                            (
+                                group.group_path,
+                                ResourceMonitorWarning(
+                                    code=(
+                                        "resource_monitor_evidence_limit_exceeded"
+                                    ),
+                                    message=(
+                                        "Resource identifier evidence exceeded "
+                                        "monitor limits"
+                                    ),
+                                    issues=extraction.evidence_issues[:20],
+                                ),
+                            )
+                        )
+                    else:
+                        outcome.warnings.append(
+                            (
+                                group.group_path,
+                                ResourceMonitorWarning(
+                                    code="expected_resource_id_missing",
+                                    message=(
+                                        "The IR-declared exact resource "
+                                        "identifier was not observed"
+                                    ),
+                                    issues=[field.selector],
+                                ),
+                            )
+                        )
+                    continue
+                resource_name = _resolve_resource_name(
+                    group,
+                    operation=observation.operation,
+                    resource_context=resource_context,
+                )
+                outcome.detections.append(
+                    DetectedResourceGroup(
+                        group_path=group.group_path,
+                        resource_name=resource_name,
+                        resource_aliases=[resource_name],
+                        id_field_name=field.name,
+                        id_selector=field.selector,
+                        identifier_values=extraction.values,
+                        classification_source="exact_id",
+                    )
+                )
+                if extraction.missing_locations:
+                    outcome.warnings.append(
+                        (
+                            group.group_path,
+                            ResourceMonitorWarning(
+                                code="expected_resource_id_missing",
+                                message=(
+                                    "One or more resource items omitted the "
+                                    "exact identifier"
+                                ),
+                                issues=extraction.missing_locations[:20],
+                            ),
+                        )
+                    )
+                if extraction.evidence_issues:
+                    outcome.warnings.append(
+                        (
+                            group.group_path,
+                            ResourceMonitorWarning(
+                                code="resource_monitor_evidence_limit_exceeded",
+                                message=(
+                                    "Some resource evidence was skipped or "
+                                    "truncated"
+                                ),
+                                issues=extraction.evidence_issues[:20],
+                            ),
+                        )
+                    )
+            else:
+                unresolved.append(group)
 
-    def _prompt_groups(
-        self,
-        groups: list[_ResponseGroup],
-        *,
-        alias_to_canonical: dict[str, str],
-    ) -> list[_PromptGroup]:
-        prompt_groups: list[_PromptGroup] = []
-        total_candidates = 0
-        for index, group in enumerate(groups, start=1):
-            candidates = {
-                f"c{candidate_index}": field
-                for candidate_index, field in enumerate(
-                    _identifier_candidates(group.fields.values()),
-                    start=1,
-                )
-            }
-            if len(candidates) > MAX_PROMPT_CANDIDATES_PER_GROUP:
-                raise _EvidenceLimitExceeded(
-                    "identifier candidates for one group exceed "
-                    f"{MAX_PROMPT_CANDIDATES_PER_GROUP}"
-                )
-            total_candidates += len(candidates)
-            if total_candidates > MAX_PROMPT_CANDIDATES_TOTAL:
-                raise _EvidenceLimitExceeded(
-                    "identifier candidates exceed "
-                    f"{MAX_PROMPT_CANDIDATES_TOTAL}"
-                )
-            exact_candidate_id = next(
-                (
-                    candidate_id
-                    for candidate_id, field in candidates.items()
-                    if field.selector == group.exact_id_selector
-                ),
-                None,
+        for group in unresolved:
+            resource_name = _resolve_resource_name(
+                group,
+                operation=observation.operation,
+                resource_context=resource_context,
             )
-            prompt_groups.append(
-                _PromptGroup(
-                    group_id=f"g{index}",
-                    group=group,
-                    candidates=candidates,
-                    matched_canonical_name=alias_to_canonical.get(
-                        _normalize_resource_name(group.suggested_alias)
-                    ),
-                    locked_identifier_candidate_id=exact_candidate_id,
+            field = self._select_identifier_candidate(
+                observation=observation,
+                group=group,
+                resource_name=resource_name,
+            )
+            if field is None:
+                continue
+            extraction = _extract_group_identifier_values(
+                observation.body,
+                group_path=group.group_path,
+                selector=field.selector,
+            )
+            if not extraction.values:
+                outcome.warnings.append(
+                    (
+                        group.group_path,
+                        ResourceMonitorWarning(
+                            code="expected_resource_id_missing",
+                            message=(
+                                "The selected resource identifier was not "
+                                "observed"
+                            ),
+                            issues=[field.selector],
+                        ),
+                    )
+                )
+                continue
+            outcome.detections.append(
+                DetectedResourceGroup(
+                    group_path=group.group_path,
+                    resource_name=resource_name,
+                    resource_aliases=[resource_name],
+                    id_field_name=field.name,
+                    id_selector=field.selector,
+                    identifier_values=extraction.values,
+                    classification_source="llm",
                 )
             )
-        return prompt_groups
+            if extraction.missing_locations:
+                outcome.warnings.append(
+                    (
+                        group.group_path,
+                        ResourceMonitorWarning(
+                            code="expected_resource_id_missing",
+                            message=(
+                                "One or more resource items omitted the "
+                                "selected identifier"
+                            ),
+                            issues=extraction.missing_locations[:20],
+                        ),
+                    )
+                )
+            if extraction.evidence_issues:
+                outcome.warnings.append(
+                    (
+                        group.group_path,
+                        ResourceMonitorWarning(
+                            code="resource_monitor_evidence_limit_exceeded",
+                            message=(
+                                "Some resource evidence was skipped or "
+                                "truncated"
+                            ),
+                            issues=extraction.evidence_issues[:20],
+                        ),
+                    )
+                )
+        return outcome
 
-    def _classify_with_model(
+    def _select_identifier_candidate(
         self,
         *,
         observation: ResourceObservation,
-        groups: list[_PromptGroup],
-        known_resource_names: list[str],
-    ) -> list[ResourceClassificationDraft]:
+        group: _ResponseGroup,
+        resource_name: str,
+    ) -> _FieldCandidate | None:
+        candidates = _identifier_candidates(group.fields.values())
+        suffix_candidates = [
+            field
+            for field in candidates
+            if _normalize_identifier_name(field.name).endswith("id")
+        ]
+        selected_pool = (suffix_candidates or candidates)[
+            :MAX_PROMPT_CANDIDATES_TOTAL
+        ]
+        if not selected_pool:
+            return None
+        numbered = [
+            (f"c{index}", field)
+            for index, field in enumerate(selected_pool, start=1)
+        ]
+        batches = [
+            numbered[index : index + MAX_PROMPT_CANDIDATES_PER_GROUP]
+            for index in range(0, len(numbered), MAX_PROMPT_CANDIDATES_PER_GROUP)
+        ]
+        first_messages = _selection_messages(
+            observation=observation,
+            group=group,
+            resource_name=resource_name,
+            candidates=batches[0],
+        )
+        selection, errors, response = self._invoke_selection(
+            first_messages,
+            batches[0],
+        )
+        if errors:
+            repair_messages = [
+                *first_messages,
+                LLMMessage(
+                    role="assistant",
+                    content=json.dumps(
+                        response.parsed_json
+                        if response.parsed_json is not None
+                        else response.content,
+                        ensure_ascii=False,
+                    ),
+                ),
+                LLMMessage(
+                    role="user",
+                    content=json.dumps(
+                        {
+                            "instruction": (
+                                "Repair the identifier selection. Return only "
+                                "the required JSON object."
+                            ),
+                            "validation_errors": errors[:10],
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            ]
+            repaired, repair_errors, _response = self._invoke_selection(
+                repair_messages,
+                batches[0],
+            )
+            if repair_errors or repaired is None:
+                raise ResourceIdentifierOutputError(
+                    "resource_monitor_output_invalid",
+                    "Resource Monitor output remained invalid: "
+                    f"{'; '.join(repair_errors[:5])}",
+                )
+            return _selected_field(repaired, batches[0])
+        assert selection is not None
+        selected = _selected_field(selection, batches[0])
+        if selected is not None or len(batches) == 1:
+            return selected
+
+        second_messages = _selection_messages(
+            observation=observation,
+            group=group,
+            resource_name=resource_name,
+            candidates=batches[1],
+        )
+        second, second_errors, _response = self._invoke_selection(
+            second_messages,
+            batches[1],
+        )
+        if second_errors or second is None:
+            raise ResourceIdentifierOutputError(
+                "resource_monitor_output_invalid",
+                "Resource Monitor second selection was invalid: "
+                f"{'; '.join(second_errors[:5])}",
+            )
+        return _selected_field(second, batches[1])
+
+    def _invoke_selection(
+        self,
+        messages: list[LLMMessage],
+        candidates: list[tuple[str, _FieldCandidate]],
+    ) -> tuple[
+        ResourceIdentifierSelection | None,
+        list[str],
+        LLMResponse,
+    ]:
         if not self.model.enabled:
             raise ResourceIdentifierOutputError(
                 "resource_monitor_model_not_configured",
                 "The resource_monitor FAST model is not configured",
             )
-        messages = [
-            LLMMessage(role="system", content=_classification_instructions()),
-            LLMMessage(
-                role="user",
-                content=json.dumps(
-                    {
-                        "operation": {
-                            "method": observation.operation.method,
-                            "path": observation.operation.path,
-                        },
-                        "known_resource_names": known_resource_names,
-                        "groups": [_group_prompt(group) for group in groups],
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
-        ]
-        response = self.client.invoke(self._request(messages))
-        parsed, errors = self._validate_response(response, groups)
-        if not errors:
-            assert parsed is not None
-            return parsed.groups
-
-        repair_messages = [
-            *messages,
-            LLMMessage(
-                role="assistant",
-                content=json.dumps(
-                    response.parsed_json
-                    if response.parsed_json is not None
-                    else response.content,
-                    ensure_ascii=False,
-                ),
-            ),
-            LLMMessage(
-                role="user",
-                content=json.dumps(
-                    {
-                        "instruction": (
-                            "Repair the classification and return the complete batch."
-                        ),
-                        "validation_errors": errors[:10],
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
-        ]
-        repaired = self.client.invoke(self._request(repair_messages))
-        parsed, errors = self._validate_response(repaired, groups)
-        if errors or parsed is None:
-            raise ResourceIdentifierOutputError(
-                "resource_monitor_output_invalid",
-                f"Resource Monitor output remained invalid: {'; '.join(errors[:5])}",
+        response = self.client.invoke(self._selection_request(messages))
+        validation = self.validator.validate(
+            response=response,
+            output_model=ResourceIdentifierSelection,
+        )
+        if not validation.valid:
+            return (
+                None,
+                [
+                    f"{item.location or 'output'}: {item.message}"
+                    for item in validation.errors
+                ],
+                response,
             )
-        return parsed.groups
+        selection = ResourceIdentifierSelection.model_validate(
+            validation.validated_object
+        )
+        candidate_ids = {candidate_id for candidate_id, _field in candidates}
+        if (
+            selection.identifier_candidate_id is not None
+            and selection.identifier_candidate_id not in candidate_ids
+        ):
+            return (
+                selection,
+                [
+                    "identifier_candidate_id must be one of "
+                    f"{sorted(candidate_ids)}"
+                ],
+                response,
+            )
+        return selection, [], response
 
-    def _request(self, messages: list[LLMMessage]) -> LLMRequest:
+    def _selection_request(
+        self,
+        messages: list[LLMMessage],
+    ) -> LLMRequest:
         return LLMRequest(
             provider=self.model.provider,
             model=self.model.model,
@@ -566,96 +714,13 @@ class ResourceIdentifierTracker:
             temperature=self.model.temperature,
             max_tokens=self.model.max_tokens,
             response_format="json_schema",
-            json_schema=ResourceClassificationBatch.model_json_schema(),
-            json_schema_name="ResourceClassificationBatch",
+            json_schema=ResourceIdentifierSelection.model_json_schema(),
+            json_schema_name="ResourceIdentifierSelection",
             tool_choice="none",
             timeout_seconds=self.model.timeout_seconds,
             reasoning=self.model.reasoning,
             metadata={"role": "api_behavior_monitor"},
         )
-
-    def _validate_response(
-        self,
-        response: LLMResponse,
-        groups: list[_PromptGroup],
-    ) -> tuple[ResourceClassificationBatch | None, list[str]]:
-        validation = self.validator.validate(
-            response=response,
-            output_model=ResourceClassificationBatch,
-        )
-        if not validation.valid:
-            return None, _model_validation_errors(
-                validation.errors,
-                validation.raw_json,
-                groups,
-            )
-        batch = ResourceClassificationBatch.model_validate(
-            validation.validated_object
-        )
-        expected = {group.group_id for group in groups}
-        actual = [draft.group_id for draft in batch.groups]
-        errors: list[str] = []
-        if set(actual) != expected or len(actual) != len(expected):
-            errors.append(f"group ids must exactly match {sorted(expected)}")
-        by_id = {group.group_id: group for group in groups}
-        for draft in batch.groups:
-            group = by_id.get(draft.group_id)
-            if group is None:
-                continue
-            if not draft.represents_resource:
-                supplied_fields = {
-                    "canonical_resource_name",
-                    "identifier_candidate_id",
-                } & draft.model_fields_set
-                if supplied_fields:
-                    errors.append(
-                        f"{draft.group_id}: non-resource result must omit "
-                        f"{sorted(supplied_fields)}"
-                    )
-                if group.locked_identifier_candidate_id is not None:
-                    errors.append(
-                        f"{draft.group_id}: locked identifier candidate cannot "
-                        "be declared non-resource"
-                    )
-                if group.matched_canonical_name is not None:
-                    errors.append(
-                        f"{draft.group_id}: matched canonical resource cannot "
-                        "be declared non-resource"
-                    )
-                continue
-            if not all(
-                (
-                    draft.canonical_resource_name,
-                    draft.identifier_candidate_id,
-                )
-            ):
-                errors.append(
-                    f"{draft.group_id}: resource fields are incomplete"
-                )
-                continue
-            if draft.identifier_candidate_id not in group.candidates:
-                errors.append(
-                    f"{draft.group_id}: unknown candidate id "
-                    f"{draft.identifier_candidate_id}"
-                )
-                continue
-            if (
-                group.locked_identifier_candidate_id is not None
-                and draft.identifier_candidate_id
-                != group.locked_identifier_candidate_id
-            ):
-                errors.append(
-                    f"{draft.group_id}: locked identifier candidate must be preserved"
-                )
-            if (
-                group.matched_canonical_name is not None
-                and draft.canonical_resource_name != group.matched_canonical_name
-            ):
-                errors.append(
-                    f"{draft.group_id}: matched canonical resource name must "
-                    "be preserved"
-                )
-        return batch, errors
 
     def _record_warning(
         self,
@@ -685,90 +750,165 @@ def _build_groups(observation: ResourceObservation) -> list[_ResponseGroup]:
     groups: list[_ResponseGroup] = []
     budget = _EvidenceBudget()
     if isinstance(body, dict):
-        root_fields: dict[str, _FieldCandidate] = {}
-        _collect_fields(
-            body,
-            "$",
-            fields=root_fields,
-            recursive=False,
-            budget=budget,
-        )
-        if root_fields:
+        collections = [
+            (str(name), value)
+            for name, value in body.items()
+            if isinstance(value, list)
+        ]
+        if collections:
+            for name, items in collections:
+                _require_evidence_text(
+                    name,
+                    limit=MAX_RESOURCE_NAME_CHARS,
+                    label="response collection field name",
+                )
+                _require_selector_safe_field_name(
+                    name,
+                    label="response collection field name",
+                )
+                normalized_name = _normalize_resource_name(name)
+                alias = (
+                    _operation_resource_alias(observation.operation.path)
+                    if normalized_name in GENERIC_RESOURCE_WRAPPERS
+                    else _singularize(name)
+                )
+                _append_group(
+                    groups,
+                    _build_item_group(
+                        items,
+                        group_path=f"$.{name}[]",
+                        suggested_alias=alias,
+                    ),
+                    budget=budget,
+                )
+        else:
             _append_group(
                 groups,
-                _ResponseGroup(
+                _build_item_group(
+                    [body],
                     group_path="$",
                     suggested_alias=_operation_resource_alias(
                         observation.operation.path
                     ),
-                    fields=root_fields,
                 ),
                 budget=budget,
             )
-        for name, value in body.items():
-            if isinstance(value, dict):
-                path = f"$.{name}"
-                fields: dict[str, _FieldCandidate] = {}
-                _collect_fields(
-                    value,
-                    path,
-                    fields=fields,
-                    recursive=True,
-                    budget=budget,
-                )
-                if fields:
-                    _append_group(
-                        groups,
-                        _ResponseGroup(
-                            group_path=path,
-                            suggested_alias=_singularize(name),
-                            fields=fields,
-                        ),
-                        budget=budget,
-                    )
-            elif isinstance(value, list):
-                path = f"$.{name}[]"
-                fields = {}
-                _collect_fields(
-                    value,
-                    f"$.{name}",
-                    fields=fields,
-                    recursive=True,
-                    budget=budget,
-                )
-                if fields:
-                    _append_group(
-                        groups,
-                        _ResponseGroup(
-                            group_path=path,
-                            suggested_alias=_singularize(name),
-                            fields=fields,
-                        ),
-                        budget=budget,
-                    )
     elif isinstance(body, list):
-        fields = {}
-        _collect_fields(
-            body,
-            "$",
-            fields=fields,
-            recursive=True,
+        _append_group(
+            groups,
+            _build_item_group(
+                body,
+                group_path="$[]",
+                suggested_alias=_operation_resource_alias(
+                    observation.operation.path
+                ),
+            ),
             budget=budget,
         )
-        if fields:
-            _append_group(
-                groups,
-                _ResponseGroup(
-                    group_path="$[]",
-                    suggested_alias=_operation_resource_alias(
-                        observation.operation.path
-                    ),
-                    fields=fields,
-                ),
-                budget=budget,
-            )
     _merge_schema_fields(groups, observation, budget=budget)
     return groups
+
+
+def _build_item_group(
+    items: list[Any],
+    *,
+    group_path: str,
+    suggested_alias: str,
+) -> _ResponseGroup:
+    fields: dict[str, _FieldCandidate] = {}
+    issues: list[str] = []
+    bounded_items = items[:MAX_RESOURCE_ITEMS]
+    if len(items) > MAX_RESOURCE_ITEMS:
+        issues.append(
+            f"{group_path}: collection truncated after "
+            f"{MAX_RESOURCE_ITEMS} items"
+        )
+    for index, item in enumerate(bounded_items):
+        if not isinstance(item, dict):
+            continue
+        location = _group_item_location(group_path, index)
+        if _json_scalar_count_exceeds(item, MAX_OBSERVED_SCALARS):
+            if len(issues) < 20:
+                issues.append(
+                    f"{location}: resource item exceeds "
+                    f"{MAX_OBSERVED_SCALARS} scalar values"
+                )
+            continue
+        _collect_item_fields(
+            item,
+            group_path=group_path,
+            fields=fields,
+            issues=issues,
+        )
+    return _ResponseGroup(
+        group_path=group_path,
+        suggested_alias=suggested_alias,
+        fields=fields,
+        evidence_issues=issues,
+    )
+
+
+def _collect_item_fields(
+    item: dict[Any, Any],
+    *,
+    group_path: str,
+    fields: dict[str, _FieldCandidate],
+    issues: list[str],
+) -> None:
+    for raw_name, value in item.items():
+        name = str(raw_name)
+        _require_evidence_text(
+            name,
+            limit=MAX_RESOURCE_NAME_CHARS,
+            label="response field name",
+        )
+        _require_selector_safe_field_name(name, label="response field name")
+        if isinstance(value, (dict, list)):
+            continue
+        selector = f"{group_path}.{name}"
+        _require_evidence_text(
+            selector,
+            limit=MAX_RESOURCE_SELECTOR_CHARS,
+            label="response field selector",
+        )
+        candidate = fields.get(selector)
+        if candidate is None:
+            if len(fields) >= MAX_OBSERVED_SCALARS:
+                if len(issues) < 20:
+                    issues.append(
+                        f"{group_path}: candidate fields exceed "
+                        f"{MAX_OBSERVED_SCALARS}"
+                    )
+                continue
+            candidate = _FieldCandidate(selector=selector, name=name)
+            fields[selector] = candidate
+        if len(candidate.values) < MAX_RESOURCE_ITEMS:
+            candidate.values.append(value)
+        candidate.types.add(_json_type(value))
+
+
+def _json_scalar_count_exceeds(value: Any, limit: int) -> bool:
+    count = 0
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+        else:
+            count += 1
+            if count > limit:
+                return True
+    return False
+
+
+def _group_item_location(group_path: str, index: int) -> str:
+    if group_path == "$":
+        return "$"
+    if group_path == "$[]":
+        return f"$[{index}]"
+    return f"{group_path.removesuffix('[]')}[{index}]"
 
 
 def _append_group(
@@ -832,19 +972,9 @@ def _merge_schema_fields(
                 )
         group = _group_for_schema_selector(groups, selector)
         if group is None:
-            group_path, alias = _schema_group_identity(
-                selector,
-                operation_path=observation.operation.path,
-            )
-            group = _ResponseGroup(
-                group_path=group_path,
-                suggested_alias=alias,
-                fields={},
-            )
-            _append_group(groups, group, budget=budget)
+            continue
         candidate = group.fields.get(selector)
         if candidate is None:
-            budget.add_field()
             candidate = _FieldCandidate(selector=selector, name=name)
             group.fields[selector] = candidate
         raw_type = item.get("type")
@@ -863,96 +993,138 @@ def _merge_schema_fields(
                 label="schema field format",
             )
             candidate.schema_format = schema_format
+        resource_name = item.get("resource_name")
+        if isinstance(resource_name, str) and resource_name.strip():
+            _require_evidence_text(
+                resource_name,
+                limit=MAX_RESOURCE_NAME_CHARS,
+                label="schema resource name",
+            )
+            group.schema_resource_name = _singularize(resource_name)
 
 
 def _group_for_schema_selector(
     groups: list[_ResponseGroup],
     selector: str,
 ) -> _ResponseGroup | None:
-    matches: list[_ResponseGroup] = []
-    for group in groups:
-        if group.group_path == "$":
-            remainder = selector.removeprefix("$.")
-            if selector.startswith("$.") and "." not in remainder and "[]" not in remainder:
-                matches.append(group)
-        elif selector == group.group_path or selector.startswith(
-            f"{group.group_path}."
-        ):
-            matches.append(group)
-    return max(matches, key=lambda item: len(item.group_path)) if matches else None
+    return next(
+        (
+            group
+            for group in groups
+            if _selector_is_immediate(group.group_path, selector)
+        ),
+        None,
+    )
 
 
-def _schema_group_identity(
-    selector: str,
+def _selector_is_immediate(group_path: str, selector: str) -> bool:
+    prefix = f"{group_path}."
+    if not selector.startswith(prefix):
+        return False
+    remainder = selector.removeprefix(prefix)
+    return bool(remainder) and "." not in remainder and "[]" not in remainder
+
+
+def _resolve_resource_name(
+    group: _ResponseGroup,
     *,
-    operation_path: str,
-) -> tuple[str, str]:
-    if selector.startswith("$[]"):
-        return "$[]", _operation_resource_alias(operation_path)
-    remainder = selector.removeprefix("$.")
-    if "." not in remainder and "[]" not in remainder:
-        return "$", _operation_resource_alias(operation_path)
-    first = remainder.split(".", 1)[0]
-    group_path = f"$.{first}"
-    return group_path, _singularize(first.removesuffix("[]"))
+    operation: MonitoredOperation,
+    resource_context: _ResourcePromptContext,
+) -> str:
+    operation_alias = _operation_resource_alias(operation.path)
+    aliases = [
+        value
+        for value in (
+            group.schema_resource_name,
+            group.suggested_alias,
+            operation_alias,
+        )
+        if value
+        and _normalize_resource_name(value) not in GENERIC_RESOURCE_WRAPPERS
+    ]
+    for alias in aliases:
+        known = resource_context.alias_to_canonical.get(
+            _normalize_resource_name(alias)
+        )
+        if known is not None:
+            return known
+    if group.schema_resource_name is not None:
+        return group.schema_resource_name
+    if (
+        group.suggested_alias
+        and _normalize_resource_name(group.suggested_alias)
+        not in GENERIC_RESOURCE_WRAPPERS
+    ):
+        return group.suggested_alias
+    return operation_alias
 
 
-def _collect_fields(
-    value: Any,
-    selector: str,
+def _extract_group_identifier_values(
+    body: Any,
     *,
-    fields: dict[str, _FieldCandidate],
-    recursive: bool,
-    budget: _EvidenceBudget,
-) -> None:
-    if isinstance(value, dict):
-        for raw_name, child in value.items():
-            name = str(raw_name)
-            _require_evidence_text(
-                name,
-                limit=MAX_RESOURCE_NAME_CHARS,
-                label="response field name",
-            )
-            _require_selector_safe_field_name(name, label="response field name")
-            child_selector = f"{selector}.{name}"
-            _require_evidence_text(
-                child_selector,
-                limit=MAX_RESOURCE_SELECTOR_CHARS,
-                label="response field selector",
-            )
-            if isinstance(child, (dict, list)):
-                if recursive:
-                    _collect_fields(
-                        child,
-                        child_selector,
-                        fields=fields,
-                        recursive=True,
-                        budget=budget,
-                    )
-                continue
-            candidate = fields.get(child_selector)
-            if candidate is None:
-                budget.add_field()
-                candidate = _FieldCandidate(
-                    selector=child_selector,
-                    name=name,
+    group_path: str,
+    selector: str,
+) -> _SelectorExtraction:
+    prefix = f"{group_path}."
+    if not selector.startswith(prefix):
+        return _SelectorExtraction(
+            values=_identifier_values(_extract_selector_values(body, selector))
+        )
+    field_name = selector.removeprefix(prefix)
+    if not field_name or "." in field_name or "[]" in field_name:
+        return _SelectorExtraction(
+            values=_identifier_values(_extract_selector_values(body, selector))
+        )
+    items = _items_for_group(body, group_path)
+    extraction = _SelectorExtraction()
+    if len(items) > MAX_RESOURCE_ITEMS:
+        extraction.evidence_issues.append(
+            f"{group_path}: collection truncated after "
+            f"{MAX_RESOURCE_ITEMS} items"
+        )
+    seen: set[tuple[type[object], object]] = set()
+    for index, item in enumerate(items[:MAX_RESOURCE_ITEMS]):
+        if not isinstance(item, dict):
+            continue
+        location = _group_item_location(group_path, index)
+        if _json_scalar_count_exceeds(item, MAX_OBSERVED_SCALARS):
+            if len(extraction.evidence_issues) < 20:
+                extraction.evidence_issues.append(
+                    f"{location}: resource item exceeds "
+                    f"{MAX_OBSERVED_SCALARS} scalar values"
                 )
-                fields[child_selector] = candidate
-            budget.add_value(len(candidate.values))
-            candidate.types.add(_json_type(child))
-            candidate.values.append(child)
-        return
-    if isinstance(value, list):
-        array_selector = f"{selector}[]"
-        for child in value:
-            if isinstance(child, (dict, list)):
-                _collect_fields(
-                    child,
-                    array_selector,
-                    fields=fields,
-                    recursive=recursive,
-                    budget=budget,
+            continue
+        raw_value = item.get(field_name)
+        try:
+            values = _identifier_values([raw_value])
+        except _EvidenceLimitExceeded as exc:
+            if len(extraction.evidence_issues) < 20:
+                extraction.evidence_issues.append(
+                    f"{location}: {exc}"
                 )
+            continue
+        if not values:
+            if len(extraction.missing_locations) < 20:
+                extraction.missing_locations.append(location)
+            continue
+        value = values[0]
+        key = (type(value), value)
+        if key not in seen:
+            seen.add(key)
+            extraction.values.append(value)
+    return extraction
+
+
+def _items_for_group(body: Any, group_path: str) -> list[Any]:
+    if group_path == "$":
+        return [body] if isinstance(body, dict) else []
+    if group_path == "$[]":
+        return list(body) if isinstance(body, list) else []
+    match = re.fullmatch(r"\$\.([^.\[\]]+)\[\]", group_path)
+    if match is None or not isinstance(body, dict):
+        return []
+    value = body.get(match.group(1))
+    return list(value) if isinstance(value, list) else []
 
 
 def _extract_selector_values(body: Any, selector: str) -> list[Any]:
@@ -1014,12 +1186,6 @@ def _identifier_values(values: list[Any]) -> list[str | int]:
     return output
 
 
-def _existing_resource_prompt(
-    resources: list[ResourceNameSummary],
-) -> list[str]:
-    return _resource_prompt_context(resources).canonical_names
-
-
 def _resource_prompt_context(
     resources: list[ResourceNameSummary],
 ) -> _ResourcePromptContext:
@@ -1028,7 +1194,6 @@ def _resource_prompt_context(
             "existing resources exceed "
             f"{MAX_EXISTING_RESOURCES_IN_PROMPT}"
         )
-    canonical_names: list[str] = []
     alias_to_canonical: dict[str, str] = {}
     for resource in resources:
         _require_evidence_text(
@@ -1041,7 +1206,6 @@ def _resource_prompt_context(
                 "existing aliases per resource exceed "
                 f"{MAX_RESOURCE_ALIAS_COUNT}"
             )
-        canonical_names.append(resource.canonical_name)
         for alias in (resource.canonical_name, *resource.aliases):
             _require_evidence_text(
                 alias,
@@ -1055,63 +1219,82 @@ def _resource_prompt_context(
                     "existing resource aliases map to conflicting canonical names"
                 )
             alias_to_canonical[normalized_alias] = resource.canonical_name
-    return _ResourcePromptContext(
-        canonical_names=canonical_names,
-        alias_to_canonical=alias_to_canonical,
-    )
+    return _ResourcePromptContext(alias_to_canonical=alias_to_canonical)
 
 
-def _group_prompt(group: _PromptGroup) -> dict[str, Any]:
+def _selection_messages(
+    *,
+    observation: ResourceObservation,
+    group: _ResponseGroup,
+    resource_name: str,
+    candidates: list[tuple[str, _FieldCandidate]],
+) -> list[LLMMessage]:
+    return [
+        LLMMessage(role="system", content=_selection_instructions()),
+        LLMMessage(
+            role="user",
+            content=json.dumps(
+                {
+                    "operation": {
+                        "method": observation.operation.method,
+                        "path": observation.operation.path,
+                    },
+                    "resource": {"canonical_name": resource_name},
+                    "candidates": [
+                        _selection_candidate_prompt(
+                            group,
+                            candidate_id=candidate_id,
+                            field=field,
+                        )
+                        for candidate_id, field in candidates
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    ]
+
+
+def _selection_candidate_prompt(
+    group: _ResponseGroup,
+    *,
+    candidate_id: str,
+    field: _FieldCandidate,
+) -> dict[str, Any]:
     result: dict[str, Any] = {
-        "group_id": group.group_id,
-        "response_location": group.group.group_path,
-        "resource_name_hint": group.group.suggested_alias,
-        "identifier_candidates": [
-            {
-                "candidate_id": candidate_id,
-                "field_path": _relative_field_path(
-                    group.group.group_path,
-                    field.selector,
-                ),
-                "value_types": sorted(field.types & {"string", "integer"}),
-                **(
-                    {"schema_format": field.schema_format}
-                    if field.schema_format is not None
-                    else {}
-                ),
-                **(
-                    {"description": field.description[:200]}
-                    if field.description
-                    else {}
-                ),
-                "observed_in_response": bool(_identifier_values(field.values)),
-            }
-            for candidate_id, field in group.candidates.items()
-        ],
+        "candidate_id": candidate_id,
+        "field_path": _relative_field_path(
+            group.group_path,
+            field.selector,
+        ),
+        "value_types": sorted(field.types & {"string", "integer"}),
+        "observed_in_response": bool(_identifier_values(field.values)),
     }
-    if group.matched_canonical_name is not None:
-        result["matched_canonical_name"] = group.matched_canonical_name
-    if group.locked_identifier_candidate_id is not None:
-        result["locked_identifier_candidate_id"] = (
-            group.locked_identifier_candidate_id
-        )
+    if field.schema_format is not None:
+        result["schema_format"] = field.schema_format
+    if field.description:
+        result["description"] = field.description[:200]
     return result
 
 
-def _classification_instructions() -> str:
+def _selection_instructions() -> str:
     return (
-        "Return JSON only. A resource is a persistent business entity that a "
-        "later API can reference. An identifier uniquely identifies one such "
-        "entity and can be reused later. resource_name_hint is only a hint, not "
-        "a fact. Reuse a matched_canonical_name exactly; otherwise prefer a "
-        "known_resource_names value when semantically equal. "
-        "observed_in_response only means this response contained a usable value. "
-        "locked_identifier_candidate_id must not change. For every group_id "
-        "return exactly one result. Set represents_resource=false with no other "
-        "fields for non-resources. For resources, provide a canonical resource "
-        "name and exactly one supplied identifier_candidate_id. Do not invent "
-        "candidates. Do not include explanations."
+        "Return JSON only. Choose a supplied candidate only when its field "
+        "uniquely identifies one persistent resource instance and its value "
+        "can be reused by another API operation. Return null when none is "
+        "trustworthy. identifier_candidate_id is an ephemeral option ID. "
+        "Do not invent IDs, fields, selectors, resource names, aliases, "
+        "explanations, or reasoning."
     )
+
+
+def _selected_field(
+    selection: ResourceIdentifierSelection,
+    candidates: list[tuple[str, _FieldCandidate]],
+) -> _FieldCandidate | None:
+    if selection.identifier_candidate_id is None:
+        return None
+    return dict(candidates)[selection.identifier_candidate_id]
 
 
 def _identifier_candidates(
@@ -1123,58 +1306,6 @@ def _identifier_candidates(
         if not known_types or known_types <= {"string", "integer"}:
             output.append(field)
     return output
-
-
-def _model_validation_errors(
-    errors: list[Any],
-    raw_json: Any,
-    groups: list[_PromptGroup],
-) -> list[str]:
-    """Translate validation offsets using the actual raw result group IDs."""
-
-    output: list[str] = []
-    expected_ids = {group.group_id for group in groups}
-    for issue in errors:
-        location = issue.location or "output"
-        match = re.fullmatch(r"groups\.(\d+)(?:\.(.*))?", location)
-        if match is not None:
-            group_index = int(match.group(1))
-            group_id = _raw_group_id(
-                raw_json,
-                group_index=group_index,
-                expected_ids=expected_ids,
-            )
-            if group_id is not None:
-                suffix = match.group(2)
-                location = group_id
-                if suffix:
-                    location = f"{location}.{suffix}"
-            else:
-                location = "output"
-        elif location.startswith("groups."):
-            location = "output"
-        output.append(f"{location}: {issue.message}")
-    return output
-
-
-def _raw_group_id(
-    raw_json: Any,
-    *,
-    group_index: int,
-    expected_ids: set[str],
-) -> str | None:
-    if not isinstance(raw_json, dict):
-        return None
-    raw_groups = raw_json.get("groups")
-    if not isinstance(raw_groups, list) or group_index >= len(raw_groups):
-        return None
-    raw_group = raw_groups[group_index]
-    if not isinstance(raw_group, dict):
-        return None
-    group_id = raw_group.get("group_id")
-    if not isinstance(group_id, str) or group_id not in expected_ids:
-        return None
-    return group_id
 
 
 def _relative_field_path(group_path: str, selector: str) -> str:
