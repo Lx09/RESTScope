@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from restscope.observability.content import PreparedContent, TraceContentEncoder
+from restscope.observability.openinference import prepare_message_attributes
 from restscope.redaction import Redactor
 
 
@@ -30,6 +31,45 @@ class TraceSpan:
 
     def set_output(self, value: Any) -> None:
         self._set_content("output", value)
+
+    def set_llm_input_messages(self, messages: Any) -> None:
+        """Record model-visible input as Phoenix-renderable chat messages."""
+
+        try:
+            normalized = self._normalize_messages(messages)
+        except Exception:
+            return
+        self._set_llm_messages(
+            "input",
+            normalized,
+            summary={
+                "message_count": len(normalized),
+                "roles": [message.get("role") for message in normalized],
+            },
+        )
+
+    def set_llm_output_messages(
+        self,
+        messages: Any,
+        *,
+        summary: Any | None = None,
+    ) -> None:
+        """Record normalized model output as Phoenix-renderable chat messages."""
+
+        try:
+            normalized = self._normalize_messages(messages)
+        except Exception:
+            return
+        self._set_llm_messages(
+            "output",
+            normalized,
+            summary=summary
+            if summary is not None
+            else {
+                "message_count": len(normalized),
+                "roles": [message.get("role") for message in normalized],
+            },
+        )
 
     def set_attribute(self, name: str, value: Any) -> None:
         if self._span is None or self._content_encoder is None:
@@ -94,6 +134,67 @@ class TraceSpan:
         except Exception:
             return
 
+    def _set_llm_messages(
+        self,
+        prefix: str,
+        messages: list[dict[str, Any]],
+        *,
+        summary: Any,
+    ) -> None:
+        if self._span is None or self._content_encoder is None:
+            return
+        try:
+            normalized_summary = self._content_encoder.redactor.redact(summary)
+            prepared_summary = self._content_encoder.prepare(normalized_summary)
+            summary_size = len(prepared_summary.value.encode("utf-8"))
+            message_budget = max(
+                0,
+                self._content_encoder.max_content_bytes - summary_size,
+            )
+            prepared_messages = prepare_message_attributes(
+                messages,
+                direction=prefix,
+                max_value_bytes=message_budget,
+            )
+            self._span.set_attribute(f"{prefix}.value", prepared_summary.value)
+            self._span.set_attribute(f"{prefix}.mime_type", "application/json")
+            for name, value in prepared_messages.attributes.items():
+                self._span.set_attribute(name, value)
+            if prepared_messages.omitted_message_count:
+                self._span.set_attribute(
+                    f"restscope.{prefix}.omitted_message_count",
+                    prepared_messages.omitted_message_count,
+                )
+            original_size = len(
+                _compact_json_bytes(
+                    {
+                        "summary": normalized_summary,
+                        "messages": messages,
+                    }
+                )
+            )
+            self._set_size_attributes(
+                prefix,
+                PreparedContent(
+                    value=prepared_summary.value,
+                    original_size_bytes=original_size,
+                    truncated=(
+                        prepared_summary.truncated
+                        or prepared_messages.truncated
+                    ),
+                ),
+            )
+        except Exception:
+            return
+
+    def _normalize_messages(self, messages: Any) -> list[dict[str, Any]]:
+        if self._content_encoder is None:
+            return []
+        normalized = self._content_encoder.redactor.redact(messages)
+        if not isinstance(normalized, list):
+            return []
+        return [message for message in normalized if isinstance(message, dict)]
+
     def _set_size_attributes(self, prefix: str, prepared: PreparedContent) -> None:
         self._span.set_attribute(
             f"restscope.{prefix}.original_size_bytes",
@@ -103,6 +204,17 @@ class TraceSpan:
             f"restscope.{prefix}.truncated",
             prepared.truncated,
         )
+
+
+def _compact_json_bytes(value: Any) -> bytes:
+    import json
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
 
 
 class TracingRuntime:
@@ -157,6 +269,10 @@ class TracingRuntime:
 
         span = TraceSpan(span=otel_span, content_encoder=self._content_encoder)
         span.set_attribute("openinference.span.kind", kind)
+        if kind == "AGENT":
+            span.set_attribute("agent.name", name)
+        elif kind == "TOOL":
+            span.set_attribute("tool.name", name)
         if input_value is not None:
             span.set_input(input_value)
         for key, value in (attributes or {}).items():

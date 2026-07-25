@@ -80,7 +80,7 @@ class RESTScopeMainGraph:
             report = RESTScopeRunReport.model_validate(
                 final_state["final_report"]
             )
-            span.set_output(report)
+            span.set_output(_graph_run_trace_summary(report))
             span.set_attribute("restscope.run.status", report.status)
             return report
 
@@ -414,6 +414,32 @@ def _attempt_disposition(
     if attempt_number < max_attempts:
         return "retrying"
     return "errored" if result.status == "errored" else "failed"
+
+
+def _graph_run_trace_summary(report: RESTScopeRunReport) -> dict[str, Any]:
+    disposition_counts: dict[str, int] = {}
+    failure_kind_counts: dict[str, int] = {}
+    for attempt in report.attempts:
+        disposition_counts[attempt.disposition] = (
+            disposition_counts.get(attempt.disposition, 0) + 1
+        )
+        if attempt.failure_kind is not None:
+            failure_kind_counts[attempt.failure_kind] = (
+                failure_kind_counts.get(attempt.failure_kind, 0) + 1
+            )
+    return {
+        "report_id": report.report_id,
+        "status": report.status,
+        "stop_reason": report.stop_reason,
+        "operation_count": len(report.operations),
+        "attempt_count": report.attempt_count,
+        "rounds": report.rounds,
+        "satisfied_operation_count": len(report.satisfied_operations),
+        "unattempted_operation_count": len(report.unattempted_operations),
+        "disposition_counts": disposition_counts,
+        "failure_kind_counts": failure_kind_counts,
+        "error": report.error,
+    }
 
 
 def _path_depth(path: str) -> int:

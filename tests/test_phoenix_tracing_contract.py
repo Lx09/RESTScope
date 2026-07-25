@@ -167,16 +167,19 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
                 provider=self.name,
                 model=llm_request.model,
                 content="contract response",
+                parsed_json={"result": "readable"},
                 tool_calls=[
                     ToolCall(
                         id="reasoning",
                         name="catalog.inspect",
+                        arguments={"query": "contract-secret"},
                         provider_context={"reasoning_content": reasoning},
                     )
                 ],
                 prompt_tokens=3,
                 completion_tokens=5,
                 total_tokens=8,
+                finish_reason="tool_calls",
             )
 
     registry = LLMProviderRegistry()
@@ -235,10 +238,51 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         if span["name"] == "OperationSmokeAgent.run"
         and span["context"]["trace_id"] == app_span["context"]["trace_id"]
     )
+    tool_span = next(span for span in spans if span["name"] == "contract.tool")
+    llm_span = next(span for span in spans if span["name"] == "LLMClient.invoke")
     truncated_span = next(span for span in spans if span["name"] == "contract.truncated")
 
     assert graph_span["parent_id"] == app_span["context"]["span_id"]
     assert attempt_span["parent_id"] == graph_span["context"]["span_id"]
     assert operation_span["parent_id"] == attempt_span["context"]["span_id"]
+    assert graph_span["attributes"]["agent.name"] == "RESTScopeMainGraph.run"
+    assert operation_span["attributes"]["agent.name"] == "OperationSmokeAgent.run"
+    assert tool_span["attributes"]["tool.name"] == "contract.tool"
+    assert json.loads(app_span["attributes"]["output.value"]) == {
+        "report_id": json.loads(graph_span["attributes"]["output.value"])["report_id"],
+        "status": "passed",
+        "stop_reason": "completed",
+        "operation_count": 20,
+        "attempt_count": 20,
+    }
+    assert app_span["attributes"]["restscope.output.truncated"] is False
+    assert graph_span["attributes"]["restscope.output.truncated"] is False
+    assert "\n  " in app_span["attributes"]["output.value"]
+    assert json.loads(llm_span["attributes"]["input.value"]) == {
+        "message_count": 1,
+        "roles": ["user"],
+    }
+    assert (
+        llm_span["attributes"]["llm.input_messages.0.message.role"]
+        == "user"
+    )
+    assert (
+        llm_span["attributes"]["llm.input_messages.0.message.content"]
+        == "***REDACTED***"
+    )
+    assert (
+        llm_span["attributes"]["llm.output_messages.0.message.content"]
+        == "contract response"
+    )
+    assert llm_span["attributes"]["llm.finish_reason"] == "tool_calls"
+    assert json.loads(llm_span["attributes"]["output.value"]) == {
+        "parsed_json": {"result": "readable"},
+        "tool_calls": [{"id": "reasoning", "name": "catalog.inspect"}],
+        "finish_reason": "tool_calls",
+    }
+    assert not any(span["name"] == "ChatCompletion" for span in spans)
     assert truncated_span["attributes"]["restscope.input.truncated"] is True
     assert truncated_span["attributes"]["restscope.input.original_size_bytes"] > 65536
+    truncated_payload = json.loads(truncated_span["attributes"]["input.value"])
+    assert truncated_payload["truncated"] is True
+    assert isinstance(truncated_payload["preview"], dict)

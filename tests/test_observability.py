@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,40 @@ def test_trace_content_encoder_only_redacts_registered_values() -> None:
     assert prepared.truncated is False
 
 
+def test_trace_content_encoder_formats_normalized_json_for_people() -> None:
+    from pydantic import BaseModel
+
+    from restscope.observability.content import TraceContentEncoder
+    from restscope.redaction import Redactor
+
+    @dataclass(frozen=True)
+    class DataclassValue:
+        label: str
+
+    class ModelValue(BaseModel):
+        enabled: bool
+
+    encoder = TraceContentEncoder(redactor=Redactor(), max_content_bytes=4096)
+    prepared = encoder.prepare(
+        {
+            "unicode": "中文",
+            "dataclass": DataclassValue(label="visible"),
+            "model": ModelValue(enabled=True),
+            "bytes": b"text",
+        }
+    )
+
+    assert prepared.value.startswith("{\n  ")
+    assert '"unicode": "中文"' in prepared.value
+    assert json.loads(prepared.value) == {
+        "unicode": "中文",
+        "dataclass": {"label": "visible"},
+        "model": {"enabled": True},
+        "bytes": "text",
+    }
+    assert prepared.truncated is False
+
+
 def test_trace_content_encoder_bounds_serialized_content_and_records_original_size() -> None:
     from restscope.observability.content import TraceContentEncoder
     from restscope.redaction import Redactor
@@ -85,7 +120,10 @@ def test_trace_content_encoder_bounds_serialized_content_and_records_original_si
     assert len(prepared.value.encode("utf-8")) <= 256
     assert prepared.original_size_bytes > 4096
     assert prepared.truncated is True
-    assert json.loads(prepared.value)["truncated"] is True
+    payload = json.loads(prepared.value)
+    assert payload["truncated"] is True
+    assert isinstance(payload["preview"], dict)
+    assert payload["preview"]["content"].startswith("x")
 
 
 def test_disabled_tracing_runtime_is_a_safe_noop() -> None:
@@ -205,6 +243,126 @@ def test_enabled_runtime_emits_nested_sanitized_openinference_spans() -> None:
     assert "span-secret" not in child_span.attributes["input.value"]
     assert json.loads(child_span.attributes["output.value"])["content"] == "safe"
     assert root_span.attributes["restscope.task_id"] == "task-1"
+
+
+def test_runtime_adds_openinference_names_for_agent_and_tool_spans() -> None:
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from restscope.observability.otel_backend import OpenTelemetryBackend
+    from restscope.observability.runtime import TracingRuntime
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    runtime = TracingRuntime(
+        backend=OpenTelemetryBackend(
+            tracer_provider=provider,
+            flush_timeout_seconds=1,
+        ),
+    )
+
+    with runtime.span("ExampleAgent.run", kind="AGENT"):
+        pass
+    with runtime.span("restscope.example.tool", kind="TOOL"):
+        pass
+    runtime.close()
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["ExampleAgent.run"].attributes["agent.name"] == "ExampleAgent.run"
+    assert (
+        spans["restscope.example.tool"].attributes["tool.name"]
+        == "restscope.example.tool"
+    )
+
+
+def test_llm_message_projection_preserves_roles_when_content_is_truncated() -> None:
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from restscope.observability.otel_backend import OpenTelemetryBackend
+    from restscope.observability.runtime import TracingRuntime
+    from restscope.redaction import Redactor
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    runtime = TracingRuntime(
+        redactor=Redactor(["message-secret"]),
+        max_content_bytes=256,
+        backend=OpenTelemetryBackend(
+            tracer_provider=provider,
+            flush_timeout_seconds=1,
+        ),
+    )
+
+    with runtime.span("LLMClient.invoke", kind="LLM") as span:
+        span.set_llm_input_messages(
+            [
+                {"role": "system", "content": "s" * 1024},
+                {
+                    "role": "user",
+                    "content": f"message-secret{'u' * 1024}",
+                },
+            ]
+        )
+    runtime.close()
+
+    recorded = exporter.get_finished_spans()[0]
+    attributes = recorded.attributes
+    assert json.loads(attributes["input.value"]) == {
+        "message_count": 2,
+        "roles": ["system", "user"],
+    }
+    assert attributes["llm.input_messages.0.message.role"] == "system"
+    assert attributes["llm.input_messages.1.message.role"] == "user"
+    assert attributes["restscope.input.truncated"] is True
+    assert attributes["restscope.input.original_size_bytes"] > 2048
+    rendered = json.dumps(dict(attributes), ensure_ascii=False)
+    assert "message-secret" not in rendered
+    assert len(
+        attributes["llm.input_messages.0.message.content"].encode("utf-8")
+    ) < 1024
+    assert len(
+        attributes["llm.input_messages.1.message.content"].encode("utf-8")
+    ) < 1024
+
+
+def test_llm_message_projection_failure_does_not_change_business_result() -> None:
+    pytest.importorskip("opentelemetry.sdk")
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from restscope.observability.otel_backend import OpenTelemetryBackend
+    from restscope.observability.runtime import TracingRuntime
+
+    class BrokenMessages:
+        def model_dump(self, *, mode):
+            del mode
+            raise ValueError("cannot encode messages")
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    runtime = TracingRuntime(
+        backend=OpenTelemetryBackend(
+            tracer_provider=provider,
+            flush_timeout_seconds=1,
+        ),
+    )
+
+    with runtime.span("LLMClient.invoke", kind="LLM") as span:
+        span.set_llm_input_messages(BrokenMessages())
+        result = "unchanged"
+    runtime.close()
+
+    assert result == "unchanged"
+    assert exporter.get_finished_spans()[0].status.status_code.name == "OK"
 
 
 def test_runtime_records_sanitized_error_without_leaking_exception_message() -> None:

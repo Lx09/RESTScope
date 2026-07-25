@@ -347,7 +347,7 @@ class RESTScopeApp:
                 tool_context=self._tool_context,
                 tracing_runtime=self.tracing_runtime,
             ).run(request)
-            span.set_output(report)
+            span.set_output(_app_run_trace_summary(report))
             span.set_attribute("restscope.run.status", report.status)
             if report.status == "errored":
                 span.mark_error("RESTScope run returned an errored report")
@@ -386,6 +386,16 @@ class RESTScopeApp:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("RESTScopeApp is already closed")
+
+
+def _app_run_trace_summary(report: RESTScopeRunReport) -> dict[str, object]:
+    return {
+        "report_id": report.report_id,
+        "status": report.status,
+        "stop_reason": report.stop_reason,
+        "operation_count": len(report.operations),
+        "attempt_count": report.attempt_count,
+    }
 
 
 def _schema_source_value(source: Any) -> str:
