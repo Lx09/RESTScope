@@ -44,9 +44,7 @@ def _request():
 
 
 def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tmp_path) -> None:
-    from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent, register_openapi_retrieval_tool
     from restscope.capabilities import ToolContextError
-    from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
     from restscope.openapi_parser import OpenAPIParser
 
     original_parse = OpenAPIParser.parse
@@ -59,33 +57,6 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tm
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(counting_parse))
     app = _app(tmp_path)
 
-    class NotFoundClient:
-        def __init__(self):
-            self.requests = []
-
-        def invoke(self, request):
-            self.requests.append(request)
-            return LLMResponse(
-                provider="fake",
-                model=request.model,
-                parsed_json={
-                    "status": "not_found",
-                    "candidates": [],
-                    "conflicts": [],
-                    "evidence_sufficient": True,
-                    "limitations": [],
-                    "warnings": [],
-                },
-            )
-
-    client = NotFoundClient()
-    retrieval_spec = register_openapi_retrieval_tool(
-        app.capability_runtime.tool_registry,
-        OpenAPIRetrievalAgent(
-            client=client,
-            model=LLMModelConfig(role="openapi_retrieval", provider="fake", model="thinking-test"),
-        ),
-    )
     headers = {"Authorization": "Bearer runtime-secret"}
     source = {"kind": "inline", "format": "json", "content": json.dumps(_spec())}
 
@@ -99,36 +70,14 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tm
 
     first = app.run(_request())
     second = app.run(_request())
-    retrieval_arguments = {
-        "query": {
-            "objective": "parameter_value_producer",
-            "consumer_method": "GET",
-            "consumer_path": "/pets",
-            "parameter_name": "cursor",
-        }
-    }
-    retrieval_results = [
-        app.capability_runtime.tool_executor.execute(
-            tool_call=ToolCall(
-                id=f"retrieve-{index}",
-                name=retrieval_spec.name,
-                arguments=retrieval_arguments,
-            ),
-            role="decision_maker",
-            state={},
-        )
-        for index in range(2)
-    ]
 
     assert first.status == second.status == "passed"
-    assert [result.status for result in retrieval_results] == ["succeeded", "succeeded"]
     assert len(seen) == 1
     assert app.tool_context is context
     assert app.capability_runtime.tool_executor.tool_context is context
     assert context.baseline_schema_source["content"] != "changed"
     assert context.headers["Authorization"] == "Bearer runtime-secret"
     assert "runtime-secret" not in repr(context)
-    assert all("runtime-secret" not in request.model_dump_json() for request in client.requests)
 
     with pytest.raises(ToolContextError) as exc_info:
         app.initialize(schema_source={"kind": "inline", "content": json.dumps(_spec())})

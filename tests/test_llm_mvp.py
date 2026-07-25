@@ -67,7 +67,7 @@ def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
     )
     tool_call = ToolCall(
         id="call_search",
-        name="openapi.search_symbols",
+        name="catalog.search",
         arguments={"query": "orderId"},
         provider="deepseek",
         provider_context={"reasoning_content": "Search for producer operations."},
@@ -141,7 +141,7 @@ def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
 def test_tool_call_does_not_retain_raw_provider_payload() -> None:
     from restscope.llm import ToolCall
 
-    tool_call = ToolCall(id="call_1", name="openapi.inspect")
+    tool_call = ToolCall(id="call_1", name="catalog.inspect")
 
     assert "raw" not in type(tool_call).model_fields
 
@@ -243,7 +243,7 @@ def test_openai_compatible_provider_serializes_assistant_tool_call_history() -> 
                     tool_calls=[
                         ToolCall(
                             id="call_search",
-                            name="openapi.search_symbols",
+                            name="catalog.search",
                             arguments={"query": "userId"},
                         )
                     ],
@@ -251,7 +251,7 @@ def test_openai_compatible_provider_serializes_assistant_tool_call_history() -> 
                 LLMMessage(
                     role="tool",
                     content='{"results": []}',
-                    name="openapi.search_symbols",
+                    name="catalog.search",
                     tool_call_id="call_search",
                 ),
             ],
@@ -310,7 +310,7 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
             messages=[LLMMessage(role="user", content="search")],
             tools=[
                 ToolSpec(
-                    name="openapi.search_symbols",
+                    name="catalog.search",
                     description="Search symbols",
                     kind="local_function",
                     input_schema={"type": "object", "properties": {}},
@@ -320,7 +320,7 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
         )
     )
 
-    assert response.tool_calls[0].name == "openapi.search_symbols"
+    assert response.tool_calls[0].name == "catalog.search"
 
 
 def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
@@ -376,7 +376,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
     selector = ModelSelector.from_config(config.llm)
     registry = build_llm_registry(config.llm)
 
-    assert selector.select("openapi_retrieval").reasoning.mode == "enabled"
+    assert selector.select("planner").reasoning.mode == "enabled"
     assert selector.select("decision_maker").reasoning.mode == "disabled"
     assert registry.list_names() == ["deepseek"]
     assert isinstance(registry.get("deepseek"), DeepSeekProvider)
@@ -406,7 +406,7 @@ def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> Non
 
     selector = ModelSelector.from_config(RESTScopeConfig.from_environment(env_file).llm)
 
-    assert selector.select("openapi_retrieval").reasoning.effort == "max"
+    assert selector.select("planner").reasoning.effort == "max"
     assert selector.select("decision_maker").reasoning.mode == "disabled"
     assert selector.select("decision_maker").reasoning.effort is None
 

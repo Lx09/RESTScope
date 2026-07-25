@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
 from restscope.capabilities.http_request import register_http_request_tool
@@ -19,7 +19,10 @@ from restscope.capabilities.tool_selector import ToolSelector
 from restscope.capabilities.tool_sources import register_tool_source
 from restscope.http_transport import TargetHTTPTransport
 from restscope.observability import TracingRuntime
-from restscope.testing import GeneratorConfigCatalog, OperationTestingService
+
+if TYPE_CHECKING:
+    from restscope.testing.catalog import GeneratorConfigCatalog
+    from restscope.testing.execution import OperationTestingService
 
 
 @dataclass(frozen=True)

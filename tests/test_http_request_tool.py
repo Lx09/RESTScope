@@ -89,7 +89,6 @@ def test_capability_runtime_registers_http_request_tool_for_every_role() -> None
         "result_analyst",
         "operation_smoke_parameter_diagnosis",
         "decision_maker",
-        "openapi_retrieval",
         "future_agent",
     ):
         selected = runtime.tool_selector.select_for_role(role=role, state={})

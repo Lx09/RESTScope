@@ -135,7 +135,8 @@ parameter values, target Authorization/Cookie headers, and DeepSeek
 `reasoning_content`. Only the exact configured THINK, FAST, and Phoenix API key
 values are replaced; oversized content is truncated to the configured byte
 limit. Model calls are represented by RESTScope's manual `LLMClient.invoke`
-spans; the OpenAI SDK is not auto-instrumented.
+spans; their input contains only model-visible messages, while model settings
+and tool names are span attributes. The OpenAI SDK is not auto-instrumented.
 
 Tracing is fail-open: missing optional packages, exporter failures, or shutdown
 timeouts do not change RESTScope results. Stop Phoenix without deleting its
@@ -304,14 +305,20 @@ internally by Operation Smoke.
 
 `OperationSmokeAgent` runs a bounded generated batch and measures its 2xx
 success rate. When the threshold is not met, the shared FAST model is called in
-two narrow rounds. The first sees only unique failure messages, failed-case
-generated values, omitted input IDs, and temporary evidence IDs; it selects
-suspect input nodes. The second sees only that diagnosis, the current
-generators for those nodes, and bounded reference options whose persistent
-pools are already non-empty. Actual pool values are not sent to the model.
-Ordinary changes are returned as `InputGeneratorPatch` updates; a reference
-change must select a supplied temporary option ID, which the system maps to the
-real resource or response pool.
+two narrow rounds. Both prompts are short English task cards. The first sees
+only the operation, `P*` input aliases, unique `F*` failures, and failed `C*`
+cases with their actual generated values and omitted inputs. It returns
+confidence, a short reason, and evidence aliases; code maps those aliases back
+to internal IDs.
+
+The second round sees only the suspect diagnosis, natural-language summaries
+of the affected generators, and non-empty observed-value sources labeled
+`R*`. It returns a generator intent such as `sample_values`,
+`integer_between`, or `observed_value`. Code—not the model—compiles that intent
+into an `InputGeneratorPatch`, resolves real resource/response pool names, and
+enforces required inputs and Generator validity. Actual pool values, internal
+IDs, Generator classes, config revisions, prepared requests, headers, and
+Pydantic JSON Schemas are not sent to either round.
 
 The patch is stored as a candidate revision and is never validated by replaying
 or cloning one failed case. A complete next batch accepts the candidate when it
@@ -324,8 +331,9 @@ candidate options and therefore cannot create a reference-backed Generator.
 If an existing reference Generator nevertheless points to an empty pool, that
 is an `operation_error`, not a wait state. The default API Behavior Monitor
 adapter resolves both persistent Resource Identifier and Response Value pools.
-Operation dependency discovery through `OpenAPIRetrievalAgent` is not connected
-in this iteration.
+Its ambiguous identifier and semantic producer-field decisions use the same
+task-focused boundary with request-local `G*/I*` and `P*/S*` aliases.
+Deterministic exact matches do not call the model.
 
 ## Program Startup
 
@@ -369,16 +377,3 @@ do not interrupt later operations, and a completed run with any final failures
 returns `failed/completed_with_failures`. Only shared setup, database, or
 runtime failures stop immediately as `errored/technical_error`. Queue and retry
 state are not persisted.
-
-## OpenAPI Retrieval Agent
-
-`OpenAPIRetrievalAgent` investigates the App-bound OpenAPI IR for operations
-that may produce a consumer parameter value. Its public capability is
-`restscope.openapi.retrieve`; the request contains only the retrieval query and
-does not accept a file path. Internally it exposes only IR-backed
-`openapi.inspect`, `openapi.find_operation`, `openapi.search_symbols`,
-`openapi.read_operation`, and `openapi.read_evidence` tools. Symbol searches
-scan the current IR directly and do not retain an index or raw-text fallback.
-The Agent remains an explicitly registered standalone investigation tool; the
-default App, Smoke loop, and Supervisor do not invoke it or use it to register
-monitors.

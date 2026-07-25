@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 
@@ -23,7 +22,7 @@ class StubLLMClient:
 
 
 def _selection(identifier_candidate_id: str | None) -> dict:
-    return {"identifier_candidate_id": identifier_candidate_id}
+    return {"identifier": identifier_candidate_id}
 
 
 def _catalog(tmp_path: Path):
@@ -147,7 +146,7 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
 ) -> None:
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, catalog = _agent(tmp_path, client)
 
     result = tracker.observe(
@@ -162,26 +161,14 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     assert len(client.requests) == 1
     request = client.requests[0]
     assert request.metadata["role"] == "api_behavior_monitor"
-    payload = json.loads(request.messages[1].content)
-    assert payload == {
-        "operation": {"method": "POST", "path": "/commits"},
-        "resource": {"canonical_name": "commit"},
-        "candidates": [
-            {
-                "candidate_id": "c1",
-                "field_path": "sha",
-                "value_types": ["string"],
-                "observed_in_response": True,
-            },
-            {
-                "candidate_id": "c2",
-                "field_path": "message",
-                "value_types": ["string"],
-                "observed_in_response": True,
-            },
-        ],
-    }
     prompt = request.messages[1].content
+    assert "Operation\nPOST /commits" in prompt
+    assert 'Resource\n"commit"' in prompt
+    assert 'Response section\n[G1] root' in prompt
+    assert '[I1] field "sha"; type=string; observed=yes' in prompt
+    assert '[I2] field "message"; type=string; observed=yes' in prompt
+    assert request.response_format == "json"
+    assert request.json_schema is None
     for forbidden in (
         "secret-abc123",
         "operation_key",
@@ -190,6 +177,8 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
         "aliases",
         "known_resource_names",
         "represents_resource",
+        "identifier_candidate_id",
+        "$defs",
     ):
         assert forbidden not in prompt
     assert catalog.lookup(
@@ -200,7 +189,7 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
 def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
     tmp_path: Path,
 ) -> None:
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
 
     result = tracker.observe(
@@ -210,16 +199,15 @@ def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
     )
 
     assert result.status == "updated"
-    payload = json.loads(client.requests[0].messages[1].content)
-    assert [item["field_path"] for item in payload["candidates"]] == [
-        "userId"
-    ]
+    prompt = client.requests[0].messages[1].content
+    assert '[I1] field "userId"' in prompt
+    assert 'field "sha"' not in prompt
 
 
 def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
     tmp_path: Path,
 ) -> None:
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
     observation = _observation(
         operation_key="POST /commits",
@@ -244,14 +232,15 @@ def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
     )
 
     assert tracker.observe(observation).status == "updated"
-    payload = json.loads(client.requests[0].messages[1].content)
-    assert [item["field_path"] for item in payload["candidates"]] == ["sha"]
+    prompt = client.requests[0].messages[1].content
+    assert '[I1] field "sha"' in prompt
+    assert 'field "mixed"' not in prompt
 
 
 def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
     tmp_path: Path,
 ) -> None:
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
 
     result = tracker.observe(
@@ -263,14 +252,15 @@ def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
     )
 
     assert result.status == "updated"
-    payload = json.loads(client.requests[0].messages[1].content)
-    assert [item["field_path"] for item in payload["candidates"]] == ["sha"]
+    prompt = client.requests[0].messages[1].content
+    assert '[I1] field "sha"' in prompt
+    assert 'field "id"' not in prompt
 
 
 def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
     tmp_path: Path,
 ) -> None:
-    client = StubLLMClient(_selection(None), _selection("c51"))
+    client = StubLLMClient(_selection(None), _selection("I51"))
     tracker, _catalog = _agent(tmp_path, client)
     body = {f"field{index}": f"value-{index}" for index in range(51)}
 
@@ -278,19 +268,12 @@ def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
 
     assert result.status == "updated"
     assert len(client.requests) == 2
-    first = json.loads(client.requests[0].messages[1].content)
-    second = json.loads(client.requests[1].messages[1].content)
-    assert [item["candidate_id"] for item in first["candidates"]] == [
-        f"c{index}" for index in range(1, 51)
-    ]
-    assert second["candidates"] == [
-        {
-            "candidate_id": "c51",
-            "field_path": "field50",
-            "value_types": ["string"],
-            "observed_in_response": True,
-        }
-    ]
+    first = client.requests[0].messages[1].content
+    second = client.requests[1].messages[1].content
+    for index in range(1, 51):
+        assert f"[I{index}]" in first
+    assert "[I51] field \"field50\"; type=string; observed=yes" in second
+    assert "[I50]" not in second
 
 
 def test_semantic_identifier_ignores_candidates_after_first_100(
@@ -317,7 +300,7 @@ def test_semantic_identifier_ignores_candidates_after_first_100(
 def test_invalid_first_selection_uses_second_and_final_call_for_repair(
     tmp_path: Path,
 ) -> None:
-    client = StubLLMClient(_selection("forged"), _selection("c1"))
+    client = StubLLMClient(_selection("forged"), _selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
     body = {f"field{index}": f"value-{index}" for index in range(51)}
 
@@ -325,14 +308,10 @@ def test_invalid_first_selection_uses_second_and_final_call_for_repair(
 
     assert result.status == "updated"
     assert len(client.requests) == 2
-    repair = json.loads(client.requests[1].messages[-1].content)
-    assert repair["instruction"].startswith("Repair")
-    assert "forged" not in {
-        item["candidate_id"]
-        for item in json.loads(client.requests[0].messages[1].content)[
-            "candidates"
-        ]
-    }
+    repair = client.requests[1].messages[-1].content
+    assert "Your previous JSON could not be used." in repair
+    assert "forged was not offered" in repair
+    assert "I1" in repair
 
 
 def test_two_invalid_model_outputs_do_not_persist_partial_rules(
@@ -375,7 +354,7 @@ def test_extra_model_fields_are_repaired_and_not_persisted(
             "identifier_candidate_id": "c1",
             "aliases": ["revision"],
         },
-        _selection("c1"),
+        _selection("I1"),
     )
     tracker, catalog = _agent(tmp_path, client)
 
@@ -389,8 +368,8 @@ def test_extra_model_fields_are_repaired_and_not_persisted(
 
     assert result.status == "updated"
     assert len(client.requests) == 2
-    repair = json.loads(client.requests[1].messages[-1].content)
-    assert "aliases" in " ".join(repair["validation_errors"])
+    repair = client.requests[1].messages[-1].content
+    assert "only the identifier field" in repair
     assert catalog.lookup(ResourceLookupRequest(resource="revision")).status == (
         "not_found"
     )
@@ -419,7 +398,7 @@ def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
 ) -> None:
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, catalog = _agent(tmp_path, client)
     first = _observation(
         operation_key="GET /commits/{commitId}",
@@ -452,7 +431,7 @@ def test_schema_only_semantic_identifier_retries_until_value_is_observed(
 ) -> None:
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
-    client = StubLLMClient(_selection("c2"), _selection("c1"))
+    client = StubLLMClient(_selection("I2"), _selection("I1"))
     tracker, catalog = _agent(tmp_path, client)
     observation = _observation(
         operation_key="GET /commits/{commitId}",
@@ -490,7 +469,7 @@ def test_schema_only_semantic_identifier_retries_until_value_is_observed(
         for message in request.messages
     )
     assert "Canonical commit hash" in prompt
-    assert '"schema_format": "sha1"' in prompt
+    assert "format=sha1" in prompt
     assert catalog.lookup(
         ResourceLookupRequest(resource="commit")
     ).recommended_id == "abc123"
@@ -606,7 +585,7 @@ def test_generic_wrapper_uses_schema_resource_name_without_llm(
 def test_existing_alias_resolves_canonical_name_locally(tmp_path: Path) -> None:
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, catalog = _agent(tmp_path, client)
     _record_user_resource(catalog, aliases=["user", "owner"])
 
@@ -620,8 +599,8 @@ def test_existing_alias_resolves_canonical_name_locally(tmp_path: Path) -> None:
     )
 
     assert result.status == "updated"
-    payload = json.loads(client.requests[0].messages[1].content)
-    assert payload["resource"] == {"canonical_name": "user"}
+    prompt = client.requests[0].messages[1].content
+    assert 'Resource\n"user"' in prompt
     lookup = catalog.lookup(ResourceLookupRequest(resource="owner", limit=100))
     assert lookup.canonical_resource == "user"
     assert {item.value for item in lookup.identifiers} == {1, 2}
@@ -918,7 +897,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
 def test_first_observation_requests_bounded_alias_window(
     tmp_path: Path,
 ) -> None:
-    client = StubLLMClient(_selection("c1"))
+    client = StubLLMClient(_selection("I1"))
     tracker, catalog = _agent(tmp_path, client)
     original = catalog.list_resources
     calls: list[dict[str, int | None]] = []

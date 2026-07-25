@@ -2,6 +2,10 @@
 
 Status: Completed and verified
 
+Historical note: the OpenAPI Retrieval tests listed below were valid at the
+time of verification. The Retrieval Agent and those tests were later deleted
+by `task-focused-main-flow-prompts.md`; the DeepSeek provider remains active.
+
 ## Objective
 
 Implement the approved first-class official DeepSeek provider entirely inside

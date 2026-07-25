@@ -13,7 +13,6 @@ class ModelSelector:
         "result_analyst",
         "check_designer",
         "intelligence_updater",
-        "openapi_retrieval",
     }
     FAST_ROLES = {
         "api_behavior_monitor",

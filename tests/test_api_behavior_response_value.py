@@ -381,8 +381,6 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
 
 
 def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
-    import json
-
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -397,7 +395,7 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
             return LLMResponse(
                 provider=request.provider,
                 model=request.model,
-                parsed_json={"candidate_ids": ["c1"]},
+                parsed_json={"sources": ["S1"]},
             )
 
     ir = OpenAPIParser.parse(
@@ -483,23 +481,79 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     assert len(client.requests) == 1
     request = client.requests[0]
     assert request.metadata["role"] == "api_behavior_monitor"
-    payload = json.loads(request.messages[1].content)
-    assert set(payload) == {"consumer", "candidates"}
-    assert payload["consumer"] == {
-        "parameter_name": "commitId",
-        "expected_type": "string",
-    }
-    assert payload["candidates"][0] == {
-        "candidate_id": "c1",
-        "producer_operation_key": "GET /commits",
-        "status_code": "200",
-        "media_type": "application/json",
-        "field_path": "$.sha",
-        "field_name": "sha",
-        "type": "string",
-        "format": None,
-        "description": "Commit object identifier",
-    }
+    prompt = request.messages[1].content
+    assert 'Consumer input\n[P1] parameter "commitId"; expected type=string' in prompt
+    assert (
+        '[S1] GET /commits; 200 application/json; '
+        'field "body.sha" (sha); type=string; '
+        "description='Commit object identifier'"
+    ) in prompt
+    assert request.response_format == "json"
+    assert request.json_schema is None
+    for forbidden in (
+        "candidate_id",
+        "selector",
+        "$.sha",
+        "actual_value",
+        "$defs",
+    ):
+        assert forbidden not in prompt
+
+
+def test_semantic_source_selection_fails_closed_without_repair() -> None:
+    from restscope.agent.api_behavior_monitor.response_value import (
+        ResponseValueTracker,
+        _SourceCandidate,
+    )
+    from restscope.agent.api_behavior_monitor.response_value_catalog import (
+        ResponseValueSource,
+    )
+    from restscope.llm import LLMModelConfig, LLMResponse
+
+    class StubClient:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def invoke(self, request):
+            self.requests.append(request)
+            return LLMResponse(
+                provider=request.provider,
+                model=request.model,
+                parsed_json={"sources": ["S9"]},
+            )
+
+    client = StubClient()
+    tracker = ResponseValueTracker(
+        catalog=_catalog(),
+        client=client,
+        model=LLMModelConfig(
+            role="api_behavior_monitor",
+            provider="stub",
+            model="fast-stub",
+        ),
+    )
+
+    selected = tracker._semantic_sources(
+        parameter_name="commitId",
+        expected_type="string",
+        candidates=[
+            _SourceCandidate(
+                source=ResponseValueSource(
+                    producer_operation_key="GET /commits",
+                    status_code="200",
+                    media_type="application/json",
+                    selector="$.sha",
+                    field_name="sha",
+                ),
+                field_type="string",
+                schema_format=None,
+                description=None,
+            )
+        ],
+    )
+
+    assert selected == []
+    assert len(client.requests) == 1
 
 
 def test_newly_materialized_success_schema_supports_late_registration() -> None:

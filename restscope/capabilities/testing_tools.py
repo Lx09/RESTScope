@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from restscope.capabilities.tool_context import ToolContext
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.llm.schemas import ToolSpec
-from restscope.testing import (
-    GeneratorConfigCatalog,
+from restscope.testing.models import (
     InputGeneratorConfig,
     InputGeneratorPatch,
     OperationExecutionReport,
     OperationGeneratorConfig,
-    OperationTestingService,
 )
+
+if TYPE_CHECKING:
+    from restscope.testing.catalog import GeneratorConfigCatalog
+    from restscope.testing.execution import OperationTestingService
 
 
 INSPECT_INPUTS_TOOL_NAME = "restscope.testing.inspect_operation_inputs"

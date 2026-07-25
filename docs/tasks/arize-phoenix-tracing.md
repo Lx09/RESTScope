@@ -66,6 +66,16 @@ The unified-redaction implementation was verified offline with the full core
 and tracing-extra suites (`247 passed, 2 skipped` for each), plus compileall.
 No new Phoenix contract trace or live model request was produced.
 
+## Follow-up decision: task-focused LLM projection
+
+`task-focused-main-flow-prompts.md` later narrowed each manual
+`LLMClient.invoke` input to the complete messages only. Provider, model,
+temperature, max tokens, response mode, reasoning settings, tool names, and
+tool choice are span attributes. Output contains only content, parsed JSON,
+tool calls, and finish reason; token counts and latency remain attributes.
+This keeps request configuration and full tool schemas out of the prompt-like
+trace payload while preserving model-visible content.
+
 ## Decisions
 
 - Manual span kinds are `CHAIN`, `AGENT`, `LLM`, and `TOOL`; model calls emit
@@ -153,6 +163,11 @@ the Phoenix contract (`1 passed`), `compileall`, and `git diff --check`.
   run, and existing Phoenix trace data was unchanged.
 
 ## Historical live DeepSeek/Phoenix evidence before removal
+
+The OpenAPI Retrieval Agent used by this historical run was later deleted by
+`task-focused-main-flow-prompts.md`. Existing Phoenix traces and the evidence
+below were intentionally retained; they no longer describe an active runtime
+capability.
 
 - Model slot: FAST (`deepseek/deepseek-v4-flash`, reasoning disabled).
 - Phoenix project: `restscope-openapi-retrieval-live-20260722-131740`.

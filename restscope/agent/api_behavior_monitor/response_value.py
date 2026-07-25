@@ -8,8 +8,6 @@ import json
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from restscope.llm import (
     LLMClient,
     LLMMessage,
@@ -21,6 +19,12 @@ from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import SchemaIR
 
 from .contract_tracker import normalize_media_type
+from .prompts import (
+    ResponseSourceSelectionDecision,
+    ResponseSourceView,
+    build_response_source_prompt,
+    validate_response_source_decision,
+)
 from .response_value_catalog import (
     PersistedResponseValueSource,
     ResponseValueCatalog,
@@ -74,12 +78,6 @@ class _SourceCandidate:
     field_type: str | list[str] | None
     schema_format: str | None
     description: str | None
-
-
-class _SourceSelection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    candidate_ids: list[str] = Field(max_length=100)
 
 
 class ResponseValueTracker:
@@ -303,61 +301,38 @@ class ResponseValueTracker:
         ):
             return []
         bounded = candidates[:100]
-        by_id = {
-            f"c{index}": candidate
-            for index, candidate in enumerate(bounded, start=1)
-        }
-        payload = {
-            "consumer": {
-                "parameter_name": parameter_name,
-                "expected_type": expected_type,
-            },
-            "candidates": [
-                {
-                    "candidate_id": candidate_id,
-                    "producer_operation_key": candidate.source.producer_operation_key,
-                    "status_code": candidate.source.status_code,
-                    "media_type": candidate.source.media_type,
-                    "field_path": candidate.source.selector,
-                    "field_name": candidate.source.field_name,
-                    "type": candidate.field_type,
-                    "format": candidate.schema_format,
-                    "description": (
-                        candidate.description[:200]
-                        if candidate.description is not None
-                        else None
+        prompt = build_response_source_prompt(
+            parameter_name=parameter_name,
+            expected_type=expected_type,
+            sources=[
+                ResponseSourceView(
+                    alias=f"S{index}",
+                    producer_operation_key=(
+                        candidate.source.producer_operation_key
                     ),
-                }
-                for candidate_id, candidate in by_id.items()
+                    status_code=candidate.source.status_code,
+                    media_type=candidate.source.media_type,
+                    field_path=_display_field_path(candidate.source.selector),
+                    field_name=candidate.source.field_name,
+                    field_type=candidate.field_type,
+                    schema_format=candidate.schema_format,
+                    description=candidate.description,
+                    source=candidate.source,
+                )
+                for index, candidate in enumerate(bounded, start=1)
             ],
-        }
+        )
         response = self.client.invoke(
             LLMRequest(
                 provider=self.model.provider,
                 model=self.model.model,
                 messages=[
-                    LLMMessage(
-                        role="system",
-                        content=(
-                            "Select only response fields that can supply the "
-                            "consumer parameter. Return candidate_ids only. "
-                            "Do not explain, invent fields, or use actual values."
-                        ),
-                    ),
-                    LLMMessage(
-                        role="user",
-                        content=json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    ),
+                    LLMMessage(role="system", content=prompt.system),
+                    LLMMessage(role="user", content=prompt.user),
                 ],
                 temperature=self.model.temperature,
                 max_tokens=self.model.max_tokens,
-                response_format="json_schema",
-                json_schema=_SourceSelection.model_json_schema(),
-                json_schema_name="ResponseValueSourceSelection",
+                response_format="json",
                 tool_choice="none",
                 timeout_seconds=self.model.timeout_seconds,
                 reasoning=self.model.reasoning,
@@ -366,18 +341,18 @@ class ResponseValueTracker:
         )
         validation = self.validator.validate(
             response=response,
-            output_model=_SourceSelection,
+            output_model=ResponseSourceSelectionDecision,
         )
         if not validation.valid:
             return []
-        selection = _SourceSelection.model_validate(validation.validated_object)
-        if len(selection.candidate_ids) != len(set(selection.candidate_ids)):
-            return []
-        if any(candidate_id not in by_id for candidate_id in selection.candidate_ids):
+        selection = ResponseSourceSelectionDecision.model_validate(
+            validation.validated_object
+        )
+        if validate_response_source_decision(selection, prompt):
             return []
         return [
-            by_id[candidate_id].source
-            for candidate_id in selection.candidate_ids
+            prompt.source_by_alias[alias]
+            for alias in selection.sources
         ]
 
     def observe(
@@ -598,6 +573,14 @@ def _deduplicate_typed_values(values: list[object]) -> list[object]:
 
 def _normalize_identifier(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _display_field_path(selector: str) -> str:
+    if selector == "$":
+        return "body"
+    if selector.startswith("$."):
+        return "body." + selector[2:]
+    return "body" + selector.removeprefix("$")
 
 
 def _declared_success(status_code: str) -> bool:
