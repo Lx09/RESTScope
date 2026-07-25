@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from restscope.operations import OperationReference
+
 from .openapi_retrieval import (
     EvidenceConflict,
     OpenAPIRetrievalAgent,
@@ -18,25 +20,6 @@ from .openapi_retrieval import (
     TargetParameterSummary,
     build_openapi_retrieval_agent,
     register_openapi_retrieval_tool,
-)
-from .operation_test import (
-    DependencyAnalysisError,
-    FailureSummary,
-    FakeOperationDependencyAnalyzer,
-    FakeOperationTestRunner,
-    LLMOperationDependencyAnalyzer,
-    OperationCandidate,
-    OperationDependencyAnalysis,
-    OperationDependencyAnalyzer,
-    OperationExecutionResult,
-    OperationReference,
-    OperationTarget,
-    OperationTestAgent,
-    OperationTestFinding,
-    OperationTestReport,
-    OperationTestRequest,
-    OperationTestRunner,
-    SchemathesisOperationRunner,
 )
 from .api_behavior_monitor import (
     APIBehaviorMonitorAgent,
@@ -71,7 +54,6 @@ from .operation_smoke import (
     build_operation_smoke_agent,
 )
 from .supervisor import (
-    BlockedOperation,
     OperationAttempt,
     OperationFailureKind,
     RESTScopeMainGraph,
@@ -81,18 +63,12 @@ from .supervisor import (
 )
 
 __all__ = [
-    "BlockedOperation",
     "APIBehaviorMonitorAgent",
     "APIBehaviorMonitorError",
     "APIBehaviorMonitorResult",
     "APIBehaviorResponseProcessor",
     "APIBehaviorWarning",
-    "DependencyAnalysisError",
     "EvidenceConflict",
-    "FailureSummary",
-    "FakeOperationDependencyAnalyzer",
-    "FakeOperationTestRunner",
-    "LLMOperationDependencyAnalyzer",
     "OpenAPIRetrievalAgent",
     "OpenAPIRetrievalOutputError",
     "OpenAPIRetrievalRequest",
@@ -100,25 +76,15 @@ __all__ = [
     "OpenAPIRetrievalQueryError",
     "InvestigationAction",
     "InvestigationSummary",
-    "OperationCandidate",
     "OperationBatchRunner",
     "OperationSmokeAgent",
     "OperationSmokeDiagnoser",
     "OperationSmokeOutputError",
     "OperationSmokeRequest",
     "OperationSmokeResult",
-    "OperationDependencyAnalysis",
-    "OperationDependencyAnalyzer",
-    "OperationExecutionResult",
     "OperationReference",
-    "OperationTarget",
     "OperationAttempt",
     "OperationFailureKind",
-    "OperationTestAgent",
-    "OperationTestFinding",
-    "OperationTestReport",
-    "OperationTestRequest",
-    "OperationTestRunner",
     "ParameterProducerCandidate",
     "ParameterValueProducerQuery",
     "RESTScopeMainGraph",
@@ -126,7 +92,6 @@ __all__ = [
     "RESTScopeRunRequest",
     "SchemaSource",
     "RetrievalEvidence",
-    "SchemathesisOperationRunner",
     "TargetParameterMatch",
     "TargetParameterSummary",
     "build_openapi_retrieval_agent",

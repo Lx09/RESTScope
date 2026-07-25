@@ -21,12 +21,12 @@ from .catalog import (
     SchemaSourceValidationError,
 )
 from .bootstrap import build_generator_config_catalog, build_schema_catalog
+from .operations import OperationReference
 from .agent import (
     APIBehaviorMonitorAgent,
     OpenAPIRetrievalAgent,
     OpenAPIRetrievalRequest,
     OpenAPIRetrievalResult,
-    OperationReference,
     OperationSmokeAgent,
     OperationSmokeRequest,
     OperationSmokeResult,

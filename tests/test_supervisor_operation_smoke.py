@@ -88,7 +88,7 @@ class _SmokeAgent:
 
 
 def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() -> None:
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.agent import OperationAttempt, RESTScopeMainGraph, RESTScopeRunReport, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["passed", "passed"])
 
@@ -106,10 +106,31 @@ def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() ->
         "successful_operation_keys" not in request.model_dump()
         for request in smoke.requests
     )
-    assert all(
-        attempt.report.metadata["agent"] == "operation_smoke_agent"
-        for attempt in report.attempts
-    )
+    assert [attempt.smoke_result.status for attempt in report.attempts] == [
+        "passed",
+        "passed",
+    ]
+    assert list(OperationAttempt.model_fields) == [
+        "operation",
+        "round_number",
+        "attempt_number",
+        "smoke_result",
+        "disposition",
+        "failure_kind",
+    ]
+    assert list(RESTScopeRunReport.model_fields) == [
+        "report_id",
+        "status",
+        "stop_reason",
+        "operations",
+        "attempts",
+        "satisfied_operations",
+        "unattempted_operations",
+        "rounds",
+        "attempt_count",
+        "error",
+        "metadata",
+    ]
 
 
 def test_supervisor_retries_smoke_operation_in_the_next_round() -> None:
@@ -216,3 +237,34 @@ def test_operation_scoped_smoke_error_retries_after_other_operations() -> None:
         "satisfied",
     ]
     assert report.attempts[0].failure_kind == "operation_error"
+
+
+def test_smoke_runtime_exception_is_a_global_technical_error() -> None:
+    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+
+    class BrokenSmokeAgent:
+        def run(self, context, request):
+            del context, request
+            raise RuntimeError("shared runtime unavailable")
+
+    report = RESTScopeMainGraph(
+        operation_smoke_agent=BrokenSmokeAgent(),
+        tool_context=_context(),
+    ).run(RESTScopeRunRequest())
+
+    assert (report.status, report.stop_reason) == (
+        "errored",
+        "technical_error",
+    )
+    assert report.attempts == []
+    assert report.attempt_count == 0
+    assert report.error == {
+        "type": "RuntimeError",
+        "message": "shared runtime unavailable",
+        "stage": "run_next_operation",
+        "operation": {
+            "method": "GET",
+            "path": "/first",
+            "operation_id": "first",
+        },
+    }

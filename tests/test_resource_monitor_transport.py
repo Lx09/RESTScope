@@ -674,8 +674,8 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
     tmp_path: Path,
 ) -> None:
     from restscope import RESTScopeApp
-    from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner
     from restscope.restscope_config import RESTScopeConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -684,8 +684,7 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(),
     )
     try:
         runtime = app.capability_runtime

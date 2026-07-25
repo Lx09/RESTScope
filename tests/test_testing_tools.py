@@ -46,7 +46,6 @@ def _runtime(tmp_path: Path):
         ),
     )
     runtime = build_capabilities(
-        presets=(),
         generator_config_catalog=catalog,
         operation_testing_service=service,
     )
@@ -95,7 +94,7 @@ def test_testing_tools_register_with_run_allowed_for_every_role_and_config_tools
     for role in (
         "planner",
         "result_analyst",
-        "operation_tester",
+        "operation_smoke_parameter_diagnosis",
         "decision_maker",
         "openapi_retrieval",
         "future_agent",
@@ -135,9 +134,9 @@ def test_default_app_runtime_registers_testing_tools_against_configured_database
     tmp_path: Path,
 ) -> None:
     from restscope import RESTScopeApp
-    from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner
     from restscope.capabilities import RUN_OPERATION_TOOL_NAME
     from restscope.restscope_config import RESTScopeConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -146,8 +145,7 @@ def test_default_app_runtime_registers_testing_tools_against_configured_database
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(),
     )
     try:
         assert app.capability_runtime.tool_registry.get_spec(RUN_OPERATION_TOOL_NAME).name == (

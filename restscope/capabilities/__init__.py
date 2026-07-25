@@ -18,11 +18,8 @@ from .testing_tools import (
 from .tool_registry import ToolRegistry
 from .tool_selector import ToolSelector
 from .tool_sources import (
-    PresetToolSourceNotFoundError,
     ToolSourceError,
-    UnsupportedPresetToolSourceError,
     UnsupportedToolSourceKindError,
-    add_preset_tools,
     register_tool_source,
 )
 
@@ -48,10 +45,7 @@ __all__ = [
     "register_testing_tools",
     "ToolRegistry",
     "ToolSelector",
-    "PresetToolSourceNotFoundError",
     "ToolSourceError",
-    "UnsupportedPresetToolSourceError",
     "UnsupportedToolSourceKindError",
-    "add_preset_tools",
     "register_tool_source",
 ]

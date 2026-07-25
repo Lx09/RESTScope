@@ -75,11 +75,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         pytest.skip("select -m phoenix_contract to run the local Phoenix contract")
 
     from restscope import RESTScopeApp
-    from restscope.agent import (
-        FakeOperationDependencyAnalyzer,
-        FakeOperationTestRunner,
-        RESTScopeRunRequest,
-    )
+    from restscope.agent import RESTScopeRunRequest
     from restscope.capabilities import build_capabilities
     from restscope.llm import (
         LLMClient,
@@ -94,6 +90,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     from restscope.observability import build_tracing_runtime
     from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig, TracingConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     _wait_for_phoenix()
     project_name = f"restscope-contract-{uuid4().hex}"
@@ -113,7 +110,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     assert runtime.enabled is True
 
-    capabilities = build_capabilities(presets=(), tracing_runtime=runtime)
+    capabilities = build_capabilities(tracing_runtime=runtime)
     capabilities.tool_registry.register(
         spec=ToolSpec(
             name="contract.tool",
@@ -134,8 +131,9 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     app = RESTScopeApp.from_config(
         config,
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(
+            tracing_runtime=runtime
+        ),
         capability_runtime=capabilities,
         tracing_runtime=runtime,
     )
@@ -202,7 +200,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         "RESTScopeApp.run",
         "RESTScopeMainGraph.run",
         "RESTScopeMainGraph.operation_attempt",
-        "OperationTestAgent.run",
+        "OperationSmokeAgent.run",
         "contract.tool",
         "LLMClient.invoke",
         "contract.truncated",
@@ -234,7 +232,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     operation_span = next(
         span
         for span in spans
-        if span["name"] == "OperationTestAgent.run"
+        if span["name"] == "OperationSmokeAgent.run"
         and span["context"]["trace_id"] == app_span["context"]["trace_id"]
     )
     truncated_span = next(span for span in spans if span["name"] == "contract.truncated")

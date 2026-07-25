@@ -25,16 +25,15 @@ def _spec(*, operation_id: str = "listPets") -> dict:
 
 def _app(tmp_path):
     from restscope import RESTScopeApp
-    from restscope.agent import FakeOperationDependencyAnalyzer, FakeOperationTestRunner
     from restscope.restscope_config import RESTScopeConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     database = tmp_path / "app-context.sqlite"
     env_file = tmp_path / ".env"
     env_file.write_text(f"DB_URL=sqlite:///{database}\n", encoding="utf-8")
     return RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(),
     )
 
 

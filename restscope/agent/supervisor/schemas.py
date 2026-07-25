@@ -1,4 +1,4 @@
-"""Public contracts for round-based Supervisor runs."""
+"""Public contracts for round-based Operation Smoke runs."""
 
 from __future__ import annotations
 
@@ -7,13 +7,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..operation_test import OperationReference, OperationTestFinding, OperationTestReport
+from restscope.operations import OperationReference
+
+from ..operation_smoke import OperationSmokeResult
 
 
 RunStatus = Literal["passed", "failed", "errored"]
 AttemptDisposition = Literal[
     "satisfied",
-    "blocked",
     "retrying",
     "unsupported",
     "failed",
@@ -24,13 +25,10 @@ OperationFailureKind = Literal[
     "no_parameter_issue",
     "unsupported_operation",
     "operation_error",
-    "operation_failed",
 ]
 StopReason = Literal[
     "completed",
     "completed_with_failures",
-    "operation_failed",
-    "unresolved_dependencies",
     "technical_error",
 ]
 
@@ -64,7 +62,7 @@ SchemaSource = Annotated[
 
 
 class RESTScopeRunRequest(BaseModel):
-    """The only public Supervisor input for an MVP run."""
+    """Public input for one bounded Supervisor run."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -73,31 +71,22 @@ class RESTScopeRunRequest(BaseModel):
 
 
 class OperationAttempt(BaseModel):
-    """Chronological evidence retained for every operation execution."""
+    """Chronological result of one Operation Smoke invocation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     operation: OperationReference
-    round_number: int
-    attempt_number: int
-    report: OperationTestReport
+    round_number: int = Field(ge=1)
+    attempt_number: int = Field(ge=1)
+    smoke_result: OperationSmokeResult
     disposition: AttemptDisposition
     failure_kind: OperationFailureKind | None = None
-    dependency_hint: str | None = None
-    direct_dependencies: list[OperationReference] = Field(default_factory=list)
-    unsatisfied_dependencies: list[OperationReference] = Field(default_factory=list)
-
-
-class BlockedOperation(BaseModel):
-    """Latest unresolved scheduling state for an attempted operation."""
-
-    operation: OperationReference
-    dependency_hint: str | None = None
-    direct_dependencies: list[OperationReference] = Field(default_factory=list)
-    unsatisfied_dependencies: list[OperationReference] = Field(default_factory=list)
-    reason: Literal["unknown_dependency", "failed_prerequisite", "dependency_cycle", "unsatisfied_dependency"]
 
 
 class RESTScopeRunReport(BaseModel):
-    """Complete scheduler result without secrets or queue internals."""
+    """Complete Smoke-only Supervisor result."""
+
+    model_config = ConfigDict(extra="forbid")
 
     report_id: str = Field(default_factory=lambda: f"restscope_run_{uuid4().hex}")
     status: RunStatus
@@ -105,12 +94,7 @@ class RESTScopeRunReport(BaseModel):
     operations: list[OperationReference] = Field(default_factory=list)
     attempts: list[OperationAttempt] = Field(default_factory=list)
     satisfied_operations: list[OperationReference] = Field(default_factory=list)
-    blocked_operations: list[BlockedOperation] = Field(default_factory=list)
     unattempted_operations: list[OperationReference] = Field(default_factory=list)
-    dependency_cycles: list[list[OperationReference]] = Field(default_factory=list)
-    findings: list[OperationTestFinding] = Field(default_factory=list)
-    run_ids: list[str] = Field(default_factory=list)
-    artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     rounds: int = 0
     attempt_count: int = 0
     error: dict[str, Any] | None = None

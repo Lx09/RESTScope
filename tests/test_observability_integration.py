@@ -121,7 +121,7 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
         },
     }
     runtime, exporter = _recording_runtime(secret_values=["tool-secret"])
-    capabilities = build_capabilities(presets=(), tracing_runtime=runtime)
+    capabilities = build_capabilities(tracing_runtime=runtime)
     capabilities.tool_registry.register(
         spec=ToolSpec(
             name="test.echo",
@@ -200,12 +200,9 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
 
 def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) -> None:
     from restscope import RESTScopeApp
-    from restscope.agent import (
-        FakeOperationDependencyAnalyzer,
-        FakeOperationTestRunner,
-        RESTScopeRunRequest,
-    )
+    from restscope.agent import RESTScopeRunRequest
     from restscope.restscope_config import RESTScopeConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     schema = {
         "openapi": "3.0.0",
@@ -234,8 +231,9 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     runtime, exporter = _recording_runtime()
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(
+            tracing_runtime=runtime
+        ),
         tracing_runtime=runtime,
     )
     context = app.initialize(
@@ -264,7 +262,7 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     app_span = spans["RESTScopeApp.run"]
     graph_span = spans["RESTScopeMainGraph.run"]
     attempt_span = spans["RESTScopeMainGraph.operation_attempt"]
-    operation_span = spans["OperationTestAgent.run"]
+    operation_span = spans["OperationSmokeAgent.run"]
     rendered = json.dumps(
         [dict(span.attributes) for span in spans.values()],
         default=str,
@@ -295,15 +293,12 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
 
 def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> None:
     from restscope import RESTScopeApp
-    from restscope.agent import (
-        FakeOperationDependencyAnalyzer,
-        FakeOperationTestRunner,
-    )
     from restscope.capabilities import build_capabilities
     from restscope.observability import TracingRuntime
     from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig
     from restscope.testing import OperationTestingService
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
     app_runtime = TracingRuntime.disabled(redactor=Redactor(["app-key"]))
@@ -312,15 +307,13 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
         tracing_runtime=old_runtime,
     )
     capabilities = build_capabilities(
-        presets=(),
         tracing_runtime=old_runtime,
         generator_config_catalog=object(),
         operation_testing_service=testing_service,
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(tmp_path / ".env"),
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(),
         capability_runtime=capabilities,
         tracing_runtime=app_runtime,
     )
@@ -452,7 +445,7 @@ def test_openapi_retrieval_emits_tool_agent_llm_and_internal_tool_spans() -> Non
         ),
         tracing_runtime=runtime,
     )
-    capabilities = build_capabilities(presets=(), tracing_runtime=runtime)
+    capabilities = build_capabilities(tracing_runtime=runtime)
     spec = register_openapi_retrieval_tool(capabilities.tool_registry, agent)
     serialized_schema = json.dumps(schema)
     capabilities.tool_executor.bind_context(
@@ -520,7 +513,7 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
         )
     )
     runtime, exporter = _recording_runtime(secret_values=["Bearer runtime-secret"])
-    capabilities = build_capabilities(presets=(), tracing_runtime=runtime)
+    capabilities = build_capabilities(tracing_runtime=runtime)
     register_http_request_tool(
         capabilities.tool_registry,
         client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),
@@ -637,7 +630,6 @@ def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path:
         ),
     )
     capabilities = build_capabilities(
-        presets=(),
         tracing_runtime=runtime,
         generator_config_catalog=catalog,
         operation_testing_service=service,

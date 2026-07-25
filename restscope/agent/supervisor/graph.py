@@ -1,4 +1,4 @@
-"""Round-based FIFO Supervisor for dynamically discovered operations."""
+"""Round-based FIFO Supervisor for Operation Smoke execution."""
 
 from __future__ import annotations
 
@@ -8,26 +8,16 @@ from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 
 from restscope.capabilities import ToolContext
-from restscope.openapi_parser.ir import OperationIR, SchemaIR
+from restscope.openapi_parser.ir import OperationIR
+from restscope.operations import OperationReference
 from restscope.observability import TracingRuntime
 
-from ..operation_test import (
-    OperationCandidate,
-    OperationDependencyAnalyzer,
-    OperationExecutionResult,
-    OperationReference,
-    OperationTestAgent,
-    OperationTestFinding,
-    OperationTestReport,
-    OperationTestRequest,
-    OperationTestRunner,
-)
 from ..operation_smoke import (
     OperationSmokeAgent,
     OperationSmokeRequest,
     OperationSmokeResult,
 )
-from .schemas import BlockedOperation, OperationAttempt, RESTScopeRunReport, RESTScopeRunRequest
+from .schemas import OperationAttempt, RESTScopeRunReport, RESTScopeRunRequest
 
 
 class RESTScopeMainState(TypedDict, total=False):
@@ -35,37 +25,31 @@ class RESTScopeMainState(TypedDict, total=False):
 
     request: dict[str, Any]
     operations: list[dict[str, Any]]
-    candidates: list[dict[str, Any]]
     ready_queue: list[dict[str, Any]]
     retry_queue: list[dict[str, Any]]
-    blocked_queue: list[dict[str, Any]]
     satisfied: list[dict[str, Any]]
     attempts: list[dict[str, Any]]
     attempt_counts: dict[str, int]
-    findings: list[dict[str, Any]]
     current_round: int
     rounds: int
     status: str
     stop_reason: str
-    dependency_cycles: list[list[dict[str, Any]]]
     last_error: dict[str, Any]
     final_report: dict[str, Any]
 
 
 class RESTScopeMainGraph:
-    """Discover operations and schedule them through two round-based FIFO queues."""
+    """Discover operations and schedule one Smoke attempt per operation/round."""
 
     def __init__(
         self,
         *,
-        operation_runner: OperationTestRunner | None = None,
-        dependency_analyzer: OperationDependencyAnalyzer | None = None,
-        operation_smoke_agent: OperationSmokeAgent | None = None,
+        operation_smoke_agent: OperationSmokeAgent,
         tool_context: ToolContext,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        self.operation_runner = operation_runner
-        self.dependency_analyzer = dependency_analyzer
+        if operation_smoke_agent is None:
+            raise ValueError("Supervisor requires an OperationSmokeAgent")
         self.operation_smoke_agent = operation_smoke_agent
         self.tool_context = tool_context
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
@@ -79,44 +63,35 @@ class RESTScopeMainGraph:
             input_value=request,
             attributes=attributes,
         ) as span:
-            graph = self._build_graph(request=request)
-            final_state = graph.invoke(
+            final_state = self._build_graph(request=request).invoke(
                 {
                     "request": request.model_dump(mode="json"),
                     "operations": [],
-                    "candidates": [],
                     "ready_queue": [],
                     "retry_queue": [],
-                    "blocked_queue": [],
                     "satisfied": [],
                     "attempts": [],
                     "attempt_counts": {},
-                    "findings": [],
                     "current_round": 0,
                     "rounds": 0,
-                    "dependency_cycles": [],
                 },
                 config={"recursion_limit": 10_000},
             )
-            report = RESTScopeRunReport.model_validate(final_state["final_report"])
+            report = RESTScopeRunReport.model_validate(
+                final_state["final_report"]
+            )
             span.set_output(report)
             span.set_attribute("restscope.run.status", report.status)
             return report
 
     def _build_graph(self, *, request: RESTScopeRunRequest):
         graph = StateGraph(RESTScopeMainState)
-        graph.add_node("validate_runtime", self._validate_runtime(request))
         graph.add_node("discover_operations", self._discover_operations)
         graph.add_node("run_next_operation", self._run_next_operation(request))
         graph.add_node("advance_round", self._advance_round)
         graph.add_node("finalize_report", self._finalize_report)
 
-        graph.add_edge(START, "validate_runtime")
-        graph.add_conditional_edges(
-            "validate_runtime",
-            self._route_after_setup,
-            {"finalize": "finalize_report", "next": "discover_operations"},
-        )
+        graph.add_edge(START, "discover_operations")
         graph.add_conditional_edges(
             "discover_operations",
             self._route_after_discovery,
@@ -125,7 +100,11 @@ class RESTScopeMainGraph:
         graph.add_conditional_edges(
             "run_next_operation",
             self._route_after_attempt,
-            {"finalize": "finalize_report", "run": "run_next_operation", "advance": "advance_round"},
+            {
+                "finalize": "finalize_report",
+                "run": "run_next_operation",
+                "advance": "advance_round",
+            },
         )
         graph.add_conditional_edges(
             "advance_round",
@@ -135,26 +114,10 @@ class RESTScopeMainGraph:
         graph.add_edge("finalize_report", END)
         return graph.compile()
 
-    def _validate_runtime(self, request: RESTScopeRunRequest):
-        def node(state: RESTScopeMainState) -> RESTScopeMainState:
-            del state
-            try:
-                if self.operation_smoke_agent is None:
-                    if (
-                        self.operation_runner is None
-                        or self.dependency_analyzer is None
-                    ):
-                        raise RuntimeError(
-                            "Supervisor has no operation execution Agent"
-                        )
-                    self.dependency_analyzer.check_configured()
-                return {}
-            except Exception as exc:
-                return self._technical_error(exc, stage="validate_runtime")
-
-        return node
-
-    def _discover_operations(self, state: RESTScopeMainState) -> RESTScopeMainState:
+    def _discover_operations(
+        self,
+        state: RESTScopeMainState,
+    ) -> RESTScopeMainState:
         del state
         try:
             indexed = list(enumerate(self.tool_context.ir.operations.values()))
@@ -165,12 +128,15 @@ class RESTScopeMainGraph:
                     key=lambda item: (_path_depth(item[1].path), item[0]),
                 )
             ]
-            candidates = [_operation_candidate(operation) for operation in ordered_ir]
-            operations = [candidate.operation for candidate in candidates]
+            operations = [
+                _operation_reference(operation) for operation in ordered_ir
+            ]
+            serialized = [
+                operation.model_dump(mode="json") for operation in operations
+            ]
             return {
-                "operations": [operation.model_dump(mode="json") for operation in operations],
-                "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
-                "ready_queue": [operation.model_dump(mode="json") for operation in operations],
+                "operations": serialized,
+                "ready_queue": serialized,
                 "retry_queue": [],
                 "current_round": 1,
                 "rounds": 1,
@@ -184,125 +150,61 @@ class RESTScopeMainGraph:
             if not ready:
                 return {}
             operation = OperationReference.model_validate(ready.pop(0))
-            candidates = [OperationCandidate.model_validate(item) for item in state.get("candidates", [])]
             counts = dict(state.get("attempt_counts", {}))
             identity_key = _identity_key(operation)
             attempt_number = counts.get(identity_key, 0) + 1
             counts[identity_key] = attempt_number
 
             try:
-                smoke_result: OperationSmokeResult | None = None
-                if self.operation_smoke_agent is not None:
-                    smoke_result = self.operation_smoke_agent.run(
-                        self.tool_context,
-                        OperationSmokeRequest(
-                            operation_key=_operation_key(operation),
-                        ),
-                    )
-                    report = _operation_smoke_report(
-                        smoke_result,
-                        operation=operation,
-                        task_id=request.metadata.get("task_id"),
-                    )
-                else:
-                    assert self.operation_runner is not None
-                    assert self.dependency_analyzer is not None
-                    report = OperationTestAgent(
-                        runner=self.operation_runner,
-                        dependency_analyzer=self.dependency_analyzer,
-                        tracing_runtime=self.tracing_runtime,
-                    ).run(
-                        OperationTestRequest(
-                            task_id=request.metadata.get("task_id"),
-                            operation=operation,
-                            candidate_operations=candidates,
-                        )
-                    )
+                smoke_result = self.operation_smoke_agent.run(
+                    self.tool_context,
+                    OperationSmokeRequest(
+                        operation_key=_operation_key(operation),
+                    ),
+                )
             except Exception as exc:
                 return {
                     "ready_queue": ready,
                     "attempt_counts": counts,
-                    **self._technical_error(exc, stage="run_next_operation", operation=operation),
+                    **self._technical_error(
+                        exc,
+                        stage="run_next_operation",
+                        operation=operation,
+                    ),
                 }
 
-            analysis = report.dependency_analysis
-            direct_dependencies = analysis.dependencies if analysis is not None else []
-            satisfied_ids = {
-                OperationReference.model_validate(item).identity()
-                for item in state.get("satisfied", [])
-            }
-            unsatisfied = [
-                dependency
-                for dependency in direct_dependencies
-                if dependency.identity() not in satisfied_ids
-            ]
-            disposition = "errored"
-            failure_kind = None
             updates: RESTScopeMainState = {}
             retry_queue = list(state.get("retry_queue", []))
-
-            if report.status == "errored":
-                failure_kind = (
-                    smoke_result.failure_kind
-                    if smoke_result is not None
-                    else "operation_error"
-                ) or "operation_error"
-                if attempt_number < request.max_operation_attempts:
-                    disposition = "retrying"
-                    retry_queue.append(operation.model_dump(mode="json"))
-                else:
-                    disposition = "errored"
-            elif analysis is not None and analysis.dependency_issue and (not direct_dependencies or unsatisfied):
-                disposition = "blocked"
-                blocked = list(state.get("blocked_queue", []))
-                blocked.append(
-                    {
-                        "operation": operation.model_dump(mode="json"),
-                        "dependency_hint": analysis.hint,
-                        "direct_dependencies": [item.model_dump(mode="json") for item in direct_dependencies],
-                        "unsatisfied_dependencies": [item.model_dump(mode="json") for item in unsatisfied],
-                    }
-                )
-                updates["blocked_queue"] = blocked
-            elif report.status == "passed" and report.observed_2xx:
-                disposition = "satisfied"
-                updates["satisfied"] = list(state.get("satisfied", [])) + [operation.model_dump(mode="json")]
-            else:
-                failure_kind = (
-                    smoke_result.failure_kind
-                    if smoke_result is not None
-                    else "operation_failed"
-                ) or "operation_failed"
-                if (
-                    smoke_result is not None
-                    and smoke_result.status == "unsupported"
-                ):
-                    disposition = "unsupported"
-                elif attempt_number < request.max_operation_attempts:
-                    disposition = "retrying"
-                    retry_queue.append(operation.model_dump(mode="json"))
-                else:
-                    disposition = "failed"
+            disposition = _attempt_disposition(
+                smoke_result,
+                attempt_number=attempt_number,
+                max_attempts=request.max_operation_attempts,
+            )
+            if disposition == "satisfied":
+                updates["satisfied"] = [
+                    *state.get("satisfied", []),
+                    operation.model_dump(mode="json"),
+                ]
+            elif disposition == "retrying":
+                retry_queue.append(operation.model_dump(mode="json"))
 
             attempt = OperationAttempt(
                 operation=operation,
                 round_number=int(state.get("current_round", 1)),
                 attempt_number=attempt_number,
-                report=report,
+                smoke_result=smoke_result,
                 disposition=disposition,
-                failure_kind=failure_kind,
-                dependency_hint=analysis.hint if analysis is not None else None,
-                direct_dependencies=direct_dependencies,
-                unsatisfied_dependencies=unsatisfied,
+                failure_kind=smoke_result.failure_kind,
             )
             updates.update(
                 {
                     "ready_queue": ready,
                     "retry_queue": retry_queue,
                     "attempt_counts": counts,
-                    "attempts": list(state.get("attempts", [])) + [attempt.model_dump(mode="json")],
-                    "findings": list(state.get("findings", []))
-                    + [finding.model_dump(mode="json") for finding in report.findings],
+                    "attempts": [
+                        *state.get("attempts", []),
+                        attempt.model_dump(mode="json"),
+                    ],
                 }
             )
             return updates
@@ -341,10 +243,7 @@ class RESTScopeMainGraph:
                 if updates.get("last_error") is not None:
                     error = updates["last_error"]
                     span.set_output(
-                        {
-                            "disposition": "global_error",
-                            "error": error,
-                        }
+                        {"disposition": "global_error", "error": error}
                     )
                     span.set_attribute(
                         "restscope.operation.disposition",
@@ -354,186 +253,104 @@ class RESTScopeMainGraph:
                         str(error.get("message", "Operation attempt failed"))
                     )
                     return updates
-                attempt_values = updates.get("attempts", [])
-                if not attempt_values:
-                    return updates
-                attempt = OperationAttempt.model_validate(attempt_values[-1])
-                span.set_output(
-                    {
-                        "disposition": attempt.disposition,
-                        "failure_kind": attempt.failure_kind,
-                        "report_status": attempt.report.status,
-                        "observed_2xx": attempt.report.observed_2xx,
-                        "run_ids": attempt.report.run_ids,
-                        "batch_count": attempt.report.metadata.get(
-                            "batch_count",
-                            0,
-                        ),
-                    }
-                )
-                span.set_attribute(
-                    "restscope.operation.disposition",
-                    attempt.disposition,
-                )
-                span.set_attribute(
-                    "restscope.operation.report_status",
-                    attempt.report.status,
-                )
-                span.set_attribute(
-                    "restscope.operation.observed_2xx",
-                    attempt.report.observed_2xx,
-                )
-                if attempt.failure_kind is not None:
-                    span.set_attribute(
-                        "restscope.operation.failure_kind",
-                        attempt.failure_kind,
+                attempts = updates.get("attempts", [])
+                if attempts:
+                    attempt = OperationAttempt.model_validate(attempts[-1])
+                    span.set_output(
+                        {
+                            "disposition": attempt.disposition,
+                            "failure_kind": attempt.failure_kind,
+                            "smoke_status": attempt.smoke_result.status,
+                            "batch_count": len(
+                                attempt.smoke_result.batch_reports
+                            ),
+                        }
                     )
+                    span.set_attribute(
+                        "restscope.operation.disposition",
+                        attempt.disposition,
+                    )
+                    span.set_attribute(
+                        "restscope.operation.smoke_status",
+                        attempt.smoke_result.status,
+                    )
+                    if attempt.failure_kind is not None:
+                        span.set_attribute(
+                            "restscope.operation.failure_kind",
+                            attempt.failure_kind,
+                        )
                 return updates
 
         return node
 
-    def _advance_round(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        blocked = list(state.get("blocked_queue", []))
+    def _advance_round(
+        self,
+        state: RESTScopeMainState,
+    ) -> RESTScopeMainState:
         retry = list(state.get("retry_queue", []))
-
-        satisfied_ids = {
-            OperationReference.model_validate(item).identity()
-            for item in state.get("satisfied", [])
-        }
-        promotable: list[dict[str, Any]] = []
-        remaining: list[dict[str, Any]] = []
-        for item in blocked:
-            dependencies = [OperationReference.model_validate(value) for value in item.get("direct_dependencies", [])]
-            if dependencies and all(dependency.identity() in satisfied_ids for dependency in dependencies):
-                promotable.append(item)
-            else:
-                remaining.append(item)
-
-        operation_order = {
-            OperationReference.model_validate(value).identity(): index
-            for index, value in enumerate(state.get("operations", []))
-        }
-        next_operations = [
-            OperationReference.model_validate(item["operation"])
-            for item in promotable
-        ] + [
-            OperationReference.model_validate(item)
-            for item in retry
-        ]
-        by_identity = {
-            operation.identity(): operation for operation in next_operations
-        }
-        next_operations = sorted(
-            by_identity.values(),
-            key=lambda operation: operation_order[operation.identity()],
-        )
-        if next_operations:
+        if retry:
             return {
-                "ready_queue": [
-                    operation.model_dump(mode="json")
-                    for operation in next_operations
-                ],
+                "ready_queue": retry,
                 "retry_queue": [],
-                "blocked_queue": remaining,
                 "current_round": int(state.get("current_round", 1)) + 1,
                 "rounds": int(state.get("rounds", 1)) + 1,
             }
 
-        if remaining:
-            cycles = _dependency_cycles(remaining)
-            return {
-                "blocked_queue": remaining,
-                "dependency_cycles": [
-                    [operation.model_dump(mode="json") for operation in cycle]
-                    for cycle in cycles
-                ],
-                "status": "failed",
-                "stop_reason": "unresolved_dependencies",
-            }
-
-        operations = state.get("operations", [])
-        if len(satisfied_ids) == len(operations):
+        if len(state.get("satisfied", [])) == len(
+            state.get("operations", [])
+        ):
             return {"status": "passed", "stop_reason": "completed"}
         return {
             "status": "failed",
             "stop_reason": "completed_with_failures",
         }
 
-    def _finalize_report(self, state: RESTScopeMainState) -> RESTScopeMainState:
-        operations = [OperationReference.model_validate(item) for item in state.get("operations", [])]
-        attempts = [OperationAttempt.model_validate(item) for item in state.get("attempts", [])]
+    def _finalize_report(
+        self,
+        state: RESTScopeMainState,
+    ) -> RESTScopeMainState:
+        operations = [
+            OperationReference.model_validate(item)
+            for item in state.get("operations", [])
+        ]
+        attempts = [
+            OperationAttempt.model_validate(item)
+            for item in state.get("attempts", [])
+        ]
         satisfied_ids = {
             OperationReference.model_validate(item).identity()
             for item in state.get("satisfied", [])
         }
-        satisfied = [operation for operation in operations if operation.identity() in satisfied_ids]
-        attempted_ids = {attempt.operation.identity() for attempt in attempts}
-        unattempted = [operation for operation in operations if operation.identity() not in attempted_ids]
-        cycles = [
-            [OperationReference.model_validate(operation) for operation in cycle]
-            for cycle in state.get("dependency_cycles", [])
+        satisfied = [
+            operation
+            for operation in operations
+            if operation.identity() in satisfied_ids
         ]
-        cycle_ids = {operation.identity() for cycle in cycles for operation in cycle}
-        final_dispositions: dict[
-            tuple[str, str, str | None],
-            str,
-        ] = {}
-        for attempt in attempts:
-            final_dispositions[attempt.operation.identity()] = (
-                attempt.disposition
-            )
-
-        blocked_operations: list[BlockedOperation] = []
-        for item in state.get("blocked_queue", []):
-            operation = OperationReference.model_validate(item["operation"])
-            direct_dependencies = [
-                OperationReference.model_validate(value)
-                for value in item.get("direct_dependencies", [])
-            ]
-            unsatisfied = [
-                dependency for dependency in direct_dependencies if dependency.identity() not in satisfied_ids
-            ]
-            if not direct_dependencies:
-                reason = "unknown_dependency"
-            elif any(
-                final_dispositions.get(dependency.identity())
-                in {"failed", "errored", "unsupported"}
-                for dependency in unsatisfied
-            ):
-                reason = "failed_prerequisite"
-            elif operation.identity() in cycle_ids:
-                reason = "dependency_cycle"
-            else:
-                reason = "unsatisfied_dependency"
-            blocked_operations.append(
-                BlockedOperation(
-                    operation=operation,
-                    dependency_hint=item.get("dependency_hint"),
-                    direct_dependencies=direct_dependencies,
-                    unsatisfied_dependencies=unsatisfied,
-                    reason=reason,
-                )
-            )
-
-        findings = [OperationTestFinding.model_validate(item) for item in state.get("findings", [])]
-        run_ids = [run_id for attempt in attempts for run_id in attempt.report.run_ids]
-        artifact_refs = [artifact for attempt in attempts for artifact in attempt.report.artifact_refs]
+        attempted_ids = {
+            attempt.operation.identity() for attempt in attempts
+        }
+        unattempted = [
+            operation
+            for operation in operations
+            if operation.identity() not in attempted_ids
+        ]
         error = state.get("last_error")
-        status = "errored" if error is not None else state.get("status", "failed")
-        stop_reason = "technical_error" if error is not None else state.get("stop_reason", "technical_error")
         report = RESTScopeRunReport(
             report_id=f"restscope_run_{uuid4().hex}",
-            status=status,
-            stop_reason=stop_reason,
+            status=(
+                "errored"
+                if error is not None
+                else state.get("status", "failed")
+            ),
+            stop_reason=(
+                "technical_error"
+                if error is not None
+                else state.get("stop_reason", "technical_error")
+            ),
             operations=operations,
             attempts=attempts,
             satisfied_operations=satisfied,
-            blocked_operations=blocked_operations,
             unattempted_operations=unattempted,
-            dependency_cycles=cycles,
-            findings=findings,
-            run_ids=_unique(run_ids),
-            artifact_refs=_unique_artifact_refs(artifact_refs),
             rounds=int(state.get("rounds", 0)),
             attempt_count=len(attempts),
             error=error,
@@ -544,10 +361,6 @@ class RESTScopeMainGraph:
             },
         )
         return {"final_report": report.model_dump(mode="json")}
-
-    @staticmethod
-    def _route_after_setup(state: RESTScopeMainState) -> str:
-        return "finalize" if state.get("last_error") else "next"
 
     @staticmethod
     def _route_after_discovery(state: RESTScopeMainState) -> str:
@@ -561,7 +374,11 @@ class RESTScopeMainGraph:
 
     @staticmethod
     def _route_after_advance(state: RESTScopeMainState) -> str:
-        return "finalize" if state.get("status") in {"passed", "failed", "errored"} else "run"
+        return (
+            "finalize"
+            if state.get("status") in {"passed", "failed", "errored"}
+            else "run"
+        )
 
     @staticmethod
     def _technical_error(
@@ -570,248 +387,53 @@ class RESTScopeMainGraph:
         stage: str,
         operation: OperationReference | None = None,
     ) -> RESTScopeMainState:
-        payload: dict[str, Any] = {"stage": stage, "type": type(exc).__name__, "message": str(exc)}
+        payload: dict[str, Any] = {
+            "stage": stage,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
         if operation is not None:
             payload["operation"] = operation.model_dump(mode="json")
-        return {"status": "errored", "stop_reason": "technical_error", "last_error": payload}
+        return {
+            "status": "errored",
+            "stop_reason": "technical_error",
+            "last_error": payload,
+        }
+
+
+def _attempt_disposition(
+    result: OperationSmokeResult,
+    *,
+    attempt_number: int,
+    max_attempts: int,
+) -> str:
+    if result.status == "passed":
+        return "satisfied"
+    if result.status == "unsupported":
+        return "unsupported"
+    if attempt_number < max_attempts:
+        return "retrying"
+    return "errored" if result.status == "errored" else "failed"
 
 
 def _path_depth(path: str) -> int:
     return sum(1 for segment in path.split("/") if segment)
 
 
-def _operation_candidate(operation: OperationIR) -> OperationCandidate:
-    parameters = []
-    for location, values in (
-        ("path", operation.path_parameters),
-        ("query", operation.query_parameters),
-        ("header", operation.header_parameters),
-        ("cookie", operation.cookie_parameters),
-    ):
-        for parameter in values:
-            parameters.append(
-                {
-                    "name": parameter.name,
-                    "in": location,
-                    "required": parameter.required,
-                    "schema": _schema_structure(parameter.schema),
-                }
-            )
-
-    request_structure = None
-    if operation.request_body is not None:
-        request_structure = {
-            "required": operation.request_body.required,
-            "content": {
-                media_type: _schema_structure(media.schema)
-                for media_type, media in operation.request_body.contents.items()
-            },
-        }
-    response_structure = {
-        status_code: {
-            "content": {
-                media_type: _schema_structure(media.schema)
-                for media_type, media in response.contents.items()
-            }
-        }
-        for status_code, response in operation.responses.by_status.items()
-    }
-    security = [
-        {"scheme": requirement.scheme_name, "scopes": requirement.scopes}
-        for requirement in operation.security.requirements
-    ]
-    return OperationCandidate(
-        operation=OperationReference(
-            method=operation.method,
-            path=operation.path,
-            operation_id=operation.operation_id,
-        ),
-        summary=operation.summary,
-        parameters=parameters,
-        security=security,
-        request_structure=request_structure,
-        response_structure=response_structure,
+def _operation_reference(operation: OperationIR) -> OperationReference:
+    return OperationReference(
+        method=operation.method,
+        path=operation.path,
+        operation_id=operation.operation_id,
     )
 
 
-def _schema_structure(schema: SchemaIR | None, *, depth: int = 0, seen: set[int] | None = None) -> dict[str, Any]:
-    if schema is None:
-        return {}
-    if depth >= 8:
-        return {"type": schema.type}
-    seen = set() if seen is None else set(seen)
-    if id(schema) in seen:
-        return {"type": schema.type, "recursive": True}
-    seen.add(id(schema))
-    result: dict[str, Any] = {}
-    if schema.type is not None:
-        result["type"] = schema.type
-    if schema.format is not None:
-        result["format"] = schema.format
-    if schema.required:
-        result["required"] = list(schema.required)
-    if schema.properties:
-        result["properties"] = {
-            name: _schema_structure(value, depth=depth + 1, seen=seen)
-            for name, value in schema.properties.items()
-        }
-    if schema.items is not None:
-        result["items"] = _schema_structure(schema.items, depth=depth + 1, seen=seen)
-    for name in ("minimum", "maximum", "min_length", "max_length", "pattern", "min_items", "max_items"):
-        value = getattr(schema, name)
-        if value is not None:
-            result[name] = value
-    return result
-
-
 def _identity_key(operation: OperationReference) -> str:
-    return f"{operation.method}\0{operation.path}\0{operation.operation_id or ''}"
+    return (
+        f"{operation.method}\0{operation.path}\0"
+        f"{operation.operation_id or ''}"
+    )
 
 
 def _operation_key(operation: OperationReference) -> str:
     return f"{operation.method} {operation.path}"
-
-
-def _operation_smoke_report(
-    result: OperationSmokeResult,
-    *,
-    operation: OperationReference,
-    task_id: str | None,
-) -> OperationTestReport:
-    reports = result.batch_reports
-    last = reports[-1] if reports else None
-    run_ids = [report.run_id for report in reports]
-    failure_ids = [
-        failure.failure_id
-        for report in reports
-        for failure in report.failure_report.unique_failure_messages
-    ]
-    execution = (
-        OperationExecutionResult(
-            run_id=last.run_id,
-            outcome=result.status,
-            status_code_counts=last.status_code_counts,
-            failure_ids=failure_ids,
-            stop_reason=(
-                "success_rate_threshold_not_met"
-                if result.status == "retry"
-                else None
-            ),
-        )
-        if last is not None
-        else None
-    )
-    dependency_analysis = None
-    findings: list[OperationTestFinding] = []
-    if result.status == "retry":
-        findings.append(
-            OperationTestFinding(
-                severity="high",
-                title="Operation smoke success threshold was not met",
-                summary=(
-                    f"Observed success rate {result.success_rate:.3f}; "
-                    f"required {result.required_success_rate:.3f}."
-                ),
-                evidence_refs=failure_ids,
-            )
-        )
-    elif result.status == "unsupported":
-        findings.append(
-            OperationTestFinding(
-                severity="medium",
-                title="Operation smoke test does not support this operation",
-                summary="The operation request structure is unsupported.",
-            )
-        )
-    status = (
-        "passed"
-        if result.status == "passed"
-        else "errored"
-        if result.status == "errored"
-        else "failed"
-    )
-    observed_2xx = any(report.observed_2xx for report in reports)
-    if result.status == "passed" and not reports:
-        observed_2xx = True
-    return OperationTestReport(
-        status=status,
-        task_id=task_id,
-        operation=operation,
-        execution=execution,
-        dependency_analysis=dependency_analysis,
-        observed_2xx=observed_2xx,
-        findings=findings,
-        run_ids=run_ids,
-        error=result.error,
-        metadata={
-            "agent": "operation_smoke_agent",
-            "batch_count": len(reports),
-            "active_config_revision": result.active_config_revision,
-            "success_rate": result.success_rate,
-            "required_success_rate": result.required_success_rate,
-            "failure_kind": result.failure_kind,
-        },
-    )
-
-
-def _dependency_cycles(blocked: list[dict[str, Any]]) -> list[list[OperationReference]]:
-    references: dict[tuple[str, str, str | None], OperationReference] = {}
-    for item in blocked:
-        operation = OperationReference.model_validate(item["operation"])
-        references[operation.identity()] = operation
-    graph = {
-        identity: [
-            dependency.identity()
-            for dependency in (
-                OperationReference.model_validate(value)
-                for value in item.get("direct_dependencies", [])
-            )
-            if dependency.identity() in references
-        ]
-        for item in blocked
-        for identity in [OperationReference.model_validate(item["operation"]).identity()]
-    }
-    visiting: set[tuple[str, str, str | None]] = set()
-    visited: set[tuple[str, str, str | None]] = set()
-    stack: list[tuple[str, str, str | None]] = []
-    cycles: list[list[OperationReference]] = []
-    seen_cycles: set[tuple[tuple[str, str, str | None], ...]] = set()
-
-    def visit(node: tuple[str, str, str | None]) -> None:
-        if node in visited:
-            return
-        visiting.add(node)
-        stack.append(node)
-        for dependency in graph.get(node, []):
-            if dependency in visiting:
-                start = stack.index(dependency)
-                raw_cycle = stack[start:]
-                rotations = [tuple(raw_cycle[index:] + raw_cycle[:index]) for index in range(len(raw_cycle))]
-                canonical = min(rotations, key=repr)
-                if canonical not in seen_cycles:
-                    seen_cycles.add(canonical)
-                    cycles.append([references[identity] for identity in raw_cycle])
-            elif dependency not in visited:
-                visit(dependency)
-        stack.pop()
-        visiting.remove(node)
-        visited.add(node)
-
-    for identity in graph:
-        visit(identity)
-    return cycles
-
-
-def _unique(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(values))
-
-
-def _unique_artifact_refs(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[tuple[tuple[str, str], ...]] = set()
-    unique: list[dict[str, Any]] = []
-    for item in values:
-        key = tuple(sorted((str(name), str(value)) for name, value in item.items()))
-        if key not in seen:
-            seen.add(key)
-            unique.append(item)
-    return unique

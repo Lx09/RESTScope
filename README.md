@@ -11,7 +11,7 @@ The parser-only package uses a short optional `.env` file:
 LOG_LEVEL=INFO
 DATA_DIR=./data
 # LOG_FILE=./data/logs/restscope.log
-MCP_SERVERS_FILE=./mcp.servers.json
+# MCP_SERVERS_FILE=/path/to/mcp.servers.json
 
 DB_URL=sqlite:///./data/restscope.db
 DB_ECHO=false
@@ -56,15 +56,8 @@ are not part of the supported contract.
 
 ```bash
 uv sync
-uv sync --project services/schemathesis-mcp
 uv run pytest
-
-cd services/schemathesis-mcp
-uv run pytest
-uv run ruff check .
 ```
-
-The two Python projects intentionally keep separate environments and lock files.
 
 ## Database
 
@@ -160,41 +153,23 @@ reasoning, anyone with local Phoenix access can inspect those values.
 
 ## MCP Tools
 
-RESTScope can run as a standalone lightweight MCP Host. The short `.env`
-surface only points at a server config file:
+RESTScope retains a generic lightweight MCP Host for caller-owned integrations.
+Set an optional server config file explicitly:
 
 ```env
-MCP_SERVERS_FILE=./mcp.servers.json
+MCP_SERVERS_FILE=/path/to/mcp.servers.json
 ```
 
-Put MCP server command and environment details in that JSON file. The default
-`mcp.servers.json` runs the internal `schemathesis-mcp` service with Docker.
-Build its image from the repository root before using that configuration:
-
-```bash
-docker build -t schemathesis-mcp services/schemathesis-mcp
-```
-
-For local stdio development without Docker, copy `mcp.servers.example.json`,
-which starts the isolated subproject through `uv`:
+RESTScope does not bundle an MCP server or default server configuration. A
+caller can provide any compatible stdio server:
 
 ```json
 {
   "mcpServers": {
-    "schemathesis": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "services/schemathesis-mcp",
-        "schemathesis-mcp"
-      ],
-      "env": {
-        "SCHEMATHESIS_MCP_ALLOWED_PATHS": "./assets:/tmp",
-        "SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost,127.0.0.1",
-        "SCHEMATHESIS_MCP_ARTIFACT_DIR": "./.schemathesis-mcp"
-      },
-      "cwd": "."
+    "example": {
+      "command": "/path/to/example-mcp",
+      "args": ["--stdio"],
+      "env": {}
     }
   }
 }
@@ -207,22 +182,23 @@ capability layer:
 ```python
 from restscope.capabilities import build_capabilities_with_mcp_host
 
-runtime = build_capabilities_with_mcp_host(config="./mcp.servers.json")
+runtime = build_capabilities_with_mcp_host(
+    config="/path/to/mcp.servers.json",
+    server_names=("example",),
+)
 ```
 
 Lower-level embedding remains possible through `build_capabilities(...)` when a
-caller already has discovered tools and a call bridge. If the `schemathesis`
-source is not configured or provided, preset registration raises
-`PresetToolSourceNotFoundError`. To build a runtime without MCP sources, pass
-`presets=()`.
+caller already has discovered tools and a call bridge. Explicit sources are
+registered in mapping order. Calling `build_capabilities()` without sources
+builds the local RESTScope tools only.
 
 `MCPToolAdapter` uses MCP annotations for read-only/risk classification, while
 `ToolPolicy` remains the final execution gate.
 
-## Lightweight generated operation tests
+## Operation Smoke testing
 
-Every default `RESTScopeApp` runtime includes a process-local testing path that
-does not call Schemathesis MCP:
+Every default `RESTScopeApp` runtime includes the Operation Smoke testing path:
 
 - `restscope.testing.inspect_operation_inputs`
 - `restscope.testing.replace_operation_generators`
@@ -287,10 +263,9 @@ generator configuration.
 The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
-The default Supervisor uses `OperationSmokeAgent` and this lightweight batch
-service. It does not start the Schemathesis MCP service. The older
-`OperationTestAgent` and `SchemathesisOperationRunner` remain available only
-when a caller explicitly injects the legacy runner path.
+The default and only Supervisor execution path is
+`Supervisor → OperationSmokeAgent → restscope.testing.run_operation`. The
+default App does not start MCP processes.
 
 ## API Behavior Monitor Agent
 

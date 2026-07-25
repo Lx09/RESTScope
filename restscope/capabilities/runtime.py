@@ -16,7 +16,7 @@ from restscope.capabilities.tool_executor import ToolExecutor
 from restscope.capabilities.tool_policy import ToolPolicy
 from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.capabilities.tool_selector import ToolSelector
-from restscope.capabilities.tool_sources import add_preset_tools
+from restscope.capabilities.tool_sources import register_tool_source
 from restscope.http_transport import TargetHTTPTransport
 from restscope.observability import TracingRuntime
 from restscope.testing import GeneratorConfigCatalog, OperationTestingService
@@ -55,7 +55,6 @@ class CapabilityRuntime:
 def build_capabilities(
     *,
     sources: Mapping[str, Mapping[str, Any]] | None = None,
-    presets: Iterable[str] = ("schemathesis",),
     skills: Iterable[SkillManifest] = (),
     tracing_runtime: TracingRuntime | None = None,
     generator_config_catalog: GeneratorConfigCatalog | None = None,
@@ -99,9 +98,12 @@ def build_capabilities(
     for skill in skills:
         skill_registry.register(skill)
 
-    preset_list = tuple(presets)
-    if preset_list:
-        add_preset_tools(registry=tool_registry, sources=sources or {}, presets=preset_list)
+    for server_name, source in (sources or {}).items():
+        register_tool_source(
+            registry=tool_registry,
+            server_name=server_name,
+            source=source,
+        )
 
     return CapabilityRuntime(
         tool_registry=tool_registry,
@@ -119,7 +121,7 @@ def build_capabilities_with_mcp_host(
     *,
     config: Mapping[str, MCPServerConfig] | str | Path | None = None,
     mcp_host: MCPHost | None = None,
-    presets: Iterable[str] = ("schemathesis",),
+    server_names: Iterable[str] | None = None,
     skills: Iterable[SkillManifest] = (),
     tracing_runtime: TracingRuntime | None = None,
     generator_config_catalog: GeneratorConfigCatalog | None = None,
@@ -132,11 +134,14 @@ def build_capabilities_with_mcp_host(
     owns_host = mcp_host is None
     host = MCPHost(_load_mcp_configs(config)) if mcp_host is None else mcp_host
     try:
-        preset_list = tuple(presets)
-        sources = MCPSourceBuilder(host).build_sources(presets=preset_list)
+        selected_names = (
+            tuple(server_names) if server_names is not None else None
+        )
+        sources = MCPSourceBuilder(host).build_sources(
+            server_names=selected_names
+        )
         runtime = build_capabilities(
             sources=sources,
-            presets=preset_list,
             skills=skills,
             tracing_runtime=tracing_runtime,
             generator_config_catalog=generator_config_catalog,

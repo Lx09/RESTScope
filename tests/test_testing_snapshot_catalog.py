@@ -96,11 +96,8 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
     import json
 
     from restscope import RESTScopeApp
-    from restscope.agent import (
-        FakeOperationDependencyAnalyzer,
-        FakeOperationTestRunner,
-    )
     from restscope.restscope_config import RESTScopeConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     database = tmp_path / "app.sqlite"
     env_file = tmp_path / ".env"
@@ -110,8 +107,7 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_runner=FakeOperationTestRunner(),
-        dependency_analyzer=FakeOperationDependencyAnalyzer(),
+        operation_smoke_agent=PassingOperationSmokeAgent(),
     )
     try:
         app.initialize(
@@ -138,12 +134,9 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     import pytest
 
     from restscope import RESTScopeApp
-    from restscope.agent import (
-        FakeOperationDependencyAnalyzer,
-        FakeOperationTestRunner,
-    )
     from restscope.db import DatabaseAlreadyExistsError
     from restscope.restscope_config import RESTScopeConfig
+    from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
     database = tmp_path / "shared-app.sqlite"
     env_file = tmp_path / ".env"
@@ -153,8 +146,7 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     def build_app():
         return RESTScopeApp.from_config(
             config,
-            operation_runner=FakeOperationTestRunner(),
-            dependency_analyzer=FakeOperationDependencyAnalyzer(),
+            operation_smoke_agent=PassingOperationSmokeAgent(),
         )
 
     first = build_app()

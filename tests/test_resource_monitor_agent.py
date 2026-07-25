@@ -900,7 +900,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
             name="restscope.resource.lookup",
             arguments={"resource": "user"},
         ),
-        role="operation_tester",
+        role="operation_smoke_parameter_diagnosis",
         state={},
     )
 

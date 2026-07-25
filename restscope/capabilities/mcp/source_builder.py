@@ -14,8 +14,12 @@ class MCPSourceBuilder:
     def __init__(self, host: MCPHost) -> None:
         self.host = host
 
-    def build_sources(self, *, presets: Iterable[str] | None = None) -> dict[str, dict[str, Any]]:
-        discovered = self.host.discover_tools(server_names=presets)
+    def build_sources(
+        self,
+        *,
+        server_names: Iterable[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        discovered = self.host.discover_tools(server_names=server_names)
         return {
             server_name: {
                 "kind": "mcp",

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from restscope.llm import ToolSpec
 from restscope.openapi_parser.ir import OperationIR, OpenAPISpecIR, SchemaIR
 
-from ..operation_test import OperationReference
+from restscope.operations import OperationReference
 from .schemas import RetrievalEvidence, TargetParameterMatch, TargetParameterSummary
 
 

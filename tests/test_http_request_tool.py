@@ -74,7 +74,7 @@ def _execute(executor, **arguments):
 def test_capability_runtime_registers_http_request_tool_for_every_role() -> None:
     from restscope.capabilities import build_capabilities
 
-    runtime = build_capabilities(presets=())
+    runtime = build_capabilities()
 
     spec = runtime.tool_registry.get_spec("restscope.http.request")
     assert spec.kind == "local_function"
@@ -87,7 +87,7 @@ def test_capability_runtime_registers_http_request_tool_for_every_role() -> None
     for role in (
         "planner",
         "result_analyst",
-        "operation_tester",
+        "operation_smoke_parameter_diagnosis",
         "decision_maker",
         "openapi_retrieval",
         "future_agent",

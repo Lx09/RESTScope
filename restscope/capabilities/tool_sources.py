@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from restscope.capabilities.mcp import MCPToolAdapter
@@ -11,51 +11,14 @@ from restscope.llm.schemas import ToolSpec
 
 
 CallTool = Callable[[str, dict[str, Any]], Any]
-SUPPORTED_PRESET_TOOL_SOURCES = {"schemathesis": "mcp"}
-DEFAULT_PRESET_TOOL_SOURCES = ("schemathesis",)
 
 
 class ToolSourceError(Exception):
     """Base class for tool source registration errors."""
 
 
-class PresetToolSourceNotFoundError(ToolSourceError):
-    """Raised when a requested preset source was not provided."""
-
-
-class UnsupportedPresetToolSourceError(ToolSourceError):
-    """Raised when a requested preset source is unknown to RESTScope."""
-
-
 class UnsupportedToolSourceKindError(ToolSourceError):
     """Raised when a source kind has no registered adapter."""
-
-
-def add_preset_tools(
-    *,
-    registry: ToolRegistry,
-    sources: Mapping[str, Mapping[str, Any]],
-    presets: Iterable[str] = DEFAULT_PRESET_TOOL_SOURCES,
-    adapter_registry: Mapping[str, Any] | None = None,
-) -> list[ToolSpec]:
-    """Register RESTScope-supported preset tools from external sources."""
-
-    registered: list[ToolSpec] = []
-    for preset in presets:
-        if preset not in SUPPORTED_PRESET_TOOL_SOURCES:
-            raise UnsupportedPresetToolSourceError(f"Unsupported preset tool source: {preset}")
-        source = sources.get(preset)
-        if source is None:
-            raise PresetToolSourceNotFoundError(f"Preset tool source not available: {preset}")
-        registered.extend(
-            register_tool_source(
-                registry=registry,
-                server_name=preset,
-                source=source,
-                adapter_registry=adapter_registry,
-            )
-        )
-    return registered
 
 
 def register_tool_source(

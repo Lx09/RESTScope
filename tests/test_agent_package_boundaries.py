@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 
@@ -13,7 +14,6 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
     for package_name in (
         "openapi_retrieval",
         "operation_smoke",
-        "operation_test",
         "api_behavior_monitor",
         "supervisor",
     ):
@@ -28,19 +28,16 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
     from restscope.agent import (
         OpenAPIRetrievalAgent,
         OperationSmokeAgent,
-        OperationTestAgent,
         APIBehaviorMonitorAgent,
         RESTScopeMainGraph,
     )
     from restscope.agent.openapi_retrieval import OpenAPIRetrievalAgent as PackagedOpenAPIRetrievalAgent
     from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
-    from restscope.agent.operation_test import OperationTestAgent as PackagedOperationTestAgent
     from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent as PackagedAPIBehaviorMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
     assert OpenAPIRetrievalAgent is PackagedOpenAPIRetrievalAgent
     assert OperationSmokeAgent is PackagedOperationSmokeAgent
-    assert OperationTestAgent is PackagedOperationTestAgent
     assert APIBehaviorMonitorAgent is PackagedAPIBehaviorMonitorAgent
     assert RESTScopeMainGraph is PackagedMainGraph
 
@@ -49,7 +46,6 @@ def test_cross_agent_imports_use_package_facades() -> None:
     package_names = {
         "openapi_retrieval",
         "operation_smoke",
-        "operation_test",
         "api_behavior_monitor",
         "supervisor",
     }
@@ -68,6 +64,37 @@ def test_cross_agent_imports_use_package_facades() -> None:
                     violations.append(f"{path.name}:{node.lineno} imports {node.module}")
 
     assert violations == []
+
+
+def test_retired_operation_test_agent_package_is_absent() -> None:
+    assert not list((AGENT_ROOT / "operation_test").rglob("*.py"))
+
+
+def test_retired_operation_test_contracts_are_not_public_or_in_app_builders() -> None:
+    import restscope
+    import restscope.agent as agents
+    from restscope import RESTScopeApp
+
+    retired = {
+        "OperationTestAgent",
+        "OperationTestRunner",
+        "OperationDependencyAnalyzer",
+        "OperationCandidate",
+        "OperationTarget",
+        "OperationTestRequest",
+        "OperationTestReport",
+        "Schema" + "thesisOperationRunner",
+    }
+    assert all(not hasattr(restscope, name) for name in retired)
+    assert all(not hasattr(agents, name) for name in retired)
+    for builder in (
+        RESTScopeApp,
+        RESTScopeApp.from_environment,
+        RESTScopeApp.from_config,
+    ):
+        parameters = inspect.signature(builder).parameters
+        assert "operation_runner" not in parameters
+        assert "dependency_analyzer" not in parameters
 
 
 def test_openapi_retrieval_agent_has_no_persistence_dependencies() -> None:

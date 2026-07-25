@@ -123,13 +123,13 @@ def _report_coverage(report: Any, expected: set[str]) -> dict[str, Any]:
                 "operation_key": operation_key,
                 "attempt_count": len(operation_attempts),
                 "batch_count": sum(
-                    int(item.report.metadata.get("batch_count", 0))
+                    len(item.smoke_result.batch_reports)
                     for item in operation_attempts
                 ),
                 "run_ids": [
-                    run_id
+                    batch.run_id
                     for item in operation_attempts
-                    for run_id in item.report.run_ids
+                    for batch in item.smoke_result.batch_reports
                 ],
                 "dispositions": [
                     item.disposition for item in operation_attempts
@@ -246,7 +246,11 @@ def _assert_phoenix_coverage(
         for span in diagnosis_spans
     )
 
-    report_run_ids = set(report.run_ids)
+    report_run_ids = {
+        batch.run_id
+        for attempt in report.attempts
+        for batch in attempt.smoke_result.batch_reports
+    }
     traced_run_ids = {
         span["attributes"]["restscope.test.run_id"]
         for span in batch_spans
@@ -264,7 +268,7 @@ def _assert_phoenix_coverage(
     assert len(monitor_spans) == response_case_count
 
     required_diagnoses = sum(
-        max(0, int(attempt.report.metadata.get("batch_count", 0)) - 1)
+        max(0, len(attempt.smoke_result.batch_reports) - 1)
         for attempt in report.attempts
     )
     assert len(diagnosis_spans) >= required_diagnoses
@@ -431,7 +435,8 @@ def test_project_swagger_runs_every_operation_through_smoke_and_phoenix() -> Non
     assert coverage["missing_operations"] == []
     assert coverage["unexpected_operations"] == []
     assert all(
-        attempt.report.metadata.get("agent") == "operation_smoke_agent"
+        attempt.smoke_result.operation_key
+        == _operation_key(attempt.operation)
         for attempt in report.attempts
     )
     smoke_tested = [

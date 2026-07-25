@@ -462,7 +462,7 @@ def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_co
     )
     registry.register(
         spec=ToolSpec(
-            name="schemathesis.run_campaign",
+            name="external.run_campaign",
             description="Run campaign",
             kind="local_function",
             input_schema={"type": "object"},
@@ -485,7 +485,7 @@ def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_co
         state={},
     )
     denied = executor.execute(
-        tool_call=ToolCall(id="call_2", name="schemathesis.run_campaign", arguments={}),
+        tool_call=ToolCall(id="call_2", name="external.run_campaign", arguments={}),
         role="planner",
         state={},
     )

@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..operation_test import OperationReference
+from restscope.operations import OperationReference
 
 
 class ParameterValueProducerQuery(BaseModel):

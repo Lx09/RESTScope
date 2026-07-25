@@ -13,18 +13,15 @@ from restscope.llm.schemas import ToolSpec
 class ToolPolicy:
     """Allow only explicitly safe tool use for each role."""
 
-    MCP_READ_ROLES = {"planner", "result_analyst", "operation_tester"}
-    OPERATION_TESTER_LIVE_TOOLS = {"mcp.schemathesis.start_run"}
+    MCP_READ_ROLES = {"planner", "result_analyst"}
     ROLE_ALLOWLISTS = {
         "planner": {
             "artifact.read_summary",
             "openapi.lookup_operation",
-            "schemathesis.validate_campaign_spec",
         },
         "result_analyst": {
             "artifact.read_summary",
             "observation.lookup_recent",
-            "schemathesis.parse_result_summary",
         },
     }
 
@@ -35,11 +32,6 @@ class ToolPolicy:
             return True
         if tool_spec.name in CONFIGURATION_TOOL_NAMES:
             return False
-
-        if role == "operation_tester" and tool_spec.kind == "mcp_tool":
-            if tool_spec.read_only:
-                return True
-            return tool_spec.name in self.OPERATION_TESTER_LIVE_TOOLS
 
         if tool_spec.requires_approval:
             return False

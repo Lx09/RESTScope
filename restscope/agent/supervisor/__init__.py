@@ -3,7 +3,6 @@
 from .graph import RESTScopeMainGraph
 from .schemas import (
     AttemptDisposition,
-    BlockedOperation,
     FileSchemaSource,
     InlineSchemaSource,
     OperationAttempt,
@@ -18,7 +17,6 @@ from .schemas import (
 
 __all__ = [
     "AttemptDisposition",
-    "BlockedOperation",
     "FileSchemaSource",
     "InlineSchemaSource",
     "OperationAttempt",

@@ -17,7 +17,13 @@ def _mcp_tool(name: str, annotations: dict | None = None) -> dict:
 
 
 class FakeMCPSession:
-    def __init__(self, config, *, tools: list[dict], calls: list[tuple[str, dict]]):
+    def __init__(
+        self,
+        config,
+        *,
+        tools: list[dict],
+        calls: list[tuple[str, dict]],
+    ):
         self.config = config
         self.tools = tools
         self.calls = calls
@@ -35,15 +41,21 @@ class FakeMCPSession:
         assert self.started is True
         self.calls.append((tool_name, arguments))
         return {
-            "content": [{"type": "text", "text": "run details"}],
-            "structuredContent": {"tool_name": tool_name, "arguments": arguments},
+            "content": [{"type": "text", "text": "details"}],
+            "structuredContent": {
+                "tool_name": tool_name,
+                "arguments": arguments,
+            },
         }
 
     def close(self) -> None:
         self.closed = True
 
 
-def test_load_mcp_server_configs_reads_file_and_env_var(tmp_path, monkeypatch) -> None:
+def test_load_mcp_server_configs_reads_file_and_env_var(
+    tmp_path,
+    monkeypatch,
+) -> None:
     from restscope.capabilities.mcp import load_mcp_server_configs
 
     config_path = tmp_path / "mcp.servers.json"
@@ -51,10 +63,10 @@ def test_load_mcp_server_configs_reads_file_and_env_var(tmp_path, monkeypatch) -
         json.dumps(
             {
                 "mcpServers": {
-                    "schemathesis": {
-                        "command": "/bin/schemathesis-mcp",
+                    "example": {
+                        "command": "/bin/example-mcp",
                         "args": ["--stdio"],
-                        "env": {"SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost"},
+                        "env": {"EXAMPLE_MODE": "local"},
                         "cwd": str(tmp_path),
                         "timeout": 45,
                     }
@@ -69,15 +81,15 @@ def test_load_mcp_server_configs_reads_file_and_env_var(tmp_path, monkeypatch) -
     from_env = load_mcp_server_configs()
 
     assert explicit == from_env
-    assert explicit["schemathesis"].name == "schemathesis"
-    assert explicit["schemathesis"].command == "/bin/schemathesis-mcp"
-    assert explicit["schemathesis"].args == ["--stdio"]
-    assert explicit["schemathesis"].env == {"SCHEMATHESIS_MCP_ALLOWED_HOSTS": "localhost"}
-    assert explicit["schemathesis"].cwd == tmp_path
-    assert explicit["schemathesis"].timeout == 45
+    assert explicit["example"].name == "example"
+    assert explicit["example"].command == "/bin/example-mcp"
+    assert explicit["example"].args == ["--stdio"]
+    assert explicit["example"].env == {"EXAMPLE_MODE": "local"}
+    assert explicit["example"].cwd == tmp_path
+    assert explicit["example"].timeout == 45
 
 
-def test_mcp_host_discovers_tools_and_calls_original_tool_name() -> None:
+def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
     from restscope.capabilities.mcp import MCPHost, MCPServerConfig
 
     calls: list[tuple[str, dict]] = []
@@ -88,7 +100,7 @@ def test_mcp_host_discovers_tools_and_calls_original_tool_name() -> None:
             config,
             tools=[
                 _mcp_tool(
-                    "get_run",
+                    "inspect",
                     {
                         "readOnlyHint": True,
                         "destructiveHint": False,
@@ -103,23 +115,45 @@ def test_mcp_host_discovers_tools_and_calls_original_tool_name() -> None:
         return session
 
     host = MCPHost(
-        {"schemathesis": MCPServerConfig(name="schemathesis", command="/bin/schemathesis-mcp")},
+        {
+            "example": MCPServerConfig(
+                name="example",
+                command="/bin/example-mcp",
+            )
+        },
         session_factory=session_factory,
     )
 
     tools = host.discover_tools()
-    result = host.call_tool("schemathesis", "get_run", {"run_id": "run_1"})
+    result = host.call_tool("example", "inspect", {"item_id": "item_1"})
     host.close()
 
-    assert tools == {"schemathesis": [_mcp_tool("get_run", sessions[0].tools[0]["annotations"])]}
-    assert calls == [("get_run", {"run_id": "run_1"})]
-    assert result["structuredContent"] == {"tool_name": "get_run", "arguments": {"run_id": "run_1"}}
+    assert tools == {
+        "example": [_mcp_tool("inspect", sessions[0].tools[0]["annotations"])]
+    }
+    assert calls == [("inspect", {"item_id": "item_1"})]
+    assert result["structuredContent"] == {
+        "tool_name": "inspect",
+        "arguments": {"item_id": "item_1"},
+    }
     assert sessions[0].closed is True
 
 
-def test_mcp_source_builder_registers_discovered_tools_through_existing_runtime(tool_context) -> None:
-    from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry, add_preset_tools
-    from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder
+def test_mcp_source_builder_registers_discovered_tools_through_runtime(
+    tool_context,
+) -> None:
+    from restscope.capabilities import (
+        ToolCallValidator,
+        ToolExecutor,
+        ToolPolicy,
+        ToolRegistry,
+        register_tool_source,
+    )
+    from restscope.capabilities.mcp import (
+        MCPHost,
+        MCPServerConfig,
+        MCPSourceBuilder,
+    )
     from restscope.llm import ToolCall
 
     calls: list[tuple[str, dict]] = []
@@ -129,7 +163,7 @@ def test_mcp_source_builder_registers_discovered_tools_through_existing_runtime(
             config,
             tools=[
                 _mcp_tool(
-                    "get_run",
+                    "inspect",
                     {
                         "readOnlyHint": True,
                         "destructiveHint": False,
@@ -142,28 +176,48 @@ def test_mcp_source_builder_registers_discovered_tools_through_existing_runtime(
         )
 
     host = MCPHost(
-        {"schemathesis": MCPServerConfig(name="schemathesis", command="/bin/schemathesis-mcp")},
+        {
+            "example": MCPServerConfig(
+                name="example",
+                command="/bin/example-mcp",
+            )
+        },
         session_factory=session_factory,
     )
-    sources = MCPSourceBuilder(host).build_sources(presets=("schemathesis",))
+    sources = MCPSourceBuilder(host).build_sources(server_names=("example",))
     registry = ToolRegistry()
-    registered = add_preset_tools(registry=registry, sources=sources)
+    registered = []
+    for server_name, source in sources.items():
+        registered.extend(
+            register_tool_source(
+                registry=registry,
+                server_name=server_name,
+                source=source,
+            )
+        )
     executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
     executor.bind_context(tool_context)
 
     result = executor.execute(
-        tool_call=ToolCall(id="call_1", name="mcp.schemathesis.get_run", arguments={"run_id": "run_1"}),
+        tool_call=ToolCall(
+            id="call_1",
+            name="mcp.example.inspect",
+            arguments={"item_id": "item_1"},
+        ),
         role="planner",
         state={},
     )
 
-    assert [tool.name for tool in registered] == ["mcp.schemathesis.get_run"]
-    assert calls == [("get_run", {"run_id": "run_1"})]
+    assert [tool.name for tool in registered] == ["mcp.example.inspect"]
+    assert calls == [("inspect", {"item_id": "item_1"})]
     assert result.status == "succeeded"
-    assert result.structured == {"tool_name": "get_run", "arguments": {"run_id": "run_1"}}
+    assert result.structured == {
+        "tool_name": "inspect",
+        "arguments": {"item_id": "item_1"},
+    }
 
 
-def test_build_capabilities_with_mcp_host_registers_read_only_tools_and_denies_destructive() -> None:
+def test_build_capabilities_with_mcp_host_discovers_all_servers_by_default() -> None:
     from restscope.capabilities import build_capabilities_with_mcp_host
     from restscope.capabilities.mcp import MCPHost, MCPServerConfig
 
@@ -171,14 +225,37 @@ def test_build_capabilities_with_mcp_host_registers_read_only_tools_and_denies_d
         return FakeMCPSession(
             config,
             tools=[
-                _mcp_tool("get_run", {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}),
-                _mcp_tool("start_run", {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}),
+                _mcp_tool(
+                    "inspect",
+                    {
+                        "readOnlyHint": True,
+                        "destructiveHint": False,
+                        "openWorldHint": False,
+                    },
+                ),
+                _mcp_tool(
+                    "mutate",
+                    {
+                        "readOnlyHint": False,
+                        "destructiveHint": True,
+                        "openWorldHint": True,
+                    },
+                ),
             ],
             calls=[],
         )
 
     host = MCPHost(
-        {"schemathesis": MCPServerConfig(name="schemathesis", command="/bin/schemathesis-mcp")},
+        {
+            "example": MCPServerConfig(
+                name="example",
+                command="/bin/example-mcp",
+            ),
+            "secondary": MCPServerConfig(
+                name="secondary",
+                command="/bin/secondary-mcp",
+            ),
+        },
         session_factory=session_factory,
     )
 
@@ -186,23 +263,77 @@ def test_build_capabilities_with_mcp_host_registers_read_only_tools_and_denies_d
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
         "restscope.http.request",
-        "mcp.schemathesis.get_run",
-        "mcp.schemathesis.start_run",
+        "mcp.example.inspect",
+        "mcp.example.mutate",
+        "mcp.secondary.inspect",
+        "mcp.secondary.mutate",
     ]
-    assert [tool.name for tool in runtime.tool_selector.select_for_role(role="planner", state={})] == [
+    assert [
+        tool.name
+        for tool in runtime.tool_selector.select_for_role(role="planner", state={})
+    ] == [
         "restscope.http.request",
-        "mcp.schemathesis.get_run"
+        "mcp.example.inspect",
+        "mcp.secondary.inspect",
     ]
 
 
-def test_build_capabilities_with_mcp_host_raises_when_preset_missing() -> None:
-    from restscope.capabilities import PresetToolSourceNotFoundError, build_capabilities_with_mcp_host
+def test_build_capabilities_with_mcp_host_can_filter_generic_server_names() -> None:
+    from restscope.capabilities import build_capabilities_with_mcp_host
+    from restscope.capabilities.mcp import MCPHost, MCPServerConfig
+
+    def session_factory(config):
+        return FakeMCPSession(
+            config,
+            tools=[
+                _mcp_tool(
+                    "inspect",
+                    {
+                        "readOnlyHint": True,
+                        "destructiveHint": False,
+                        "openWorldHint": False,
+                    },
+                )
+            ],
+            calls=[],
+        )
+
+    host = MCPHost(
+        {
+            "example": MCPServerConfig(
+                name="example",
+                command="/bin/example-mcp",
+            ),
+            "secondary": MCPServerConfig(
+                name="secondary",
+                command="/bin/secondary-mcp",
+            ),
+        },
+        session_factory=session_factory,
+    )
+
+    runtime = build_capabilities_with_mcp_host(
+        mcp_host=host,
+        server_names=("secondary",),
+    )
+
+    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
+        "restscope.http.request",
+        "mcp.secondary.inspect",
+    ]
+
+
+def test_build_capabilities_with_empty_mcp_host_keeps_builtin_tools() -> None:
+    from restscope.capabilities import build_capabilities_with_mcp_host
     from restscope.capabilities.mcp import MCPHost
 
-    host = MCPHost({}, session_factory=lambda config: None)
+    runtime = build_capabilities_with_mcp_host(
+        mcp_host=MCPHost({}, session_factory=lambda config: None)
+    )
 
-    with pytest.raises(PresetToolSourceNotFoundError, match="Preset tool source not available: schemathesis"):
-        build_capabilities_with_mcp_host(mcp_host=host)
+    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
+        "restscope.http.request"
+    ]
 
 
 def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure(
@@ -221,7 +352,9 @@ def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure
     monkeypatch.setattr("restscope.capabilities.runtime.MCPHost", lambda _configs: host)
     monkeypatch.setattr(
         "restscope.capabilities.runtime.MCPSourceBuilder.build_sources",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("discovery failed")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("discovery failed")
+        ),
     )
 
     with pytest.raises(RuntimeError, match="discovery failed"):
@@ -230,7 +363,7 @@ def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure
     assert host.closed is True
 
 
-def test_build_capabilities_with_mcp_host_keeps_injected_host_on_discovery_failure(
+def test_build_capabilities_with_mcp_host_keeps_injected_host_on_failure(
     monkeypatch,
 ) -> None:
     from restscope.capabilities import build_capabilities_with_mcp_host
@@ -245,7 +378,9 @@ def test_build_capabilities_with_mcp_host_keeps_injected_host_on_discovery_failu
     host = Host()
     monkeypatch.setattr(
         "restscope.capabilities.runtime.MCPSourceBuilder.build_sources",
-        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("discovery failed")),
+        lambda self, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("discovery failed")
+        ),
     )
 
     with pytest.raises(RuntimeError, match="discovery failed"):
@@ -254,7 +389,7 @@ def test_build_capabilities_with_mcp_host_keeps_injected_host_on_discovery_failu
     assert host.closed is False
 
 
-def test_build_capabilities_with_mcp_host_closes_owned_host_on_keyboard_interrupt(
+def test_build_capabilities_with_mcp_host_closes_owned_host_on_interrupt(
     monkeypatch,
 ) -> None:
     from restscope.capabilities import build_capabilities_with_mcp_host
