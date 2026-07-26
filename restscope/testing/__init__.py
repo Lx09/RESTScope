@@ -1,6 +1,22 @@
 """Lightweight OpenAPI request generation and execution."""
 
 from .catalog import GeneratorConfigCatalog, GeneratorConfigError, GeneratorConfigRevisionConflict
+from .constraints import (
+    AndConstraint,
+    ArithmeticValue,
+    CardinalityConstraint,
+    ComparePredicate,
+    ConstraintSet,
+    ImplicationConstraint,
+    InputAssignment,
+    InputNodeOverride,
+    InputValue,
+    LiteralValue,
+    MatchesPredicate,
+    NotConstraint,
+    OrConstraint,
+    PresentPredicate,
+)
 from .execution import OperationTestingService, TestingExecutionError
 from .models import (
     BatchFailureReport,
@@ -25,7 +41,12 @@ from .generation import generate_strategy_value
 from .ports import ReferenceValueProvider
 
 __all__ = [
+    "AndConstraint",
+    "ArithmeticValue",
     "BatchFailureReport",
+    "CardinalityConstraint",
+    "ComparePredicate",
+    "ConstraintSet",
     "GeneratorConfigCatalog",
     "GeneratorConfigError",
     "GeneratorConfigRevisionConflict",
@@ -35,7 +56,14 @@ __all__ = [
     "GeneratedTestCase",
     "InputGeneratorConfig",
     "InputGeneratorPatch",
+    "InputAssignment",
+    "InputNodeOverride",
+    "InputValue",
     "InputNodeSnapshot",
+    "ImplicationConstraint",
+    "LiteralValue",
+    "MatchesPredicate",
+    "NotConstraint",
     "OperationGeneratorConfig",
     "OperationTestSnapshot",
     "ParameterSnapshot",
@@ -46,6 +74,8 @@ __all__ = [
     "ReferenceValueProvider",
     "ResourceIdentifierGenerator",
     "ResponseValueGenerator",
+    "OrConstraint",
+    "PresentPredicate",
     "TestingExecutionError",
     "UniqueFailureMessage",
     "generate_strategy_value",
