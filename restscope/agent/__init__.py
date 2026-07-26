@@ -34,6 +34,8 @@ from .operation_smoke import (
     OperationSmokeOutputError,
     OperationSmokeRequest,
     OperationSmokeResult,
+    PatchItemValidationSummary,
+    PatchValidationSummary,
     PlanSolveDiagnosisResult,
     build_operation_smoke_agent,
 )
@@ -58,6 +60,8 @@ __all__ = [
     "OperationSmokeOutputError",
     "OperationSmokeRequest",
     "OperationSmokeResult",
+    "PatchItemValidationSummary",
+    "PatchValidationSummary",
     "PlanSolveDiagnosisResult",
     "OperationReference",
     "OperationAttempt",

@@ -64,11 +64,30 @@ class ReferenceGeneratorSelection(BaseModel):
     inclusion_probability: float | None = Field(default=None, ge=0, le=1)
 
 
+class GeneratorPatchAttribution(BaseModel):
+    """Associate one concrete generator change with its planned causes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_node_id: str = Field(min_length=1, max_length=1000)
+    item_ids: list[str] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def require_unique_items(self) -> "GeneratorPatchAttribution":
+        if len(set(self.item_ids)) != len(self.item_ids):
+            raise ValueError("item_ids must be unique")
+        return self
+
+
 class GeneratorPatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     updates: list[InputGeneratorPatch] = Field(default_factory=list, max_length=100)
     reference_selections: list[ReferenceGeneratorSelection] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    attributions: list[GeneratorPatchAttribution] = Field(
         default_factory=list,
         max_length=100,
     )
@@ -79,6 +98,19 @@ class GeneratorPatchDraft(BaseModel):
             raise ValueError("at least one generator update is required")
         if len(self.updates) + len(self.reference_selections) > 100:
             raise ValueError("at most 100 generator updates are allowed")
+        changed_inputs = [
+            item.input_node_id
+            for item in [*self.updates, *self.reference_selections]
+        ]
+        attributed_inputs = [item.input_node_id for item in self.attributions]
+        if len(set(changed_inputs)) != len(changed_inputs):
+            raise ValueError("each input may be changed at most once")
+        if len(set(attributed_inputs)) != len(attributed_inputs):
+            raise ValueError("each changed input requires one attribution")
+        if set(changed_inputs) != set(attributed_inputs):
+            raise ValueError(
+                "attributions must identify every changed input exactly once"
+            )
         return self
 
 
@@ -119,6 +151,61 @@ class DeferredPlanItem(BaseModel):
     reason: str = Field(min_length=1, max_length=4000)
 
 
+class PatchItemValidationSummary(BaseModel):
+    """THINK assessment of one planned failure after its patch is exercised."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    item_id: str = Field(min_length=1, max_length=20)
+    status: Literal["resolved", "persisting", "unknown"]
+    current_failure_refs: list[str] = Field(default_factory=list, max_length=100)
+    reason: str = Field(min_length=1, max_length=4000)
+    confidence: float = Field(ge=0, le=1)
+
+
+class PatchValidationSummary(BaseModel):
+    """Accepted and rejected portions of one candidate generator patch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    items: list[PatchItemValidationSummary] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    accepted_item_ids: list[str] = Field(default_factory=list, max_length=100)
+    accepted_input_node_ids: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    rejected_input_node_ids: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+
+    @model_validator(mode="after")
+    def validate_partitions(self) -> "PatchValidationSummary":
+        item_ids = [item.item_id for item in self.items]
+        accepted_items = set(self.accepted_item_ids)
+        resolved_items = {
+            item.item_id for item in self.items if item.status == "resolved"
+        }
+        if len(set(item_ids)) != len(item_ids):
+            raise ValueError("validation item IDs must be unique")
+        if len(accepted_items) != len(self.accepted_item_ids):
+            raise ValueError("accepted item IDs must be unique")
+        if accepted_items != resolved_items:
+            raise ValueError("accepted item IDs must equal resolved item IDs")
+        accepted_inputs = set(self.accepted_input_node_ids)
+        rejected_inputs = set(self.rejected_input_node_ids)
+        if len(accepted_inputs) != len(self.accepted_input_node_ids):
+            raise ValueError("accepted input node IDs must be unique")
+        if len(rejected_inputs) != len(self.rejected_input_node_ids):
+            raise ValueError("rejected input node IDs must be unique")
+        if accepted_inputs.intersection(rejected_inputs):
+            raise ValueError("accepted and rejected input nodes must be disjoint")
+        return self
+
+
 class PlanSolveDiagnosisResult(BaseModel):
     """Bounded Plan & Solve outcome consumed by the Smoke feedback loop."""
 
@@ -138,6 +225,7 @@ class PlanSolveDiagnosisResult(BaseModel):
     deferred_items: list[DeferredPlanItem] = Field(default_factory=list)
     planning_outputs: int = Field(default=0, ge=0, le=20)
     http_tool_rounds: int = Field(default=0, ge=0, le=40)
+    patch_validation: PatchValidationSummary | None = None
 
     @model_validator(mode="after")
     def validate_patch_status(self) -> "PlanSolveDiagnosisResult":
@@ -145,6 +233,18 @@ class PlanSolveDiagnosisResult(BaseModel):
             raise ValueError("patch_ready requires a patch")
         if self.status != "patch_ready" and self.patch is not None:
             raise ValueError("only patch_ready may contain a patch")
+        if self.status != "patch_ready" and self.patch_validation is not None:
+            raise ValueError("only patch_ready may contain patch validation")
+        if self.patch is not None:
+            attributed_item_ids = {
+                item_id
+                for attribution in self.patch.attributions
+                for item_id in attribution.item_ids
+            }
+            if attributed_item_ids != set(self.covered_item_ids):
+                raise ValueError(
+                    "patch attribution must cover exactly the covered items"
+                )
         return self
 
 

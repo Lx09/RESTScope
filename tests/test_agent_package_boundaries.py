@@ -26,12 +26,14 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 def test_agent_package_and_public_facade_export_same_contracts() -> None:
     from restscope.agent import (
         OperationSmokeAgent,
+        PatchValidationSummary,
         PlanSolveDiagnosisResult,
         APIBehaviorMonitorAgent,
         RESTScopeMainGraph,
     )
     from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
     from restscope.agent.operation_smoke import (
+        PatchValidationSummary as PackagedPatchValidationSummary,
         PlanSolveDiagnosisResult as PackagedPlanSolveDiagnosisResult,
     )
     from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent as PackagedAPIBehaviorMonitorAgent
@@ -39,6 +41,7 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
 
     assert OperationSmokeAgent is PackagedOperationSmokeAgent
     assert PlanSolveDiagnosisResult is PackagedPlanSolveDiagnosisResult
+    assert PatchValidationSummary is PackagedPatchValidationSummary
     assert APIBehaviorMonitorAgent is PackagedAPIBehaviorMonitorAgent
     assert RESTScopeMainGraph is PackagedMainGraph
 

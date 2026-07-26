@@ -1,6 +1,7 @@
 # Operation Smoke Plan & Solve Diagnosis
 
-Status: Implemented and verified; uncommitted
+Status: Patch-validation and cumulative-merge amendment freshly verified in a
+separate uncommitted worktree
 
 ## Objective
 
@@ -27,7 +28,8 @@ forming one compatible Generator patch.
   receive new `F*` references and observations receive `O*` references.
 - The final FAST result accounts for every ready item as covered or deferred.
   Each input can change at most once, and every covered item must have one of
-  its affected inputs changed.
+  its affected inputs changed. Every change also names the covered `I*` items
+  it serves.
 - A malformed plan or final patch gets one repair. Plan repair is free; final
   patch and its repair are outside the THINK decision budget.
 - A decision-limit termination still patches ready work. All non-parameter
@@ -66,8 +68,14 @@ forming one compatible Generator patch.
   App-lifetime result carrying failure response/monitor evidence while
   `run_operation()` and its public report remain unchanged.
 - `OperationSmokeAgent` stages one candidate revision, reruns the complete
-  batch with the same seed, then accepts or rolls back the candidate exactly as
-  before.
+  batch with the same seed, then invokes an independent THINK Patch Validation
+  boundary and atomically accepts all, part, or none of the candidate changes.
+- Patch Validation uses the prior item cause and solution, current `F*/C*`
+  evidence, and per-input generated/omitted coverage. It cannot call tools,
+  gets one repair, and does not consume planning-output budget.
+- Accepted changes immediately form the parent of the next candidate. Partial
+  finalization creates no rollback lifecycle revision and performs no extra
+  stabilization batch.
 
 ## Non-goals
 
@@ -96,3 +104,100 @@ the root runs.
 
 No real DeepSeek request, target API request, Phoenix contract run, commit,
 merge, push, or worktree cleanup was performed.
+
+## Live acceptance audit on port 37001
+
+On 2026-07-26 the user authorized sending bounded Project API failure
+evidence, generated request values, response bodies, and Plan & Solve prompts
+to the configured DeepSeek THINK/FAST models. The user also authorized
+potentially mutating requests to `127.0.0.1:37001` without restoration.
+
+The final business run used
+`assets/openapi/project_swagger.yaml`, selected the approved method-diverse ten
+operations, and completed all ten Supervisor/Smoke attempts:
+
+- Run: `project-swagger-smoke-20260726T005529Z-6c230f37`.
+- Phoenix project:
+  `restscope-project-swagger-smoke-20260726T005529Z-6c230f37`.
+- Report: ten attempts, zero unattempted operations, 28 batches, and 280
+  generated HTTP cases.
+- Outcome: two collection GET operations satisfied the threshold; the report
+  ended as `completed_with_failures`, with no graph-level error.
+- Plan & Solve produced 21 valid planning outputs, four HTTP probe rounds, 18
+  `patch_ready` results, one `no_parameter_issue`, and one `inconclusive`.
+- Phoenix retained one 710-span trace containing 21 diagnosis spans, 51 LLM
+  spans, four HTTP probe spans, and the matching case/monitor hierarchy. The
+  updated contract assertion passes against the retained project.
+- The trace used DeepSeek `deepseek-v4-pro` for 31 THINK calls and
+  `deepseek-v4-flash` for 20 FAST calls. Exact configured API-key values were
+  absent from the exported span payload.
+
+The clearest parameter-level result was `POST /app/api/assignments`. Its first
+batch contained six date-deserialization `400` responses and four `405`
+responses. Plan & Solve used four bounded probes, identified
+`body.commitDate` and `body.employee.hiredate`, and built one joint patch backed
+by observed response values. The same-seed candidate batch contained ten
+`405` responses and no `400` response, proving that the generated date values
+removed the parsing failures and exposed the endpoint's non-parameter method
+problem.
+
+The audit also exposed four framework defects. Regression coverage and minimal
+fixes are retained in `codex/fix-smoke-inconclusive-supervisor`:
+
+- Supervisor's duplicated failure-kind contract rejected
+  `diagnosis_inconclusive` and interrupted the graph.
+- The model task card omitted the complete `ready` output contract, so sound
+  diagnoses repeatedly failed DTO validation.
+- The Phoenix live assertion assumed every Behavior Monitor span belonged to
+  a generated case and rejected the legitimate monitor spans below HTTP
+  probes.
+- The improved task card assumed every operation had at least one configurable
+  input and raised `StopIteration` for an input-free operation.
+
+Fresh offline verification in that worktree:
+
+- Complete suite: `396 passed, 4 skipped`.
+- Focused migration, tracing, Plan & Solve, and Supervisor suite:
+  `56 passed, 1 skipped`.
+- `python -m compileall -q restscope`: passed.
+- `git diff --check`: passed.
+- Revalidation of the retained Phoenix project with the updated hierarchy
+  assertion: passed with 710 spans and ten attempts.
+
+The live pytest process itself ended on the now-fixed stale Phoenix assertion,
+so this is not recorded as a green fresh live-test invocation. No second
+DeepSeek/target run was made during the acceptance audit.
+
+The live audit exposed a behavior limitation in the then-current code:
+candidate acceptance depended only on the 2xx success threshold. The date patch
+above was therefore rejected after it changed `400` failures into the
+endpoint's `405` responses, and multi-parameter path fixes did not accumulate.
+This limitation is superseded by the approved Patch Validation amendment:
+below the threshold, THINK classifies each planned item as resolved,
+persisting, or unknown; resolved-item changes become accepted immediately and
+the next candidate is staged from that cumulative configuration. A candidate
+that reaches the 2xx threshold still wins and is accepted in full.
+
+The amendment keeps PlanState, failure evidence, response bodies, and model
+reasoning ephemeral. Revision evaluation stores only batch metrics, validation
+status, and accepted/rejected change counts. It adds no database columns or
+migration.
+
+Fresh offline verification of the amendment:
+
+- `uv run pytest -q`: `409 passed, 4 skipped`.
+- `uv run --extra tracing pytest -q`: `409 passed, 4 skipped`.
+- Focused Operation Smoke, revision-history, LLM, tracing, Supervisor, and
+  package-boundary tests passed before the complete suites.
+- `uv run --extra tracing python -m compileall -q restscope`: passed.
+- `git diff --check`: passed.
+
+The repository still has no `tests/test_schemathesis_mcp_contract.py`; no
+Schemathesis contract result is claimed. Verification used stubs, mock
+transport, SQLite transaction tests, and in-memory tracing only. It made no
+DeepSeek, target API, or Phoenix contract request.
+
+The audit fixes and cumulative-merge amendment remain uncommitted in
+`codex/fix-smoke-inconclusive-supervisor`. No new DeepSeek, target API, or
+Phoenix contract run was made for the amendment. No commit, merge, push, or
+worktree cleanup was performed.

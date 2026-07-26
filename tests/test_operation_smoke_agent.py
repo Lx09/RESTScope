@@ -44,6 +44,12 @@ def _catalog(tmp_path: Path):
                                 "in": "path",
                                 "required": True,
                                 "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "region",
+                                "in": "query",
+                                "required": False,
+                                "schema": {"type": "string"},
                             }
                         ],
                         "responses": {"200": {"description": "ok"}},
@@ -107,7 +113,8 @@ class _BatchRunner:
         seed: int | None = None,
     ):
         del context
-        revision = self.catalog.inspect_operation(operation_key).revision
+        config = self.catalog.inspect_operation(operation_key)
+        revision = config.revision
         passed, failed = self.outcomes.pop(0)
         self.calls.append(
             {
@@ -115,6 +122,9 @@ class _BatchRunner:
                 "case_count": case_count,
                 "seed": seed,
                 "revision": revision,
+                "configs": [
+                    item.model_dump(mode="json") for item in config.configs
+                ],
             }
         )
         return _report(
@@ -127,9 +137,11 @@ class _BatchRunner:
 
 
 class _Diagnoser:
-    def __init__(self, results) -> None:
+    def __init__(self, results, validations=None) -> None:
         self.results = list(results)
+        self.validations = list(validations or [])
         self.calls: list[dict[str, Any]] = []
+        self.validation_calls: list[dict[str, Any]] = []
 
     def diagnose(
         self,
@@ -148,6 +160,13 @@ class _Diagnoser:
             }
         )
         return self.results.pop(0)
+
+    def validate_patch(self, **kwargs):
+        self.validation_calls.append(kwargs)
+        result = self.validations.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class _ReferenceValues:
@@ -190,10 +209,15 @@ def _diagnosis(
     *,
     node_id: str,
     strategy: dict[str, Any],
+    item_id: str = "I1",
+    semantic_input: str = "path.itemId",
     selected_reference_options=None,
 ):
     from restscope.agent.operation_smoke import PlanSolveDiagnosisResult
-    from restscope.agent.operation_smoke.schemas import GeneratorPatchDraft
+    from restscope.agent.operation_smoke.schemas import (
+        GeneratorPatchDraft,
+        PlanItemSummary,
+    )
 
     return PlanSolveDiagnosisResult(
         status="patch_ready",
@@ -204,10 +228,49 @@ def _diagnosis(
                     "input_node_id": node_id,
                     "strategy": strategy,
                 }
-            ]
+            ],
+            attributions=[
+                {
+                    "input_node_id": node_id,
+                    "item_ids": [item_id],
+                }
+            ],
         ),
         selected_reference_options=selected_reference_options or [],
-        covered_item_ids=["I1"],
+        ready_items=[
+            PlanItemSummary(
+                item_id=item_id,
+                failure_refs=["F1"],
+                cause="The generated input is rejected.",
+                confidence=0.9,
+                affected_inputs=[semantic_input],
+                solution="Generate a value accepted by the target.",
+                evidence_refs=["F1", "C1"],
+            )
+        ],
+        covered_item_ids=[item_id],
+    )
+
+
+def _validation(*, node_id: str, status: str):
+    from restscope.agent.operation_smoke import (
+        PatchItemValidationSummary,
+        PatchValidationSummary,
+    )
+
+    resolved = status == "resolved"
+    item = PatchItemValidationSummary(
+        item_id="I1",
+        status=status,
+        current_failure_refs=["F1"] if status == "persisting" else [],
+        reason=f"Validation classified the item as {status}.",
+        confidence=0.9,
+    )
+    return PatchValidationSummary(
+        items=[item],
+        accepted_item_ids=["I1"] if resolved else [],
+        accepted_input_node_ids=[node_id] if resolved else [],
+        rejected_input_node_ids=[] if resolved else [node_id],
     )
 
 
@@ -223,7 +286,13 @@ def test_candidate_is_validated_only_by_the_next_batch_and_then_accepted(
     node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
     runner = _BatchRunner(catalog, [(0, 10), (9, 1)])
     diagnoser = _Diagnoser(
-        [_diagnosis(node_id=node_id, strategy={"type": "constant", "value": "known"})]
+        [
+            _diagnosis(
+                node_id=node_id,
+                strategy={"type": "constant", "value": "known"},
+            )
+        ],
+        validations=[_validation(node_id=node_id, status="persisting")],
     )
     agent = OperationSmokeAgent(
         config_catalog=catalog,
@@ -246,6 +315,8 @@ def test_candidate_is_validated_only_by_the_next_batch_and_then_accepted(
     assert result.success_rate == 0.9
     assert [call["revision"] for call in runner.calls] == [1, 2]
     assert len(diagnoser.calls) == 1
+    assert len(diagnoser.validation_calls) == 1
+    assert result.diagnoses[0].patch_validation.items[0].status == "persisting"
     assert [
         item.lifecycle for item in catalog.list_revisions(operation_key)
     ] == ["accepted", "accepted"]
@@ -338,7 +409,8 @@ def test_failed_candidate_is_rejected_and_compensated_without_case_probe(
                     node_id=node_id,
                     strategy={"type": "constant", "value": "still-bad"},
                 )
-            ]
+            ],
+            validations=[_validation(node_id=node_id, status="unknown")],
         ),
         reference_values=_ReferenceValues(),
     )
@@ -356,9 +428,242 @@ def test_failed_candidate_is_rejected_and_compensated_without_case_probe(
     assert len(runner.calls) == 2
     assert [
         item.lifecycle for item in catalog.list_revisions(operation_key)
-    ] == ["accepted", "rejected", "rollback"]
+    ] == ["accepted", "rejected", "accepted"]
     restored = catalog.inspect_operation(operation_key)
     assert restored.configs[0].strategy == baseline.configs[0].strategy
+
+
+def test_validated_patch_accumulates_into_the_next_candidate(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+
+    catalog, operation_key = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation_key)
+    path_node_id = baseline.configs[0].input_node_id
+    query_node_id = baseline.configs[1].input_node_id
+    first = _diagnosis(
+        node_id=path_node_id,
+        strategy={"type": "constant", "value": "known-item"},
+    )
+    second = _diagnosis(
+        node_id=query_node_id,
+        strategy={"type": "constant", "value": "known-region"},
+        semantic_input="query.region",
+    )
+    diagnoser = _Diagnoser(
+        [first, second],
+        validations=[
+            _validation(node_id=path_node_id, status="resolved"),
+            _validation(node_id=query_node_id, status="unknown"),
+        ],
+    )
+    runner = _BatchRunner(catalog, [(0, 10), (0, 10), (0, 10)])
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=2,
+        ),
+    )
+
+    assert result.status == "retry"
+    assert result.failure_kind == "threshold_exhausted"
+    assert [call["revision"] for call in runner.calls] == [1, 2, 3]
+    second_candidate_configs = {
+        item["input_node_id"]: item for item in runner.calls[2]["configs"]
+    }
+    assert second_candidate_configs[path_node_id]["strategy"] == {
+        "type": "constant",
+        "value": "known-item",
+    }
+    assert second_candidate_configs[query_node_id]["strategy"] == {
+        "type": "constant",
+        "value": "known-region",
+    }
+    active = catalog.inspect_operation(operation_key)
+    assert active.revision == 4
+    active_by_id = {item.input_node_id: item for item in active.configs}
+    assert active_by_id[path_node_id].strategy.value == "known-item"
+    assert active_by_id[query_node_id].strategy == baseline.configs[1].strategy
+    assert [
+        item.lifecycle for item in catalog.list_revisions(operation_key)
+    ] == ["accepted", "accepted", "rejected", "accepted"]
+    assert len(diagnoser.calls) == 2
+    assert len(diagnoser.validation_calls) == 2
+    previous_experiment = diagnoser.calls[1]["previous_experiment"]
+    assert previous_experiment["accepted_change_count"] == 1
+    assert previous_experiment["removed_change_count"] == 0
+    assert "complete experimental patch" in previous_experiment["evidence_note"]
+
+
+def test_patch_validation_provider_error_discards_only_current_candidate(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+
+    catalog, operation_key = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation_key)
+    node_id = baseline.configs[0].input_node_id
+    diagnoser = _Diagnoser(
+        [
+            _diagnosis(
+                node_id=node_id,
+                strategy={"type": "constant", "value": "experimental"},
+            )
+        ],
+        validations=[RuntimeError("validation provider unavailable")],
+    )
+    runner = _BatchRunner(catalog, [(0, 10), (0, 10)])
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=1,
+        ),
+    )
+
+    assert result.status == "errored"
+    assert result.error["message"] == "validation provider unavailable"
+    active = catalog.inspect_operation(operation_key)
+    assert active.configs == baseline.configs
+    assert [
+        item.lifecycle for item in catalog.list_revisions(operation_key)
+    ] == ["accepted", "rejected", "accepted"]
+
+
+def test_joint_patch_keeps_only_changes_owned_by_resolved_items(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        GeneratorPatchAttribution,
+        GeneratorPatchDraft,
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+        PatchItemValidationSummary,
+        PatchValidationSummary,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.agent.operation_smoke.schemas import PlanItemSummary
+
+    catalog, operation_key = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation_key)
+    path_node_id = baseline.configs[0].input_node_id
+    query_node_id = baseline.configs[1].input_node_id
+    diagnosis = PlanSolveDiagnosisResult(
+        status="patch_ready",
+        termination_reason="model_finalize",
+        patch=GeneratorPatchDraft(
+            updates=[
+                {
+                    "input_node_id": path_node_id,
+                    "strategy": {"type": "constant", "value": "known-item"},
+                },
+                {
+                    "input_node_id": query_node_id,
+                    "strategy": {
+                        "type": "constant",
+                        "value": "experimental-region",
+                    },
+                },
+            ],
+            attributions=[
+                GeneratorPatchAttribution(
+                    input_node_id=path_node_id,
+                    item_ids=["I1"],
+                ),
+                GeneratorPatchAttribution(
+                    input_node_id=query_node_id,
+                    item_ids=["I2"],
+                ),
+            ],
+        ),
+        ready_items=[
+            PlanItemSummary(
+                item_id="I1",
+                failure_refs=["F1"],
+                cause="The item ID does not exist.",
+                confidence=0.9,
+                affected_inputs=["path.itemId"],
+                solution="Use an existing item ID.",
+                evidence_refs=["F1", "C1"],
+            ),
+            PlanItemSummary(
+                item_id="I2",
+                failure_refs=["F2"],
+                cause="The region may be invalid.",
+                confidence=0.7,
+                affected_inputs=["query.region"],
+                solution="Use a supported region.",
+                evidence_refs=["F2", "C1"],
+            ),
+        ],
+        covered_item_ids=["I1", "I2"],
+    )
+    validation = PatchValidationSummary(
+        items=[
+            PatchItemValidationSummary(
+                item_id="I1",
+                status="resolved",
+                current_failure_refs=[],
+                reason="The item lookup failure disappeared.",
+                confidence=0.9,
+            ),
+            PatchItemValidationSummary(
+                item_id="I2",
+                status="persisting",
+                current_failure_refs=["F1"],
+                reason="The region failure remains.",
+                confidence=0.8,
+            ),
+        ],
+        accepted_item_ids=["I1"],
+        accepted_input_node_ids=[path_node_id],
+        rejected_input_node_ids=[query_node_id],
+    )
+    runner = _BatchRunner(catalog, [(0, 10), (0, 10)])
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=_Diagnoser([diagnosis], validations=[validation]),
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=1,
+        ),
+    )
+
+    assert result.status == "retry"
+    active = catalog.inspect_operation(operation_key)
+    assert active.revision == 3
+    active_by_id = {item.input_node_id: item for item in active.configs}
+    assert active_by_id[path_node_id].strategy.value == "known-item"
+    assert active_by_id[query_node_id].strategy == baseline.configs[1].strategy
+    assert result.diagnoses[0].patch_validation == validation
 
 
 def test_empty_reference_pool_is_an_operation_error_and_is_not_staged(
@@ -542,7 +847,8 @@ def test_response_value_patch_is_registered_and_uses_system_value_name(
                     },
                     selected_reference_options=[selected_option],
                 )
-            ]
+            ],
+            validations=[_validation(node_id=node_id, status="resolved")],
         ),
         reference_values=BehaviorMonitorReferenceValues(behavior_agent),
     )

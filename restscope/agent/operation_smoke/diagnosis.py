@@ -32,16 +32,21 @@ from .evidence import EvidenceJournal
 from .planning import PlanDecision, PlanState
 from .prompts import (
     JointPatchDecision,
+    PatchValidationDecision,
     build_joint_patch_prompt,
+    build_patch_validation_prompt,
     build_plan_prompt,
     compile_joint_patch,
     generator_intent_repair_guidance,
     validate_joint_patch,
+    validate_patch_validation,
 )
 from .schemas import (
     AvailableReferenceOption,
     DeferredPlanItem,
     GeneratorPatchDraft,
+    PatchItemValidationSummary,
+    PatchValidationSummary,
     PlanSolveDiagnosisResult,
 )
 
@@ -189,6 +194,154 @@ class OperationSmokeDiagnoser:
                 span.set_attribute(name, value)
             return result
 
+    def validate_patch(
+        self,
+        *,
+        report: OperationExecutionReport,
+        config: OperationGeneratorConfig,
+        diagnosis: PlanSolveDiagnosisResult,
+        private_case_evidence: Mapping[str, Any] | None = None,
+    ) -> PatchValidationSummary:
+        """Assess one candidate patch independently from success-rate policy."""
+
+        if not self.planning_model.enabled:
+            raise OperationSmokeOutputError(
+                "operation_smoke_validation_model_not_configured",
+                "The Operation Smoke patch validation model is not configured",
+            )
+        if report.operation_key != config.operation_key:
+            raise OperationSmokeOutputError(
+                "operation_smoke_report_mismatch",
+                "Execution report and generator config identify different operations",
+            )
+        if report.config_revision != config.revision:
+            raise OperationSmokeOutputError(
+                "operation_smoke_report_revision_mismatch",
+                "Execution report and generator config identify different revisions",
+            )
+        if diagnosis.status != "patch_ready" or diagnosis.patch is None:
+            raise ValueError("Patch validation requires a patch_ready diagnosis")
+
+        with self.tracing_runtime.span(
+            "OperationSmokeDiagnoser.validate_patch",
+            kind="AGENT",
+            input_value={
+                "operation_key": report.operation_key,
+                "candidate_revision": config.revision,
+                "target_item_count": len(diagnosis.covered_item_ids),
+                "target_change_count": len(diagnosis.patch.attributions),
+            },
+            attributes={
+                "restscope.operation.key": report.operation_key,
+                "restscope.generator.candidate_revision": config.revision,
+                "restscope.smoke.validation_target_item_count": len(
+                    diagnosis.covered_item_ids
+                ),
+                "restscope.smoke.validation_target_change_count": len(
+                    diagnosis.patch.attributions
+                ),
+            },
+        ) as span:
+            summary = self._validate_patch(
+                report=report,
+                config=config,
+                diagnosis=diagnosis,
+                private_case_evidence=private_case_evidence,
+            )
+            span.set_output(
+                {
+                    "items": [
+                        item.model_dump(mode="json") for item in summary.items
+                    ],
+                    "accepted_item_count": len(summary.accepted_item_ids),
+                    "accepted_change_count": len(
+                        summary.accepted_input_node_ids
+                    ),
+                    "rejected_change_count": len(
+                        summary.rejected_input_node_ids
+                    ),
+                }
+            )
+            span.set_attribute(
+                "restscope.smoke.validation_accepted_item_count",
+                len(summary.accepted_item_ids),
+            )
+            span.set_attribute(
+                "restscope.smoke.validation_accepted_change_count",
+                len(summary.accepted_input_node_ids),
+            )
+            span.set_attribute(
+                "restscope.smoke.validation_rejected_change_count",
+                len(summary.rejected_input_node_ids),
+            )
+            return summary
+
+    def _validate_patch(
+        self,
+        *,
+        report: OperationExecutionReport,
+        config: OperationGeneratorConfig,
+        diagnosis: PlanSolveDiagnosisResult,
+        private_case_evidence: Mapping[str, Any] | None,
+    ) -> PatchValidationSummary:
+        journal = EvidenceJournal.from_batch(
+            report=report,
+            config=config,
+            private_case_evidence=private_case_evidence,
+            redactor=self.tracing_runtime.redactor,
+        )
+        prompt = build_patch_validation_prompt(
+            config=config,
+            report=report,
+            diagnosis=diagnosis,
+            journal=journal,
+        )
+        messages = [
+            LLMMessage(role="system", content=prompt.system),
+            LLMMessage(role="user", content=prompt.user),
+        ]
+        response = self.client.invoke(
+            self._request(
+                model=self.planning_model,
+                messages=messages,
+                role="operation_smoke_patch_validation",
+                tools=[],
+                tool_choice="none",
+            )
+        )
+        decision, errors = self._parse(response, PatchValidationDecision)
+        if decision is not None and not errors:
+            errors = validate_patch_validation(
+                decision,
+                prompt=prompt,
+                diagnosis=diagnosis,
+            )
+        if errors:
+            repaired = self._repair(
+                model=self.planning_model,
+                messages=messages,
+                response=response,
+                role="operation_smoke_patch_validation",
+                errors=errors,
+                guidance=prompt.system,
+            )
+            decision, errors = self._parse(
+                repaired,
+                PatchValidationDecision,
+            )
+            if decision is not None and not errors:
+                errors = validate_patch_validation(
+                    decision,
+                    prompt=prompt,
+                    diagnosis=diagnosis,
+                )
+        if decision is None or errors:
+            return _unknown_patch_validation(diagnosis)
+        return _patch_validation_summary(
+            decision,
+            diagnosis=diagnosis,
+        )
+
     def _diagnose(
         self,
         *,
@@ -305,6 +458,7 @@ class OperationSmokeDiagnoser:
                     response=response,
                     role="operation_smoke_plan_solve",
                     errors=errors,
+                    guidance=prompt.repair_guidance,
                 )
                 decision, repair_errors = self._parse(
                     repaired,
@@ -453,7 +607,10 @@ class OperationSmokeDiagnoser:
             state=state,
             planning_outputs=planning_outputs,
             http_tool_rounds=http_tool_rounds,
-            patch=GeneratorPatchDraft(updates=resolved_updates),
+            patch=GeneratorPatchDraft(
+                updates=resolved_updates,
+                attributions=draft.attributions,
+            ),
             selected_reference_options=selected_options,
             covered_item_ids=patch_decision.covered_item_ids,
             deferred_items=deferred,
@@ -510,6 +667,7 @@ class OperationSmokeDiagnoser:
         response: LLMResponse,
         role: str,
         errors: list[str],
+        guidance: str | None = None,
     ) -> LLMResponse:
         return self.client.invoke(
             self._request(
@@ -527,6 +685,11 @@ class OperationSmokeDiagnoser:
                             + "\n".join(
                                 f"- {error}"
                                 for error in errors[:_MAX_REPAIR_ERRORS]
+                            )
+                            + (
+                                "\n" + guidance
+                                if guidance is not None
+                                else ""
                             )
                             + "\nReturn one complete corrected JSON object "
                             "using only the supplied names and references."
@@ -605,6 +768,63 @@ def _tool_response_errors(
     ):
         errors.append("Only restscope.http.request may be called.")
     return errors
+
+
+def _patch_validation_summary(
+    decision: PatchValidationDecision,
+    *,
+    diagnosis: PlanSolveDiagnosisResult,
+) -> PatchValidationSummary:
+    items_by_id = {item.item_id: item for item in decision.items}
+    items = [
+        PatchItemValidationSummary.model_validate(
+            items_by_id[item_id].model_dump(mode="json")
+        )
+        for item_id in diagnosis.covered_item_ids
+    ]
+    accepted_item_ids = [
+        item.item_id for item in items if item.status == "resolved"
+    ]
+    accepted_item_set = set(accepted_item_ids)
+    accepted_input_node_ids = [
+        attribution.input_node_id
+        for attribution in diagnosis.patch.attributions
+        if accepted_item_set.intersection(attribution.item_ids)
+    ]
+    accepted_input_set = set(accepted_input_node_ids)
+    rejected_input_node_ids = [
+        attribution.input_node_id
+        for attribution in diagnosis.patch.attributions
+        if attribution.input_node_id not in accepted_input_set
+    ]
+    return PatchValidationSummary(
+        items=items,
+        accepted_item_ids=accepted_item_ids,
+        accepted_input_node_ids=accepted_input_node_ids,
+        rejected_input_node_ids=rejected_input_node_ids,
+    )
+
+
+def _unknown_patch_validation(
+    diagnosis: PlanSolveDiagnosisResult,
+) -> PatchValidationSummary:
+    assert diagnosis.patch is not None
+    return PatchValidationSummary(
+        items=[
+            PatchItemValidationSummary(
+                item_id=item_id,
+                status="unknown",
+                current_failure_refs=[],
+                reason="Patch validation output was invalid.",
+                confidence=0,
+            )
+            for item_id in diagnosis.covered_item_ids
+        ],
+        rejected_input_node_ids=[
+            attribution.input_node_id
+            for attribution in diagnosis.patch.attributions
+        ],
+    )
 
 
 def _resolve_generator_updates(

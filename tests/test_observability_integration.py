@@ -220,6 +220,7 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
                 "deferred_items": [],
                 "changes": [
                     {
+                        "item_ids": ["I1"],
                         "input": "path.projectId",
                         "generation": {
                             "kind": "exact_value",
@@ -228,6 +229,21 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
                     }
                 ]
             }
+        ),
+        LLMResponse(
+            provider="stub",
+            model="think-model",
+            parsed_json={
+                "items": [
+                    {
+                        "item_id": "I1",
+                        "status": "persisting",
+                        "current_failure_refs": ["F1"],
+                        "reason": "The identifier failure remains.",
+                        "confidence": 0.8,
+                    }
+                ]
+            },
         ),
     ]
 
@@ -241,7 +257,7 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
     registry.register(PromptProvider())
     client = LLMClient(registry, tracing_runtime=runtime)
 
-    OperationSmokeDiagnoser(
+    diagnoser = OperationSmokeDiagnoser(
         client=client,
         planning_model=LLMModelConfig(
             role="operation_smoke_plan_solve",
@@ -254,9 +270,21 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
             model="fast-model",
         ),
         tracing_runtime=runtime,
-    ).diagnose(report=smoke_report(), config=smoke_config())
+    )
+    diagnosis = diagnoser.diagnose(
+        report=smoke_report(),
+        config=smoke_config(),
+    )
+    diagnoser.validate_patch(
+        report=smoke_report().model_copy(update={"config_revision": 4}),
+        config=smoke_config().model_copy(update={"revision": 4}),
+        diagnosis=diagnosis,
+    )
     runtime.close()
 
+    span_names = [span.name for span in exporter.get_finished_spans()]
+    assert "OperationSmokeDiagnoser.validate_patch" in span_names
+    assert span_names.count("LLMClient.invoke") == 3
     rendered = json.dumps(
         [dict(span.attributes) for span in exporter.get_finished_spans()],
         default=str,

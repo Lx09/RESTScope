@@ -48,8 +48,9 @@ class _SmokeAgent:
         del context
         self.requests.append(request)
         status = self.statuses.pop(0)
+        result_status = "retry" if status == "diagnosis_inconclusive" else status
         reports = []
-        if status == "passed":
+        if result_status == "passed":
             reports.append(
                 OperationExecutionReport(
                     run_id=f"run_{len(self.requests)}",
@@ -64,24 +65,26 @@ class _SmokeAgent:
                 )
             )
         return OperationSmokeResult(
-            status=status,
+            status=result_status,
             operation_key=request.operation_key,
-            success_rate=1.0 if status == "passed" else 0.0,
+            success_rate=1.0 if result_status == "passed" else 0.0,
             required_success_rate=request.success_rate_threshold,
             active_config_revision=1,
             batch_reports=reports,
             failure_kind=(
-                "threshold_exhausted"
-                if status == "retry"
+                "diagnosis_inconclusive"
+                if status == "diagnosis_inconclusive"
+                else "threshold_exhausted"
+                if result_status == "retry"
                 else "unsupported_operation"
-                if status == "unsupported"
+                if result_status == "unsupported"
                 else "operation_error"
-                if status == "errored"
+                if result_status == "errored"
                 else None
             ),
             error=(
                 {"type": "SmokeError", "message": "local operation failure"}
-                if status == "errored"
+                if result_status == "errored"
                 else None
             ),
         )
@@ -193,6 +196,32 @@ def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> 
         3,
     ]
     assert report.attempts[-1].failure_kind == "threshold_exhausted"
+    assert report.unattempted_operations == []
+
+
+def test_inconclusive_diagnosis_does_not_interrupt_other_operations() -> None:
+    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+
+    smoke = _SmokeAgent(["diagnosis_inconclusive", "passed"])
+
+    report = RESTScopeMainGraph(
+        operation_smoke_agent=smoke,
+        tool_context=_context(),
+    ).run(RESTScopeRunRequest(max_operation_attempts=1))
+
+    assert (report.status, report.stop_reason) == (
+        "failed",
+        "completed_with_failures",
+    )
+    assert [request.operation_key for request in smoke.requests] == [
+        "GET /first",
+        "POST /second",
+    ]
+    assert [attempt.disposition for attempt in report.attempts] == [
+        "failed",
+        "satisfied",
+    ]
+    assert report.attempts[0].failure_kind == "diagnosis_inconclusive"
     assert report.unattempted_operations == []
 
 

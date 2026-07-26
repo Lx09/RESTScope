@@ -14,6 +14,7 @@ class ModelSelector:
         "check_designer",
         "intelligence_updater",
         "operation_smoke_plan_solve",
+        "operation_smoke_patch_validation",
     }
     FAST_ROLES = {
         "api_behavior_monitor",

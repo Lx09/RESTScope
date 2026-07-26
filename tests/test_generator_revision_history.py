@@ -26,6 +26,12 @@ def _catalog(tmp_path: Path):
                                 "in": "path",
                                 "required": True,
                                 "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "region",
+                                "in": "query",
+                                "required": False,
+                                "schema": {"type": "string"},
                             }
                         ],
                         "responses": {"200": {"description": "ok"}},
@@ -181,3 +187,184 @@ def test_direct_catalog_patch_is_recorded_as_an_accepted_revision(
 
     history = catalog.list_revisions(operation.operation_key)
     assert [item.lifecycle for item in history] == ["accepted", "accepted"]
+
+
+def test_candidate_finalization_accepts_only_validated_changes_atomically(
+    tmp_path: Path,
+) -> None:
+    catalog, operation = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation.operation_key)
+    path_node_id = baseline.configs[0].input_node_id
+    query_node_id = baseline.configs[1].input_node_id
+    path_strategy = {"type": "constant", "value": "known-item"}
+    query_strategy = {"type": "constant", "value": "experimental-region"}
+    catalog.stage_candidate(
+        operation_key=operation.operation_key,
+        expected_revision=1,
+        updates=[
+            {"input_node_id": path_node_id, "strategy": path_strategy},
+            {"input_node_id": query_node_id, "strategy": query_strategy},
+        ],
+        hypothesis={"kind": "operation_smoke_joint_patch"},
+    )
+
+    accepted = catalog.finalize_candidate(
+        operation_key=operation.operation_key,
+        candidate_revision=2,
+        accepted_input_node_ids={path_node_id},
+        evaluation={
+            "case_count": 10,
+            "success_2xx_count": 0,
+            "success_rate": 0.0,
+            "required_threshold": 0.8,
+            "run_id": "run_2",
+            "validation_status": "partial",
+            "accepted_change_count": 1,
+            "rejected_change_count": 1,
+        },
+    )
+
+    assert accepted.revision == 3
+    assert accepted.configs[0].strategy.value == "known-item"
+    assert accepted.configs[1].strategy == baseline.configs[1].strategy
+    history = catalog.list_revisions(operation.operation_key)
+    assert [item.lifecycle for item in history] == [
+        "accepted",
+        "rejected",
+        "accepted",
+    ]
+    assert history[1].evaluation["validation_status"] == "partial"
+    assert all(item.lifecycle != "rollback" for item in history)
+
+
+def test_candidate_finalization_with_no_accepted_changes_restores_parent_without_rollback(
+    tmp_path: Path,
+) -> None:
+    catalog, operation = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation.operation_key)
+    node_id = baseline.configs[0].input_node_id
+    catalog.stage_candidate(
+        operation_key=operation.operation_key,
+        expected_revision=1,
+        updates=[
+            {
+                "input_node_id": node_id,
+                "strategy": {"type": "constant", "value": "bad-item"},
+            }
+        ],
+        hypothesis={"kind": "operation_smoke_joint_patch"},
+    )
+
+    accepted = catalog.finalize_candidate(
+        operation_key=operation.operation_key,
+        candidate_revision=2,
+        accepted_input_node_ids=set(),
+        evaluation={
+            "case_count": 10,
+            "success_2xx_count": 0,
+            "success_rate": 0.0,
+            "required_threshold": 0.8,
+            "run_id": "run_2",
+            "validation_status": "rejected",
+            "accepted_change_count": 0,
+            "rejected_change_count": 1,
+        },
+    )
+
+    assert accepted.revision == 3
+    assert accepted.configs == baseline.configs
+    assert [
+        item.lifecycle for item in catalog.list_revisions(operation.operation_key)
+    ] == ["accepted", "rejected", "accepted"]
+
+
+def test_candidate_finalization_rejects_nodes_not_changed_by_candidate(
+    tmp_path: Path,
+) -> None:
+    from restscope.testing import GeneratorConfigError
+
+    catalog, operation = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation.operation_key)
+    node_id = baseline.configs[0].input_node_id
+    catalog.stage_candidate(
+        operation_key=operation.operation_key,
+        expected_revision=1,
+        updates=[
+            {
+                "input_node_id": node_id,
+                "strategy": {"type": "constant", "value": "candidate"},
+            }
+        ],
+        hypothesis={"kind": "operation_smoke_joint_patch"},
+    )
+
+    try:
+        catalog.finalize_candidate(
+            operation_key=operation.operation_key,
+            candidate_revision=2,
+            accepted_input_node_ids={"not-a-candidate-change"},
+            evaluation={"run_id": "run_2"},
+        )
+    except GeneratorConfigError as exc:
+        assert exc.code == "generator_candidate_invalid_accepted_nodes"
+    else:
+        raise AssertionError("unchanged node was accepted")
+
+    assert catalog.inspect_operation(operation.operation_key).revision == 2
+    assert [
+        item.lifecycle for item in catalog.list_revisions(operation.operation_key)
+    ] == ["accepted", "candidate"]
+
+
+def test_candidate_partial_finalization_rolls_back_the_whole_transaction_on_write_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from restscope.db.repositories import SqlAlchemyGeneratorConfigRepository
+
+    catalog, operation = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation.operation_key)
+    path_node_id = baseline.configs[0].input_node_id
+    query_node_id = baseline.configs[1].input_node_id
+    catalog.stage_candidate(
+        operation_key=operation.operation_key,
+        expected_revision=1,
+        updates=[
+            {
+                "input_node_id": path_node_id,
+                "strategy": {"type": "constant", "value": "known-item"},
+            },
+            {
+                "input_node_id": query_node_id,
+                "strategy": {"type": "constant", "value": "region"},
+            },
+        ],
+        hypothesis={"kind": "operation_smoke_joint_patch"},
+    )
+
+    def fail_replace(self, **kwargs):
+        del self, kwargs
+        raise RuntimeError("simulated accepted revision write failure")
+
+    monkeypatch.setattr(
+        SqlAlchemyGeneratorConfigRepository,
+        "replace",
+        fail_replace,
+    )
+
+    try:
+        catalog.finalize_candidate(
+            operation_key=operation.operation_key,
+            candidate_revision=2,
+            accepted_input_node_ids={path_node_id},
+            evaluation={"run_id": "run_2"},
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "simulated accepted revision write failure"
+    else:
+        raise AssertionError("simulated write failure did not escape")
+
+    assert catalog.inspect_operation(operation.operation_key).revision == 2
+    history = catalog.list_revisions(operation.operation_key)
+    assert [item.lifecycle for item in history] == ["accepted", "candidate"]
+    assert history[1].evaluation is None
