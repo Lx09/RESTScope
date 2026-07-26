@@ -274,6 +274,426 @@ def _validation(*, node_id: str, status: str):
     )
 
 
+def _constraint_diagnosis(*, node_id: str, value: str = "known-item"):
+    from restscope.agent.operation_smoke import (
+        CompiledConstraintPatch,
+        GeneratorPatchDraft,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.agent.operation_smoke.schemas import PlanItemSummary
+    from restscope.testing import ConstraintSet
+
+    constraint = CompiledConstraintPatch(
+        constraint_id=f"constraint_{value}",
+        item_ids=["I1"],
+        kind="Arithmetic/Relational",
+        constraint=ConstraintSet.model_validate(
+            {
+                "constraints": [
+                    {
+                        "type": "compare",
+                        "operator": "==",
+                        "left": {
+                            "type": "input_value",
+                            "input_node_id": node_id,
+                        },
+                        "right": {"type": "literal", "value": value},
+                    }
+                ]
+            }
+        ),
+    )
+    return PlanSolveDiagnosisResult(
+        status="patch_ready",
+        termination_reason="model_finalize",
+        patch=GeneratorPatchDraft(constraints=[constraint]),
+        ready_items=[
+            PlanItemSummary(
+                item_id="I1",
+                failure_refs=["F1"],
+                cause="The identifier must match another request input.",
+                confidence=0.9,
+                affected_inputs=["path.itemId"],
+                solution="Enforce the learned same-request constraint.",
+                evidence_refs=["F1", "C1"],
+            )
+        ],
+        covered_item_ids=["I1"],
+    )
+
+
+def _constraint_validation(*, constraint_id: str, status: str):
+    from restscope.agent.operation_smoke import (
+        PatchItemValidationSummary,
+        PatchValidationSummary,
+    )
+
+    resolved = status == "resolved"
+    return PatchValidationSummary(
+        items=[
+            PatchItemValidationSummary(
+                item_id="I1",
+                status=status,
+                current_failure_refs=(
+                    ["F1"] if status == "persisting" else []
+                ),
+                reason=f"Validation classified the constraint as {status}.",
+                confidence=0.9,
+            )
+        ],
+        accepted_item_ids=["I1"] if resolved else [],
+        accepted_constraint_ids=[constraint_id] if resolved else [],
+        rejected_constraint_ids=[] if resolved else [constraint_id],
+    )
+
+
+def test_constraint_only_candidate_is_run_local_and_creates_no_revision(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+    from restscope.testing.execution import SmokeExecutionOutcome
+
+    catalog, operation_key = _catalog(tmp_path)
+    node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
+
+    class ConstraintRunner(_BatchRunner):
+        def run_operation_for_smoke(
+            self,
+            context,
+            /,
+            *,
+            constraints=None,
+            **arguments,
+        ):
+            report = self.run_operation(context, **arguments)
+            self.calls[-1]["constraints"] = constraints
+            return SmokeExecutionOutcome(report=report, case_evidence=())
+
+    constraint_id = "constraint_known-item"
+    runner = ConstraintRunner(catalog, [(0, 10), (9, 1), (10, 0)])
+    diagnoser = _Diagnoser(
+        [_constraint_diagnosis(node_id=node_id)],
+        validations=[
+            _constraint_validation(
+                constraint_id=constraint_id,
+                status="resolved",
+            )
+        ],
+    )
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            case_count=10,
+            success_rate_threshold=0.8,
+            max_feedback_rounds=1,
+            seed=17,
+        ),
+    )
+
+    assert result.status == "passed"
+    assert [call["revision"] for call in runner.calls] == [1, 1]
+    assert runner.calls[0]["constraints"] is None
+    assert len(runner.calls[1]["constraints"].constraints) == 1
+    assert len(catalog.list_revisions(operation_key)) == 1
+    assert diagnoser.validation_calls[0]["baseline_report"] == (
+        result.batch_reports[0]
+    )
+
+    repeated = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            case_count=10,
+            success_rate_threshold=0.8,
+            max_feedback_rounds=0,
+            seed=17,
+        ),
+    )
+
+    assert repeated.status == "passed"
+    assert runner.calls[2]["constraints"] is None
+
+
+def test_rejected_constraint_is_cleared_before_the_next_feedback_round(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+    from restscope.testing.execution import SmokeExecutionOutcome
+
+    catalog, operation_key = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation_key)
+    path_node_id = baseline.configs[0].input_node_id
+    query_node_id = baseline.configs[1].input_node_id
+
+    class ConstraintRunner(_BatchRunner):
+        def run_operation_for_smoke(
+            self,
+            context,
+            /,
+            *,
+            constraints=None,
+            **arguments,
+        ):
+            report = self.run_operation(context, **arguments)
+            self.calls[-1]["constraints"] = constraints
+            return SmokeExecutionOutcome(report=report, case_evidence=())
+
+    runner = ConstraintRunner(
+        catalog,
+        [(0, 10), (0, 10), (0, 10)],
+    )
+    diagnoser = _Diagnoser(
+        [
+            _constraint_diagnosis(node_id=path_node_id),
+            _diagnosis(
+                node_id=query_node_id,
+                strategy={"type": "constant", "value": "known-region"},
+                semantic_input="query.region",
+            ),
+        ],
+        validations=[
+            _constraint_validation(
+                constraint_id="constraint_known-item",
+                status="unknown",
+            ),
+            _validation(node_id=query_node_id, status="unknown"),
+        ],
+    )
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=2,
+            seed=19,
+        ),
+    )
+
+    assert result.status == "retry"
+    assert [
+        (
+            len(call["constraints"].constraints)
+            if call["constraints"] is not None
+            else 0
+        )
+        for call in runner.calls
+    ] == [0, 1, 0]
+
+
+def test_accepted_constraint_remains_active_in_later_feedback_rounds(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+    from restscope.testing.execution import SmokeExecutionOutcome
+
+    catalog, operation_key = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation_key)
+    path_node_id = baseline.configs[0].input_node_id
+    query_node_id = baseline.configs[1].input_node_id
+
+    class ConstraintRunner(_BatchRunner):
+        def run_operation_for_smoke(
+            self,
+            context,
+            /,
+            *,
+            constraints=None,
+            **arguments,
+        ):
+            report = self.run_operation(context, **arguments)
+            self.calls[-1]["constraints"] = constraints
+            return SmokeExecutionOutcome(report=report, case_evidence=())
+
+    runner = ConstraintRunner(
+        catalog,
+        [(0, 10), (0, 10), (0, 10)],
+    )
+    diagnoser = _Diagnoser(
+        [
+            _constraint_diagnosis(node_id=path_node_id),
+            _diagnosis(
+                node_id=query_node_id,
+                strategy={"type": "constant", "value": "known-region"},
+                semantic_input="query.region",
+            ),
+        ],
+        validations=[
+            _constraint_validation(
+                constraint_id="constraint_known-item",
+                status="resolved",
+            ),
+            _validation(node_id=query_node_id, status="unknown"),
+        ],
+    )
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=2,
+            seed=23,
+        ),
+    )
+
+    assert result.status == "retry"
+    assert [
+        (
+            len(call["constraints"].constraints)
+            if call["constraints"] is not None
+            else 0
+        )
+        for call in runner.calls
+    ] == [0, 1, 1]
+
+
+def test_success_threshold_accepts_the_whole_constraint_candidate(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+    from restscope.testing.execution import SmokeExecutionOutcome
+
+    catalog, operation_key = _catalog(tmp_path)
+    node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
+
+    class ConstraintRunner(_BatchRunner):
+        def run_operation_for_smoke(
+            self,
+            context,
+            /,
+            *,
+            constraints=None,
+            **arguments,
+        ):
+            report = self.run_operation(context, **arguments)
+            self.calls[-1]["constraints"] = constraints
+            return SmokeExecutionOutcome(report=report, case_evidence=())
+
+    runner = ConstraintRunner(catalog, [(0, 10), (8, 2)])
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=_Diagnoser(
+            [_constraint_diagnosis(node_id=node_id)],
+            validations=[
+                _constraint_validation(
+                    constraint_id="constraint_known-item",
+                    status="unknown",
+                )
+            ],
+        ),
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            success_rate_threshold=0.8,
+            max_feedback_rounds=1,
+            seed=29,
+        ),
+    )
+
+    assert result.status == "passed"
+    assert result.diagnoses[0].patch_validation.items[0].status == "unknown"
+    assert len(runner.calls[1]["constraints"].constraints) == 1
+    assert len(catalog.list_revisions(operation_key)) == 1
+
+
+def test_constraint_candidate_is_cleared_after_validation_error(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+    from restscope.testing.execution import SmokeExecutionOutcome
+
+    catalog, operation_key = _catalog(tmp_path)
+    node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
+
+    class ConstraintRunner(_BatchRunner):
+        def run_operation_for_smoke(
+            self,
+            context,
+            /,
+            *,
+            constraints=None,
+            **arguments,
+        ):
+            report = self.run_operation(context, **arguments)
+            self.calls[-1]["constraints"] = constraints
+            return SmokeExecutionOutcome(report=report, case_evidence=())
+
+    runner = ConstraintRunner(catalog, [(0, 10), (0, 10), (10, 0)])
+    diagnoser = _Diagnoser(
+        [_constraint_diagnosis(node_id=node_id)],
+        validations=[RuntimeError("validation unavailable")],
+    )
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    failed = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=1,
+            seed=31,
+        ),
+    )
+    repeated = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_feedback_rounds=0,
+            seed=31,
+        ),
+    )
+
+    assert failed.status == "errored"
+    assert failed.error["message"] == "validation unavailable"
+    assert repeated.status == "passed"
+    assert runner.calls[1]["constraints"] is not None
+    assert runner.calls[2]["constraints"] is None
+    assert len(catalog.list_revisions(operation_key)) == 1
+
+
 def test_candidate_is_validated_only_by_the_next_batch_and_then_accepted(
     tmp_path: Path,
 ) -> None:

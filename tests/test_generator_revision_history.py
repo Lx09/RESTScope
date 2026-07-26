@@ -51,6 +51,36 @@ def _catalog(tmp_path: Path):
     return catalog, ir.operations["GET /items/{itemId}"]
 
 
+def test_candidate_preview_validates_patch_without_writing_revision(
+    tmp_path: Path,
+) -> None:
+    catalog, operation = _catalog(tmp_path)
+    baseline = catalog.inspect_operation(operation.operation_key)
+    node_id = baseline.configs[0].input_node_id
+
+    preview = catalog.preview_candidate(
+        operation_key=operation.operation_key,
+        updates=[
+            {
+                "input_node_id": node_id,
+                "strategy": {"type": "constant", "value": "known-item"},
+            }
+        ],
+    )
+
+    assert preview.revision == baseline.revision
+    assert preview.configs[0].strategy.model_dump(mode="json") == {
+        "type": "constant",
+        "value": "known-item",
+    }
+    assert catalog.inspect_operation(operation.operation_key) == baseline
+    assert len(catalog.list_revisions(operation.operation_key)) == 1
+    assert catalog.preview_candidate(
+        operation_key=operation.operation_key,
+        updates=[],
+    ) == baseline
+
+
 def test_candidate_revision_can_be_accepted_with_batch_evaluation(
     tmp_path: Path,
 ) -> None:

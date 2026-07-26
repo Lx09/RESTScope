@@ -1,6 +1,6 @@
 # Runtime Parameter Constraints
 
-Status: In progress
+Status: Complete
 
 ## Objective
 
@@ -29,17 +29,24 @@ Smoke's failure-scoped Patch lifecycle.
 
 ## Dependency
 
-Operation Smoke integration depends on the completed but currently uncommitted
-`codex/fix-smoke-inconclusive-supervisor` work. It must be committed and merged
-into local `main`, then incorporated here, before the Agent integration phase.
-No action against that worktree is implied by this task.
+The failure-scoped Operation Smoke prerequisite was verified, committed as
+`d6aa25a`, merged into local `main`, and incorporated into this feature before
+the Agent integration phase.
 
 ## Current progress
 
-- Design approved and recorded.
-- Implementation plan recorded.
-- Core `restscope.testing` implementation started with TDD.
-- Operation Smoke integration not started.
+- Constraint AST, validation, normalization, classification, and total
+  evaluation are implemented in `restscope.testing.constraints`.
+- Deterministic finite-domain solving is implemented in
+  `restscope.testing.constraint_solver`.
+- Constrained test generation and Smoke-only zero-HTTP batch preflight are
+  implemented without changing unconstrained `run_operation()`.
+- Operation Smoke compiles semantic constraints, performs one repair after
+  side-effect-free candidate preflight, validates constraints against a
+  same-seed baseline, and keeps accepted constraints only for the current run.
+- Constraint-only candidates do not create Generator catalog revisions.
+- No constraint AST, assignment, solver state, or accepted constraint is
+  persisted.
 
 ## Verification
 
@@ -47,12 +54,22 @@ Baseline before implementation:
 
 - `uv run pytest -q`: `375 passed, 16 skipped`.
 
-Fresh feature and full-suite results will be added as work progresses.
+Fresh final verification:
 
-## Risks
+- Focused testing, Operation Smoke, and package-boundary suite:
+  `143 passed`.
+- `uv run pytest -q`: `469 passed, 4 skipped`.
+- `uv run --extra tracing pytest -q`: `469 passed, 4 skipped`.
+- `uv run python -m compileall -q restscope`: passed.
+- `git diff --check`: passed.
 
-- The prerequisite Operation Smoke branch changes the Patch attribution and
-  candidate-finalization contracts that this feature must extend.
+No live target, external LLM provider, or Phoenix deployment was exercised by
+these offline tests.
+
+## Remaining limits
+
 - Finite candidate domains may be unable to satisfy a semantically valid
-  relationship; that outcome must remain a pre-HTTP Patch validation failure,
-  never an unconstrained fallback.
+  relationship. That remains a pre-HTTP Patch validation failure and never
+  falls back to unconstrained execution.
+- Constraints cover same-request relationships only; cross-request,
+  cross-operation, and repeated array-item relationships remain out of scope.

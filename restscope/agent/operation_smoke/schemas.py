@@ -11,7 +11,22 @@ from pydantic import (
     model_validator,
 )
 
-from restscope.testing import InputGeneratorPatch, OperationExecutionReport
+from restscope.testing import (
+    ConstraintSet,
+    InputGeneratorPatch,
+    OperationExecutionReport,
+)
+
+
+ConstraintKind = Literal[
+    "Requires",
+    "Or",
+    "OnlyOne",
+    "AllOrNone",
+    "ZeroOrOne",
+    "Arithmetic/Relational",
+    "Complex",
+]
 
 
 class AvailableReferenceOption(BaseModel):
@@ -79,6 +94,27 @@ class GeneratorPatchAttribution(BaseModel):
         return self
 
 
+class CompiledConstraintPatch(BaseModel):
+    """One normalized runtime constraint attributed to planned causes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    constraint_id: str = Field(min_length=1, max_length=100)
+    item_ids: list[str] = Field(min_length=1, max_length=100)
+    kind: ConstraintKind
+    constraint: ConstraintSet
+
+    @model_validator(mode="after")
+    def validate_constraint_patch(self) -> "CompiledConstraintPatch":
+        if len(set(self.item_ids)) != len(self.item_ids):
+            raise ValueError("item_ids must be unique")
+        if len(self.constraint.constraints) != 1:
+            raise ValueError(
+                "a compiled constraint patch contains one expression"
+            )
+        return self
+
+
 class GeneratorPatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -91,11 +127,19 @@ class GeneratorPatchDraft(BaseModel):
         default_factory=list,
         max_length=100,
     )
+    constraints: list[CompiledConstraintPatch] = Field(
+        default_factory=list,
+        max_length=20,
+    )
 
     @model_validator(mode="after")
     def require_update(self) -> "GeneratorPatchDraft":
-        if not self.updates and not self.reference_selections:
-            raise ValueError("at least one generator update is required")
+        if (
+            not self.updates
+            and not self.reference_selections
+            and not self.constraints
+        ):
+            raise ValueError("at least one generator update or constraint is required")
         if len(self.updates) + len(self.reference_selections) > 100:
             raise ValueError("at most 100 generator updates are allowed")
         changed_inputs = [
@@ -111,6 +155,9 @@ class GeneratorPatchDraft(BaseModel):
             raise ValueError(
                 "attributions must identify every changed input exactly once"
             )
+        constraint_ids = [item.constraint_id for item in self.constraints]
+        if len(set(constraint_ids)) != len(constraint_ids):
+            raise ValueError("constraint IDs must be unique")
         return self
 
 
@@ -181,6 +228,14 @@ class PatchValidationSummary(BaseModel):
         default_factory=list,
         max_length=100,
     )
+    accepted_constraint_ids: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    rejected_constraint_ids: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+    )
 
     @model_validator(mode="after")
     def validate_partitions(self) -> "PatchValidationSummary":
@@ -203,6 +258,16 @@ class PatchValidationSummary(BaseModel):
             raise ValueError("rejected input node IDs must be unique")
         if accepted_inputs.intersection(rejected_inputs):
             raise ValueError("accepted and rejected input nodes must be disjoint")
+        accepted_constraints = set(self.accepted_constraint_ids)
+        rejected_constraints = set(self.rejected_constraint_ids)
+        if len(accepted_constraints) != len(self.accepted_constraint_ids):
+            raise ValueError("accepted constraint IDs must be unique")
+        if len(rejected_constraints) != len(self.rejected_constraint_ids):
+            raise ValueError("rejected constraint IDs must be unique")
+        if accepted_constraints.intersection(rejected_constraints):
+            raise ValueError(
+                "accepted and rejected constraint IDs must be disjoint"
+            )
         return self
 
 
@@ -241,6 +306,11 @@ class PlanSolveDiagnosisResult(BaseModel):
                 for attribution in self.patch.attributions
                 for item_id in attribution.item_ids
             }
+            attributed_item_ids.update(
+                item_id
+                for constraint in self.patch.constraints
+                for item_id in constraint.item_ids
+            )
             if attributed_item_ids != set(self.covered_item_ids):
                 raise ValueError(
                     "patch attribution must cover exactly the covered items"

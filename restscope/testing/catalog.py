@@ -154,6 +154,26 @@ class GeneratorConfigCatalog:
             cleared_recoverable_node_ids=patched_node_ids,
         )
 
+    def preview_candidate(
+        self,
+        *,
+        operation_key: str,
+        updates: Sequence[InputGeneratorPatch],
+    ) -> OperationGeneratorConfig:
+        """Validate and apply a candidate patch without writing catalog state."""
+
+        current = self._require_existing(operation_key)
+        if not updates:
+            return current
+        updated, _ = _apply_patches(current, updates)
+        _validate_configs(
+            current,
+            media_type=current.active_media_type,
+            configs=updated,
+            enforce_schema=False,
+        )
+        return current.model_copy(update={"configs": updated})
+
     def stage_candidate(
         self,
         *,

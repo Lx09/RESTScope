@@ -106,6 +106,9 @@ class OperationSmokeDiagnoser:
         ) = None,
         private_case_evidence: Mapping[str, Any] | None = None,
         previous_experiment: Mapping[str, Any] | None = None,
+        patch_preflight: (
+            Callable[[GeneratorPatchDraft], list[str]] | None
+        ) = None,
         max_planning_outputs: int = 20,
         max_http_tool_rounds: int = 40,
     ) -> PlanSolveDiagnosisResult:
@@ -143,6 +146,7 @@ class OperationSmokeDiagnoser:
                 reference_option_provider=reference_option_provider,
                 private_case_evidence=private_case_evidence,
                 previous_experiment=previous_experiment,
+                patch_preflight=patch_preflight,
                 max_planning_outputs=max_planning_outputs,
                 max_http_tool_rounds=max_http_tool_rounds,
             )
@@ -201,6 +205,7 @@ class OperationSmokeDiagnoser:
         config: OperationGeneratorConfig,
         diagnosis: PlanSolveDiagnosisResult,
         private_case_evidence: Mapping[str, Any] | None = None,
+        baseline_report: OperationExecutionReport | None = None,
     ) -> PatchValidationSummary:
         """Assess one candidate patch independently from success-rate policy."""
 
@@ -219,6 +224,22 @@ class OperationSmokeDiagnoser:
                 "operation_smoke_report_revision_mismatch",
                 "Execution report and generator config identify different revisions",
             )
+        if (
+            baseline_report is not None
+            and baseline_report.operation_key != report.operation_key
+        ):
+            raise OperationSmokeOutputError(
+                "operation_smoke_baseline_report_mismatch",
+                "Baseline and candidate reports identify different operations",
+            )
+        if (
+            baseline_report is not None
+            and baseline_report.seed != report.seed
+        ):
+            raise OperationSmokeOutputError(
+                "operation_smoke_baseline_seed_mismatch",
+                "Baseline and candidate reports must use the same seed",
+            )
         if diagnosis.status != "patch_ready" or diagnosis.patch is None:
             raise ValueError("Patch validation requires a patch_ready diagnosis")
 
@@ -229,7 +250,10 @@ class OperationSmokeDiagnoser:
                 "operation_key": report.operation_key,
                 "candidate_revision": config.revision,
                 "target_item_count": len(diagnosis.covered_item_ids),
-                "target_change_count": len(diagnosis.patch.attributions),
+                "target_change_count": (
+                    len(diagnosis.patch.attributions)
+                    + len(diagnosis.patch.constraints)
+                ),
             },
             attributes={
                 "restscope.operation.key": report.operation_key,
@@ -239,7 +263,8 @@ class OperationSmokeDiagnoser:
                 ),
                 "restscope.smoke.validation_target_change_count": len(
                     diagnosis.patch.attributions
-                ),
+                )
+                + len(diagnosis.patch.constraints),
             },
         ) as span:
             summary = self._validate_patch(
@@ -247,6 +272,7 @@ class OperationSmokeDiagnoser:
                 config=config,
                 diagnosis=diagnosis,
                 private_case_evidence=private_case_evidence,
+                baseline_report=baseline_report,
             )
             span.set_output(
                 {
@@ -256,10 +282,12 @@ class OperationSmokeDiagnoser:
                     "accepted_item_count": len(summary.accepted_item_ids),
                     "accepted_change_count": len(
                         summary.accepted_input_node_ids
-                    ),
+                    )
+                    + len(summary.accepted_constraint_ids),
                     "rejected_change_count": len(
                         summary.rejected_input_node_ids
-                    ),
+                    )
+                    + len(summary.rejected_constraint_ids),
                 }
             )
             span.set_attribute(
@@ -268,11 +296,13 @@ class OperationSmokeDiagnoser:
             )
             span.set_attribute(
                 "restscope.smoke.validation_accepted_change_count",
-                len(summary.accepted_input_node_ids),
+                len(summary.accepted_input_node_ids)
+                + len(summary.accepted_constraint_ids),
             )
             span.set_attribute(
                 "restscope.smoke.validation_rejected_change_count",
-                len(summary.rejected_input_node_ids),
+                len(summary.rejected_input_node_ids)
+                + len(summary.rejected_constraint_ids),
             )
             return summary
 
@@ -283,6 +313,7 @@ class OperationSmokeDiagnoser:
         config: OperationGeneratorConfig,
         diagnosis: PlanSolveDiagnosisResult,
         private_case_evidence: Mapping[str, Any] | None,
+        baseline_report: OperationExecutionReport | None,
     ) -> PatchValidationSummary:
         journal = EvidenceJournal.from_batch(
             report=report,
@@ -295,6 +326,7 @@ class OperationSmokeDiagnoser:
             report=report,
             diagnosis=diagnosis,
             journal=journal,
+            baseline_report=baseline_report,
         )
         messages = [
             LLMMessage(role="system", content=prompt.system),
@@ -353,6 +385,7 @@ class OperationSmokeDiagnoser:
         ),
         private_case_evidence: Mapping[str, Any] | None,
         previous_experiment: Mapping[str, Any] | None,
+        patch_preflight: Callable[[GeneratorPatchDraft], list[str]] | None,
         max_planning_outputs: int,
         max_http_tool_rounds: int,
     ) -> PlanSolveDiagnosisResult:
@@ -536,16 +569,53 @@ class OperationSmokeDiagnoser:
                 tool_choice="none",
             )
         )
-        patch_decision, patch_errors = self._parse(
-            patch_response,
-            JointPatchDecision,
-        )
-        if patch_decision is not None and not patch_errors:
-            patch_errors = validate_joint_patch(
-                patch_decision,
-                prompt=patch_prompt,
-                config=config,
-            )
+
+        def evaluate_patch_response(
+            response: LLMResponse,
+        ) -> tuple[
+            JointPatchDecision | None,
+            GeneratorPatchDraft | None,
+            list[AvailableReferenceOption],
+            list[str],
+        ]:
+            decision, errors = self._parse(response, JointPatchDecision)
+            if decision is not None and not errors:
+                errors = validate_joint_patch(
+                    decision,
+                    prompt=patch_prompt,
+                    config=config,
+                )
+            if decision is None or errors:
+                return decision, None, [], errors
+            try:
+                compiled, selected = compile_joint_patch(
+                    decision,
+                    prompt=patch_prompt,
+                )
+                if compiled is None:
+                    return decision, None, selected, []
+                resolved = GeneratorPatchDraft(
+                    updates=_resolve_generator_updates(
+                        compiled,
+                        reference_options=selected,
+                    ),
+                    attributions=compiled.attributions,
+                    constraints=compiled.constraints,
+                )
+                if patch_preflight is not None:
+                    errors = list(patch_preflight(resolved))
+            except (KeyError, TypeError, ValueError) as exc:
+                errors = [f"Patch compilation failed: {exc}"]
+                resolved = None
+                selected = []
+            return decision, resolved, selected, errors
+
+        (
+            patch_decision,
+            draft,
+            selected_options,
+            patch_errors,
+        ) = evaluate_patch_response(patch_response)
         if patch_errors:
             repaired = self._repair(
                 model=self.patch_model,
@@ -557,16 +627,14 @@ class OperationSmokeDiagnoser:
                     generator_intent_repair_guidance(),
                 ],
             )
-            patch_decision, patch_errors = self._parse(
+            (
+                patch_decision,
+                draft,
+                selected_options,
+                patch_errors,
+            ) = evaluate_patch_response(
                 repaired,
-                JointPatchDecision,
             )
-            if patch_decision is not None and not patch_errors:
-                patch_errors = validate_joint_patch(
-                    patch_decision,
-                    prompt=patch_prompt,
-                    config=config,
-                )
         if patch_decision is None or patch_errors:
             return _result(
                 status="inconclusive",
@@ -576,10 +644,6 @@ class OperationSmokeDiagnoser:
                 http_tool_rounds=http_tool_rounds,
             )
 
-        draft, selected_options = compile_joint_patch(
-            patch_decision,
-            prompt=patch_prompt,
-        )
         deferred = [
             DeferredPlanItem(
                 item_id=item.item_id,
@@ -597,20 +661,13 @@ class OperationSmokeDiagnoser:
                 covered_item_ids=patch_decision.covered_item_ids,
                 deferred_items=deferred,
             )
-        resolved_updates = _resolve_generator_updates(
-            draft,
-            reference_options=selected_options,
-        )
         return _result(
             status="patch_ready",
             termination_reason=termination_reason,
             state=state,
             planning_outputs=planning_outputs,
             http_tool_rounds=http_tool_rounds,
-            patch=GeneratorPatchDraft(
-                updates=resolved_updates,
-                attributions=draft.attributions,
-            ),
+            patch=draft,
             selected_reference_options=selected_options,
             covered_item_ids=patch_decision.covered_item_ids,
             deferred_items=deferred,
@@ -797,11 +854,24 @@ def _patch_validation_summary(
         for attribution in diagnosis.patch.attributions
         if attribution.input_node_id not in accepted_input_set
     ]
+    accepted_constraint_ids = [
+        constraint.constraint_id
+        for constraint in diagnosis.patch.constraints
+        if accepted_item_set.intersection(constraint.item_ids)
+    ]
+    accepted_constraint_set = set(accepted_constraint_ids)
+    rejected_constraint_ids = [
+        constraint.constraint_id
+        for constraint in diagnosis.patch.constraints
+        if constraint.constraint_id not in accepted_constraint_set
+    ]
     return PatchValidationSummary(
         items=items,
         accepted_item_ids=accepted_item_ids,
         accepted_input_node_ids=accepted_input_node_ids,
         rejected_input_node_ids=rejected_input_node_ids,
+        accepted_constraint_ids=accepted_constraint_ids,
+        rejected_constraint_ids=rejected_constraint_ids,
     )
 
 
@@ -823,6 +893,10 @@ def _unknown_patch_validation(
         rejected_input_node_ids=[
             attribution.input_node_id
             for attribution in diagnosis.patch.attributions
+        ],
+        rejected_constraint_ids=[
+            constraint.constraint_id
+            for constraint in diagnosis.patch.constraints
         ],
     )
 

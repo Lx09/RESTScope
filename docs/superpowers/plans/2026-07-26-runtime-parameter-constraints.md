@@ -10,7 +10,9 @@
 
 **Design:** `docs/superpowers/specs/2026-07-26-runtime-parameter-constraints-design.md`
 
-**Git boundary:** No staging, commit, merge, rebase, or cleanup is authorized. The Operation Smoke tasks must not begin until `codex/fix-smoke-inconclusive-supervisor` is committed and merged into local `main`, then incorporated into this worktree with separate authorization.
+**Git boundary:** The user later authorized scoped commits, local merge, and
+feature worktree/branch cleanup. Push, pull request creation, rebase, and
+history rewriting remain out of scope.
 
 ---
 
@@ -36,11 +38,11 @@
 - Create: `restscope/testing/constraints.py`
 - Modify: `restscope/testing/__init__.py`
 
-- [ ] **Step 1: Record the approved task and prerequisite**
+- [x] **Step 1: Record the approved task and prerequisite**
 
 Create a task record with status `In progress`, the approved same-request scope, the `restscope.testing` ownership decision, non-goals, the unmerged failure-scoped Patch dependency, and the baseline result `375 passed, 16 skipped`.
 
-- [ ] **Step 2: Write failing AST construction tests**
+- [x] **Step 2: Write failing AST construction tests**
 
 Cover recursive parsing and frozen/forbid-extra behavior with public contracts shaped as:
 
@@ -63,7 +65,7 @@ constraint = ConstraintSet(
 
 Also assert that `InputAssignment(present=True, has_value=True, value=None)` differs from omission and that an override can explicitly supply `null`.
 
-- [ ] **Step 3: Run the focused test and confirm RED**
+- [x] **Step 3: Run the focused test and confirm RED**
 
 Run:
 
@@ -73,7 +75,7 @@ uv run pytest -q tests/test_testing_constraints.py
 
 Expected: collection failure because `restscope.testing.constraints` does not exist.
 
-- [ ] **Step 4: Implement the immutable contracts**
+- [x] **Step 4: Implement the immutable contracts**
 
 Define:
 
@@ -110,7 +112,7 @@ Add predicate models for `present`, `compare`, `matches`, `implies`, `cardinalit
 - `has_value=True` may carry any value, including `None`;
 - structural presence may be represented by `present=True, has_value=False`.
 
-- [ ] **Step 5: Export the public contracts and confirm GREEN**
+- [x] **Step 5: Export the public contracts and confirm GREEN**
 
 Export `ConstraintSet`, expression leaf types, `InputAssignment`, and `InputNodeOverride` from `restscope.testing`. Re-run the focused test and expect all contract tests to pass.
 
@@ -120,7 +122,7 @@ Export `ConstraintSet`, expression leaf types, `InputAssignment`, and `InputNode
 - Modify: `tests/test_testing_constraints.py`
 - Modify: `restscope/testing/constraints.py`
 
-- [ ] **Step 1: Write failing validation and evaluation tests**
+- [x] **Step 1: Write failing validation and evaluation tests**
 
 Add fixtures with parameter, request-body, object-property, and array-item snapshots. Test:
 
@@ -135,11 +137,11 @@ Add fixtures with parameter, request-body, object-property, and array-item snaps
 
 Assert classification produces Requires, Or, OnlyOne, AllOrNone, ZeroOrOne, Arithmetic/Relational, or Complex from normalized AST shape without a model-supplied label.
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run the constraint test module and expect missing validator/evaluator functions.
 
-- [ ] **Step 3: Implement snapshot validation**
+- [x] **Step 3: Implement snapshot validation**
 
 Add:
 
@@ -153,7 +155,7 @@ def validate_constraint_set(
 
 Walk all input references, map them to `InputNodeSnapshot`, reject unsupported references, compile regexes, check cardinality `0 <= minimum <= maximum <= len(expressions)`, and verify ordered/arithmetic operands have compatible frozen scalar schema types. Raise `ConstraintValidationError(code, message, input_node_ids=...)`.
 
-- [ ] **Step 4: Implement normalization and classification**
+- [x] **Step 4: Implement normalization and classification**
 
 Canonicalize commutative child ordering and literal JSON representation. Add:
 
@@ -164,7 +166,7 @@ def classify_constraint(expression: BooleanExpression) -> ConstraintKind:
 
 Use AST shape only. Cardinality `[1, n]` maps to Or, `[1, 1]` to OnlyOne, `[0, 1]` to ZeroOrOne, and `[0, 0] | [n, n]` expressed through equivalent all-or-none shape maps to AllOrNone; nested or mixed shapes map to Complex.
 
-- [ ] **Step 5: Implement total evaluation**
+- [x] **Step 5: Implement total evaluation**
 
 Add:
 
@@ -178,7 +180,7 @@ def evaluate_constraint_set(
 
 Use an internal unavailable sentinel so absent input and explicit `None` remain distinct. Equality supports JSON scalar equality, ordered/arithmetic operations exclude booleans, matching uses `re.search`, and evaluation never leaks type or division exceptions.
 
-- [ ] **Step 6: Run focused tests and confirm GREEN**
+- [x] **Step 6: Run focused tests and confirm GREEN**
 
 Run `tests/test_testing_constraints.py` and expect all cases to pass.
 
@@ -188,7 +190,7 @@ Run `tests/test_testing_constraints.py` and expect all cases to pass.
 - Create: `tests/test_testing_constraint_solver.py`
 - Create: `restscope/testing/constraint_solver.py`
 
-- [ ] **Step 1: Write failing domain tests**
+- [x] **Step 1: Write failing domain tests**
 
 Build small frozen configs and assert:
 
@@ -200,7 +202,7 @@ Build small frozen configs and assert:
 - required presence never includes absent;
 - no value domain exceeds eight entries.
 
-- [ ] **Step 2: Write failing search tests**
+- [x] **Step 2: Write failing search tests**
 
 Test implication, exactly-one, arithmetic order, multiple simultaneous constraints, structural ancestor inclusion, same-seed repeatability, unsatisfiable constraints, and a deliberately tiny search budget.
 
@@ -222,15 +224,15 @@ def solve_input_overrides(
     ...
 ```
 
-- [ ] **Step 3: Run the solver tests and confirm RED**
+- [x] **Step 3: Run the solver tests and confirm RED**
 
 Expected: collection failure because `constraint_solver.py` does not exist.
 
-- [ ] **Step 4: Implement candidate-domain construction**
+- [x] **Step 4: Implement candidate-domain construction**
 
 Derive baseline assignments from `GeneratedTestCase.generated_values` and `omitted_input_node_ids`. Generate alternatives with stable SHA-256-derived seeds rather than process-random hashes. Use only existing Generator strategies and `ReferenceValueProvider`; an empty required reference pool raises `ConstraintSolveError("constraint_empty_domain", ...)`.
 
-- [ ] **Step 5: Implement bounded deterministic search**
+- [x] **Step 5: Implement bounded deterministic search**
 
 Order referenced inputs by smallest domain, then descending reference count, then `input_node_id`. Search assignments in domain order, count every explored choice, prune only when a three-valued partial evaluation proves false, and raise:
 
@@ -241,7 +243,7 @@ ConstraintSolveError("constraint_search_exhausted", ...)
 
 Propagate presence to structural ancestors in returned overrides and validate the final complete assignment.
 
-- [ ] **Step 6: Run constraint and solver tests and confirm GREEN**
+- [x] **Step 6: Run constraint and solver tests and confirm GREEN**
 
 Run both focused modules. Repeat the deterministic tests in a second process to ensure no hash-order dependency.
 
@@ -251,7 +253,7 @@ Run both focused modules. Repeat the deterministic tests in a second process to 
 - Modify: `tests/test_testing_generation.py`
 - Modify: `restscope/testing/generation.py`
 
-- [ ] **Step 1: Write failing constrained-generation tests**
+- [x] **Step 1: Write failing constrained-generation tests**
 
 Add tests proving:
 
@@ -262,15 +264,15 @@ Add tests proving:
 - final generated metadata records overridden values and omissions correctly;
 - final recheck failure raises `ConstraintSolveError("constraint_recheck_failed", ...)`.
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Expected: `generate_test_case()` rejects the new keyword.
 
-- [ ] **Step 3: Add internal override support**
+- [x] **Step 3: Add internal override support**
 
 Extend `_TestCaseGenerator` with an override mapping. `_included()` uses an override before RNG. Scalar generation uses an override value before the configured strategy. Record overridden scalar values in `generated_values`, and record forced omission exactly once.
 
-- [ ] **Step 4: Add the optional constraint path**
+- [x] **Step 4: Add the optional constraint path**
 
 Change the entry point to:
 
@@ -289,7 +291,7 @@ def generate_test_case(
 
 Generate the ordinary baseline first. If constraints are absent, return it immediately. Otherwise validate the set, solve overrides, rebuild through `_TestCaseGenerator`, reconstruct assignments from the completed case, and re-evaluate before returning.
 
-- [ ] **Step 5: Run generation, constraint, and solver tests**
+- [x] **Step 5: Run generation, constraint, and solver tests**
 
 Expect all focused modules to pass with the existing unconstrained snapshots unchanged.
 
@@ -299,7 +301,7 @@ Expect all focused modules to pass with the existing unconstrained snapshots unc
 - Modify: `tests/test_testing_execution.py`
 - Modify: `restscope/testing/execution.py`
 
-- [ ] **Step 1: Write failing execution tests**
+- [x] **Step 1: Write failing execution tests**
 
 Test that:
 
@@ -309,19 +311,19 @@ Test that:
 - an unsatisfiable second case results in zero transport calls;
 - tracing input includes only constraint count, never AST values.
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Expected: `run_operation_for_smoke()` rejects `constraints`.
 
-- [ ] **Step 3: Thread constraints through the private execution path**
+- [x] **Step 3: Thread constraints through the private execution path**
 
 Add an optional `constraints` keyword only to `run_operation_for_smoke`, `_run_operation_traced`, and `_run_operation`. `run_operation` always supplies `None`. Pass the set to `generate_test_case` during the existing preparation loop.
 
-- [ ] **Step 4: Preserve preflight error boundaries**
+- [x] **Step 4: Preserve preflight error boundaries**
 
 Catch `ConstraintValidationError` and `ConstraintSolveError` before transport and raise `TestingExecutionError` with the same stable code and a bounded message. Preserve the existing behavior for unconstrained `GenerationError`.
 
-- [ ] **Step 5: Run focused execution and testing regressions**
+- [x] **Step 5: Run focused execution and testing regressions**
 
 Run:
 
@@ -344,27 +346,27 @@ Expected: all pass.
 - Modify: `tests/test_operation_smoke_plan_solve.py`
 - Modify: `tests/test_operation_smoke_agent.py`
 
-- [ ] **Step 1: Write failing structured Patch tests**
+- [x] **Step 1: Write failing structured Patch tests**
 
 Add semantic-path LLM schemas mirroring the testing AST without exposing internal IDs. Each top-level constraint carries unique `item_ids`. Test unknown paths, paths outside each item's `affected_inputs`, duplicate normalized constraints, constraint-only patches, and mixed generator/constraint patches.
 
-- [ ] **Step 2: Compile semantic paths into testing constraints**
+- [x] **Step 2: Compile semantic paths into testing constraints**
 
 Use the existing evidence input registry to translate semantic paths to `input_node_id`. Derive stable constraint IDs from canonical JSON and expose derived RESTest kinds only as system metadata.
 
-- [ ] **Step 3: Add side-effect-free Patch preflight and one repair**
+- [x] **Step 3: Add side-effect-free Patch preflight and one repair**
 
 Preview Generator updates without creating a revision, combine accepted run constraints with candidate constraints, and solve every candidate case using the same seed. Feed validation/solve errors into the existing single FAST repair. A second failure returns `inconclusive` before reference registration, revision staging, or HTTP.
 
-- [ ] **Step 4: Extend failure-scoped validation**
+- [x] **Step 4: Extend failure-scoped validation**
 
 Record accepted and rejected constraint IDs beside generator input IDs. A candidate constraint is exercised only when every candidate case satisfies it and at least one same-seed baseline case violates it. Preserve the prerequisite branch's item-attribution and partial-acceptance semantics.
 
-- [ ] **Step 5: Maintain run-local accepted constraints**
+- [x] **Step 5: Maintain run-local accepted constraints**
 
 Pass active plus candidate constraints to `_run_smoke_batch`. After validation, retain only accepted candidate constraints. Support a constraint-only pending diagnosis without creating an empty catalog revision. Clear all active constraints on every Agent return and exception path.
 
-- [ ] **Step 6: Run Operation Smoke focused regressions**
+- [x] **Step 6: Run Operation Smoke focused regressions**
 
 Cover constraint-only success, mixed partial acceptance, cumulative later rounds, rejection, global-threshold acceptance, technical-error cleanup, and a second Smoke invocation starting empty.
 
@@ -373,11 +375,11 @@ Cover constraint-only success, mixed partial acceptance, cumulative later rounds
 **Files:**
 - Modify: `docs/tasks/runtime-parameter-constraints.md`
 
-- [ ] **Step 1: Run package-boundary and focused tests**
+- [x] **Step 1: Run package-boundary and focused tests**
 
 Run all testing and Operation Smoke focused modules plus `tests/test_agent_package_boundaries.py`.
 
-- [ ] **Step 2: Run complete verification**
+- [x] **Step 2: Run complete verification**
 
 Run:
 
@@ -390,14 +392,15 @@ git diff --check
 
 Record exact observed results. Do not infer live target, LLM, or Phoenix behavior from offline tests.
 
-- [ ] **Step 3: Self-review the scoped diff**
+- [x] **Step 3: Self-review the scoped diff**
 
 Confirm no constraint AST, IDs, assignments, solver traces, or Agent state enters database models, repositories, migrations, public reports, or LangGraph state. Confirm all unrelated main-worktree files remain untouched.
 
-- [ ] **Step 4: Update the task record**
+- [x] **Step 4: Update the task record**
 
-Mark only completed phases as completed. If Task 6 remains blocked by its prerequisite, leave the overall task `In progress` and state the exact blocker.
+Mark the completed feature and its fresh verification results.
 
-- [ ] **Step 5: Stop at the Git authorization gate**
+- [x] **Step 5: Apply the scoped Git authorization**
 
-Summarize the exact unstaged diff and verification. Request explicit authorization before any `git add` or `git commit`; do not merge, push, or remove worktrees without separate authorization.
+The user authorized scoped commits, local merge, and feature worktree/branch
+cleanup. Do not push, create a pull request, rebase, or rewrite history.

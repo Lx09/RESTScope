@@ -9,6 +9,7 @@ from .factory import build_operation_smoke_agent
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
     AvailableReferenceOption,
+    CompiledConstraintPatch,
     GeneratorPatchAttribution,
     GeneratorPatchDraft,
     OperationSmokeRequest,
@@ -20,6 +21,7 @@ from .schemas import (
 
 __all__ = [
     "AvailableReferenceOption",
+    "CompiledConstraintPatch",
     "GeneratorPatchAttribution",
     "GeneratorPatchDraft",
     "OperationSmokeAgent",

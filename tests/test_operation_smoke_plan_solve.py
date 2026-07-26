@@ -619,6 +619,221 @@ def _joint_patch():
     }
 
 
+def _constraint_patch():
+    return {
+        "covered_item_ids": ["I1"],
+        "deferred_items": [],
+        "changes": [],
+        "constraints": [
+            {
+                "item_ids": ["I1"],
+                "expression": {
+                    "type": "compare",
+                    "operator": "==",
+                    "left": {
+                        "type": "input_value",
+                        "input": "path.projectId",
+                    },
+                    "right": {
+                        "type": "literal",
+                        "value": "known-project",
+                    },
+                },
+            }
+        ],
+    }
+
+
+def test_fast_patch_compiles_semantic_constraint_without_generator_change() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    client = _StubClient(
+        [
+            _llm_response(_ready_plan()),
+            _llm_response(_constraint_patch()),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "patch_ready"
+    assert result.patch is not None
+    assert result.patch.updates == []
+    assert result.patch.attributions == []
+    assert len(result.patch.constraints) == 1
+    compiled = result.patch.constraints[0]
+    assert compiled.item_ids == ["I1"]
+    assert compiled.kind == "Arithmetic/Relational"
+    assert compiled.constraint.constraints[0].left.input_node_id == (
+        "path/projectId"
+    )
+    assert compiled.constraint_id.startswith("constraint_")
+    assert "path/projectId" not in str(client.requests[1].messages)
+    assert "input_node_id" not in str(client.requests[1].messages)
+
+
+def test_fast_patch_compiles_mixed_generator_and_constraint_effects() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    mixed = _joint_patch()
+    mixed["constraints"] = _constraint_patch()["constraints"]
+    client = _StubClient(
+        [
+            _llm_response(_ready_plan()),
+            _llm_response(mixed),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "patch_ready"
+    assert len(result.patch.updates) == 1
+    assert len(result.patch.attributions) == 1
+    assert len(result.patch.constraints) == 1
+
+
+def test_fast_patch_repairs_duplicate_normalized_constraints() -> None:
+    from copy import deepcopy
+
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    duplicated = _constraint_patch()
+    duplicated["constraints"].append(
+        deepcopy(duplicated["constraints"][0])
+    )
+    client = _StubClient(
+        [
+            _llm_response(_ready_plan()),
+            _llm_response(duplicated),
+            _llm_response(_constraint_patch()),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "patch_ready"
+    assert "same normalized constraint" in (
+        client.requests[2].messages[-1].content
+    )
+
+
+def test_fast_patch_repairs_constraint_outside_item_affected_inputs() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    invalid = _constraint_patch()
+    invalid["constraints"][0]["expression"]["left"]["input"] = "query.region"
+    client = _StubClient(
+        [
+            _llm_response(_ready_plan()),
+            _llm_response(invalid),
+            _llm_response(_constraint_patch()),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "patch_ready"
+    assert len(client.requests) == 3
+    assert "query.region is not an affected input for I1" in (
+        client.requests[2].messages[-1].content
+    )
+
+
+def test_fast_patch_preflight_failure_gets_one_repair() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    client = _StubClient(
+        [
+            _llm_response(_ready_plan()),
+            _llm_response(_constraint_patch()),
+            _llm_response(_joint_patch()),
+        ]
+    )
+    preflight_calls = []
+
+    def preflight(patch):
+        preflight_calls.append(patch)
+        if patch.constraints:
+            return ["Constraint candidate cannot generate a complete batch."]
+        return []
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).diagnose(
+        report=smoke_report(),
+        config=smoke_config(),
+        patch_preflight=preflight,
+    )
+
+    assert result.status == "patch_ready"
+    assert len(preflight_calls) == 2
+    assert preflight_calls[0].constraints
+    assert preflight_calls[1].constraints == []
+    assert "Constraint candidate cannot generate a complete batch." in (
+        client.requests[2].messages[-1].content
+    )
+
+
+def test_constraint_only_patch_covers_plan_item_without_generator_attribution() -> None:
+    from restscope.agent.operation_smoke.schemas import (
+        CompiledConstraintPatch,
+        GeneratorPatchDraft,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.testing import ConstraintSet
+
+    constraint = CompiledConstraintPatch(
+        constraint_id="constraint_example",
+        item_ids=["I1"],
+        kind="Requires",
+        constraint=ConstraintSet.model_validate(
+            {
+                "constraints": [
+                    {
+                        "type": "implies",
+                        "condition": {
+                            "type": "present",
+                            "input_node_id": "path/projectId",
+                        },
+                        "consequence": {
+                            "type": "present",
+                            "input_node_id": "query/region",
+                        },
+                    }
+                ]
+            }
+        ),
+    )
+
+    patch = GeneratorPatchDraft(constraints=[constraint])
+    result = PlanSolveDiagnosisResult(
+        status="patch_ready",
+        termination_reason="model_finalize",
+        patch=patch,
+        covered_item_ids=["I1"],
+    )
+
+    assert result.patch == patch
+
+
 def test_diagnoser_uses_think_plan_then_one_fast_joint_patch() -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     client = _StubClient(
@@ -1124,6 +1339,53 @@ def test_previous_experiment_uses_semantic_inputs_without_revisions_or_node_ids(
     assert "revision" not in rendered
 
 
+def test_previous_experiment_summarizes_constraints_without_ast_or_values() -> None:
+    from restscope.agent.operation_smoke.agent import (
+        _previous_experiment_summary,
+    )
+    from restscope.agent.operation_smoke import (
+        PatchItemValidationSummary,
+        PatchValidationSummary,
+    )
+
+    diagnosis = _constraint_patch_ready_diagnosis().model_copy(
+        update={
+            "patch_validation": PatchValidationSummary(
+                items=[
+                    PatchItemValidationSummary(
+                        item_id="I1",
+                        status="resolved",
+                        reason="The constraint was exercised.",
+                        confidence=0.9,
+                    )
+                ],
+                accepted_item_ids=["I1"],
+                accepted_constraint_ids=["constraint_project_known"],
+            )
+        }
+    )
+
+    summary = _previous_experiment_summary(
+        diagnosis,
+        evaluation={
+            "success_rate": 0.5,
+            "case_count": 10,
+            "accepted_change_count": 1,
+            "rejected_change_count": 0,
+        },
+        config=smoke_config(),
+    )
+
+    assert summary["constraints"] == [
+        {"kind": "Arithmetic/Relational", "outcome": "accepted"}
+    ]
+    rendered = str(summary)
+    assert "constraint_project_known" not in rendered
+    assert "path/projectId" not in rendered
+    assert "known-project" not in rendered
+    assert "input_node_id" not in rendered
+
+
 def test_more_than_four_http_calls_are_repaired_before_any_tool_executes() -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall, ToolResult, ToolSpec
@@ -1352,6 +1614,210 @@ def _patch_ready_diagnosis():
         ],
         covered_item_ids=["I1"],
     )
+
+
+def _constraint_patch_ready_diagnosis():
+    from restscope.agent.operation_smoke import (
+        CompiledConstraintPatch,
+        GeneratorPatchDraft,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.agent.operation_smoke.schemas import PlanItemSummary
+    from restscope.testing import ConstraintSet
+
+    return PlanSolveDiagnosisResult(
+        status="patch_ready",
+        termination_reason="model_finalize",
+        patch=GeneratorPatchDraft(
+            constraints=[
+                CompiledConstraintPatch(
+                    constraint_id="constraint_project_known",
+                    item_ids=["I1"],
+                    kind="Arithmetic/Relational",
+                    constraint=ConstraintSet.model_validate(
+                        {
+                            "constraints": [
+                                {
+                                    "type": "compare",
+                                    "operator": "==",
+                                    "left": {
+                                        "type": "input_value",
+                                        "input_node_id": "path/projectId",
+                                    },
+                                    "right": {
+                                        "type": "literal",
+                                        "value": "known-project",
+                                    },
+                                }
+                            ]
+                        }
+                    ),
+                )
+            ]
+        ),
+        ready_items=[
+            PlanItemSummary(
+                item_id="I1",
+                failure_refs=["F1"],
+                cause="The project identifier must equal the accepted value.",
+                confidence=0.95,
+                affected_inputs=["path.projectId"],
+                solution="Apply the learned request constraint.",
+                evidence_refs=["F1", "C1"],
+            )
+        ],
+        covered_item_ids=["I1"],
+    )
+
+
+def _report_with_project_value(value: str, *, revision: int):
+    report = smoke_report()
+    case = report.cases[0]
+    generated = case.generated_test_case.model_copy(
+        update={
+            "path_parameters": {"projectId": value},
+            "generated_values": [
+                case.generated_test_case.generated_values[0].model_copy(
+                    update={"value": value}
+                )
+            ],
+        }
+    )
+    return report.model_copy(
+        update={
+            "config_revision": revision,
+            "cases": [
+                case.model_copy(update={"generated_test_case": generated})
+            ],
+        }
+    )
+
+
+def test_patch_validation_accepts_only_a_constraint_that_changes_generated_cases() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.testing import BatchFailureReport
+
+    baseline = _report_with_project_value("random-project", revision=3)
+    candidate = _report_with_project_value(
+        "known-project",
+        revision=3,
+    ).model_copy(update={"failure_report": BatchFailureReport()})
+    client = _StubClient(
+        [
+            _llm_response(
+                {
+                    "items": [
+                        {
+                            "item_id": "I1",
+                            "status": "resolved",
+                            "current_failure_refs": [],
+                            "reason": "The constraint changed the request and the failure is absent.",
+                            "confidence": 0.95,
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=candidate,
+        baseline_report=baseline,
+        config=smoke_config(),
+        diagnosis=_constraint_patch_ready_diagnosis(),
+    )
+
+    assert result.accepted_constraint_ids == [
+        "constraint_project_known"
+    ]
+    assert result.rejected_constraint_ids == []
+    assert result.accepted_input_node_ids == []
+    prompt = client.requests[0].messages[-1].content
+    assert '"kind": "Arithmetic/Relational"' in prompt
+    assert '"baseline_violated": true' in prompt
+    assert "path/projectId" not in prompt
+    assert "known-project" not in prompt
+
+
+def test_patch_validation_rejects_resolved_constraint_without_baseline_difference() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.testing import BatchFailureReport
+
+    report = _report_with_project_value(
+        "known-project",
+        revision=3,
+    ).model_copy(update={"failure_report": BatchFailureReport()})
+    resolved = {
+        "items": [
+            {
+                "item_id": "I1",
+                "status": "resolved",
+                "current_failure_refs": [],
+                "reason": "The current batch has no failure.",
+                "confidence": 0.9,
+            }
+        ]
+    }
+    client = _StubClient(
+        [_llm_response(resolved), _llm_response(resolved)]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=report,
+        baseline_report=report,
+        config=smoke_config(),
+        diagnosis=_constraint_patch_ready_diagnosis(),
+    )
+
+    assert result.accepted_constraint_ids == []
+    assert result.rejected_constraint_ids == [
+        "constraint_project_known"
+    ]
+    assert result.items[0].status == "unknown"
+    assert "attributed effect was not exercised" in (
+        client.requests[1].messages[-1].content
+    )
+
+
+def test_patch_validation_requires_a_same_seed_baseline() -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeDiagnoser,
+        OperationSmokeOutputError,
+    )
+
+    candidate = _report_with_project_value(
+        "known-project",
+        revision=3,
+    )
+    baseline = _report_with_project_value(
+        "random-project",
+        revision=3,
+    ).model_copy(update={"seed": candidate.seed + 1})
+    diagnoser = OperationSmokeDiagnoser(
+        client=_StubClient([]),
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    )
+
+    try:
+        diagnoser.validate_patch(
+            report=candidate,
+            baseline_report=baseline,
+            config=smoke_config(),
+            diagnosis=_constraint_patch_ready_diagnosis(),
+        )
+    except OperationSmokeOutputError as exc:
+        assert exc.code == "operation_smoke_baseline_seed_mismatch"
+    else:
+        raise AssertionError("mismatched baseline seed was accepted")
 
 
 def test_patch_validation_uses_think_and_accepts_an_exercised_resolved_item() -> None:

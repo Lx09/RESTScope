@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from restscope.observability import TracingRuntime
 from restscope.testing import (
+    ConstraintSet,
     GeneratorConfigCatalog,
     OperationExecutionReport,
     OperationGeneratorConfig,
@@ -16,11 +17,14 @@ from restscope.testing import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
+from restscope.testing.generation import generate_test_case
 
 from .diagnosis import OperationSmokeDiagnoser
 from .evidence import build_semantic_input_map
 from .schemas import (
     AvailableReferenceOption,
+    CompiledConstraintPatch,
+    GeneratorPatchDraft,
     OperationSmokeRequest,
     OperationSmokeResult,
     PatchValidationSummary,
@@ -173,7 +177,9 @@ class OperationSmokeAgent:
             else 0
         )
         pending_diagnosis: PlanSolveDiagnosisResult | None = None
+        pending_baseline_report: OperationExecutionReport | None = None
         previous_experiment: dict | None = None
+        active_constraints: dict[str, CompiledConstraintPatch] = {}
 
         try:
             while True:
@@ -188,6 +194,17 @@ class OperationSmokeAgent:
                     operation_key=request.operation_key,
                     case_count=request.case_count,
                     seed=seed,
+                    constraints=_combined_constraints(
+                        [
+                            *active_constraints.values(),
+                            *(
+                                pending_diagnosis.patch.constraints
+                                if pending_diagnosis is not None
+                                and pending_diagnosis.patch is not None
+                                else []
+                            ),
+                        ]
+                    ),
                 )
                 reports.append(report)
                 if report.config_revision != current.revision:
@@ -203,20 +220,24 @@ class OperationSmokeAgent:
                     request.operation_key,
                     current.revision,
                 )
-                is_candidate = (
-                    current_history is not None
-                    and current_history.lifecycle == "candidate"
-                )
-                if is_candidate:
-                    if pending_diagnosis is None:
+                if pending_diagnosis is not None:
+                    assert pending_diagnosis.patch is not None
+                    has_generator_candidate = bool(
+                        pending_diagnosis.patch.updates
+                    )
+                    if has_generator_candidate and (
+                        current_history is None
+                        or current_history.lifecycle != "candidate"
+                    ):
                         raise RuntimeError(
-                            "Candidate revision has no in-memory patch diagnosis"
+                            "Pending generator patch has no candidate revision"
                         )
                     validation = self.diagnoser.validate_patch(
                         report=report,
                         config=current,
                         diagnosis=pending_diagnosis,
                         private_case_evidence=private_case_evidence,
+                        baseline_report=pending_baseline_report,
                     )
                     pending_diagnosis = pending_diagnosis.model_copy(
                         update={"patch_validation": validation}
@@ -230,13 +251,29 @@ class OperationSmokeAgent:
                         validation=validation,
                         change_count=len(
                             pending_diagnosis.patch.attributions
-                            if pending_diagnosis.patch is not None
-                            else []
+                        )
+                        + len(
+                            pending_diagnosis.patch.constraints
                         ),
                         success_override=success_override,
                     )
                     candidate_config = current
-                    if success_override:
+                    accepted_constraint_ids = (
+                        {
+                            constraint.constraint_id
+                            for constraint in (
+                                pending_diagnosis.patch.constraints
+                            )
+                        }
+                        if success_override
+                        else set(validation.accepted_constraint_ids)
+                    )
+                    for constraint in pending_diagnosis.patch.constraints:
+                        if constraint.constraint_id in accepted_constraint_ids:
+                            active_constraints[constraint.constraint_id] = (
+                                constraint
+                            )
+                    if has_generator_candidate and success_override:
                         current = self.config_catalog.finalize_candidate(
                             operation_key=request.operation_key,
                             candidate_revision=current.revision,
@@ -250,7 +287,7 @@ class OperationSmokeAgent:
                             },
                             evaluation=candidate_evaluation,
                         )
-                    else:
+                    elif has_generator_candidate:
                         current = self.config_catalog.finalize_candidate(
                             operation_key=request.operation_key,
                             candidate_revision=current.revision,
@@ -265,6 +302,7 @@ class OperationSmokeAgent:
                         config=candidate_config,
                     )
                     pending_diagnosis = None
+                    pending_baseline_report = None
                     if success_override:
                         return self._result(
                             status="passed",
@@ -318,6 +356,17 @@ class OperationSmokeAgent:
                     ),
                     private_case_evidence=private_case_evidence,
                     previous_experiment=previous_experiment,
+                    patch_preflight=lambda patch: _preflight_patch(
+                        catalog=self.config_catalog,
+                        reference_values=self.reference_values,
+                        current=current,
+                        patch=patch,
+                        active_constraints=list(
+                            active_constraints.values()
+                        ),
+                        case_count=request.case_count,
+                        seed=seed,
+                    ),
                     max_planning_outputs=request.max_planning_outputs,
                     max_http_tool_rounds=request.max_http_tool_rounds,
                 )
@@ -352,17 +401,20 @@ class OperationSmokeAgent:
                         "patch": type(diagnosis.patch)(
                             updates=updates,
                             attributions=diagnosis.patch.attributions,
+                            constraints=diagnosis.patch.constraints,
                         )
                     }
                 )
                 diagnoses.append(diagnosis)
-                current = self.config_catalog.stage_candidate(
-                    operation_key=request.operation_key,
-                    expected_revision=current.revision,
-                    updates=updates,
-                    hypothesis={"kind": "operation_smoke_joint_patch"},
-                )
+                if updates:
+                    current = self.config_catalog.stage_candidate(
+                        operation_key=request.operation_key,
+                        expected_revision=current.revision,
+                        updates=updates,
+                        hypothesis={"kind": "operation_smoke_joint_patch"},
+                    )
                 pending_diagnosis = diagnosis
+                pending_baseline_report = report
                 feedback_rounds += 1
         except SQLAlchemyError:
             # Database availability is a shared-run invariant. Let Supervisor
@@ -376,6 +428,7 @@ class OperationSmokeAgent:
                 threshold=request.success_rate_threshold,
                 candidate_change_count=(
                     len(pending_diagnosis.patch.attributions)
+                    + len(pending_diagnosis.patch.constraints)
                     if pending_diagnosis is not None
                     and pending_diagnosis.patch is not None
                     else 0
@@ -483,7 +536,10 @@ def _candidate_evaluation(
     accepted_count = (
         change_count
         if success_override
-        else len(validation.accepted_input_node_ids)
+        else (
+            len(validation.accepted_input_node_ids)
+            + len(validation.accepted_constraint_ids)
+        )
     )
     if success_override:
         validation_status = "success_threshold_override"
@@ -573,6 +629,57 @@ def _prepare_reference_updates(
     return prepared
 
 
+def _combined_constraints(
+    patches: list[CompiledConstraintPatch],
+) -> ConstraintSet | None:
+    unique_patches = {patch.constraint_id: patch for patch in patches}
+    expressions = [
+        expression
+        for patch in unique_patches.values()
+        for expression in patch.constraint.constraints
+    ]
+    if not expressions:
+        return None
+    return ConstraintSet(constraints=expressions)
+
+
+def _preflight_patch(
+    *,
+    catalog: GeneratorConfigCatalog,
+    reference_values: ReferenceValueProvider,
+    current: OperationGeneratorConfig,
+    patch: GeneratorPatchDraft,
+    active_constraints: list[CompiledConstraintPatch],
+    case_count: int,
+    seed: int,
+) -> list[str]:
+    """Generate the complete experimental batch without mutating runtime state."""
+
+    try:
+        preview = catalog.preview_candidate(
+            operation_key=current.operation_key,
+            updates=patch.updates,
+        )
+        constraints = _combined_constraints(
+            [*active_constraints, *patch.constraints]
+        )
+        for case_index in range(case_count):
+            generate_test_case(
+                preview.snapshot,
+                preview,
+                run_seed=seed,
+                case_index=case_index,
+                reference_values=reference_values,
+                constraints=constraints,
+            )
+    except ValueError as exc:
+        return [
+            "Candidate patch cannot generate a complete batch "
+            f"({type(exc).__name__})."
+        ]
+    return []
+
+
 def _run_smoke_batch(
     runner: OperationBatchRunner,
     *,
@@ -580,9 +687,14 @@ def _run_smoke_batch(
     operation_key: str,
     case_count: int,
     seed: int,
+    constraints: ConstraintSet | None,
 ) -> tuple[OperationExecutionReport, dict[str, object]]:
     run_for_smoke = getattr(runner, "run_operation_for_smoke", None)
     if not callable(run_for_smoke):
+        if constraints is not None:
+            raise RuntimeError(
+                "The batch runner does not support runtime constraints"
+            )
         return (
             runner.run_operation(
                 context,
@@ -592,12 +704,14 @@ def _run_smoke_batch(
             ),
             {},
         )
-    outcome = run_for_smoke(
-        context,
-        operation_key=operation_key,
-        case_count=case_count,
-        seed=seed,
-    )
+    arguments = {
+        "operation_key": operation_key,
+        "case_count": case_count,
+        "seed": seed,
+    }
+    if constraints is not None:
+        arguments["constraints"] = constraints
+    outcome = run_for_smoke(context, **arguments)
     return (
         outcome.report,
         {item.case_id: item for item in outcome.case_evidence},
@@ -616,7 +730,13 @@ def _previous_experiment_summary(
         if diagnosis.patch_validation is not None
         else []
     )
+    accepted_constraint_ids = set(
+        diagnosis.patch_validation.accepted_constraint_ids
+        if diagnosis.patch_validation is not None
+        else []
+    )
     changes = []
+    constraints = []
     if diagnosis.patch is not None:
         for update in diagnosis.patch.updates:
             handle = semantic_inputs.handle_by_node.get(update.input_node_id)
@@ -638,12 +758,22 @@ def _previous_experiment_summary(
                     else "removed"
                 )
             changes.append(change)
+        for constraint in diagnosis.patch.constraints:
+            summary = {"kind": constraint.kind}
+            if diagnosis.patch_validation is not None:
+                summary["outcome"] = (
+                    "accepted"
+                    if constraint.constraint_id in accepted_constraint_ids
+                    else "removed"
+                )
+            constraints.append(summary)
     summary = {
         "diagnosis_status": diagnosis.status,
         "termination_reason": diagnosis.termination_reason,
         "covered_item_count": len(diagnosis.covered_item_ids),
         "deferred_item_count": len(diagnosis.deferred_items),
         "generator_changes": changes,
+        "constraints": constraints,
         "candidate_success_rate": evaluation.get("success_rate"),
         "candidate_case_count": evaluation.get("case_count"),
     }
@@ -652,16 +782,20 @@ def _previous_experiment_summary(
             {
                 "accepted_change_count": evaluation.get(
                     "accepted_change_count",
-                    len(accepted_input_node_ids),
+                    len(accepted_input_node_ids)
+                    + len(accepted_constraint_ids),
                 ),
                 "removed_change_count": evaluation.get(
                     "rejected_change_count",
-                    len(changes) - len(accepted_input_node_ids),
+                    len(changes)
+                    + len(constraints)
+                    - len(accepted_input_node_ids)
+                    - len(accepted_constraint_ids),
                 ),
                 "evidence_note": (
                     "This candidate batch used the complete experimental patch. "
-                    "Changes marked removed are no longer active in the accepted "
-                    "generator configuration."
+                    "Effects marked removed are no longer active in this Smoke "
+                    "run."
                 ),
             }
         )
