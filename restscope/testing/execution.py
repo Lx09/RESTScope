@@ -20,6 +20,8 @@ from restscope.http_transport import (
 from restscope.observability import TracingRuntime
 
 from .catalog import GeneratorConfigCatalog
+from .constraints import ConstraintSet, ConstraintValidationError
+from .constraint_solver import ConstraintSolveError
 from .failure_reporting import (
     MAX_FAILURE_RESPONSE_BYTES,
     FailureCaseEvidence,
@@ -100,6 +102,7 @@ class OperationTestingService:
             operation_key=operation_key,
             case_count=case_count,
             seed=seed,
+            constraints=None,
         ).report
 
     def run_operation_for_smoke(
@@ -110,6 +113,7 @@ class OperationTestingService:
         operation_key: str,
         case_count: int = 1,
         seed: int | None = None,
+        constraints: ConstraintSet | None = None,
     ) -> SmokeExecutionOutcome:
         """Execute once while retaining bounded evidence outside the report."""
 
@@ -118,6 +122,7 @@ class OperationTestingService:
             operation_key=operation_key,
             case_count=case_count,
             seed=seed,
+            constraints=constraints,
         )
 
     def _run_operation_traced(
@@ -128,6 +133,7 @@ class OperationTestingService:
         operation_key: str,
         case_count: int,
         seed: int | None,
+        constraints: ConstraintSet | None,
     ) -> SmokeExecutionOutcome:
         with self.tracing_runtime.span(
             "OperationTestingService.run_operation",
@@ -136,10 +142,20 @@ class OperationTestingService:
                 "operation_key": operation_key,
                 "case_count": case_count,
                 "seed": seed,
+                "constraint_count": (
+                    len(constraints.constraints)
+                    if constraints is not None
+                    else 0
+                ),
             },
             attributes={
                 "restscope.operation.key": operation_key,
                 "restscope.test.case_count": case_count,
+                "restscope.test.constraint_count": (
+                    len(constraints.constraints)
+                    if constraints is not None
+                    else 0
+                ),
             },
         ) as span:
             outcome = self._run_operation(
@@ -147,6 +163,7 @@ class OperationTestingService:
                 operation_key=operation_key,
                 case_count=case_count,
                 seed=seed,
+                constraints=constraints,
             )
             report = outcome.report
             span.set_output(
@@ -190,6 +207,7 @@ class OperationTestingService:
         operation_key: str,
         case_count: int = 1,
         seed: int | None = None,
+        constraints: ConstraintSet | None = None,
     ) -> SmokeExecutionOutcome:
         if not 1 <= case_count <= 20:
             raise TestingExecutionError(
@@ -202,26 +220,30 @@ class OperationTestingService:
         prepared: list[
             tuple[GeneratedTestCase, PreparedTestRequest, PreparedTargetRequest]
         ] = []
-        for case_index in range(case_count):
-            generated = generate_test_case(
-                operation,
-                config,
-                run_seed=run_seed,
-                case_index=case_index,
-                reference_values=self.reference_values,
-            )
-            request = serialize_test_case(operation, generated)
-            target_request = self.transport.prepare(
-                method=request.method,
-                base_url=context.base_url,
-                path=request.path,
-                query_items=_target_query_items(request),
-                context_headers=context.headers,
-                request_headers=request.headers,
-                override_context_headers=True,
-                allowed_sensitive_request_headers={"cookie"},
-            )
-            prepared.append((generated, request, target_request))
+        try:
+            for case_index in range(case_count):
+                generated = generate_test_case(
+                    operation,
+                    config,
+                    run_seed=run_seed,
+                    case_index=case_index,
+                    reference_values=self.reference_values,
+                    constraints=constraints,
+                )
+                request = serialize_test_case(operation, generated)
+                target_request = self.transport.prepare(
+                    method=request.method,
+                    base_url=context.base_url,
+                    path=request.path,
+                    query_items=_target_query_items(request),
+                    context_headers=context.headers,
+                    request_headers=request.headers,
+                    override_context_headers=True,
+                    allowed_sensitive_request_headers={"cookie"},
+                )
+                prepared.append((generated, request, target_request))
+        except (ConstraintValidationError, ConstraintSolveError) as exc:
+            raise TestingExecutionError(exc.code, str(exc)) from exc
 
         run_id = f"test_run_{uuid4().hex}"
         reports: list[TestCaseExecutionReport] = []

@@ -3,6 +3,35 @@ from __future__ import annotations
 from pathlib import Path
 
 
+class _IdentityRedactor:
+    def redact(self, value):
+        return value
+
+
+class _RecordingSpan:
+    def set_output(self, value) -> None:
+        pass
+
+    def set_attribute(self, name, value) -> None:
+        pass
+
+
+class _RecordingTracingRuntime:
+    def __init__(self) -> None:
+        self.inputs: list[dict] = []
+        self.redactor = _IdentityRedactor()
+
+    def span(self, name, *, kind, input_value, attributes):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def opened():
+            self.inputs.append(input_value)
+            yield _RecordingSpan()
+
+        return opened()
+
+
 def _configured_catalog(tmp_path: Path, ir):
     from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
     from restscope.testing import GeneratorConfigCatalog
@@ -14,6 +43,67 @@ def _configured_catalog(tmp_path: Path, ir):
     )
     assert catalog.initialize_once(ir) is True
     return catalog
+
+
+def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
+    import httpx
+
+    from restscope.capabilities import ToolContext
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import OperationTestingService
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Constrained execution", "version": "1"},
+            "paths": {
+                "/search": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "mode",
+                                "in": "query",
+                                "required": True,
+                                "schema": {
+                                    "type": "string",
+                                    "enum": ["fast", "slow"],
+                                },
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["GET /search"]
+    catalog = _configured_catalog(tmp_path, ir)
+    requests: list[httpx.Request] = []
+    service = OperationTestingService(
+        config_catalog=catalog,
+        transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda request: requests.append(request)
+                    or httpx.Response(200)
+                ),
+                **kwargs,
+            )
+        ),
+        tracing_runtime=tracing_runtime,
+    )
+    context = ToolContext(
+        ir=ir,
+        baseline_schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": "{}",
+        },
+        base_url="https://api.example.test",
+        headers={},
+    )
+    return operation, catalog, service, context, requests
 
 
 def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
@@ -212,6 +302,138 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
     assert report.cases[0].generated_test_case.query_parameters == {
         "mode": "ffffffff"
     }
+
+
+def test_smoke_execution_applies_constraints_and_traces_only_the_count(
+    tmp_path: Path,
+) -> None:
+    from restscope.testing import ConstraintSet
+
+    tracing = _RecordingTracingRuntime()
+    operation, catalog, service, context, requests = _constrained_execution_setup(
+        tmp_path,
+        tracing_runtime=tracing,
+    )
+    config = catalog.inspect_operation(operation.operation_key)
+    mode_id = config.snapshot.parameters[0].input_node_id
+    secret_literal = "slow"
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {
+                    "type": "compare",
+                    "operator": "==",
+                    "left": {
+                        "type": "input_value",
+                        "input_node_id": mode_id,
+                    },
+                    "right": {
+                        "type": "literal",
+                        "value": secret_literal,
+                    },
+                }
+            ]
+        }
+    )
+
+    outcome = service.run_operation_for_smoke(
+        context,
+        operation_key=operation.operation_key,
+        case_count=2,
+        seed=17,
+        constraints=constraints,
+    )
+
+    assert len(requests) == 2
+    assert [request.url.params["mode"] for request in requests] == ["slow", "slow"]
+    assert [
+        case.generated_test_case.query_parameters["mode"]
+        for case in outcome.report.cases
+    ] == ["slow", "slow"]
+    root_input = tracing.inputs[0]
+    assert root_input["constraint_count"] == 1
+    assert secret_literal not in str(root_input)
+
+
+def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pytest
+
+    from restscope.testing import ConstraintSet, TestingExecutionError
+    from restscope.testing.constraint_solver import ConstraintSolveError
+    from restscope.testing.generation import generate_test_case as real_generate
+
+    operation, catalog, service, context, requests = _constrained_execution_setup(
+        tmp_path
+    )
+    config = catalog.inspect_operation(operation.operation_key)
+    mode_id = config.snapshot.parameters[0].input_node_id
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {"type": "present", "input_node_id": mode_id}
+            ]
+        }
+    )
+
+    def fail_second_case(*args, **kwargs):
+        if kwargs["case_index"] == 1:
+            raise ConstraintSolveError(
+                "constraint_unsatisfiable",
+                "second case has no solution",
+                input_node_ids=(mode_id,),
+            )
+        return real_generate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "restscope.testing.execution.generate_test_case",
+        fail_second_case,
+    )
+
+    with pytest.raises(TestingExecutionError) as raised:
+        service.run_operation_for_smoke(
+            context,
+            operation_key=operation.operation_key,
+            case_count=2,
+            seed=17,
+            constraints=constraints,
+        )
+
+    assert raised.value.code == "constraint_unsatisfiable"
+    assert requests == []
+
+
+def test_ordinary_operation_execution_does_not_accept_constraints(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from restscope.testing import ConstraintSet
+
+    operation, catalog, service, context, requests = _constrained_execution_setup(
+        tmp_path
+    )
+    mode_id = catalog.inspect_operation(
+        operation.operation_key
+    ).snapshot.parameters[0].input_node_id
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {"type": "present", "input_node_id": mode_id}
+            ]
+        }
+    )
+
+    with pytest.raises(TypeError):
+        service.run_operation(
+            context,
+            operation_key=operation.operation_key,
+            constraints=constraints,
+        )
+
+    assert requests == []
 
 
 def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -> None:
