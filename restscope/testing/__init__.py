@@ -5,6 +5,7 @@ from .constraints import (
     AndConstraint,
     ArithmeticValue,
     CardinalityConstraint,
+    ConstraintValidationError,
     ComparePredicate,
     ConstraintSet,
     ImplicationConstraint,
@@ -16,6 +17,11 @@ from .constraints import (
     NotConstraint,
     OrConstraint,
     PresentPredicate,
+    classify_constraint,
+    evaluate_constraint_set,
+    normalize_constraint_set,
+    referenced_input_node_ids,
+    validate_constraint_set,
 )
 from .execution import OperationTestingService, TestingExecutionError
 from .models import (
@@ -47,6 +53,7 @@ __all__ = [
     "CardinalityConstraint",
     "ComparePredicate",
     "ConstraintSet",
+    "ConstraintValidationError",
     "GeneratorConfigCatalog",
     "GeneratorConfigError",
     "GeneratorConfigRevisionConflict",
@@ -78,5 +85,10 @@ __all__ = [
     "PresentPredicate",
     "TestingExecutionError",
     "UniqueFailureMessage",
+    "classify_constraint",
+    "evaluate_constraint_set",
     "generate_strategy_value",
+    "normalize_constraint_set",
+    "referenced_input_node_ids",
+    "validate_constraint_set",
 ]
