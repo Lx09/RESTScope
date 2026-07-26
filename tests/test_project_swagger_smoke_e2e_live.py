@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import time
+from types import SimpleNamespace
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -176,6 +177,197 @@ def _phoenix_summary(
     }
 
 
+def _trace_contract_report(*, investigation_count: int = 1) -> Any:
+    return SimpleNamespace(
+        attempts=[
+            SimpleNamespace(
+                smoke_result=SimpleNamespace(
+                    diagnoses=[
+                        SimpleNamespace(
+                            investigations=[object()] * investigation_count
+                        )
+                    ]
+                )
+            )
+        ]
+    )
+
+
+def _diagnosis_protocol_report(
+    *investigations: tuple[int, str],
+) -> Any:
+    return SimpleNamespace(
+        attempts=[
+            SimpleNamespace(
+                smoke_result=SimpleNamespace(
+                    diagnoses=[
+                        SimpleNamespace(
+                            investigations=[
+                                SimpleNamespace(
+                                    valid_outputs=valid_outputs,
+                                    reason=reason,
+                                )
+                                for valid_outputs, reason in investigations
+                            ]
+                        )
+                    ]
+                    if investigations
+                    else []
+                )
+            )
+        ]
+    )
+
+
+def test_live_diagnosis_protocol_coverage_accepts_one_valid_decision() -> None:
+    _assert_live_diagnosis_protocol_coverage(
+        _diagnosis_protocol_report(
+            (0, "invalid_output_limit"),
+            (1, "output_limit"),
+        )
+    )
+
+
+def test_live_diagnosis_protocol_coverage_allows_no_failures() -> None:
+    _assert_live_diagnosis_protocol_coverage(
+        _diagnosis_protocol_report()
+    )
+
+
+def test_live_diagnosis_protocol_coverage_rejects_all_invalid_outputs() -> None:
+    with pytest.raises(AssertionError):
+        _assert_live_diagnosis_protocol_coverage(
+            _diagnosis_protocol_report(
+                (0, "invalid_output_limit"),
+                (0, "invalid_output_limit"),
+            )
+        )
+
+
+def _diagnosis_trace_spans(
+    *,
+    investigation_parent: str = "diagnosis",
+    include_llm: bool = True,
+) -> list[dict[str, Any]]:
+    operation_key = "GET /projects/{id}"
+    spans = [
+        {
+            "name": "OperationSmokeDiagnoser.diagnose",
+            "context": {"span_id": "diagnosis"},
+            "parent_id": "smoke",
+            "attributes": {"restscope.operation.key": operation_key},
+        },
+        {
+            "name": "OperationSmokeDiagnoser.investigate_failure",
+            "context": {"span_id": "investigation"},
+            "parent_id": investigation_parent,
+            "attributes": {"restscope.operation.key": operation_key},
+        },
+    ]
+    if include_llm:
+        spans.append(
+            {
+                "name": "LLMClient.invoke",
+                "context": {"span_id": "llm"},
+                "parent_id": "investigation",
+                "attributes": {},
+            }
+        )
+    return spans
+
+
+def test_diagnosis_trace_contract_accepts_nested_investigation_llm() -> None:
+    _assert_diagnosis_trace_hierarchy(
+        spans=_diagnosis_trace_spans(),
+        report=_trace_contract_report(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("investigation_parent", "include_llm"),
+    [
+        ("missing-diagnosis", True),
+        ("diagnosis", False),
+    ],
+)
+def test_diagnosis_trace_contract_rejects_incomplete_hierarchy(
+    investigation_parent: str,
+    include_llm: bool,
+) -> None:
+    with pytest.raises(AssertionError):
+        _assert_diagnosis_trace_hierarchy(
+            spans=_diagnosis_trace_spans(
+                investigation_parent=investigation_parent,
+                include_llm=include_llm,
+            ),
+            report=_trace_contract_report(),
+        )
+
+
+def _assert_live_diagnosis_protocol_coverage(report: Any) -> None:
+    investigations = [
+        investigation
+        for attempt in report.attempts
+        for diagnosis in attempt.smoke_result.diagnoses
+        for investigation in diagnosis.investigations
+    ]
+    if not investigations:
+        return
+    assert any(
+        investigation.valid_outputs > 0
+        for investigation in investigations
+    ), (
+        "every live failure investigation ended without one valid "
+        "FailureDecision"
+    )
+    assert any(
+        investigation.reason != "invalid_output_limit"
+        for investigation in investigations
+    ), "every live failure investigation hit invalid_output_limit"
+
+
+def _assert_diagnosis_trace_hierarchy(
+    *,
+    spans: list[dict[str, Any]],
+    report: Any,
+) -> None:
+    by_id = {span["context"]["span_id"]: span for span in spans}
+    diagnosis_spans = [
+        span
+        for span in spans
+        if span["name"] == "OperationSmokeDiagnoser.diagnose"
+    ]
+    investigation_spans = [
+        span
+        for span in spans
+        if span["name"] == "OperationSmokeDiagnoser.investigate_failure"
+    ]
+    report_diagnoses = [
+        diagnosis
+        for attempt in report.attempts
+        for diagnosis in attempt.smoke_result.diagnoses
+    ]
+
+    assert len(diagnosis_spans) == len(report_diagnoses)
+    assert len(investigation_spans) == sum(
+        len(diagnosis.investigations) for diagnosis in report_diagnoses
+    )
+    for investigation_span in investigation_spans:
+        parent = by_id.get(investigation_span["parent_id"])
+        assert parent is not None
+        assert parent["name"] == "OperationSmokeDiagnoser.diagnose"
+        assert (
+            parent["attributes"]["restscope.operation.key"]
+            == investigation_span["attributes"]["restscope.operation.key"]
+        )
+        assert any(
+            candidate["name"] == "LLMClient.invoke"
+            and candidate["parent_id"]
+            == investigation_span["context"]["span_id"]
+            for candidate in spans
+        )
+
+
 def _assert_phoenix_coverage(
     *,
     spans: list[dict[str, Any]],
@@ -278,18 +470,9 @@ def _assert_phoenix_coverage(
     assert len(case_monitor_spans) == response_case_count
     assert len(probe_monitor_spans) == len(probe_spans)
 
-    required_diagnoses = sum(
-        max(0, len(attempt.smoke_result.batch_reports) - 1)
-        for attempt in report.attempts
-    )
-    assert len(diagnosis_spans) >= required_diagnoses
-    assert all(
-        any(
-            candidate["name"] == "LLMClient.invoke"
-            and candidate["parent_id"] == span["context"]["span_id"]
-            for candidate in spans
-        )
-        for span in diagnosis_spans
+    _assert_diagnosis_trace_hierarchy(
+        spans=spans,
+        report=report,
     )
 
 
@@ -439,6 +622,7 @@ def test_project_swagger_runs_every_operation_through_smoke_and_phoenix() -> Non
     if phoenix_error is not None:
         raise phoenix_error
 
+    _assert_live_diagnosis_protocol_coverage(report)
     coverage = _report_coverage(report, expected_operations)
     assert report.stop_reason in {"completed", "completed_with_failures"}
     assert report.status in {"passed", "failed"}

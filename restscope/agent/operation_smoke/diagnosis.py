@@ -615,6 +615,9 @@ class OperationSmokeDiagnoser:
                 failure_ref=failure_ref,
                 root_failure_refs=root_failure_refs,
                 active_hypothesis=state.active_hypothesis,
+                hypothesis_observation_refs=(
+                    state.hypothesis_observation_refs
+                ),
             )
             tools = (
                 [self.http_probe.tool_spec(config)]

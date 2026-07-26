@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from restscope.testing import OperationGeneratorConfig
 
 from .evidence import EvidenceJournal
+from .planning import build_failure_decision_protocol
 from .schemas import FailureHypothesis
 
 
@@ -47,6 +48,7 @@ def build_failure_investigation_prompt(
     failure_ref: str,
     root_failure_refs: list[str],
     active_hypothesis: FailureHypothesis | None,
+    hypothesis_observation_refs: set[str] | None = None,
 ) -> FailureInvestigationPrompt:
     """Render one task card for exactly one active failure investigation."""
 
@@ -69,6 +71,17 @@ def build_failure_investigation_prompt(
         }
         for handle, node_id in journal.semantic_inputs.node_by_handle.items()
     ]
+    example_input = (
+        active_hypothesis.target_inputs[0]
+        if active_hypothesis is not None
+        else (inputs[0]["input"] if inputs else None)
+    )
+    observation_refs = sorted(hypothesis_observation_refs or ())
+    protocol = build_failure_decision_protocol(
+        input_handle=example_input,
+        failure_ref=failure_ref,
+        observation_ref=observation_refs[0] if observation_refs else None,
+    )
     system = "\n".join(
         (
             "You diagnose one Operation Smoke failure at a time.",
@@ -85,6 +98,8 @@ def build_failure_investigation_prompt(
             "no safe parameter diagnosis is possible.",
             "Only use input handles supplied under Request inputs and evidence "
             "references supplied under Evidence.",
+            "",
+            protocol.text,
         )
     )
     return FailureInvestigationPrompt(
@@ -118,7 +133,8 @@ def build_failure_investigation_prompt(
         ),
         repair_guidance=(
             "Return one complete decision with action ready, hypothesis, "
-            "confirmed, or deferred using only supplied inputs and evidence."
+            "confirmed, or deferred using only supplied inputs and evidence.\n"
+            + protocol.text
         ),
     )
 

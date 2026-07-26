@@ -105,6 +105,112 @@ def confirmed_decision():
     return decision
 
 
+def test_failure_decision_protocol_examples_match_the_dto() -> None:
+    from restscope.agent.operation_smoke.planning import (
+        FailureDecision,
+        build_failure_decision_protocol,
+    )
+
+    protocol = build_failure_decision_protocol(
+        input_handle="path.projectId",
+        failure_ref="F1",
+        observation_ref="O1",
+    )
+
+    assert protocol.allowed_fields == tuple(FailureDecision.model_fields)
+    assert set(protocol.examples) == {
+        "ready",
+        "hypothesis",
+        "confirmed",
+        "deferred",
+    }
+    for example in protocol.examples.values():
+        decision = FailureDecision.model_validate(example)
+        assert decision.semantic_errors() == []
+
+
+def test_failure_decision_protocol_hides_confirmed_without_observation() -> None:
+    from restscope.agent.operation_smoke.planning import (
+        build_failure_decision_protocol,
+    )
+
+    protocol = build_failure_decision_protocol(
+        input_handle="path.projectId",
+        failure_ref="F1",
+    )
+
+    assert "confirmed" not in protocol.examples
+    assert "action=confirmed is unavailable" in protocol.text
+
+
+def test_failure_prompt_and_repair_share_the_complete_dto_protocol() -> None:
+    from restscope.agent.operation_smoke.evidence import EvidenceJournal
+    from restscope.agent.operation_smoke.prompts import (
+        build_failure_investigation_prompt,
+    )
+
+    config = smoke_config()
+    journal = EvidenceJournal.from_batch(
+        report=smoke_report(),
+        config=config,
+    )
+
+    prompt = build_failure_investigation_prompt(
+        config=config,
+        journal=journal,
+        failure_ref="F1",
+        root_failure_refs=["F1"],
+        active_hypothesis=None,
+    )
+
+    for content in (prompt.system, prompt.repair_guidance):
+        assert "Allowed top-level keys (exactly)" in content
+        assert '"solutions"' in content
+        assert '"evidence_refs"' in content
+        assert '"proposed_changes"' in content
+        assert "proposed_changes must be a JSON array of strings" in content
+        assert "Never return failure_ref, explanation, reasoning, or " in content
+
+
+def test_repair_recovers_the_live_invalid_hypothesis_shape() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    invalid_live_shape = {
+        "action": "hypothesis",
+        "failure_ref": "F1",
+        "explanation": "The generated identifier must be numeric.",
+        "target_inputs": ["path.projectId"],
+        "proposed_changes": {
+            "input": "path.projectId",
+            "behavior": "Generate an integer identifier.",
+        },
+        "expected_outcome": "The request no longer returns HTTP 400.",
+    }
+    client = StubClient(
+        [
+            llm_response(invalid_live_shape),
+            llm_response(hypothesis_decision()),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+    ).diagnose(
+        report=smoke_report(),
+        config=smoke_config(),
+        max_diagnosis_outputs_per_failure=1,
+    )
+
+    assert result.valid_outputs == 1
+    assert result.invalid_outputs == 1
+    assert result.deferred_failures[0].reason == "output_limit"
+    repair_message = client.requests[1].messages[-1].content
+    assert "Allowed top-level keys (exactly)" in repair_message
+    assert "proposed_changes must be a JSON array of strings" in repair_message
+    assert "Never return failure_ref, explanation, reasoning, or " in repair_message
+
+
 class Probe:
     def __init__(self):
         self.calls = []
