@@ -9,14 +9,18 @@ from .factory import build_operation_smoke_agent
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
     AvailableReferenceOption,
+    GeneratorPatchAttribution,
     GeneratorPatchDraft,
     OperationSmokeRequest,
     OperationSmokeResult,
+    PatchItemValidationSummary,
+    PatchValidationSummary,
     PlanSolveDiagnosisResult,
 )
 
 __all__ = [
     "AvailableReferenceOption",
+    "GeneratorPatchAttribution",
     "GeneratorPatchDraft",
     "OperationSmokeAgent",
     "OperationBatchRunner",
@@ -24,6 +28,8 @@ __all__ = [
     "OperationSmokeOutputError",
     "OperationSmokeRequest",
     "OperationSmokeResult",
+    "PatchItemValidationSummary",
+    "PatchValidationSummary",
     "PlanSolveDiagnosisResult",
     "BehaviorMonitorReferenceValues",
     "build_operation_smoke_agent",

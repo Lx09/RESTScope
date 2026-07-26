@@ -197,6 +197,10 @@ def test_plan_solve_uses_thinking_model_and_patch_stays_fast() -> None:
         == "think-model"
     )
     assert (
+        selector.select("operation_smoke_patch_validation").model
+        == "think-model"
+    )
+    assert (
         selector.select("operation_smoke_generator_patch").model
         == "fast-model"
     )
@@ -233,6 +237,11 @@ def test_initial_plan_prompt_uses_semantic_handles_and_batch_evidence() -> None:
     assert "input_node_id" not in prompt.user
     assert "config_revision" not in prompt.user
     assert "must-not-enter-the-prompt" not in prompt.user
+    assert "confidence must be a number from 0 to 1" in prompt.system
+    assert (
+        '"solutions":[{"input":"path.projectId","desired_behavior":'
+        in prompt.system
+    )
 
 
 def test_plan_state_assigns_item_ids_and_supports_ready_pending_transitions() -> None:
@@ -599,6 +608,7 @@ def _joint_patch():
         "deferred_items": [],
         "changes": [
             {
+                "item_ids": ["I1"],
                 "input": "path.projectId",
                 "generation": {
                     "kind": "sample_values",
@@ -635,6 +645,8 @@ def test_diagnoser_uses_think_plan_then_one_fast_joint_patch() -> None:
     assert result.covered_item_ids == ["I1"]
     assert result.patch.updates[0].input_node_id == "path/projectId"
     assert result.patch.updates[0].strategy.type == "choice"
+    assert result.patch.attributions[0].input_node_id == "path/projectId"
+    assert result.patch.attributions[0].item_ids == ["I1"]
     assert [request.model for request in client.requests] == [
         "think-model",
         "fast-model",
@@ -770,6 +782,13 @@ def test_invalid_plan_gets_one_free_repair_without_consuming_extra_budget() -> N
     assert len(client.requests) == 3
     assert "path.forged was not offered" in (
         client.requests[1].messages[-1].content
+    )
+    assert "confidence must be a number from 0 to 1" in (
+        client.requests[1].messages[-1].content
+    )
+    assert (
+        '"solutions":[{"input":"path.projectId","desired_behavior":'
+        in client.requests[1].messages[-1].content
     )
 
 
@@ -1072,7 +1091,13 @@ def test_previous_experiment_uses_semantic_inputs_without_revisions_or_node_ids(
                         "value": "known-project",
                     },
                 }
-            ]
+            ],
+            attributions=[
+                {
+                    "input_node_id": "path/projectId",
+                    "item_ids": ["I1"],
+                }
+            ],
         ),
         covered_item_ids=["I1"],
     )
@@ -1255,6 +1280,365 @@ def test_each_covered_item_requires_a_change_to_one_of_its_own_inputs() -> None:
     assert result.status == "patch_ready"
     assert result.covered_item_ids == ["I1"]
     assert result.deferred_items[0].item_id == "I2"
-    assert "I2 is covered but none of its affected inputs changed" in (
+    assert "I2 is covered but has no attributed change" in (
         client.requests[2].messages[-1].content
     )
+
+
+def test_fast_patch_requires_valid_item_attribution_for_every_change() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    missing_attribution = _joint_patch()
+    del missing_attribution["changes"][0]["item_ids"]
+    invalid_attribution = _joint_patch()
+    invalid_attribution["changes"][0]["item_ids"] = ["I9"]
+    client = _StubClient(
+        [
+            _llm_response(_ready_plan()),
+            _llm_response(missing_attribution),
+            _llm_response(invalid_attribution),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "inconclusive"
+    assert result.termination_reason == "patch_output_invalid"
+    assert "item_ids" in client.requests[2].messages[-1].content
+
+
+def _patch_ready_diagnosis():
+    from restscope.agent.operation_smoke import (
+        GeneratorPatchAttribution,
+        GeneratorPatchDraft,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.agent.operation_smoke.schemas import PlanItemSummary
+
+    return PlanSolveDiagnosisResult(
+        status="patch_ready",
+        termination_reason="model_finalize",
+        patch=GeneratorPatchDraft(
+            updates=[
+                {
+                    "input_node_id": "path/projectId",
+                    "strategy": {
+                        "type": "constant",
+                        "value": "known-project",
+                    },
+                }
+            ],
+            attributions=[
+                GeneratorPatchAttribution(
+                    input_node_id="path/projectId",
+                    item_ids=["I1"],
+                )
+            ],
+        ),
+        ready_items=[
+            PlanItemSummary(
+                item_id="I1",
+                failure_refs=["F1"],
+                cause="The generated project identifier does not exist.",
+                confidence=0.95,
+                affected_inputs=["path.projectId"],
+                solution="Use a project identifier accepted by the API.",
+                evidence_refs=["F1", "C1"],
+            )
+        ],
+        covered_item_ids=["I1"],
+    )
+
+
+def test_patch_validation_uses_think_and_accepts_an_exercised_resolved_item() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.testing import BatchFailureReport
+
+    report = smoke_report().model_copy(
+        update={
+            "config_revision": 4,
+            "failure_report": BatchFailureReport(),
+        }
+    )
+    client = _StubClient(
+        [
+            _llm_response(
+                {
+                    "items": [
+                        {
+                            "item_id": "I1",
+                            "status": "resolved",
+                            "current_failure_refs": [],
+                            "reason": "The changed identifier was generated and the original failure is absent.",
+                            "confidence": 0.95,
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=report,
+        config=smoke_config().model_copy(update={"revision": 4}),
+        diagnosis=_patch_ready_diagnosis(),
+    )
+
+    assert result.accepted_item_ids == ["I1"]
+    assert result.accepted_input_node_ids == ["path/projectId"]
+    assert result.rejected_input_node_ids == []
+    assert result.items[0].status == "resolved"
+    assert client.requests[0].model == "think-model"
+    assert client.requests[0].metadata["role"] == (
+        "operation_smoke_patch_validation"
+    )
+    assert client.requests[0].tools == []
+    prompt = client.requests[0].messages[-1].content
+    assert "path.projectId" in prompt
+    assert '"generated_count": 1' in prompt
+    assert "path/projectId" not in prompt
+    assert "config_revision" not in prompt
+
+
+def test_patch_validation_repairs_invalid_refs_then_falls_back_to_unknown() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    invalid = {
+        "items": [
+            {
+                "item_id": "I1",
+                "status": "persisting",
+                "current_failure_refs": ["F9"],
+                "reason": "The same failure remains.",
+                "confidence": 0.8,
+            }
+        ]
+    }
+    missing = {"items": []}
+    client = _StubClient(
+        [
+            _llm_response(invalid),
+            _llm_response(missing),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=smoke_report().model_copy(update={"config_revision": 4}),
+        config=smoke_config().model_copy(update={"revision": 4}),
+        diagnosis=_patch_ready_diagnosis(),
+    )
+
+    assert result.accepted_item_ids == []
+    assert result.accepted_input_node_ids == []
+    assert result.rejected_input_node_ids == ["path/projectId"]
+    assert result.items[0].status == "unknown"
+    assert result.items[0].reason == "Patch validation output was invalid."
+    assert "F9 was not supplied" in client.requests[1].messages[-1].content
+
+
+def test_patch_validation_rejects_resolved_when_change_was_not_exercised() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    report = smoke_report().model_copy(
+        update={
+            "config_revision": 4,
+            "cases": [
+                smoke_report().cases[0].model_copy(
+                    update={
+                        "generated_test_case": smoke_report()
+                        .cases[0]
+                        .generated_test_case.model_copy(
+                            update={
+                                "generated_values": [],
+                                "omitted_input_node_ids": ["path/projectId"],
+                            }
+                        )
+                    }
+                )
+            ],
+        }
+    )
+    resolved = {
+        "items": [
+            {
+                "item_id": "I1",
+                "status": "resolved",
+                "current_failure_refs": [],
+                "reason": "The failure is absent.",
+                "confidence": 0.9,
+            }
+        ]
+    }
+    client = _StubClient(
+        [
+            _llm_response(resolved),
+            _llm_response(resolved),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=report,
+        config=smoke_config().model_copy(update={"revision": 4}),
+        diagnosis=_patch_ready_diagnosis(),
+    )
+
+    assert result.items[0].status == "unknown"
+    assert "was not exercised" in client.requests[1].messages[-1].content
+
+
+def test_patch_validation_counts_an_expected_omission_as_exercised() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.testing import BatchFailureReport
+
+    diagnosis = _patch_ready_diagnosis()
+    diagnosis = diagnosis.model_copy(
+        update={
+            "patch": diagnosis.patch.model_copy(
+                update={
+                    "updates": [
+                        diagnosis.patch.updates[0].model_copy(
+                            update={"inclusion_probability": 0}
+                        )
+                    ]
+                }
+            )
+        }
+    )
+    original_case = smoke_report().cases[0]
+    report = smoke_report().model_copy(
+        update={
+            "config_revision": 4,
+            "failure_report": BatchFailureReport(),
+            "cases": [
+                original_case.model_copy(
+                    update={
+                        "generated_test_case": (
+                            original_case.generated_test_case.model_copy(
+                                update={
+                                    "generated_values": [],
+                                    "omitted_input_node_ids": [
+                                        "path/projectId"
+                                    ],
+                                }
+                            )
+                        )
+                    }
+                )
+            ],
+        }
+    )
+    client = _StubClient(
+        [
+            _llm_response(
+                {
+                    "items": [
+                        {
+                            "item_id": "I1",
+                            "status": "resolved",
+                            "current_failure_refs": [],
+                            "reason": "The changed input was omitted as intended.",
+                            "confidence": 0.9,
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=report,
+        config=smoke_config().model_copy(update={"revision": 4}),
+        diagnosis=diagnosis,
+    )
+
+    assert result.accepted_input_node_ids == ["path/projectId"]
+    assert '"omission_expected": true' in client.requests[0].messages[-1].content
+
+
+def test_shared_change_is_accepted_when_any_attributed_item_is_resolved() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.agent.operation_smoke.schemas import PlanItemSummary
+
+    diagnosis = _patch_ready_diagnosis()
+    second_item = PlanItemSummary(
+        item_id="I2",
+        failure_refs=["F2"],
+        cause="The same identifier also violates a resource rule.",
+        confidence=0.8,
+        affected_inputs=["path.projectId"],
+        solution="Use the same observed identifier.",
+        evidence_refs=["F2", "C1"],
+    )
+    diagnosis = diagnosis.model_copy(
+        update={
+            "ready_items": [*diagnosis.ready_items, second_item],
+            "covered_item_ids": ["I1", "I2"],
+            "patch": diagnosis.patch.model_copy(
+                update={
+                    "attributions": [
+                        diagnosis.patch.attributions[0].model_copy(
+                            update={"item_ids": ["I1", "I2"]}
+                        )
+                    ]
+                }
+            ),
+        }
+    )
+    client = _StubClient(
+        [
+            _llm_response(
+                {
+                    "items": [
+                        {
+                            "item_id": "I1",
+                            "status": "resolved",
+                            "current_failure_refs": [],
+                            "reason": "The original lookup failure is absent.",
+                            "confidence": 0.9,
+                        },
+                        {
+                            "item_id": "I2",
+                            "status": "unknown",
+                            "current_failure_refs": [],
+                            "reason": "A later resource check was not reached.",
+                            "confidence": 0.4,
+                        },
+                    ]
+                }
+            )
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=_planning_model(),
+        patch_model=_patch_model(),
+    ).validate_patch(
+        report=smoke_report().model_copy(update={"config_revision": 4}),
+        config=smoke_config().model_copy(update={"revision": 4}),
+        diagnosis=diagnosis,
+    )
+
+    assert result.accepted_item_ids == ["I1"]
+    assert result.accepted_input_node_ids == ["path/projectId"]
+    assert result.rejected_input_node_ids == []

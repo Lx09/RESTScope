@@ -53,6 +53,7 @@ def test_operation_smoke_planning_uses_thinking_and_patch_uses_fast() -> None:
     )
 
     assert selector.select("operation_smoke_plan_solve").model == "thinking-model"
+    assert selector.select("operation_smoke_patch_validation").model == "thinking-model"
     assert selector.select("operation_smoke_generator_patch").model == "fast-model"
 
 

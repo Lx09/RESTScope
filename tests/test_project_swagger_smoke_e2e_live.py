@@ -206,6 +206,7 @@ def _assert_phoenix_coverage(
     case_spans = by_name["RESTScopeTestCase.execute"]
     monitor_spans = by_name["APIBehaviorMonitorAgent.observe_response"]
     diagnosis_spans = by_name["OperationSmokeDiagnoser.diagnose"]
+    probe_spans = by_name["restscope.http.request"]
 
     assert len(attempt_spans) == report.attempt_count
     assert len(smoke_spans) == report.attempt_count
@@ -237,9 +238,18 @@ def _assert_phoenix_coverage(
         == "OperationTestingService.run_operation"
         for span in case_spans
     )
-    assert all(
-        by_id[span["parent_id"]]["name"] == "RESTScopeTestCase.execute"
+    case_monitor_spans = [
+        span
         for span in monitor_spans
+        if by_id[span["parent_id"]]["name"] == "RESTScopeTestCase.execute"
+    ]
+    probe_monitor_spans = [
+        span
+        for span in monitor_spans
+        if by_id[span["parent_id"]]["name"] == "restscope.http.request"
+    ]
+    assert len(case_monitor_spans) + len(probe_monitor_spans) == len(
+        monitor_spans
     )
     assert all(
         by_id[span["parent_id"]]["name"] == "OperationSmokeAgent.run"
@@ -265,7 +275,8 @@ def _assert_phoenix_coverage(
     response_case_count = sum(
         "output.value" in span["attributes"] for span in case_spans
     )
-    assert len(monitor_spans) == response_case_count
+    assert len(case_monitor_spans) == response_case_count
+    assert len(probe_monitor_spans) == len(probe_spans)
 
     required_diagnoses = sum(
         max(0, len(attempt.smoke_result.batch_reports) - 1)

@@ -23,6 +23,7 @@ AttemptDisposition = Literal[
 OperationFailureKind = Literal[
     "threshold_exhausted",
     "no_parameter_issue",
+    "diagnosis_inconclusive",
     "unsupported_operation",
     "operation_error",
 ]

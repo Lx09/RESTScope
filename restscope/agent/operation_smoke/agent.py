@@ -23,6 +23,7 @@ from .schemas import (
     AvailableReferenceOption,
     OperationSmokeRequest,
     OperationSmokeResult,
+    PatchValidationSummary,
     PlanSolveDiagnosisResult,
 )
 
@@ -171,6 +172,8 @@ class OperationSmokeAgent:
             and current_history.lifecycle == "candidate"
             else 0
         )
+        pending_diagnosis: PlanSolveDiagnosisResult | None = None
+        previous_experiment: dict | None = None
 
         try:
             while True:
@@ -204,13 +207,84 @@ class OperationSmokeAgent:
                     current_history is not None
                     and current_history.lifecycle == "candidate"
                 )
-                if success_rate >= request.success_rate_threshold:
-                    if is_candidate:
-                        self.config_catalog.accept_candidate(
+                if is_candidate:
+                    if pending_diagnosis is None:
+                        raise RuntimeError(
+                            "Candidate revision has no in-memory patch diagnosis"
+                        )
+                    validation = self.diagnoser.validate_patch(
+                        report=report,
+                        config=current,
+                        diagnosis=pending_diagnosis,
+                        private_case_evidence=private_case_evidence,
+                    )
+                    pending_diagnosis = pending_diagnosis.model_copy(
+                        update={"patch_validation": validation}
+                    )
+                    diagnoses[-1] = pending_diagnosis
+                    success_override = (
+                        success_rate >= request.success_rate_threshold
+                    )
+                    candidate_evaluation = _candidate_evaluation(
+                        evaluation,
+                        validation=validation,
+                        change_count=len(
+                            pending_diagnosis.patch.attributions
+                            if pending_diagnosis.patch is not None
+                            else []
+                        ),
+                        success_override=success_override,
+                    )
+                    candidate_config = current
+                    if success_override:
+                        current = self.config_catalog.finalize_candidate(
                             operation_key=request.operation_key,
                             candidate_revision=current.revision,
-                            evaluation=evaluation,
+                            accepted_input_node_ids={
+                                attribution.input_node_id
+                                for attribution in (
+                                    pending_diagnosis.patch.attributions
+                                    if pending_diagnosis.patch is not None
+                                    else []
+                                )
+                            },
+                            evaluation=candidate_evaluation,
                         )
+                    else:
+                        current = self.config_catalog.finalize_candidate(
+                            operation_key=request.operation_key,
+                            candidate_revision=current.revision,
+                            accepted_input_node_ids=set(
+                                validation.accepted_input_node_ids
+                            ),
+                            evaluation=candidate_evaluation,
+                        )
+                    previous_experiment = _previous_experiment_summary(
+                        pending_diagnosis,
+                        evaluation=candidate_evaluation,
+                        config=candidate_config,
+                    )
+                    pending_diagnosis = None
+                    if success_override:
+                        return self._result(
+                            status="passed",
+                            request=request,
+                            current=current,
+                            success_rate=success_rate,
+                            reports=reports,
+                            diagnoses=diagnoses,
+                        )
+                    if feedback_rounds >= request.max_feedback_rounds:
+                        return self._result(
+                            status="retry",
+                            request=request,
+                            current=current,
+                            success_rate=success_rate,
+                            reports=reports,
+                            diagnoses=diagnoses,
+                            failure_kind="threshold_exhausted",
+                        )
+                elif success_rate >= request.success_rate_threshold:
                     return self._result(
                         status="passed",
                         request=request,
@@ -220,13 +294,7 @@ class OperationSmokeAgent:
                         diagnoses=diagnoses,
                     )
 
-                if feedback_rounds >= request.max_feedback_rounds:
-                    if is_candidate:
-                        current = self.config_catalog.reject_candidate_and_rollback(
-                            operation_key=request.operation_key,
-                            candidate_revision=current.revision,
-                            evaluation=evaluation,
-                        )
+                elif feedback_rounds >= request.max_feedback_rounds:
                     return self._result(
                         status="retry",
                         request=request,
@@ -249,26 +317,12 @@ class OperationSmokeAgent:
                         )
                     ),
                     private_case_evidence=private_case_evidence,
-                    previous_experiment=(
-                        _previous_experiment_summary(
-                            diagnoses[-1],
-                            evaluation=evaluation,
-                            config=current,
-                        )
-                        if is_candidate and diagnoses
-                        else None
-                    ),
+                    previous_experiment=previous_experiment,
                     max_planning_outputs=request.max_planning_outputs,
                     max_http_tool_rounds=request.max_http_tool_rounds,
                 )
                 if diagnosis.status != "patch_ready":
                     diagnoses.append(diagnosis)
-                    if is_candidate:
-                        current = self.config_catalog.reject_candidate_and_rollback(
-                            operation_key=request.operation_key,
-                            candidate_revision=current.revision,
-                            evaluation=evaluation,
-                        )
                     return self._result(
                         status="retry",
                         request=request,
@@ -295,24 +349,20 @@ class OperationSmokeAgent:
                 )
                 diagnosis = diagnosis.model_copy(
                     update={
-                        "patch": diagnosis.patch.model_copy(
-                            update={"updates": updates}
+                        "patch": type(diagnosis.patch)(
+                            updates=updates,
+                            attributions=diagnosis.patch.attributions,
                         )
                     }
                 )
                 diagnoses.append(diagnosis)
-                if is_candidate:
-                    current = self.config_catalog.reject_candidate_and_rollback(
-                        operation_key=request.operation_key,
-                        candidate_revision=current.revision,
-                        evaluation=evaluation,
-                    )
                 current = self.config_catalog.stage_candidate(
                     operation_key=request.operation_key,
                     expected_revision=current.revision,
                     updates=updates,
                     hypothesis={"kind": "operation_smoke_joint_patch"},
                 )
+                pending_diagnosis = diagnosis
                 feedback_rounds += 1
         except SQLAlchemyError:
             # Database availability is a shared-run invariant. Let Supervisor
@@ -320,10 +370,16 @@ class OperationSmokeAgent:
             # operation against the same unavailable catalog.
             raise
         except Exception as exc:
-            current = self._rollback_pending_candidate(
+            current = self._discard_pending_candidate(
                 current,
                 reports=reports,
                 threshold=request.success_rate_threshold,
+                candidate_change_count=(
+                    len(pending_diagnosis.patch.attributions)
+                    if pending_diagnosis is not None
+                    and pending_diagnosis.patch is not None
+                    else 0
+                ),
             )
             return self._result(
                 status="errored",
@@ -339,12 +395,13 @@ class OperationSmokeAgent:
                 },
             )
 
-    def _rollback_pending_candidate(
+    def _discard_pending_candidate(
         self,
         current: OperationGeneratorConfig,
         *,
         reports: list[OperationExecutionReport],
         threshold: float,
+        candidate_change_count: int,
     ) -> OperationGeneratorConfig:
         history = self.config_catalog.get_revision(
             current.operation_key,
@@ -357,9 +414,16 @@ class OperationSmokeAgent:
             if reports and reports[-1].config_revision == current.revision
             else {"stop_reason": "technical_error"}
         )
-        return self.config_catalog.reject_candidate_and_rollback(
+        evaluation = {
+            **evaluation,
+            "validation_status": "technical_error",
+            "accepted_change_count": 0,
+            "rejected_change_count": candidate_change_count,
+        }
+        return self.config_catalog.finalize_candidate(
             operation_key=current.operation_key,
             candidate_revision=current.revision,
+            accepted_input_node_ids=set(),
             evaluation=evaluation,
         )
 
@@ -406,6 +470,34 @@ def _batch_evaluation(
         "success_rate": success_rate,
         "required_threshold": threshold,
         "run_id": report.run_id,
+    }
+
+
+def _candidate_evaluation(
+    evaluation: dict,
+    *,
+    validation: PatchValidationSummary,
+    change_count: int,
+    success_override: bool,
+) -> dict:
+    accepted_count = (
+        change_count
+        if success_override
+        else len(validation.accepted_input_node_ids)
+    )
+    if success_override:
+        validation_status = "success_threshold_override"
+    elif accepted_count == change_count:
+        validation_status = "accepted"
+    elif accepted_count:
+        validation_status = "partial"
+    else:
+        validation_status = "rejected"
+    return {
+        **evaluation,
+        "validation_status": validation_status,
+        "accepted_change_count": accepted_count,
+        "rejected_change_count": change_count - accepted_count,
     }
 
 
@@ -519,24 +611,34 @@ def _previous_experiment_summary(
     config: OperationGeneratorConfig,
 ) -> dict:
     semantic_inputs = build_semantic_input_map(config)
+    accepted_input_node_ids = set(
+        diagnosis.patch_validation.accepted_input_node_ids
+        if diagnosis.patch_validation is not None
+        else []
+    )
     changes = []
     if diagnosis.patch is not None:
         for update in diagnosis.patch.updates:
             handle = semantic_inputs.handle_by_node.get(update.input_node_id)
             if handle is None:
                 continue
-            changes.append(
-                {
-                    "input": handle,
-                    "inclusion_probability": update.inclusion_probability,
-                    "generation": (
-                        update.strategy.model_dump(mode="json")
-                        if update.strategy is not None
-                        else None
-                    ),
-                }
-            )
-    return {
+            change = {
+                "input": handle,
+                "inclusion_probability": update.inclusion_probability,
+                "generation": (
+                    update.strategy.model_dump(mode="json")
+                    if update.strategy is not None
+                    else None
+                ),
+            }
+            if diagnosis.patch_validation is not None:
+                change["outcome"] = (
+                    "accepted"
+                    if update.input_node_id in accepted_input_node_ids
+                    else "removed"
+                )
+            changes.append(change)
+    summary = {
         "diagnosis_status": diagnosis.status,
         "termination_reason": diagnosis.termination_reason,
         "covered_item_count": len(diagnosis.covered_item_ids),
@@ -545,3 +647,22 @@ def _previous_experiment_summary(
         "candidate_success_rate": evaluation.get("success_rate"),
         "candidate_case_count": evaluation.get("case_count"),
     }
+    if diagnosis.patch_validation is not None:
+        summary.update(
+            {
+                "accepted_change_count": evaluation.get(
+                    "accepted_change_count",
+                    len(accepted_input_node_ids),
+                ),
+                "removed_change_count": evaluation.get(
+                    "rejected_change_count",
+                    len(changes) - len(accepted_input_node_ids),
+                ),
+                "evidence_note": (
+                    "This candidate batch used the complete experimental patch. "
+                    "Changes marked removed are no longer active in the accepted "
+                    "generator configuration."
+                ),
+            }
+        )
+    return summary

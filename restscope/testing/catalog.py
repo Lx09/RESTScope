@@ -211,6 +211,104 @@ class GeneratorConfigCatalog:
             uow.commit()
             return revision
 
+    def finalize_candidate(
+        self,
+        *,
+        operation_key: str,
+        candidate_revision: int,
+        accepted_input_node_ids: set[str],
+        evaluation: dict,
+    ) -> OperationGeneratorConfig:
+        """Atomically accept all, part, or none of a tested candidate."""
+
+        accepted_node_ids = set(accepted_input_node_ids)
+        with self.unit_of_work_factory() as uow:
+            current = uow.generator_configs.get(operation_key)
+            if current is None or current.revision != candidate_revision:
+                raise GeneratorConfigRevisionConflict(
+                    expected=candidate_revision,
+                    actual=current.revision if current is not None else 0,
+                )
+            candidate = uow.generator_configs.get_revision(
+                operation_key,
+                candidate_revision,
+            )
+            if (
+                candidate is None
+                or candidate.lifecycle != "candidate"
+                or candidate.parent_revision is None
+            ):
+                raise GeneratorConfigError(
+                    "generator_candidate_state_invalid",
+                    "Generator candidate is not pending or has no parent revision",
+                )
+            parent = uow.generator_configs.get_revision(
+                operation_key,
+                candidate.parent_revision,
+            )
+            if parent is None:
+                raise GeneratorConfigError(
+                    "generator_candidate_parent_missing",
+                    "Generator candidate parent revision does not exist",
+                )
+            changed_node_ids = _changed_input_node_ids(
+                parent.config,
+                candidate.config,
+            )
+            unexpected = sorted(accepted_node_ids - changed_node_ids)
+            if unexpected:
+                raise GeneratorConfigError(
+                    "generator_candidate_invalid_accepted_nodes",
+                    "Accepted nodes were not changed by the candidate: "
+                    f"{unexpected}",
+                    input_node_ids=unexpected,
+                )
+            try:
+                if accepted_node_ids == changed_node_ids:
+                    uow.generator_configs.update_revision(
+                        operation_key=operation_key,
+                        revision=candidate_revision,
+                        expected_lifecycle="candidate",
+                        lifecycle="accepted",
+                        evaluation=dict(evaluation),
+                    )
+                    uow.commit()
+                    return candidate.config
+
+                uow.generator_configs.update_revision(
+                    operation_key=operation_key,
+                    revision=candidate_revision,
+                    expected_lifecycle="candidate",
+                    lifecycle="rejected",
+                    evaluation=dict(evaluation),
+                )
+                merged = _merge_candidate_subset(
+                    parent.config,
+                    candidate.config,
+                    accepted_node_ids=accepted_node_ids,
+                )
+                accepted = uow.generator_configs.replace(
+                    operation_key=operation_key,
+                    expected_revision=candidate_revision,
+                    revision=candidate_revision + 1,
+                    snapshot=merged.snapshot.model_dump(mode="json"),
+                    enabled=merged.enabled,
+                    disabled_reasons=[
+                        item.model_dump(mode="json")
+                        for item in merged.disabled_reasons
+                    ],
+                    active_media_type=merged.active_media_type,
+                    configs=merged.configs,
+                    lifecycle="accepted",
+                )
+            except GeneratorConfigConcurrentWrite as exc:
+                raise GeneratorConfigRevisionConflict(
+                    expected=candidate_revision,
+                    actual=None,
+                ) from exc
+            uow.commit()
+            return accepted
+
     def reject_candidate_and_rollback(
         self,
         *,
@@ -427,6 +525,54 @@ def _apply_patches(
             for item in current.configs
         ],
         set(counts),
+    )
+
+
+def _changed_input_node_ids(
+    parent: OperationGeneratorConfig,
+    candidate: OperationGeneratorConfig,
+) -> set[str]:
+    parent_by_id = {item.input_node_id: item for item in parent.configs}
+    candidate_by_id = {item.input_node_id: item for item in candidate.configs}
+    return {
+        input_node_id
+        for input_node_id in set(parent_by_id) | set(candidate_by_id)
+        if parent_by_id.get(input_node_id) != candidate_by_id.get(input_node_id)
+    }
+
+
+def _merge_candidate_subset(
+    parent: OperationGeneratorConfig,
+    candidate: OperationGeneratorConfig,
+    *,
+    accepted_node_ids: set[str],
+) -> OperationGeneratorConfig:
+    candidate_by_id = {
+        item.input_node_id: item for item in candidate.configs
+    }
+    configs = [
+        (
+            candidate_by_id[item.input_node_id]
+            if item.input_node_id in accepted_node_ids
+            else item
+        )
+        for item in parent.configs
+    ]
+    remaining_reasons = [
+        reason
+        for reason in parent.disabled_reasons
+        if not (
+            reason.recoverable
+            and reason.input_node_id in accepted_node_ids
+        )
+    ]
+    return parent.model_copy(
+        update={
+            "revision": candidate.revision + 1,
+            "enabled": not remaining_reasons,
+            "disabled_reasons": remaining_reasons,
+            "configs": configs,
+        }
     )
 
 

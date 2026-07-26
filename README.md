@@ -79,7 +79,11 @@ The Alembic chain starts with the schema-source baseline, adds operation
 generator configuration in revision `0002_create_generator_configs`, and adds
 the resource evidence catalog in `0003_create_resource_catalog`. Revision
 `0004_create_generator_revision_history` adds immutable candidate, accepted,
-rejected, and compensating rollback generator revisions. Revision
+rejected, and legacy compensating rollback generator revisions. Current
+Operation Smoke candidate finalization does not create rollback lifecycle
+rows: a fully valid candidate becomes accepted in place, while partial or
+fully rejected candidates create a new accepted revision containing only
+validated changes. Revision
 `0005_create_response_value_catalog` adds persistent Response Value monitor,
 source, and typed-value tables. A schema source stores either an absolute file
 path or verbatim JSON/YAML content. Paths are reread on every load, while
@@ -343,6 +347,8 @@ or unplanned work remains visible in the result.
 At analysis completion, the FAST model is called once to convert all ready
 items into one compatible Generator patch. It must account for every ready
 item as covered or deferred and may change each semantic input at most once.
+Every concrete change names the covered `I*` items it serves, so code can later
+retain or remove that change independently.
 Code—not the model—maps semantic paths and observed-value `R*` aliases to real
 input nodes and pools, compiles generator intents such as `sample_values`,
 `integer_between`, or `observed_value`, and enforces required inputs,
@@ -356,12 +362,26 @@ headers, ToolContext Authorization/Cookie values, and observed pool values are
 not sent to the model. Private response bodies and the in-memory plan do not
 enter the public testing report, LangGraph state, or the database.
 
-The patch is stored as a candidate revision and is never validated by replaying
-or cloning one failed case. A complete next batch accepts the candidate when it
-meets the threshold. Otherwise the candidate is rejected and a compensating
-rollback revision restores its parent configuration. A new failing batch starts
-a new PlanState and receives only a compact summary of the previous patch
-experiment.
+The patch is stored as a candidate revision and exercised by one complete
+same-seed batch; RESTScope never validates by replaying or cloning one failed
+case. A separate THINK Patch Validation call then classifies each covered item
+as `resolved`, `persisting`, or `unknown` from its cause, proposed solution,
+current `F*/C*` evidence, and changed-input coverage. This validation has one
+repair, cannot call HTTP tools, and does not consume the Plan & Solve decision
+budget.
+
+When the candidate reaches the 2xx success threshold, the entire candidate is
+accepted even if Patch Validation still reports a persisting item. Below the
+threshold, changes owned by at least one resolved item are accepted
+immediately; changes owned only by persisting or unknown items are removed.
+Shared changes are retained when any owning item is resolved. The next patch is
+staged from this newly accepted revision, so earlier effective fixes accumulate.
+Partial acceptance deliberately does not run an extra stabilization batch. The
+next PlanState receives a compact experiment summary that marks accepted and
+removed changes and warns that the candidate evidence included the complete
+experimental patch. The final feedback round still validates and finalizes its
+candidate, but performs no further diagnosis or patch and never rolls back the
+whole accumulated configuration.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.
