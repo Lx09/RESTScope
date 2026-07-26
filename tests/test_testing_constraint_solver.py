@@ -508,3 +508,85 @@ def test_solver_contracts_are_exported_from_testing_package() -> None:
 
     assert issubclass(ConstraintSolveError, ValueError)
     assert callable(solve_input_overrides)
+
+
+def test_generated_case_assignments_recover_container_presence() -> None:
+    from restscope.testing import (
+        GeneratedTestCase,
+        InputNodeSnapshot,
+        OperationTestSnapshot,
+        ParameterSnapshot,
+        SchemaSnapshot,
+    )
+    from restscope.testing.constraint_solver import assignments_from_generated_case
+
+    operation = OperationTestSnapshot(
+        operation_key="POST /containers",
+        method="POST",
+        path="/containers",
+        parameters=[
+            ParameterSnapshot(
+                input_node_id="query/filter",
+                name="filter",
+                location="query",
+                required=False,
+            )
+        ],
+        request_body_node_id="body",
+        media_type_node_ids={"application/json": "body/json"},
+        available_media_types=["application/json"],
+        input_nodes=[
+            InputNodeSnapshot(
+                input_node_id="query/filter",
+                node_kind="parameter",
+                canonical_path="query/filter",
+                required=False,
+                schema_contract=SchemaSnapshot(type="object"),
+            ),
+            InputNodeSnapshot(
+                input_node_id="body",
+                node_kind="request_body",
+                canonical_path="body",
+                required=False,
+            ),
+            InputNodeSnapshot(
+                input_node_id="body/json",
+                node_kind="media_type",
+                canonical_path="body/application~1json",
+                parent_node_id="body",
+                required=True,
+                schema_contract=SchemaSnapshot(
+                    type="object",
+                    properties={"meta": SchemaSnapshot(type="object")},
+                ),
+            ),
+            InputNodeSnapshot(
+                input_node_id="body/meta",
+                node_kind="property",
+                canonical_path="body/application~1json/properties/meta",
+                parent_node_id="body/json",
+                required=False,
+                schema_contract=SchemaSnapshot(type="object"),
+            ),
+        ],
+    )
+    generated = GeneratedTestCase(
+        operation_key=operation.operation_key,
+        case_index=0,
+        media_type="application/json",
+        path_parameters={},
+        query_parameters={"filter": {}},
+        header_parameters={},
+        cookie_parameters={},
+        body={"meta": {}},
+        body_present=True,
+        generated_values=[],
+        omitted_input_node_ids=[],
+    )
+
+    assignments = assignments_from_generated_case(operation, generated)
+
+    assert assignments["query/filter"].present is True
+    assert assignments["body"].present is True
+    assert assignments["body/json"].present is True
+    assert assignments["body/meta"].present is True

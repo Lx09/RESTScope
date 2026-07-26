@@ -208,6 +208,21 @@ def assignments_from_generated_case(
         for node_id in nodes
     }
     omitted = set(generated.omitted_input_node_ids)
+    location_values = {
+        "path": generated.path_parameters,
+        "query": generated.query_parameters,
+        "header": generated.header_parameters,
+        "cookie": generated.cookie_parameters,
+    }
+    for parameter in operation.parameters:
+        values = location_values[parameter.location]
+        if parameter.name not in values:
+            continue
+        node = nodes[parameter.input_node_id]
+        assignments[parameter.input_node_id] = _assignment_for_generated_value(
+            node,
+            values[parameter.name],
+        )
     for item in generated.generated_values:
         if item.input_node_id not in nodes or item.input_node_id in omitted:
             continue
@@ -227,9 +242,18 @@ def assignments_from_generated_case(
             (generated.media_type or "").strip().lower()
         )
         if media_node_id is not None:
-            assignments[media_node_id] = InputAssignment(present=True)
+            assignments[media_node_id] = _assignment_for_generated_value(
+                nodes[media_node_id],
+                generated.body,
+            )
             _mark_ancestors_present(
                 media_node_id,
+                assignments=assignments,
+                nodes=nodes,
+            )
+            _mark_body_descendants(
+                media_node_id,
+                generated.body,
                 assignments=assignments,
                 nodes=nodes,
             )
@@ -237,6 +261,66 @@ def assignments_from_generated_case(
         if input_node_id in assignments:
             assignments[input_node_id] = InputAssignment(present=False)
     return assignments
+
+
+def _mark_body_descendants(
+    parent_id: str,
+    value: Any,
+    *,
+    assignments: dict[str, InputAssignment],
+    nodes: Mapping[str, InputNodeSnapshot],
+) -> None:
+    parent = nodes[parent_id]
+    prefix = f"{parent.canonical_path}/properties/"
+    for child in nodes.values():
+        if (
+            child.parent_node_id != parent_id
+            or not child.canonical_path.startswith(prefix)
+        ):
+            continue
+        encoded_name = child.canonical_path.removeprefix(prefix).split("/", 1)[0]
+        name = encoded_name.replace("~1", "/").replace("~0", "~")
+        if not isinstance(value, dict) or name not in value:
+            continue
+        child_value = value[name]
+        assignments[child.input_node_id] = _assignment_for_generated_value(
+            child,
+            child_value,
+        )
+        _mark_body_descendants(
+            child.input_node_id,
+            child_value,
+            assignments=assignments,
+            nodes=nodes,
+        )
+
+
+def _assignment_for_generated_value(
+    node: InputNodeSnapshot,
+    value: Any,
+) -> InputAssignment:
+    schema = node.schema_contract
+    declared = (
+        {schema.type}
+        if schema is not None and isinstance(schema.type, str)
+        else set(schema.type or ())
+        if schema is not None
+        else set()
+    )
+    is_container = (
+        schema is None
+        or bool(schema.properties)
+        or schema.items is not None
+        or bool(schema.all_of or schema.any_of or schema.one_of)
+        or bool(declared.intersection({"object", "array"}))
+    )
+    if is_container:
+        return InputAssignment(present=True)
+    return InputAssignment(
+        present=True,
+        has_value=True,
+        value=deepcopy(value),
+    )
 
 
 def _candidate_domain(

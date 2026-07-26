@@ -223,6 +223,289 @@ def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
     assert generated.query_parameters == {"mode": "xxxx"}
 
 
+def _constrained_generation_config():
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import InputGeneratorConfig
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Constrained generation", "version": "1"},
+            "paths": {
+                "/search": {
+                    "post": {
+                        "parameters": [
+                            {
+                                "name": "mode",
+                                "in": "query",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": ["fast", "slow"],
+                                },
+                            },
+                            {
+                                "name": "enabled",
+                                "in": "query",
+                                "schema": {"type": "boolean"},
+                            },
+                            {
+                                "name": "nullable",
+                                "in": "query",
+                                "schema": {
+                                    "type": ["string", "null"],
+                                    "enum": ["value", None],
+                                },
+                            },
+                        ],
+                        "requestBody": {
+                            "required": False,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "count": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 3,
+                                            }
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /search"]
+    initial = build_initial_operation_config(operation)
+    configs = []
+    for item in initial.configs:
+        node = next(
+            node
+            for node in initial.snapshot.input_nodes
+            if node.input_node_id == item.input_node_id
+        )
+        update = item.model_dump()
+        if node.canonical_path == "query/mode":
+            update["inclusion_probability"] = 1
+        elif node.canonical_path == "query/enabled":
+            update["inclusion_probability"] = 0.5
+        elif node.canonical_path == "query/nullable":
+            update["inclusion_probability"] = 1
+        configs.append(InputGeneratorConfig.model_validate(update))
+    return initial.model_copy(update={"configs": configs})
+
+
+def _node_id(config, canonical_path: str) -> str:
+    return next(
+        node.input_node_id
+        for node in config.snapshot.input_nodes
+        if node.canonical_path == canonical_path
+    )
+
+
+def test_generate_test_case_none_constraints_preserves_unconstrained_output() -> None:
+    from restscope.testing.generation import generate_test_case
+
+    config = _constrained_generation_config()
+
+    existing = generate_test_case(
+        config.snapshot,
+        config,
+        run_seed=7,
+        case_index=0,
+    )
+    explicit_none = generate_test_case(
+        config.snapshot,
+        config,
+        run_seed=7,
+        case_index=0,
+        constraints=None,
+    )
+
+    assert explicit_none == existing
+
+
+def test_constrained_generation_can_force_an_optional_parameter_present() -> None:
+    from restscope.testing import ConstraintSet
+    from restscope.testing.generation import generate_test_case
+
+    config = _constrained_generation_config()
+    mode_id = _node_id(config, "query/mode")
+    enabled_id = _node_id(config, "query/enabled")
+    seed = next(
+        candidate
+        for candidate in range(100)
+        if enabled_id
+        in generate_test_case(
+            config.snapshot,
+            config,
+            run_seed=candidate,
+            case_index=0,
+        ).omitted_input_node_ids
+    )
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {"type": "present", "input_node_id": mode_id},
+                {
+                    "type": "implies",
+                    "condition": {
+                        "type": "present",
+                        "input_node_id": mode_id,
+                    },
+                    "consequence": {
+                        "type": "present",
+                        "input_node_id": enabled_id,
+                    },
+                },
+            ]
+        }
+    )
+
+    generated = generate_test_case(
+        config.snapshot,
+        config,
+        run_seed=seed,
+        case_index=0,
+        constraints=constraints,
+    )
+
+    assert "mode" in generated.query_parameters
+    assert "enabled" in generated.query_parameters
+    assert enabled_id not in generated.omitted_input_node_ids
+
+
+def test_constrained_generation_preserves_explicit_null_override() -> None:
+    from restscope.testing import ConstraintSet
+    from restscope.testing.generation import generate_test_case
+
+    config = _constrained_generation_config()
+    nullable_id = _node_id(config, "query/nullable")
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {
+                    "type": "compare",
+                    "operator": "==",
+                    "left": {
+                        "type": "input_value",
+                        "input_node_id": nullable_id,
+                    },
+                    "right": {"type": "literal", "value": None},
+                }
+            ]
+        }
+    )
+
+    generated = generate_test_case(
+        config.snapshot,
+        config,
+        run_seed=3,
+        case_index=0,
+        constraints=constraints,
+    )
+
+    assert "nullable" in generated.query_parameters
+    assert generated.query_parameters["nullable"] is None
+    recorded = next(
+        item
+        for item in generated.generated_values
+        if item.input_node_id == nullable_id
+    )
+    assert recorded.value is None
+
+
+def test_constrained_body_property_forces_request_body_ancestors_present() -> None:
+    from restscope.testing import ConstraintSet
+    from restscope.testing.generation import generate_test_case
+
+    config = _constrained_generation_config()
+    count_id = _node_id(
+        config,
+        "body/application~1json/properties/count",
+    )
+    body_id = _node_id(config, "body")
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {
+                    "type": "compare",
+                    "operator": "==",
+                    "left": {
+                        "type": "input_value",
+                        "input_node_id": count_id,
+                    },
+                    "right": {"type": "literal", "value": 2},
+                }
+            ]
+        }
+    )
+
+    generated = generate_test_case(
+        config.snapshot,
+        config,
+        run_seed=5,
+        case_index=0,
+        constraints=constraints,
+    )
+
+    assert generated.body_present is True
+    assert generated.body == {"count": 2}
+    assert body_id not in generated.omitted_input_node_ids
+
+
+def test_constrained_generation_rechecks_the_completed_case(
+    monkeypatch,
+) -> None:
+    from restscope.testing import ConstraintSet, InputNodeOverride
+    from restscope.testing.constraint_solver import ConstraintSolveError
+    from restscope.testing.generation import generate_test_case
+
+    config = _constrained_generation_config()
+    mode_id = _node_id(config, "query/mode")
+    constraints = ConstraintSet.model_validate(
+        {
+            "constraints": [
+                {
+                    "type": "compare",
+                    "operator": "==",
+                    "left": {
+                        "type": "input_value",
+                        "input_node_id": mode_id,
+                    },
+                    "right": {"type": "literal", "value": "slow"},
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "restscope.testing.constraint_solver.solve_input_overrides",
+        lambda **_: {
+            mode_id: InputNodeOverride(
+                present=True,
+                has_value=True,
+                value="fast",
+            )
+        },
+    )
+
+    with pytest.raises(ConstraintSolveError) as raised:
+        generate_test_case(
+            config.snapshot,
+            config,
+            run_seed=5,
+            case_index=0,
+            constraints=constraints,
+        )
+
+    assert raised.value.code == "constraint_recheck_failed"
+
+
 def test_test_case_generator_builds_configured_request_inputs_and_omits_optional_nodes() -> None:
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import InputGeneratorConfig, OperationGeneratorConfig

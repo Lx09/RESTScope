@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import hashlib
 import random
 import re
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -32,6 +33,12 @@ from .models import (
 )
 from .models import InputNodeSnapshot
 from .ports import ReferenceValueProvider
+from .constraints import (
+    ConstraintSet,
+    InputAssignment,
+    InputNodeOverride,
+    evaluate_constraint_set,
+)
 
 
 class GenerationError(ValueError):
@@ -88,6 +95,7 @@ def generate_test_case(
     run_seed: int,
     case_index: int,
     reference_values: ReferenceValueProvider | None = None,
+    constraints: ConstraintSet | None = None,
 ) -> GeneratedTestCase:
     """Generate one complete request from the persisted snapshot and configuration."""
 
@@ -96,14 +104,54 @@ def generate_test_case(
     if case_index < 0:
         raise GenerationError("case_index cannot be negative")
 
-    generator = _TestCaseGenerator(
+    baseline = _TestCaseGenerator(
         operation=operation,
         config=config,
         run_seed=run_seed,
         case_index=case_index,
         reference_values=reference_values,
+        overrides=None,
+    ).generate()
+    if constraints is None:
+        return baseline
+
+    from .constraint_solver import (
+        ConstraintSolveError,
+        assignments_from_generated_case,
+        solve_input_overrides,
     )
-    return generator.generate()
+
+    overrides = solve_input_overrides(
+        operation=operation,
+        config=config,
+        constraints=constraints,
+        baseline=baseline,
+        run_seed=run_seed,
+        case_index=case_index,
+        reference_values=reference_values,
+    )
+    generated = _TestCaseGenerator(
+        operation=operation,
+        config=config,
+        run_seed=run_seed,
+        case_index=case_index,
+        reference_values=reference_values,
+        overrides=overrides,
+    ).generate()
+    assignments = assignments_from_generated_case(operation, generated)
+    assignments.update(
+        {
+            node_id: InputAssignment.model_validate(override.model_dump())
+            for node_id, override in overrides.items()
+        }
+    )
+    if not evaluate_constraint_set(constraints, assignments):
+        raise ConstraintSolveError(
+            "constraint_recheck_failed",
+            "Generated request does not satisfy its solved constraints",
+            input_node_ids=tuple(overrides),
+        )
+    return generated
 
 
 class _TestCaseGenerator:
@@ -115,12 +163,14 @@ class _TestCaseGenerator:
         run_seed: int,
         case_index: int,
         reference_values: ReferenceValueProvider | None,
+        overrides: Mapping[str, InputNodeOverride] | None,
     ) -> None:
         self.operation = operation
         self.config = config
         self.run_seed = run_seed
         self.case_index = case_index
         self.reference_values = reference_values
+        self.overrides = dict(overrides or {})
         self.nodes_by_path = {
             node.canonical_path: node for node in operation.input_nodes
         }
@@ -214,10 +264,15 @@ class _TestCaseGenerator:
             | ResourceIdentifierGenerator
             | ResponseValueGenerator,
         ):
-            value = generate_strategy_value(
-                strategy,
-                seed=self._seed(node, instance_path, "value"),
-                reference_values=self.reference_values,
+            override = self.overrides.get(node.input_node_id)
+            value = (
+                deepcopy(override.value)
+                if override is not None and override.has_value
+                else generate_strategy_value(
+                    strategy,
+                    seed=self._seed(node, instance_path, "value"),
+                    reference_values=self.reference_values,
+                )
             )
             self.generated_values.append(
                 GeneratedNodeValue(
@@ -331,8 +386,14 @@ class _TestCaseGenerator:
         return result
 
     def _included(self, node: InputNodeSnapshot, instance_path: str) -> bool:
-        config = self._config(node)
-        included = random.Random(self._seed(node, instance_path, "include")).random() < config.inclusion_probability
+        override = self.overrides.get(node.input_node_id)
+        if override is not None:
+            included = override.present
+        else:
+            config = self._config(node)
+            included = random.Random(
+                self._seed(node, instance_path, "include")
+            ).random() < config.inclusion_probability
         if not included:
             self.omitted.append(node.input_node_id)
         return included
