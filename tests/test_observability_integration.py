@@ -173,6 +173,12 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
 
 def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.agent.operation_smoke import PlanSolveDiagnosisResult
+    from restscope.agent.parameter_patch import (
+        GeneratorPatchAttribution,
+        GeneratorPatchDraft,
+        ValidatedPatchGroup,
+    )
     from restscope.llm import (
         LLMClient,
         LLMModelConfig,
@@ -191,44 +197,17 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
             provider="stub",
             model="think-model",
             parsed_json={
-                "ready": [
+                "action": "ready",
+                "cause": "The generated identifier was rejected.",
+                "solutions": [
                     {
-                        "failure_refs": ["F1"],
-                        "cause": "The generated identifier was rejected.",
-                        "confidence": 0.9,
-                        "solutions": [
-                            {
-                                "input": "path.projectId",
-                                "desired_behavior": "Use a known project ID.",
-                            }
-                        ],
-                        "evidence_refs": ["F1", "C1"],
-                        "interaction_notes": [],
+                        "input": "path.projectId",
+                        "desired_behavior": "Use a known project ID.",
                     }
                 ],
-                "pending": [],
-                "non_parameter_failure_refs": [],
-                "unplanned_failure_refs": [],
-                "finish": True,
-            }
-        ),
-        LLMResponse(
-            provider="stub",
-            model="fast-model",
-            parsed_json={
-                "covered_item_ids": ["I1"],
-                "deferred_items": [],
-                "changes": [
-                    {
-                        "item_ids": ["I1"],
-                        "input": "path.projectId",
-                        "generation": {
-                            "kind": "exact_value",
-                            "value": "known-project",
-                        },
-                    }
-                ]
-            }
+                "evidence_refs": ["F1", "C1"],
+                "interaction_notes": [],
+            },
         ),
         LLMResponse(
             provider="stub",
@@ -236,7 +215,7 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
             parsed_json={
                 "items": [
                     {
-                        "item_id": "I1",
+                        "item_id": "F1",
                         "status": "persisting",
                         "current_failure_refs": ["F1"],
                         "reason": "The identifier failure remains.",
@@ -260,14 +239,14 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
     diagnoser = OperationSmokeDiagnoser(
         client=client,
         planning_model=LLMModelConfig(
-            role="operation_smoke_plan_solve",
+            role="operation_smoke_root_cause_diagnosis",
             provider="stub",
             model="think-model",
         ),
-        patch_model=LLMModelConfig(
-            role="operation_smoke_generator_patch",
+        effect_model=LLMModelConfig(
+            role="operation_smoke_effect_validation",
             provider="stub",
-            model="fast-model",
+            model="think-model",
         ),
         tracing_runtime=runtime,
     )
@@ -275,16 +254,46 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
         report=smoke_report(),
         config=smoke_config(),
     )
-    diagnoser.validate_patch(
-        report=smoke_report().model_copy(update={"config_revision": 4}),
-        config=smoke_config().model_copy(update={"revision": 4}),
+    group = ValidatedPatchGroup(
+        group_id="G1",
+        item_ids=["I1"],
+        root_failure_refs=["F1"],
+        patch=GeneratorPatchDraft(
+            updates=[
+                {
+                    "input_node_id": "path/projectId",
+                    "strategy": {
+                        "type": "constant",
+                        "value": "known-project",
+                    },
+                }
+            ],
+            attributions=[
+                GeneratorPatchAttribution(
+                    input_node_id="path/projectId",
+                    group_ids=["G1"],
+                    item_ids=["I1"],
+                    root_failure_refs=["F1"],
+                )
+            ],
+        ),
+        samples=[{"path.projectId": "known-project"} for _ in range(10)],
+        attempts=2,
+    )
+    assert isinstance(diagnosis, PlanSolveDiagnosisResult)
+    diagnoser.validate_effect(
+        baseline_report=smoke_report(),
+        candidate_report=smoke_report().model_copy(
+            update={"run_id": "candidate_run"}
+        ),
         diagnosis=diagnosis,
+        groups=[group],
     )
     runtime.close()
 
     span_names = [span.name for span in exporter.get_finished_spans()]
-    assert "OperationSmokeDiagnoser.validate_patch" in span_names
-    assert span_names.count("LLMClient.invoke") == 3
+    assert "OperationSmokeDiagnoser.validate_effect" in span_names
+    assert span_names.count("LLMClient.invoke") == 2
     rendered = json.dumps(
         [dict(span.attributes) for span in exporter.get_finished_spans()],
         default=str,

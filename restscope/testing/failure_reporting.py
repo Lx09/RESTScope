@@ -64,6 +64,14 @@ def build_batch_failure_report(
     )
 
 
+def failure_messages_for_evidence(
+    evidence: FailureCaseEvidence,
+) -> list[str]:
+    """Return the canonical messages used to deduplicate one failed case."""
+
+    return _case_messages(evidence)
+
+
 def _case_messages(case: FailureCaseEvidence) -> list[str]:
     if case.transport_error_code is not None:
         detail = _normalize_text(case.transport_error_message or "")

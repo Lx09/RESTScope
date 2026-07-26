@@ -39,6 +39,13 @@ from .operation_smoke import (
     PlanSolveDiagnosisResult,
     build_operation_smoke_agent,
 )
+from .parameter_patch import (
+    ParameterPatchAgent,
+    ParameterPatchAgentFactory,
+    PatchGroupFailure,
+    PatchGroupTask,
+    ValidatedPatchGroup,
+)
 from .supervisor import (
     OperationAttempt,
     OperationFailureKind,
@@ -60,9 +67,14 @@ __all__ = [
     "OperationSmokeOutputError",
     "OperationSmokeRequest",
     "OperationSmokeResult",
+    "ParameterPatchAgent",
+    "ParameterPatchAgentFactory",
+    "PatchGroupFailure",
+    "PatchGroupTask",
     "PatchItemValidationSummary",
     "PatchValidationSummary",
     "PlanSolveDiagnosisResult",
+    "ValidatedPatchGroup",
     "OperationReference",
     "OperationAttempt",
     "OperationFailureKind",

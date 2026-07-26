@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -11,191 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from restscope.testing import (
-    ConstraintSet,
-    InputGeneratorPatch,
-    OperationExecutionReport,
-)
-
-
-ConstraintKind = Literal[
-    "Requires",
-    "Or",
-    "OnlyOne",
-    "AllOrNone",
-    "ZeroOrOne",
-    "Arithmetic/Relational",
-    "Complex",
-]
-
-
-class AvailableReferenceOption(BaseModel):
-    """One system-verified, non-empty reference pool exposed without values."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    option_id: str = Field(min_length=1, max_length=100)
-    input_node_id: str = Field(min_length=1, max_length=1000)
-    kind: Literal["resource_identifier", "response_value"]
-    canonical_resource: str | None = Field(default=None, max_length=200)
-    value_name: str | None = Field(default=None, max_length=200)
-    compatible_scalar_type: str | None = Field(default=None, max_length=50)
-    value_count: int = Field(ge=1)
-    producer_operation_keys: list[str] = Field(default_factory=list, max_length=100)
-    producer_status_code: str | None = Field(default=None, max_length=20)
-    producer_media_type: str | None = Field(default=None, max_length=200)
-    source_field: str | None = Field(default=None, max_length=1000)
-    source_selector: str | None = Field(default=None, max_length=2000)
-
-    @model_validator(mode="after")
-    def validate_kind_fields(self) -> "AvailableReferenceOption":
-        if self.kind == "resource_identifier":
-            if not self.canonical_resource or self.value_name is not None:
-                raise ValueError(
-                    "resource_identifier requires canonical_resource only"
-                )
-        elif (
-            not self.value_name
-            or self.canonical_resource is not None
-            or len(self.producer_operation_keys) != 1
-            or not self.producer_status_code
-            or not self.producer_media_type
-            or not self.source_field
-            or not self.source_selector
-        ):
-            raise ValueError(
-                "response_value requires one complete producer source"
-            )
-        return self
-
-
-class ReferenceGeneratorSelection(BaseModel):
-    """Model selection of a system-provided reference option."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input_node_id: str = Field(min_length=1, max_length=1000)
-    reference_option_id: str = Field(min_length=1, max_length=100)
-    inclusion_probability: float | None = Field(default=None, ge=0, le=1)
-
-
-class GeneratorPatchAttribution(BaseModel):
-    """Associate one concrete generator change with its planned causes."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input_node_id: str = Field(min_length=1, max_length=1000)
-    item_ids: list[str] = Field(min_length=1, max_length=100)
-
-    @model_validator(mode="after")
-    def require_unique_items(self) -> "GeneratorPatchAttribution":
-        if len(set(self.item_ids)) != len(self.item_ids):
-            raise ValueError("item_ids must be unique")
-        return self
-
-
-class CompiledConstraintPatch(BaseModel):
-    """One normalized runtime constraint attributed to planned causes."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    constraint_id: str = Field(min_length=1, max_length=100)
-    item_ids: list[str] = Field(min_length=1, max_length=100)
-    kind: ConstraintKind
-    constraint: ConstraintSet
-
-    @model_validator(mode="after")
-    def validate_constraint_patch(self) -> "CompiledConstraintPatch":
-        if len(set(self.item_ids)) != len(self.item_ids):
-            raise ValueError("item_ids must be unique")
-        if len(self.constraint.constraints) != 1:
-            raise ValueError(
-                "a compiled constraint patch contains one expression"
-            )
-        return self
-
-
-class GeneratorPatchDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    updates: list[InputGeneratorPatch] = Field(default_factory=list, max_length=100)
-    reference_selections: list[ReferenceGeneratorSelection] = Field(
-        default_factory=list,
-        max_length=100,
-    )
-    attributions: list[GeneratorPatchAttribution] = Field(
-        default_factory=list,
-        max_length=100,
-    )
-    constraints: list[CompiledConstraintPatch] = Field(
-        default_factory=list,
-        max_length=20,
-    )
-
-    @model_validator(mode="after")
-    def require_update(self) -> "GeneratorPatchDraft":
-        if (
-            not self.updates
-            and not self.reference_selections
-            and not self.constraints
-        ):
-            raise ValueError("at least one generator update or constraint is required")
-        if len(self.updates) + len(self.reference_selections) > 100:
-            raise ValueError("at most 100 generator updates are allowed")
-        changed_inputs = [
-            item.input_node_id
-            for item in [*self.updates, *self.reference_selections]
-        ]
-        attributed_inputs = [item.input_node_id for item in self.attributions]
-        if len(set(changed_inputs)) != len(changed_inputs):
-            raise ValueError("each input may be changed at most once")
-        if len(set(attributed_inputs)) != len(attributed_inputs):
-            raise ValueError("each changed input requires one attribution")
-        if set(changed_inputs) != set(attributed_inputs):
-            raise ValueError(
-                "attributions must identify every changed input exactly once"
-            )
-        constraint_ids = [item.constraint_id for item in self.constraints]
-        if len(set(constraint_ids)) != len(constraint_ids):
-            raise ValueError("constraint IDs must be unique")
-        return self
-
-
-class PlanItemSummary(BaseModel):
-    """One in-memory failure analysis returned for audit and tracing."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    item_id: str = Field(min_length=1, max_length=20)
-    failure_refs: list[str] = Field(min_length=1, max_length=100)
-    cause: str = Field(min_length=1, max_length=4000)
-    confidence: float = Field(ge=0, le=1)
-    affected_inputs: list[str] = Field(default_factory=list, max_length=100)
-    solution: str = Field(min_length=1, max_length=4000)
-    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
-    interaction_notes: list[str] = Field(default_factory=list, max_length=100)
-
-
-class PendingPlanItemSummary(BaseModel):
-    """One failure hypothesis that still needs bounded evidence."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    item_id: str = Field(min_length=1, max_length=20)
-    failure_refs: list[str] = Field(min_length=1, max_length=100)
-    hypothesis: str = Field(min_length=1, max_length=4000)
-    missing_evidence: str = Field(min_length=1, max_length=4000)
-    next_probe: str = Field(min_length=1, max_length=4000)
-    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
-
-
-class DeferredPlanItem(BaseModel):
-    """A ready analysis intentionally excluded from the joint patch."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    item_id: str = Field(min_length=1, max_length=20)
-    reason: str = Field(min_length=1, max_length=4000)
+from restscope.testing import OperationExecutionReport
 
 
 class PatchItemValidationSummary(BaseModel):
@@ -236,6 +52,14 @@ class PatchValidationSummary(BaseModel):
         default_factory=list,
         max_length=20,
     )
+    accepted_group_ids: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    rejected_group_ids: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+    )
 
     @model_validator(mode="after")
     def validate_partitions(self) -> "PatchValidationSummary":
@@ -268,53 +92,181 @@ class PatchValidationSummary(BaseModel):
             raise ValueError(
                 "accepted and rejected constraint IDs must be disjoint"
             )
+        accepted_groups = set(self.accepted_group_ids)
+        rejected_groups = set(self.rejected_group_ids)
+        if len(accepted_groups) != len(self.accepted_group_ids):
+            raise ValueError("accepted group IDs must be unique")
+        if len(rejected_groups) != len(self.rejected_group_ids):
+            raise ValueError("rejected group IDs must be unique")
+        if accepted_groups.intersection(rejected_groups):
+            raise ValueError(
+                "accepted and rejected group IDs must be disjoint"
+            )
+        return self
+
+
+class ParameterSolution(BaseModel):
+    """One actionable parameter behavior derived from failure evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input: str = Field(min_length=1, max_length=1000)
+    desired_behavior: str = Field(min_length=1, max_length=4000)
+    candidate_values: list[Any] = Field(default_factory=list, max_length=100)
+    candidate_range: list[float | int] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=2,
+    )
+
+
+class FailureHypothesis(BaseModel):
+    """One testable explanation for an active failure investigation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hypothesis_id: str = Field(min_length=1, max_length=20)
+    statement: str = Field(min_length=1, max_length=4000)
+    target_inputs: list[str] = Field(min_length=1, max_length=100)
+    proposed_changes: list[str] = Field(min_length=1, max_length=100)
+    expected_outcome: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+
+
+class FailureInvestigationState(BaseModel):
+    """Mutable, run-local state for exactly one active failure."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+    )
+
+    failure_ref: str = Field(min_length=1, max_length=20)
+    root_failure_refs: list[str] = Field(min_length=1, max_length=10)
+    active_hypothesis: FailureHypothesis | None = None
+    hypothesis_observation_refs: set[str] = Field(default_factory=set)
+    valid_outputs: int = Field(default=0, ge=0, le=20)
+    consecutive_invalid_outputs: int = Field(default=0, ge=0, le=3)
+    invalid_outputs: int = Field(default=0, ge=0)
+    hypothesis_count: int = Field(default=0, ge=0)
+    http_tool_calls: int = Field(default=0, ge=0)
+
+
+class ActionableFailure(BaseModel):
+    """A root-cause conclusion that may be grouped for parameter patching."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    item_id: str = Field(min_length=1, max_length=20)
+    failure_ref: str = Field(min_length=1, max_length=20)
+    root_failure_refs: list[str] = Field(min_length=1, max_length=10)
+    evidence_origin: Literal["initial", "probe"]
+    cause: str = Field(min_length=1, max_length=4000)
+    solutions: list[ParameterSolution] = Field(min_length=1, max_length=100)
+    affected_inputs: list[str] = Field(min_length=1, max_length=100)
+    evidence_refs: list[str] = Field(min_length=1, max_length=100)
+    interaction_notes: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_affected_inputs(self) -> "ActionableFailure":
+        derived = list(dict.fromkeys(item.input for item in self.solutions))
+        if self.affected_inputs != derived:
+            raise ValueError(
+                "affected_inputs must match solution inputs in first-seen order"
+            )
+        if len(set(self.root_failure_refs)) != len(self.root_failure_refs):
+            raise ValueError("root_failure_refs must be unique")
+        return self
+
+
+class FailureInvestigationSummary(BaseModel):
+    """Bounded audit summary for one in-memory failure investigation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure_ref: str = Field(min_length=1, max_length=20)
+    root_failure_refs: list[str] = Field(min_length=1, max_length=10)
+    status: Literal["ready", "confirmed", "deferred"]
+    valid_outputs: int = Field(default=0, ge=0, le=20)
+    invalid_outputs: int = Field(default=0, ge=0)
+    hypothesis_count: int = Field(default=0, ge=0)
+    http_tool_calls: int = Field(default=0, ge=0)
+    reason: str | None = Field(default=None, max_length=4000)
+
+
+class DeferredFailure(BaseModel):
+    """One failure that could not produce an actionable parameter solution."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure_ref: str = Field(min_length=1, max_length=20)
+    root_failure_refs: list[str] = Field(min_length=1, max_length=10)
+    reason: str = Field(min_length=1, max_length=4000)
+
+
+class PatchGroupRunSummary(BaseModel):
+    """Bounded audit result for one isolated Parameter Patch Agent."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    group_id: str = Field(min_length=1, max_length=20)
+    item_ids: list[str] = Field(min_length=1, max_length=100)
+    root_failure_refs: list[str] = Field(min_length=1, max_length=10)
+    status: Literal["validated", "failed"]
+    attempts: int = Field(ge=1, le=20)
+    failure_reason: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_failure_reason(self) -> "PatchGroupRunSummary":
+        if self.status == "failed" and self.failure_reason is None:
+            raise ValueError("failed Patch Group runs require a reason")
+        if self.status == "validated" and self.failure_reason is not None:
+            raise ValueError(
+                "validated Patch Group runs cannot have a failure reason"
+            )
         return self
 
 
 class PlanSolveDiagnosisResult(BaseModel):
-    """Bounded Plan & Solve outcome consumed by the Smoke feedback loop."""
+    """Root-cause investigation outcome consumed by the Smoke feedback loop."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    status: Literal["patch_ready", "no_parameter_issue", "inconclusive"]
+    status: Literal["actionable", "no_parameter_issue", "inconclusive"]
     termination_reason: str = Field(min_length=1, max_length=200)
-    patch: GeneratorPatchDraft | None = None
-    selected_reference_options: list[AvailableReferenceOption] = Field(
-        default_factory=list
+    investigations: list[FailureInvestigationSummary] = Field(
+        default_factory=list,
+        max_length=10,
     )
-    ready_items: list[PlanItemSummary] = Field(default_factory=list)
-    pending_items: list[PendingPlanItemSummary] = Field(default_factory=list)
-    non_parameter_failures: list[str] = Field(default_factory=list)
-    unplanned_failures: list[str] = Field(default_factory=list)
-    covered_item_ids: list[str] = Field(default_factory=list)
-    deferred_items: list[DeferredPlanItem] = Field(default_factory=list)
-    planning_outputs: int = Field(default=0, ge=0, le=20)
-    http_tool_rounds: int = Field(default=0, ge=0, le=40)
+    actionable_failures: list[ActionableFailure] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    deferred_failures: list[DeferredFailure] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    truncated_failure_refs: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    valid_outputs: int = Field(default=0, ge=0, le=200)
+    invalid_outputs: int = Field(default=0, ge=0)
+    http_tool_calls: int = Field(default=0, ge=0)
+    patch_group_runs: list[PatchGroupRunSummary] = Field(
+        default_factory=list,
+        max_length=100,
+    )
     patch_validation: PatchValidationSummary | None = None
 
     @model_validator(mode="after")
-    def validate_patch_status(self) -> "PlanSolveDiagnosisResult":
-        if self.status == "patch_ready" and self.patch is None:
-            raise ValueError("patch_ready requires a patch")
-        if self.status != "patch_ready" and self.patch is not None:
-            raise ValueError("only patch_ready may contain a patch")
-        if self.status != "patch_ready" and self.patch_validation is not None:
-            raise ValueError("only patch_ready may contain patch validation")
-        if self.patch is not None:
-            attributed_item_ids = {
-                item_id
-                for attribution in self.patch.attributions
-                for item_id in attribution.item_ids
-            }
-            attributed_item_ids.update(
-                item_id
-                for constraint in self.patch.constraints
-                for item_id in constraint.item_ids
+    def validate_status(self) -> "PlanSolveDiagnosisResult":
+        if self.status == "actionable" and not self.actionable_failures:
+            raise ValueError("actionable requires at least one actionable failure")
+        if self.status != "actionable" and self.actionable_failures:
+            raise ValueError(
+                "only actionable diagnoses may contain actionable failures"
             )
-            if attributed_item_ids != set(self.covered_item_ids):
-                raise ValueError(
-                    "patch attribution must cover exactly the covered items"
-                )
         return self
 
 
@@ -327,8 +279,8 @@ class OperationSmokeRequest(BaseModel):
     case_count: int = Field(default=10, ge=1, le=20)
     success_rate_threshold: float = Field(default=0.8, ge=0, le=1)
     max_feedback_rounds: int = Field(default=3, ge=0, le=10)
-    max_planning_outputs: int = Field(default=20, ge=1, le=20)
-    max_http_tool_rounds: int = Field(default=40, ge=0, le=40)
+    max_diagnosis_outputs_per_failure: int = Field(default=20, ge=1, le=20)
+    max_patch_attempts: int = Field(default=20, ge=2, le=20)
     seed: int | None = Field(default=None, ge=0)
 
 

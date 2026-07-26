@@ -1,7 +1,13 @@
 # Operation Smoke Plan & Solve Diagnosis
 
-Status: Patch-validation and cumulative-merge amendment freshly verified in a
-separate uncommitted worktree
+Status: Superseded by `operation-smoke-root-cause-parameter-patch.md`
+
+> Superseded on 2026-07-26. The direct FAST joint-Patch compiler, global
+> planning/tool budgets, four-call HTTP limit, and rule that the diagnoser must
+> not invoke another Agent are historical. The current design diagnoses one
+> failure at a time, then creates one fresh runtime `ParameterPatchAgent` per
+> confirmed Patch Group. See
+> `docs/superpowers/specs/2026-07-26-operation-smoke-root-cause-parameter-patch-design.md`.
 
 ## Objective
 

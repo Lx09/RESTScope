@@ -4,21 +4,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
 import json
-from types import MappingProxyType
 from typing import Any, Mapping
 
 from restscope.observability.content import TraceContentEncoder
 from restscope.redaction import Redactor
-from restscope.testing import OperationGeneratorConfig
+from restscope.testing import (
+    FailureCaseEvidence,
+    OperationGeneratorConfig,
+    SemanticInputMap,
+    build_semantic_input_map,
+    failure_messages_for_evidence,
+)
 from restscope.testing.models import OperationExecutionReport
-
-
-@dataclass(slots=True, frozen=True)
-class SemanticInputMap:
-    """Bidirectional semantic handles without exposing persisted node IDs."""
-
-    handle_by_node: Mapping[str, str]
-    node_by_handle: Mapping[str, str]
 
 
 @dataclass(slots=True, frozen=True)
@@ -48,8 +45,10 @@ class EvidenceJournal:
         self.redactor = redactor or Redactor()
         self.entries: list[EvidenceEntry] = []
         self.failure_aliases: dict[str, str] = {}
+        self._failure_alias_by_message: dict[str, str] = {}
         self.case_aliases: dict[str, str] = {}
         self.observation_aliases: dict[str, str] = {}
+        self.observation_failure_refs: dict[str, list[str]] = {}
         self.batch_summary: dict[str, Any] = {}
         self._total_bytes = 0
 
@@ -86,6 +85,7 @@ class EvidenceJournal:
             alias = f"F{index}"
             failure_alias_by_id[failure.failure_id] = alias
             journal.failure_aliases[alias] = failure.failure_id
+            journal._failure_alias_by_message[failure.message] = alias
             journal._append(
                 alias,
                 "failure",
@@ -158,6 +158,7 @@ class EvidenceJournal:
 
         observation_alias = f"O{len(self.observation_aliases) + 1}"
         self.observation_aliases[observation_alias] = tool_call.id
+        self.observation_failure_refs[observation_alias] = []
         self._append(
             observation_alias,
             "http_observation",
@@ -171,20 +172,56 @@ class EvidenceJournal:
                 ),
             },
         )
-        failure_message = _tool_failure_message(result)
-        if failure_message is None:
+        failure_messages = _tool_failure_messages(result)
+        if not failure_messages:
             return observation_alias, None
-        failure_alias = f"F{len(self.failure_aliases) + 1}"
-        self.failure_aliases[failure_alias] = tool_call.id
-        self._append(
-            failure_alias,
-            "failure",
-            {
-                "message": failure_message,
-                "observation_refs": [observation_alias],
-            },
+        first_alias: str | None = None
+        for failure_message in failure_messages:
+            failure_alias = self._failure_alias_by_message.get(failure_message)
+            if failure_alias is None:
+                failure_alias = f"F{len(self.failure_aliases) + 1}"
+                self.failure_aliases[failure_alias] = tool_call.id
+                self._failure_alias_by_message[failure_message] = failure_alias
+                self._append(
+                    failure_alias,
+                    "failure",
+                    {
+                        "message": failure_message,
+                        "observation_refs": [observation_alias],
+                    },
+                )
+            self.observation_failure_refs[observation_alias].append(
+                failure_alias
+            )
+            if first_alias is None:
+                first_alias = failure_alias
+        return observation_alias, first_alias
+
+    def observation_reproduces(
+        self,
+        observation_ref: str,
+        failure_ref: str,
+    ) -> bool:
+        """Return whether one observation contains the same failure signature."""
+
+        target = self.entry(failure_ref)
+        if target is None or not isinstance(target.value, dict):
+            return False
+        target_message = target.value.get("message")
+        return any(
+            (
+                candidate is not None
+                and isinstance(candidate.value, dict)
+                and candidate.value.get("message") == target_message
+            )
+            for candidate in (
+                self.entry(ref)
+                for ref in self.observation_failure_refs.get(
+                    observation_ref,
+                    [],
+                )
+            )
         )
-        return observation_alias, failure_alias
 
     def _append(self, alias: str, kind: str, value: Any) -> None:
         encoder = TraceContentEncoder(
@@ -230,101 +267,6 @@ class EvidenceJournal:
                 ),
             )
         )
-
-
-def build_semantic_input_map(
-    config: OperationGeneratorConfig,
-) -> SemanticInputMap:
-    """Map active configurable inputs to request-shaped handles."""
-
-    configured_ids = {item.input_node_id for item in config.configs}
-    active_root_id = (
-        config.snapshot.media_type_node_ids.get(config.active_media_type)
-        if config.active_media_type is not None
-        else None
-    )
-    active_root = next(
-        (
-            node
-            for node in config.snapshot.input_nodes
-            if node.input_node_id == active_root_id
-        ),
-        None,
-    )
-    handle_by_node: dict[str, str] = {}
-    node_by_handle: dict[str, str] = {}
-    for node in config.snapshot.input_nodes:
-        if (
-            node.input_node_id not in configured_ids
-            or node.input_node_id == config.snapshot.request_body_node_id
-        ):
-            continue
-        if node.canonical_path.startswith("body/"):
-            if active_root is None or not (
-                node.input_node_id == active_root.input_node_id
-                or node.canonical_path.startswith(
-                    f"{active_root.canonical_path}/"
-                )
-            ):
-                continue
-            relative = node.canonical_path.removeprefix(
-                active_root.canonical_path
-            ).removeprefix("/")
-            handle = _body_handle(relative)
-        else:
-            handle = _parameter_handle(node.canonical_path)
-        if handle in node_by_handle:
-            raise ValueError(f"Semantic input handle is not unique: {handle}")
-        handle_by_node[node.input_node_id] = handle
-        node_by_handle[handle] = node.input_node_id
-    return SemanticInputMap(
-        handle_by_node=MappingProxyType(handle_by_node),
-        node_by_handle=MappingProxyType(node_by_handle),
-    )
-
-
-def _parameter_handle(canonical_path: str) -> str:
-    segments = [_unsegment(item) for item in canonical_path.split("/")]
-    if len(segments) < 2:
-        return ".".join(segments)
-    output = f"{segments[0]}.{segments[1]}"
-    return _append_schema_segments(output, segments[2:])
-
-
-def _body_handle(relative_path: str) -> str:
-    if not relative_path:
-        return "body"
-    segments = [_unsegment(item) for item in relative_path.split("/")]
-    return _append_schema_segments("body", segments)
-
-
-def _append_schema_segments(base: str, segments: list[str]) -> str:
-    output = base
-    index = 0
-    while index < len(segments):
-        segment = segments[index]
-        if segment == "properties" and index + 1 < len(segments):
-            output += f".{segments[index + 1]}"
-            index += 2
-            continue
-        if segment == "items":
-            output += "[]"
-            index += 1
-            continue
-        if (
-            segment in {"oneOf", "anyOf", "allOf"}
-            and index + 1 < len(segments)
-        ):
-            output += f".{segment}[{segments[index + 1]}]"
-            index += 2
-            continue
-        output += f".{segment}"
-        index += 1
-    return output
-
-
-def _unsegment(value: str) -> str:
-    return value.replace("~1", "/").replace("~0", "~")
 
 
 def _case_evidence(
@@ -392,33 +334,63 @@ def _case_evidence(
     return payload
 
 
-def _tool_failure_message(result) -> str | None:
+def _tool_failure_messages(result) -> list[str]:
     if result.status != "succeeded":
         error = result.error or {}
-        message = error.get("message") or error.get("code") or result.status
-        return f"HTTP probe {result.status}: {message}"
+        code = str(error.get("code") or result.status)
+        message = error.get("message")
+        return failure_messages_for_evidence(
+            FailureCaseEvidence(
+                case_id=result.tool_call_id,
+                transport_error_code=code,
+                transport_error_message=(
+                    str(message) if message is not None else None
+                ),
+            )
+        )
     structured = result.structured
     if not isinstance(structured, Mapping):
-        return None
+        return []
     status_code = structured.get("status_code")
-    if isinstance(status_code, int) and not 200 <= status_code < 300:
-        reason = structured.get("reason_phrase")
-        body = structured.get("body")
-        suffix = f" {reason}" if reason else ""
-        if body is not None:
-            suffix += ": " + json.dumps(
+    if not isinstance(status_code, int):
+        return []
+    headers = structured.get("headers")
+    media_type = None
+    if isinstance(headers, Mapping):
+        media_type = next(
+            (
+                str(value)
+                for key, value in headers.items()
+                if str(key).lower() == "content-type"
+            ),
+            None,
+        )
+    body = structured.get("body")
+    body_format = structured.get("body_format")
+    encoded_body: bytes | None = None
+    if body is not None:
+        if body_format == "json":
+            encoded_body = json.dumps(
                 body,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 default=str,
-            )
-        return f"HTTP {status_code}{suffix}"
-    warnings = structured.get("behavior_monitor_warnings")
-    if isinstance(warnings, list) and warnings:
-        return "Behavior monitor warning: " + json.dumps(
-            warnings,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
+            ).encode("utf-8")
+            media_type = media_type or "application/json"
+        else:
+            encoded_body = str(body).encode("utf-8")
+            media_type = media_type or "text/plain"
+    return failure_messages_for_evidence(
+        FailureCaseEvidence(
+            case_id=result.tool_call_id,
+            status_code=status_code,
+            reason_phrase=(
+                str(structured["reason_phrase"])
+                if structured.get("reason_phrase") is not None
+                else None
+            ),
+            media_type=media_type,
+            body=encoded_body,
+            encoding="utf-8",
         )
-    return None
+    )

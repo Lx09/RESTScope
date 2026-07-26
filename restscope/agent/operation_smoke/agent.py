@@ -7,6 +7,13 @@ from typing import Protocol
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from restscope.agent.parameter_patch import (
+    AvailableReferenceOption,
+    CompiledConstraintPatch,
+    ParameterPatchAgentFactory,
+    PatchGroupFailure,
+    ValidatedPatchGroup,
+)
 from restscope.observability import TracingRuntime
 from restscope.testing import (
     ConstraintSet,
@@ -16,17 +23,17 @@ from restscope.testing import (
     ReferenceValueProvider,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
+    build_semantic_input_map,
+    preview_generator_patch,
 )
-from restscope.testing.generation import generate_test_case
 
 from .diagnosis import OperationSmokeDiagnoser
-from .evidence import build_semantic_input_map
+from .grouping import PatchGroupPlanner
 from .schemas import (
-    AvailableReferenceOption,
-    CompiledConstraintPatch,
-    GeneratorPatchDraft,
+    DeferredFailure,
     OperationSmokeRequest,
     OperationSmokeResult,
+    PatchGroupRunSummary,
     PatchValidationSummary,
     PlanSolveDiagnosisResult,
 )
@@ -53,12 +60,16 @@ class OperationSmokeAgent:
         config_catalog: GeneratorConfigCatalog,
         batch_runner: OperationBatchRunner,
         diagnoser: OperationSmokeDiagnoser,
+        group_planner: PatchGroupPlanner,
+        patch_agent_factory: ParameterPatchAgentFactory,
         reference_values: ReferenceValueProvider,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.config_catalog = config_catalog
         self.batch_runner = batch_runner
         self.diagnoser = diagnoser
+        self.group_planner = group_planner
+        self.patch_agent_factory = patch_agent_factory
         self.reference_values = reference_values
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
@@ -75,8 +86,10 @@ class OperationSmokeAgent:
                 "case_count": request.case_count,
                 "success_rate_threshold": request.success_rate_threshold,
                 "max_feedback_rounds": request.max_feedback_rounds,
-                "max_planning_outputs": request.max_planning_outputs,
-                "max_http_tool_rounds": request.max_http_tool_rounds,
+                "max_diagnosis_outputs_per_failure": (
+                    request.max_diagnosis_outputs_per_failure
+                ),
+                "max_patch_attempts": request.max_patch_attempts,
                 "seed": request.seed,
             },
             attributes={
@@ -88,11 +101,11 @@ class OperationSmokeAgent:
                 "restscope.smoke.max_feedback_rounds": (
                     request.max_feedback_rounds
                 ),
-                "restscope.smoke.max_planning_outputs": (
-                    request.max_planning_outputs
+                "restscope.smoke.max_diagnosis_outputs_per_failure": (
+                    request.max_diagnosis_outputs_per_failure
                 ),
-                "restscope.smoke.max_http_tool_rounds": (
-                    request.max_http_tool_rounds
+                "restscope.smoke.max_patch_attempts": (
+                    request.max_patch_attempts
                 ),
             },
         ) as span:
@@ -152,6 +165,9 @@ class OperationSmokeAgent:
                     ),
                 },
             )
+        current = self.config_catalog.recover_interrupted_candidate(
+            request.operation_key
+        )
         if not current.enabled:
             return self._result(
                 status="unsupported",
@@ -166,20 +182,9 @@ class OperationSmokeAgent:
         diagnoses: list[PlanSolveDiagnosisResult] = []
         success_rate = 0.0
         seed = request.seed if request.seed is not None else secrets.randbits(63)
-        current_history = self.config_catalog.get_revision(
-            request.operation_key,
-            current.revision,
-        )
-        feedback_rounds = (
-            1
-            if current_history is not None
-            and current_history.lifecycle == "candidate"
-            else 0
-        )
-        pending_diagnosis: PlanSolveDiagnosisResult | None = None
-        pending_baseline_report: OperationExecutionReport | None = None
-        previous_experiment: dict | None = None
+        feedback_rounds = 0
         active_constraints: dict[str, CompiledConstraintPatch] = {}
+        pending_change_count = 0
 
         try:
             while True:
@@ -195,15 +200,7 @@ class OperationSmokeAgent:
                     case_count=request.case_count,
                     seed=seed,
                     constraints=_combined_constraints(
-                        [
-                            *active_constraints.values(),
-                            *(
-                                pending_diagnosis.patch.constraints
-                                if pending_diagnosis is not None
-                                and pending_diagnosis.patch is not None
-                                else []
-                            ),
-                        ]
+                        list(active_constraints.values())
                     ),
                 )
                 reports.append(report)
@@ -216,113 +213,7 @@ class OperationSmokeAgent:
                     threshold=request.success_rate_threshold,
                 )
                 success_rate = float(evaluation["success_rate"])
-                current_history = self.config_catalog.get_revision(
-                    request.operation_key,
-                    current.revision,
-                )
-                if pending_diagnosis is not None:
-                    assert pending_diagnosis.patch is not None
-                    has_generator_candidate = bool(
-                        pending_diagnosis.patch.updates
-                    )
-                    if has_generator_candidate and (
-                        current_history is None
-                        or current_history.lifecycle != "candidate"
-                    ):
-                        raise RuntimeError(
-                            "Pending generator patch has no candidate revision"
-                        )
-                    validation = self.diagnoser.validate_patch(
-                        report=report,
-                        config=current,
-                        diagnosis=pending_diagnosis,
-                        private_case_evidence=private_case_evidence,
-                        baseline_report=pending_baseline_report,
-                    )
-                    pending_diagnosis = pending_diagnosis.model_copy(
-                        update={"patch_validation": validation}
-                    )
-                    diagnoses[-1] = pending_diagnosis
-                    success_override = (
-                        success_rate >= request.success_rate_threshold
-                    )
-                    candidate_evaluation = _candidate_evaluation(
-                        evaluation,
-                        validation=validation,
-                        change_count=len(
-                            pending_diagnosis.patch.attributions
-                        )
-                        + len(
-                            pending_diagnosis.patch.constraints
-                        ),
-                        success_override=success_override,
-                    )
-                    candidate_config = current
-                    accepted_constraint_ids = (
-                        {
-                            constraint.constraint_id
-                            for constraint in (
-                                pending_diagnosis.patch.constraints
-                            )
-                        }
-                        if success_override
-                        else set(validation.accepted_constraint_ids)
-                    )
-                    for constraint in pending_diagnosis.patch.constraints:
-                        if constraint.constraint_id in accepted_constraint_ids:
-                            active_constraints[constraint.constraint_id] = (
-                                constraint
-                            )
-                    if has_generator_candidate and success_override:
-                        current = self.config_catalog.finalize_candidate(
-                            operation_key=request.operation_key,
-                            candidate_revision=current.revision,
-                            accepted_input_node_ids={
-                                attribution.input_node_id
-                                for attribution in (
-                                    pending_diagnosis.patch.attributions
-                                    if pending_diagnosis.patch is not None
-                                    else []
-                                )
-                            },
-                            evaluation=candidate_evaluation,
-                        )
-                    elif has_generator_candidate:
-                        current = self.config_catalog.finalize_candidate(
-                            operation_key=request.operation_key,
-                            candidate_revision=current.revision,
-                            accepted_input_node_ids=set(
-                                validation.accepted_input_node_ids
-                            ),
-                            evaluation=candidate_evaluation,
-                        )
-                    previous_experiment = _previous_experiment_summary(
-                        pending_diagnosis,
-                        evaluation=candidate_evaluation,
-                        config=candidate_config,
-                    )
-                    pending_diagnosis = None
-                    pending_baseline_report = None
-                    if success_override:
-                        return self._result(
-                            status="passed",
-                            request=request,
-                            current=current,
-                            success_rate=success_rate,
-                            reports=reports,
-                            diagnoses=diagnoses,
-                        )
-                    if feedback_rounds >= request.max_feedback_rounds:
-                        return self._result(
-                            status="retry",
-                            request=request,
-                            current=current,
-                            success_rate=success_rate,
-                            reports=reports,
-                            diagnoses=diagnoses,
-                            failure_kind="threshold_exhausted",
-                        )
-                elif success_rate >= request.success_rate_threshold:
+                if success_rate >= request.success_rate_threshold:
                     return self._result(
                         status="passed",
                         request=request,
@@ -332,7 +223,7 @@ class OperationSmokeAgent:
                         diagnoses=diagnoses,
                     )
 
-                elif feedback_rounds >= request.max_feedback_rounds:
+                if feedback_rounds >= request.max_feedback_rounds:
                     return self._result(
                         status="retry",
                         request=request,
@@ -346,32 +237,13 @@ class OperationSmokeAgent:
                 diagnosis = self.diagnoser.diagnose(
                     report=report,
                     config=current,
-                    reference_option_provider=lambda input_node_ids: (
-                        _available_reference_options(
-                            self.reference_values,
-                            context=context,
-                            config=current,
-                            input_node_ids=input_node_ids,
-                        )
-                    ),
                     private_case_evidence=private_case_evidence,
-                    previous_experiment=previous_experiment,
-                    patch_preflight=lambda patch: _preflight_patch(
-                        catalog=self.config_catalog,
-                        reference_values=self.reference_values,
-                        current=current,
-                        patch=patch,
-                        active_constraints=list(
-                            active_constraints.values()
-                        ),
-                        case_count=request.case_count,
-                        seed=seed,
+                    max_diagnosis_outputs_per_failure=(
+                        request.max_diagnosis_outputs_per_failure
                     ),
-                    max_planning_outputs=request.max_planning_outputs,
-                    max_http_tool_rounds=request.max_http_tool_rounds,
                 )
-                if diagnosis.status != "patch_ready":
-                    diagnoses.append(diagnosis)
+                diagnoses.append(diagnosis)
+                if diagnosis.status != "actionable":
                     return self._result(
                         status="retry",
                         request=request,
@@ -386,53 +258,257 @@ class OperationSmokeAgent:
                         ),
                     )
 
-                assert diagnosis.patch is not None
+                grouping = self.group_planner.group(
+                    actionable_failures=diagnosis.actionable_failures,
+                    config=current,
+                )
+                diagnosis = _defer_actionable_items(
+                    diagnosis,
+                    {
+                        item_id: "patch_grouping_deferred"
+                        for item_id in grouping.deferred_item_ids
+                    },
+                )
+                diagnoses[-1] = diagnosis
+                if grouping.status != "grouped":
+                    return self._result(
+                        status="retry",
+                        request=request,
+                        current=current,
+                        success_rate=success_rate,
+                        reports=reports,
+                        diagnoses=diagnoses,
+                        failure_kind="diagnosis_inconclusive",
+                    )
+
+                successful_groups: list[ValidatedPatchGroup] = []
+                patch_group_runs: list[PatchGroupRunSummary] = []
+                failed_item_reasons: dict[str, str] = {}
+                provisional_config = current
+                provisional_constraints = list(active_constraints.values())
+                semantic = build_semantic_input_map(current)
+                for task in grouping.tasks:
+                    input_node_ids = {
+                        semantic.node_by_handle[input_handle]
+                        for input_handle in task.inputs
+                    }
+                    reference_options = _available_reference_options(
+                        self.reference_values,
+                        context=context,
+                        config=provisional_config,
+                        input_node_ids=input_node_ids,
+                    )
+                    outcome = self.patch_agent_factory.create().run(
+                        task=task,
+                        config=provisional_config,
+                        active_constraints=provisional_constraints,
+                        reference_values=self.reference_values,
+                        reference_options=reference_options,
+                        max_attempts=request.max_patch_attempts,
+                    )
+                    if isinstance(outcome, PatchGroupFailure):
+                        failed_item_reasons.update(
+                            {
+                                item_id: f"patch_group_{outcome.reason}"
+                                for item_id in outcome.item_ids
+                            }
+                        )
+                        patch_group_runs.append(
+                            PatchGroupRunSummary(
+                                group_id=outcome.group_id,
+                                item_ids=outcome.item_ids,
+                                root_failure_refs=outcome.root_failure_refs,
+                                status="failed",
+                                attempts=outcome.attempts,
+                                failure_reason=outcome.reason,
+                            )
+                        )
+                        continue
+                    patch_group_runs.append(
+                        PatchGroupRunSummary(
+                            group_id=outcome.group_id,
+                            item_ids=outcome.item_ids,
+                            root_failure_refs=outcome.root_failure_refs,
+                            status="validated",
+                            attempts=outcome.attempts,
+                        )
+                    )
+                    successful_groups.append(outcome)
+                    provisional_config = preview_generator_patch(
+                        provisional_config,
+                        outcome.patch.updates,
+                    )
+                    provisional_constraints.extend(
+                        outcome.patch.constraints
+                    )
+
+                diagnosis = diagnosis.model_copy(
+                    update={"patch_group_runs": patch_group_runs}
+                )
+                diagnosis = _defer_actionable_items(
+                    diagnosis,
+                    failed_item_reasons,
+                )
+                diagnoses[-1] = diagnosis
+                if not successful_groups:
+                    return self._result(
+                        status="retry",
+                        request=request,
+                        current=current,
+                        success_rate=success_rate,
+                        reports=reports,
+                        diagnoses=diagnoses,
+                        failure_kind="diagnosis_inconclusive",
+                    )
+
+                updates = [
+                    update
+                    for group in successful_groups
+                    for update in group.patch.updates
+                ]
                 updates = _prepare_reference_updates(
                     self.reference_values,
                     context=context,
                     config=current,
-                    updates=diagnosis.patch.updates,
-                    selected_reference_options=(
-                        diagnosis.selected_reference_options
-                    ),
+                    updates=updates,
+                    selected_reference_options=[
+                        option
+                        for group in successful_groups
+                        for option in group.patch.selected_reference_options
+                    ],
                 )
-                diagnosis = diagnosis.model_copy(
-                    update={
-                        "patch": type(diagnosis.patch)(
-                            updates=updates,
-                            attributions=diagnosis.patch.attributions,
-                            constraints=diagnosis.patch.constraints,
-                        )
-                    }
+                candidate_constraints = [
+                    constraint
+                    for group in successful_groups
+                    for constraint in group.patch.constraints
+                ]
+                pending_change_count = len(updates) + len(
+                    candidate_constraints
                 )
-                diagnoses.append(diagnosis)
                 if updates:
                     current = self.config_catalog.stage_candidate(
                         operation_key=request.operation_key,
                         expected_revision=current.revision,
                         updates=updates,
-                        hypothesis={"kind": "operation_smoke_joint_patch"},
+                        hypothesis={
+                            "kind": "operation_smoke_parameter_patch_groups",
+                            "group_count": len(successful_groups),
+                        },
                     )
-                pending_diagnosis = diagnosis
-                pending_baseline_report = report
+
+                candidate_report, _ = _run_smoke_batch(
+                    self.batch_runner,
+                    context=context,
+                    operation_key=request.operation_key,
+                    case_count=request.case_count,
+                    seed=seed,
+                    constraints=_combined_constraints(
+                        [
+                            *active_constraints.values(),
+                            *candidate_constraints,
+                        ]
+                    ),
+                )
+                reports.append(candidate_report)
+                if candidate_report.config_revision != current.revision:
+                    raise RuntimeError(
+                        "Candidate report revision does not match tested config"
+                    )
+                candidate_evaluation = _batch_evaluation(
+                    candidate_report,
+                    threshold=request.success_rate_threshold,
+                )
+                success_rate = float(candidate_evaluation["success_rate"])
+                validation = self.diagnoser.validate_effect(
+                    baseline_report=report,
+                    candidate_report=candidate_report,
+                    diagnosis=diagnosis,
+                    groups=successful_groups,
+                )
+                success_override = (
+                    success_rate >= request.success_rate_threshold
+                )
+                if success_override:
+                    validation = _accept_all_groups(
+                        validation,
+                        groups=successful_groups,
+                    )
+                diagnosis = diagnosis.model_copy(
+                    update={"patch_validation": validation}
+                )
+                diagnoses[-1] = diagnosis
+                accepted_group_ids = set(validation.accepted_group_ids)
+                accepted_groups = [
+                    group
+                    for group in successful_groups
+                    if group.group_id in accepted_group_ids
+                ]
+                for group in accepted_groups:
+                    for constraint in group.patch.constraints:
+                        active_constraints[constraint.constraint_id] = (
+                            constraint
+                        )
+                accepted_input_ids = {
+                    update.input_node_id
+                    for group in accepted_groups
+                    for update in group.patch.updates
+                }
+                if updates:
+                    current = self.config_catalog.finalize_candidate(
+                        operation_key=request.operation_key,
+                        candidate_revision=current.revision,
+                        accepted_input_node_ids=accepted_input_ids,
+                        evaluation=_candidate_evaluation(
+                            candidate_evaluation,
+                            validation=validation,
+                            change_count=pending_change_count,
+                            success_override=success_override,
+                        ),
+                    )
+                pending_change_count = 0
                 feedback_rounds += 1
+                if success_override:
+                    return self._result(
+                        status="passed",
+                        request=request,
+                        current=current,
+                        success_rate=success_rate,
+                        reports=reports,
+                        diagnoses=diagnoses,
+                    )
+                if feedback_rounds >= request.max_feedback_rounds:
+                    return self._result(
+                        status="retry",
+                        request=request,
+                        current=current,
+                        success_rate=success_rate,
+                        reports=reports,
+                        diagnoses=diagnoses,
+                        failure_kind="threshold_exhausted",
+                    )
         except SQLAlchemyError:
             # Database availability is a shared-run invariant. Let Supervisor
             # stop the run as a global technical error instead of retrying one
-            # operation against the same unavailable catalog.
+            # operation against the same unavailable catalog. Best-effort
+            # rollback keeps an already-staged candidate from becoming a later
+            # run's baseline; run startup also recovers any rollback that could
+            # not be written while the database was unavailable.
+            try:
+                current = self._discard_pending_candidate(
+                    current,
+                    reports=reports,
+                    threshold=request.success_rate_threshold,
+                    candidate_change_count=pending_change_count,
+                )
+            except Exception:
+                pass
             raise
         except Exception as exc:
             current = self._discard_pending_candidate(
                 current,
                 reports=reports,
                 threshold=request.success_rate_threshold,
-                candidate_change_count=(
-                    len(pending_diagnosis.patch.attributions)
-                    + len(pending_diagnosis.patch.constraints)
-                    if pending_diagnosis is not None
-                    and pending_diagnosis.patch is not None
-                    else 0
-                ),
+                candidate_change_count=pending_change_count,
             )
             return self._result(
                 status="errored",
@@ -473,10 +549,9 @@ class OperationSmokeAgent:
             "accepted_change_count": 0,
             "rejected_change_count": candidate_change_count,
         }
-        return self.config_catalog.finalize_candidate(
+        return self.config_catalog.reject_candidate_and_rollback(
             operation_key=current.operation_key,
             candidate_revision=current.revision,
-            accepted_input_node_ids=set(),
             evaluation=evaluation,
         )
 
@@ -503,6 +578,44 @@ class OperationSmokeAgent:
             failure_kind=failure_kind,
             error=error,
         )
+
+
+def _defer_actionable_items(
+    diagnosis: PlanSolveDiagnosisResult,
+    reasons_by_item_id: dict[str, str],
+) -> PlanSolveDiagnosisResult:
+    if not reasons_by_item_id:
+        return diagnosis
+    remaining = [
+        item
+        for item in diagnosis.actionable_failures
+        if item.item_id not in reasons_by_item_id
+    ]
+    moved = [
+        DeferredFailure(
+            failure_ref=item.failure_ref,
+            root_failure_refs=item.root_failure_refs,
+            reason=reasons_by_item_id[item.item_id],
+        )
+        for item in diagnosis.actionable_failures
+        if item.item_id in reasons_by_item_id
+    ]
+    if not moved:
+        return diagnosis
+    payload = diagnosis.model_dump(mode="json")
+    payload.update(
+        {
+            "status": "actionable" if remaining else "inconclusive",
+            "actionable_failures": [
+                item.model_dump(mode="json") for item in remaining
+            ],
+            "deferred_failures": [
+                item.model_dump(mode="json")
+                for item in [*diagnosis.deferred_failures, *moved]
+            ],
+        }
+    )
+    return PlanSolveDiagnosisResult.model_validate(payload)
 
 
 def _batch_evaluation(
@@ -555,6 +668,37 @@ def _candidate_evaluation(
         "accepted_change_count": accepted_count,
         "rejected_change_count": change_count - accepted_count,
     }
+
+
+def _accept_all_groups(
+    validation: PatchValidationSummary,
+    *,
+    groups: list[ValidatedPatchGroup],
+) -> PatchValidationSummary:
+    """Apply the existing global success-threshold acceptance override."""
+
+    return validation.model_copy(
+        update={
+            "accepted_group_ids": [group.group_id for group in groups],
+            "rejected_group_ids": [],
+            "accepted_input_node_ids": list(
+                dict.fromkeys(
+                    update.input_node_id
+                    for group in groups
+                    for update in group.patch.updates
+                )
+            ),
+            "rejected_input_node_ids": [],
+            "accepted_constraint_ids": list(
+                dict.fromkeys(
+                    constraint.constraint_id
+                    for group in groups
+                    for constraint in group.patch.constraints
+                )
+            ),
+            "rejected_constraint_ids": [],
+        }
+    )
 
 
 def _assert_reference_invariants(
@@ -643,43 +787,6 @@ def _combined_constraints(
     return ConstraintSet(constraints=expressions)
 
 
-def _preflight_patch(
-    *,
-    catalog: GeneratorConfigCatalog,
-    reference_values: ReferenceValueProvider,
-    current: OperationGeneratorConfig,
-    patch: GeneratorPatchDraft,
-    active_constraints: list[CompiledConstraintPatch],
-    case_count: int,
-    seed: int,
-) -> list[str]:
-    """Generate the complete experimental batch without mutating runtime state."""
-
-    try:
-        preview = catalog.preview_candidate(
-            operation_key=current.operation_key,
-            updates=patch.updates,
-        )
-        constraints = _combined_constraints(
-            [*active_constraints, *patch.constraints]
-        )
-        for case_index in range(case_count):
-            generate_test_case(
-                preview.snapshot,
-                preview,
-                run_seed=seed,
-                case_index=case_index,
-                reference_values=reference_values,
-                constraints=constraints,
-            )
-    except ValueError as exc:
-        return [
-            "Candidate patch cannot generate a complete batch "
-            f"({type(exc).__name__})."
-        ]
-    return []
-
-
 def _run_smoke_batch(
     runner: OperationBatchRunner,
     *,
@@ -716,87 +823,3 @@ def _run_smoke_batch(
         outcome.report,
         {item.case_id: item for item in outcome.case_evidence},
     )
-
-
-def _previous_experiment_summary(
-    diagnosis: PlanSolveDiagnosisResult,
-    *,
-    evaluation: dict,
-    config: OperationGeneratorConfig,
-) -> dict:
-    semantic_inputs = build_semantic_input_map(config)
-    accepted_input_node_ids = set(
-        diagnosis.patch_validation.accepted_input_node_ids
-        if diagnosis.patch_validation is not None
-        else []
-    )
-    accepted_constraint_ids = set(
-        diagnosis.patch_validation.accepted_constraint_ids
-        if diagnosis.patch_validation is not None
-        else []
-    )
-    changes = []
-    constraints = []
-    if diagnosis.patch is not None:
-        for update in diagnosis.patch.updates:
-            handle = semantic_inputs.handle_by_node.get(update.input_node_id)
-            if handle is None:
-                continue
-            change = {
-                "input": handle,
-                "inclusion_probability": update.inclusion_probability,
-                "generation": (
-                    update.strategy.model_dump(mode="json")
-                    if update.strategy is not None
-                    else None
-                ),
-            }
-            if diagnosis.patch_validation is not None:
-                change["outcome"] = (
-                    "accepted"
-                    if update.input_node_id in accepted_input_node_ids
-                    else "removed"
-                )
-            changes.append(change)
-        for constraint in diagnosis.patch.constraints:
-            summary = {"kind": constraint.kind}
-            if diagnosis.patch_validation is not None:
-                summary["outcome"] = (
-                    "accepted"
-                    if constraint.constraint_id in accepted_constraint_ids
-                    else "removed"
-                )
-            constraints.append(summary)
-    summary = {
-        "diagnosis_status": diagnosis.status,
-        "termination_reason": diagnosis.termination_reason,
-        "covered_item_count": len(diagnosis.covered_item_ids),
-        "deferred_item_count": len(diagnosis.deferred_items),
-        "generator_changes": changes,
-        "constraints": constraints,
-        "candidate_success_rate": evaluation.get("success_rate"),
-        "candidate_case_count": evaluation.get("case_count"),
-    }
-    if diagnosis.patch_validation is not None:
-        summary.update(
-            {
-                "accepted_change_count": evaluation.get(
-                    "accepted_change_count",
-                    len(accepted_input_node_ids)
-                    + len(accepted_constraint_ids),
-                ),
-                "removed_change_count": evaluation.get(
-                    "rejected_change_count",
-                    len(changes)
-                    + len(constraints)
-                    - len(accepted_input_node_ids)
-                    - len(accepted_constraint_ids),
-                ),
-                "evidence_note": (
-                    "This candidate batch used the complete experimental patch. "
-                    "Effects marked removed are no longer active in this Smoke "
-                    "run."
-                ),
-            }
-        )
-    return summary

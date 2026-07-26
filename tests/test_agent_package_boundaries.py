@@ -13,6 +13,7 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 
     for package_name in (
         "operation_smoke",
+        "parameter_patch",
         "api_behavior_monitor",
         "supervisor",
     ):
@@ -26,6 +27,11 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 def test_agent_package_and_public_facade_export_same_contracts() -> None:
     from restscope.agent import (
         OperationSmokeAgent,
+        ParameterPatchAgent,
+        ParameterPatchAgentFactory,
+        PatchGroupTask,
+        ValidatedPatchGroup,
+        PatchGroupFailure,
         PatchValidationSummary,
         PlanSolveDiagnosisResult,
         APIBehaviorMonitorAgent,
@@ -33,13 +39,28 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
     )
     from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
     from restscope.agent.operation_smoke import (
+        GeneratorPatchDraft as SmokeGeneratorPatchDraft,
         PatchValidationSummary as PackagedPatchValidationSummary,
         PlanSolveDiagnosisResult as PackagedPlanSolveDiagnosisResult,
+    )
+    from restscope.agent.parameter_patch import (
+        GeneratorPatchDraft,
+        ParameterPatchAgent as PackagedParameterPatchAgent,
+        ParameterPatchAgentFactory as PackagedParameterPatchAgentFactory,
+        PatchGroupFailure as PackagedPatchGroupFailure,
+        PatchGroupTask as PackagedPatchGroupTask,
+        ValidatedPatchGroup as PackagedValidatedPatchGroup,
     )
     from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent as PackagedAPIBehaviorMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
     assert OperationSmokeAgent is PackagedOperationSmokeAgent
+    assert ParameterPatchAgent is PackagedParameterPatchAgent
+    assert ParameterPatchAgentFactory is PackagedParameterPatchAgentFactory
+    assert PatchGroupTask is PackagedPatchGroupTask
+    assert ValidatedPatchGroup is PackagedValidatedPatchGroup
+    assert PatchGroupFailure is PackagedPatchGroupFailure
+    assert SmokeGeneratorPatchDraft is GeneratorPatchDraft
     assert PlanSolveDiagnosisResult is PackagedPlanSolveDiagnosisResult
     assert PatchValidationSummary is PackagedPatchValidationSummary
     assert APIBehaviorMonitorAgent is PackagedAPIBehaviorMonitorAgent
@@ -49,6 +70,7 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
 def test_cross_agent_imports_use_package_facades() -> None:
     package_names = {
         "operation_smoke",
+        "parameter_patch",
         "api_behavior_monitor",
         "supervisor",
     }

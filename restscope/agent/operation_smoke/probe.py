@@ -5,8 +5,13 @@ from __future__ import annotations
 from copy import deepcopy
 from urllib.parse import unquote, urlsplit
 
+from pydantic import ValidationError
+
 from restscope.capabilities import ToolExecutor
-from restscope.capabilities.http_request import HTTP_REQUEST_TOOL_NAME
+from restscope.capabilities.http_request import (
+    HTTP_REQUEST_TOOL_NAME,
+    HTTPRequestArguments,
+)
 from restscope.llm import ToolCall, ToolResult, ToolSpec
 from restscope.testing import OperationGeneratorConfig
 
@@ -14,7 +19,7 @@ from restscope.testing import OperationGeneratorConfig
 class CurrentOperationHTTPProbe:
     """Expose the global HTTP tool without granting cross-operation requests."""
 
-    ROLE = "operation_smoke_plan_solve"
+    ROLE = "operation_smoke_root_cause_diagnosis"
 
     def __init__(self, executor: ToolExecutor) -> None:
         self.executor = executor
@@ -84,6 +89,16 @@ class CurrentOperationHTTPProbe:
             state={},
         )
 
+    def validate(
+        self,
+        *,
+        config: OperationGeneratorConfig,
+        tool_call: ToolCall,
+    ) -> str | None:
+        """Return a scope error without executing any external request."""
+
+        return _scope_error(config, tool_call)
+
 
 def _scope_error(
     config: OperationGeneratorConfig,
@@ -91,6 +106,17 @@ def _scope_error(
 ) -> str | None:
     if tool_call.name != HTTP_REQUEST_TOOL_NAME:
         return f"{tool_call.name} is not the allowed HTTP probe tool"
+    try:
+        HTTPRequestArguments.model_validate(tool_call.arguments)
+    except ValidationError as exc:
+        issue = exc.errors(include_input=False)[0]
+        location = ".".join(
+            str(item) for item in issue.get("loc", ())
+        ) or "request"
+        return (
+            f"HTTP probe field {location} is invalid: "
+            f"{issue['msg']}"
+        )
     method = tool_call.arguments.get("method")
     expected_method = config.snapshot.method.upper()
     if method != expected_method:

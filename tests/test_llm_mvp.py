@@ -36,7 +36,7 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
     assert request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
 
 
-def test_operation_smoke_planning_uses_thinking_and_patch_uses_fast() -> None:
+def test_operation_smoke_phases_select_independent_models() -> None:
     from restscope.llm import LLMModelConfig, ModelSelector
 
     selector = ModelSelector(
@@ -52,9 +52,19 @@ def test_operation_smoke_planning_uses_thinking_and_patch_uses_fast() -> None:
         ),
     )
 
-    assert selector.select("operation_smoke_plan_solve").model == "thinking-model"
-    assert selector.select("operation_smoke_patch_validation").model == "thinking-model"
-    assert selector.select("operation_smoke_generator_patch").model == "fast-model"
+    assert (
+        selector.select("operation_smoke_root_cause_diagnosis").model
+        == "thinking-model"
+    )
+    assert (
+        selector.select("operation_smoke_effect_validation").model
+        == "thinking-model"
+    )
+    assert (
+        selector.select("operation_smoke_patch_grouping").model
+        == "fast-model"
+    )
+    assert selector.select("parameter_patch_agent").model == "fast-model"
 
 
 def test_reasoning_config_and_tool_provider_context_round_trip() -> None:

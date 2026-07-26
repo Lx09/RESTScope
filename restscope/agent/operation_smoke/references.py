@@ -9,6 +9,7 @@ from restscope.agent.api_behavior_monitor import (
     ResourceLookupRequest,
     ResponseValueSource,
 )
+from restscope.agent.parameter_patch import AvailableReferenceOption
 from restscope.testing import (
     InputGeneratorPatch,
     InputNodeSnapshot,
@@ -17,9 +18,6 @@ from restscope.testing import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
-
-from .schemas import AvailableReferenceOption
-
 
 _MAX_REFERENCE_OPTIONS = 100
 _SCALAR_REFERENCE_TYPES = frozenset(

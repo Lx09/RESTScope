@@ -548,6 +548,24 @@ def _apply_patches(
     )
 
 
+def preview_generator_patch(
+    current: OperationGeneratorConfig,
+    updates: Sequence[InputGeneratorPatch],
+) -> OperationGeneratorConfig:
+    """Apply and validate a generator patch without catalog persistence."""
+
+    if not updates:
+        return current
+    updated, _ = _apply_patches(current, updates)
+    _validate_configs(
+        current,
+        media_type=current.active_media_type,
+        configs=updated,
+        enforce_schema=False,
+    )
+    return current.model_copy(update={"configs": updated})
+
+
 def _changed_input_node_ids(
     parent: OperationGeneratorConfig,
     candidate: OperationGeneratorConfig,

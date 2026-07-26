@@ -154,6 +154,89 @@ def generate_test_case(
     return generated
 
 
+def project_generated_input_value(
+    operation: OperationTestSnapshot,
+    generated: GeneratedTestCase,
+    *,
+    input_node_id: str,
+) -> Any:
+    """Project one present input node from the request-shaped generated case."""
+
+    nodes = {node.input_node_id: node for node in operation.input_nodes}
+    try:
+        target = nodes[input_node_id]
+    except KeyError as exc:
+        raise KeyError(f"Unknown generated input node: {input_node_id}") from exc
+
+    ancestors = [target]
+    while ancestors[-1].parent_node_id is not None:
+        ancestors.append(nodes[ancestors[-1].parent_node_id])
+    ancestors.reverse()
+    root = ancestors[0]
+
+    parameters = {
+        parameter.input_node_id: parameter
+        for parameter in operation.parameters
+    }
+    parameter = parameters.get(root.input_node_id)
+    if parameter is not None:
+        by_location = {
+            "path": generated.path_parameters,
+            "query": generated.query_parameters,
+            "header": generated.header_parameters,
+            "cookie": generated.cookie_parameters,
+        }
+        values = by_location[parameter.location]
+        if parameter.name not in values:
+            raise KeyError(f"Generated parameter is absent: {parameter.name}")
+        value: Any = deepcopy(values[parameter.name])
+    else:
+        active_media_node_id = operation.media_type_node_ids.get(
+            (generated.media_type or "").strip().lower()
+        )
+        if (
+            not generated.body_present
+            or active_media_node_id is None
+            or root.input_node_id != active_media_node_id
+        ):
+            raise KeyError(
+                f"Generated input has no request-shaped root: {input_node_id}"
+            )
+        value = deepcopy(generated.body)
+
+    for parent, child in zip(ancestors, ancestors[1:]):
+        suffix = child.canonical_path.removeprefix(
+            f"{parent.canonical_path}/"
+        )
+        value = _project_child_value(value, suffix=suffix)
+    return value
+
+
+def _project_child_value(value: Any, *, suffix: str) -> Any:
+    if suffix == "items":
+        if not isinstance(value, list):
+            raise KeyError("Generated array item parent is not an array")
+        return value
+    if suffix.startswith("properties/"):
+        encoded = suffix.removeprefix("properties/").split("/", 1)[0]
+        name = encoded.replace("~1", "/").replace("~0", "~")
+        if isinstance(value, list):
+            projected = [
+                item[name]
+                for item in value
+                if isinstance(item, Mapping) and name in item
+            ]
+            if not projected:
+                raise KeyError(f"Generated property is absent: {name}")
+            return projected
+        if not isinstance(value, Mapping) or name not in value:
+            raise KeyError(f"Generated property is absent: {name}")
+        return value[name]
+    if suffix.startswith(("oneOf/", "anyOf/", "allOf/")):
+        return value
+    raise KeyError(f"Unsupported generated input path segment: {suffix}")
+
+
 class _TestCaseGenerator:
     def __init__(
         self,

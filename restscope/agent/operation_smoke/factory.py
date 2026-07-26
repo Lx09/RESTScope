@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from restscope.agent.parameter_patch import ParameterPatchAgentFactory
 from restscope.capabilities import ToolExecutor
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
@@ -10,6 +11,7 @@ from restscope.testing import GeneratorConfigCatalog, ReferenceValueProvider
 
 from .agent import OperationBatchRunner, OperationSmokeAgent
 from .diagnosis import OperationSmokeDiagnoser
+from .grouping import PatchGroupPlanner
 from .probe import CurrentOperationHTTPProbe
 
 
@@ -30,22 +32,33 @@ def build_operation_smoke_agent(
         config.llm,
         tracing_runtime=runtime,
     )
+    selector = ModelSelector.from_config(config.llm)
     return OperationSmokeAgent(
         config_catalog=config_catalog,
         batch_runner=batch_runner,
         diagnoser=OperationSmokeDiagnoser(
             client=client,
-            planning_model=ModelSelector.from_config(config.llm).select(
-                "operation_smoke_plan_solve"
+            planning_model=selector.select(
+                "operation_smoke_root_cause_diagnosis"
             ),
-            patch_model=ModelSelector.from_config(config.llm).select(
-                "operation_smoke_generator_patch"
+            effect_model=selector.select(
+                "operation_smoke_effect_validation"
             ),
             http_probe=(
                 CurrentOperationHTTPProbe(tool_executor)
                 if tool_executor is not None
                 else None
             ),
+            tracing_runtime=runtime,
+        ),
+        group_planner=PatchGroupPlanner(
+            client=client,
+            model=selector.select("operation_smoke_patch_grouping"),
+            tracing_runtime=runtime,
+        ),
+        patch_agent_factory=ParameterPatchAgentFactory(
+            client=client,
+            model=selector.select("parameter_patch_agent"),
             tracing_runtime=runtime,
         ),
         reference_values=reference_values,

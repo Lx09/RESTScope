@@ -1,6 +1,11 @@
 """Lightweight OpenAPI request generation and execution."""
 
-from .catalog import GeneratorConfigCatalog, GeneratorConfigError, GeneratorConfigRevisionConflict
+from .catalog import (
+    GeneratorConfigCatalog,
+    GeneratorConfigError,
+    GeneratorConfigRevisionConflict,
+    preview_generator_patch,
+)
 from .constraints import (
     AndConstraint,
     ArithmeticValue,
@@ -23,8 +28,16 @@ from .constraints import (
     referenced_input_node_ids,
     validate_constraint_set,
 )
-from .constraint_solver import ConstraintSolveError, solve_input_overrides
+from .constraint_solver import (
+    ConstraintSolveError,
+    assignments_from_generated_case,
+    solve_input_overrides,
+)
 from .execution import OperationTestingService, TestingExecutionError
+from .failure_reporting import (
+    FailureCaseEvidence,
+    failure_messages_for_evidence,
+)
 from .models import (
     BatchFailureReport,
     GeneratorDisabledReason,
@@ -44,8 +57,9 @@ from .models import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
-from .generation import generate_strategy_value
+from .generation import generate_strategy_value, project_generated_input_value
 from .ports import ReferenceValueProvider
+from .semantics import SemanticInputMap, build_semantic_input_map
 
 __all__ = [
     "AndConstraint",
@@ -63,6 +77,7 @@ __all__ = [
     "GeneratorConfigRevision",
     "GeneratedNodeValue",
     "GeneratedTestCase",
+    "FailureCaseEvidence",
     "InputGeneratorConfig",
     "InputGeneratorPatch",
     "InputAssignment",
@@ -83,14 +98,20 @@ __all__ = [
     "ReferenceValueProvider",
     "ResourceIdentifierGenerator",
     "ResponseValueGenerator",
+    "SemanticInputMap",
     "OrConstraint",
     "PresentPredicate",
     "TestingExecutionError",
     "UniqueFailureMessage",
     "classify_constraint",
     "evaluate_constraint_set",
+    "failure_messages_for_evidence",
+    "build_semantic_input_map",
+    "assignments_from_generated_case",
     "generate_strategy_value",
     "normalize_constraint_set",
+    "preview_generator_patch",
+    "project_generated_input_value",
     "referenced_input_node_ids",
     "solve_input_overrides",
     "validate_constraint_set",

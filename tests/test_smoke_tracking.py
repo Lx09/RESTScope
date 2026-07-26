@@ -280,11 +280,8 @@ def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
                 provider=self.name,
                 model=request.model,
                 parsed_json={
-                    "ready": [],
-                    "pending": [],
-                    "non_parameter_failure_refs": ["F1"],
-                    "unplanned_failure_refs": [],
-                    "finish": True,
+                    "action": "deferred",
+                    "reason": "non_parameter",
                 },
             )
 
@@ -294,15 +291,9 @@ def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
     diagnoser = OperationSmokeDiagnoser(
         client=LLMClient(registry, tracing_runtime=runtime),
         planning_model=LLMModelConfig(
-            role="operation_smoke_plan_solve",
+            role="operation_smoke_root_cause_diagnosis",
             provider="stub",
             model="think",
-            enabled=True,
-        ),
-        patch_model=LLMModelConfig(
-            role="operation_smoke_generator_patch",
-            provider="stub",
-            model="fast",
             enabled=True,
         ),
         tracing_runtime=runtime,
@@ -348,12 +339,28 @@ def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
     diagnosis_span = next(
         span for span in spans if span.name == "OperationSmokeDiagnoser.diagnose"
     )
+    failure_span = next(
+        span
+        for span in spans
+        if span.name == "OperationSmokeDiagnoser.investigate_failure"
+    )
     llm_span = next(span for span in spans if span.name == "LLMClient.invoke")
     assert result.status == "no_parameter_issue"
-    assert llm_span.parent.span_id == diagnosis_span.context.span_id
+    assert failure_span.parent.span_id == diagnosis_span.context.span_id
+    assert llm_span.parent.span_id == failure_span.context.span_id
     assert diagnosis_span.attributes["restscope.operation.key"] == "GET /items"
     assert diagnosis_span.attributes["restscope.test.run_id"] == "run_failure"
-    assert diagnosis_span.attributes["restscope.smoke.planning_outputs"] == 1
-    assert diagnosis_span.attributes["restscope.smoke.http_tool_rounds"] == 0
-    assert diagnosis_span.attributes["restscope.smoke.ready_count"] == 0
-    assert diagnosis_span.attributes["restscope.smoke.non_parameter_count"] == 1
+    assert (
+        diagnosis_span.attributes[
+            "restscope.smoke.diagnosis_valid_outputs"
+        ]
+        == 1
+    )
+    assert (
+        diagnosis_span.attributes[
+            "restscope.smoke.diagnosis_http_tool_calls"
+        ]
+        == 0
+    )
+    assert diagnosis_span.attributes["restscope.smoke.actionable_count"] == 0
+    assert diagnosis_span.attributes["restscope.smoke.deferred_count"] == 1
