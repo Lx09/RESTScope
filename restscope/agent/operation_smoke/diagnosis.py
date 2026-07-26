@@ -1,10 +1,10 @@
-"""Two bounded FAST calls that locate inputs before proposing generator patches."""
+"""Bounded Plan & Solve diagnosis for one failing Operation Smoke batch."""
 
 from __future__ import annotations
 
-from collections import OrderedDict
 import json
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel
 
@@ -15,6 +15,9 @@ from restscope.llm import (
     LLMRequest,
     LLMResponse,
     OutputValidator,
+    ToolCall,
+    ToolResult,
+    ToolSpec,
 )
 from restscope.observability import TracingRuntime
 from restscope.testing import (
@@ -25,32 +28,42 @@ from restscope.testing import (
     ResponseValueGenerator,
 )
 
+from .evidence import EvidenceJournal
+from .planning import PlanDecision, PlanState
+from .prompts import (
+    JointPatchDecision,
+    build_joint_patch_prompt,
+    build_plan_prompt,
+    compile_joint_patch,
+    generator_intent_repair_guidance,
+    validate_joint_patch,
+)
 from .schemas import (
     AvailableReferenceOption,
+    DeferredPlanItem,
     GeneratorPatchDraft,
-    TwoRoundDiagnosisResult,
-)
-from .prompts import (
-    GeneratorIntentBatch,
-    ParameterDiagnosisDecision,
-    build_generator_prompt,
-    build_parameter_prompt,
-    compile_generator_intents,
-    generator_intent_repair_guidance,
-    resolve_parameter_decision,
-    validate_generator_intents,
-    validate_parameter_decision,
+    PlanSolveDiagnosisResult,
 )
 
 
-MAX_FIRST_ROUND_USER_BYTES = 64 * 1024
-_FIRST_ROUND_SECTION_BYTES = 32 * 1024
+MAX_TOOL_CALLS_PER_ROUND = 4
 _MAX_REPAIR_ERRORS = 10
 _OutputT = TypeVar("_OutputT", bound=BaseModel)
 
 
+class HTTPProbe(Protocol):
+    def tool_spec(self, config: OperationGeneratorConfig) -> ToolSpec: ...
+
+    def execute(
+        self,
+        *,
+        config: OperationGeneratorConfig,
+        tool_call: ToolCall,
+    ) -> ToolResult: ...
+
+
 class OperationSmokeOutputError(RuntimeError):
-    """The FAST model did not return a safe diagnosis or generator patch."""
+    """The configured models cannot safely run Operation Smoke diagnosis."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -58,18 +71,22 @@ class OperationSmokeOutputError(RuntimeError):
 
 
 class OperationSmokeDiagnoser:
-    """Separate parameter localization from generator mutation."""
+    """Analyze all failures before compiling one compatible generator patch."""
 
     def __init__(
         self,
         *,
         client: LLMClient,
-        model: LLMModelConfig,
+        planning_model: LLMModelConfig,
+        patch_model: LLMModelConfig,
+        http_probe: HTTPProbe | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.client = client
-        self.model = model
+        self.planning_model = planning_model
+        self.patch_model = patch_model
+        self.http_probe = http_probe
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
@@ -82,20 +99,36 @@ class OperationSmokeDiagnoser:
         reference_option_provider: (
             Callable[[set[str]], list[AvailableReferenceOption]] | None
         ) = None,
-    ) -> TwoRoundDiagnosisResult:
+        private_case_evidence: Mapping[str, Any] | None = None,
+        previous_experiment: Mapping[str, Any] | None = None,
+        max_planning_outputs: int = 20,
+        max_http_tool_rounds: int = 40,
+    ) -> PlanSolveDiagnosisResult:
+        _validate_budgets(
+            max_planning_outputs=max_planning_outputs,
+            max_http_tool_rounds=max_http_tool_rounds,
+        )
         with self.tracing_runtime.span(
             "OperationSmokeDiagnoser.diagnose",
             kind="AGENT",
             input_value={
                 "operation_key": report.operation_key,
                 "run_id": report.run_id,
-                "failure_message_count": len(
+                "failure_count": len(
                     report.failure_report.unique_failure_messages
                 ),
+                "max_planning_outputs": max_planning_outputs,
+                "max_http_tool_rounds": max_http_tool_rounds,
             },
             attributes={
                 "restscope.operation.key": report.operation_key,
                 "restscope.test.run_id": report.run_id,
+                "restscope.smoke.max_planning_outputs": (
+                    max_planning_outputs
+                ),
+                "restscope.smoke.max_http_tool_rounds": (
+                    max_http_tool_rounds
+                ),
             },
         ) as span:
             result = self._diagnose(
@@ -103,31 +136,57 @@ class OperationSmokeDiagnoser:
                 config=config,
                 reference_options=reference_options,
                 reference_option_provider=reference_option_provider,
+                private_case_evidence=private_case_evidence,
+                previous_experiment=previous_experiment,
+                max_planning_outputs=max_planning_outputs,
+                max_http_tool_rounds=max_http_tool_rounds,
             )
             span.set_output(
                 {
-                    "no_parameter_issue": (
-                        result.diagnosis.no_parameter_issue
-                    ),
-                    "suspect_count": len(result.diagnosis.suspects),
-                    "update_count": len(result.updates),
-                    "reference_selection_count": len(
-                        result.selected_reference_options
-                    ),
+                    "status": result.status,
+                    "termination_reason": result.termination_reason,
+                    "planning_outputs": result.planning_outputs,
+                    "http_tool_rounds": result.http_tool_rounds,
+                    "ready_count": len(result.ready_items),
+                    "pending_count": len(result.pending_items),
+                    "covered_count": len(result.covered_item_ids),
+                    "deferred_count": len(result.deferred_items),
                 }
             )
-            span.set_attribute(
-                "restscope.smoke.no_parameter_issue",
-                result.diagnosis.no_parameter_issue,
-            )
-            span.set_attribute(
-                "restscope.smoke.suspect_count",
-                len(result.diagnosis.suspects),
-            )
-            span.set_attribute(
-                "restscope.smoke.generator_update_count",
-                len(result.updates),
-            )
+            for name, value in (
+                ("restscope.smoke.diagnosis_status", result.status),
+                (
+                    "restscope.smoke.termination_reason",
+                    result.termination_reason,
+                ),
+                (
+                    "restscope.smoke.planning_outputs",
+                    result.planning_outputs,
+                ),
+                (
+                    "restscope.smoke.http_tool_rounds",
+                    result.http_tool_rounds,
+                ),
+                ("restscope.smoke.ready_count", len(result.ready_items)),
+                ("restscope.smoke.pending_count", len(result.pending_items)),
+                (
+                    "restscope.smoke.non_parameter_count",
+                    len(result.non_parameter_failures),
+                ),
+                (
+                    "restscope.smoke.unplanned_count",
+                    len(result.unplanned_failures),
+                ),
+                (
+                    "restscope.smoke.covered_count",
+                    len(result.covered_item_ids),
+                ),
+                (
+                    "restscope.smoke.deferred_count",
+                    len(result.deferred_items),
+                ),
+            ):
+                span.set_attribute(name, value)
             return result
 
     def _diagnose(
@@ -135,321 +194,417 @@ class OperationSmokeDiagnoser:
         *,
         report: OperationExecutionReport,
         config: OperationGeneratorConfig,
-        reference_options: list[AvailableReferenceOption] | None = None,
+        reference_options: list[AvailableReferenceOption] | None,
         reference_option_provider: (
             Callable[[set[str]], list[AvailableReferenceOption]] | None
-        ) = None,
-    ) -> TwoRoundDiagnosisResult:
-        if not self.model.enabled:
+        ),
+        private_case_evidence: Mapping[str, Any] | None,
+        previous_experiment: Mapping[str, Any] | None,
+        max_planning_outputs: int,
+        max_http_tool_rounds: int,
+    ) -> PlanSolveDiagnosisResult:
+        if not self.planning_model.enabled:
             raise OperationSmokeOutputError(
-                "operation_smoke_model_not_configured",
-                "The Operation Smoke FAST model is not configured",
+                "operation_smoke_planning_model_not_configured",
+                "The Operation Smoke planning model is not configured",
+            )
+        if not self.patch_model.enabled:
+            raise OperationSmokeOutputError(
+                "operation_smoke_patch_model_not_configured",
+                "The Operation Smoke patch model is not configured",
             )
         if report.operation_key != config.operation_key:
             raise OperationSmokeOutputError(
                 "operation_smoke_report_mismatch",
                 "Execution report and generator config identify different operations",
             )
-        first_prompt = build_parameter_prompt(report, config)
-        diagnosis_decision = self._call_with_repair(
-            messages=[
-                LLMMessage(
-                    role="system",
-                    content=first_prompt.system,
-                ),
-                LLMMessage(
-                    role="user",
-                    content=first_prompt.user,
-                ),
-            ],
-            output_model=ParameterDiagnosisDecision,
-            role="operation_smoke_parameter_diagnosis",
-            semantic_validate=lambda draft: validate_parameter_decision(
-                draft,
-                first_prompt,
-            ),
-        )
-        diagnosis = resolve_parameter_decision(
-            diagnosis_decision,
-            first_prompt,
-        )
-        if diagnosis.no_parameter_issue:
-            return TwoRoundDiagnosisResult(diagnosis=diagnosis)
-
-        suspect_ids = {item.input_node_id for item in diagnosis.suspects}
         if reference_options is not None and reference_option_provider is not None:
             raise ValueError(
                 "Provide reference_options or reference_option_provider, not both"
             )
-        if reference_option_provider is not None:
-            reference_options = reference_option_provider(suspect_ids)
-        selected_options = [
-            item
-            for item in (reference_options or [])
-            if item.input_node_id in suspect_ids
-        ]
-        second_prompt = build_generator_prompt(
-            diagnosis,
-            config,
-            selected_options,
-            alias_by_input=first_prompt.alias_by_input,
-            alias_by_evidence=first_prompt.alias_by_evidence,
-        )
-        intent_batch = self._call_with_repair(
-            messages=[
-                LLMMessage(
-                    role="system",
-                    content=second_prompt.system,
-                ),
-                LLMMessage(role="user", content=second_prompt.user),
-            ],
-            output_model=GeneratorIntentBatch,
-            role="operation_smoke_generator_patch",
-            semantic_validate=lambda draft: validate_generator_intents(
-                draft,
-                second_prompt,
-                config,
-            ),
-        )
-        patch, selected_reference_options = compile_generator_intents(
-            intent_batch,
-            second_prompt,
-        )
-        return TwoRoundDiagnosisResult(
-            diagnosis=diagnosis,
-            updates=_resolve_generator_updates(
-                patch,
-                reference_options=selected_reference_options,
-            ),
-            selected_reference_options=selected_reference_options,
-        )
 
-    def _call_with_repair(
-        self,
-        *,
-        messages: list[LLMMessage],
-        output_model: type[_OutputT],
-        role: str,
-        semantic_validate: Callable[[_OutputT], list[str]],
-    ) -> _OutputT:
-        response = self.client.invoke(
-            self._request(
-                messages=messages,
-                role=role,
+        journal = EvidenceJournal.from_batch(
+            report=report,
+            config=config,
+            private_case_evidence=private_case_evidence,
+            redactor=self.tracing_runtime.redactor,
+        )
+        state: PlanState | None = None
+        planning_outputs = 0
+        http_tool_rounds = 0
+        termination_reason = "analysis_complete"
+
+        while True:
+            if state is not None and (state.finish or not state.pending):
+                termination_reason = (
+                    "model_finalize" if state.finish else "analysis_complete"
+                )
+                break
+            if planning_outputs >= max_planning_outputs:
+                termination_reason = "decision_limit"
+                break
+
+            prompt = build_plan_prompt(
+                config=config,
+                journal=journal,
+                plan_state=state,
+                previous_experiment=previous_experiment,
             )
-        )
-        parsed, errors = self._validate(
-            response,
-            output_model=output_model,
-            semantic_validate=semantic_validate,
-        )
-        if not errors:
-            assert parsed is not None
-            return parsed
-        repair_messages = [
-            *messages,
-            LLMMessage(
-                role="assistant",
-                content=_json(
-                    response.parsed_json
-                    if response.parsed_json is not None
-                    else response.content
-                ),
-            ),
-            LLMMessage(
-                role="user",
-                content=(
-                    "Your previous JSON could not be used.\n"
-                    + "\n".join(
-                        f"- {error}"
-                        for error in errors[:_MAX_REPAIR_ERRORS]
+            can_probe = (
+                state is not None
+                and self.http_probe is not None
+                and http_tool_rounds < max_http_tool_rounds
+            )
+            tools = (
+                [self.http_probe.tool_spec(config)]
+                if can_probe
+                else []
+            )
+            messages = [
+                LLMMessage(role="system", content=prompt.system),
+                LLMMessage(role="user", content=prompt.user),
+            ]
+            response = self.client.invoke(
+                self._request(
+                    model=self.planning_model,
+                    messages=messages,
+                    role="operation_smoke_plan_solve",
+                    tools=tools,
+                    tool_choice="auto" if tools else "none",
+                )
+            )
+
+            tool_errors = _tool_response_errors(
+                response,
+                tools_allowed=bool(tools),
+            )
+            if response.tool_calls and not tool_errors:
+                assert self.http_probe is not None
+                for tool_call in response.tool_calls:
+                    result = self.http_probe.execute(
+                        config=config,
+                        tool_call=tool_call,
                     )
-                    + "\nReturn one complete corrected JSON object using only "
-                    "the aliases supplied in the original task."
+                    journal.record_tool_result(tool_call, result)
+                http_tool_rounds += 1
+                continue
+
+            decision, errors = self._parse(response, PlanDecision)
+            errors = [*tool_errors, *errors]
+            next_state: PlanState | None = None
+            if decision is not None and not errors:
+                next_state, errors = PlanState.from_decision(
+                    decision,
+                    journal=journal,
+                    previous=state,
+                )
+            if errors:
+                repaired = self._repair(
+                    model=self.planning_model,
+                    messages=messages,
+                    response=response,
+                    role="operation_smoke_plan_solve",
+                    errors=errors,
+                )
+                decision, repair_errors = self._parse(
+                    repaired,
+                    PlanDecision,
+                )
+                if repaired.tool_calls:
+                    repair_errors = [
+                        *repair_errors,
+                        "A repair must return plan JSON, not tool calls.",
+                    ]
+                if decision is not None and not repair_errors:
+                    next_state, repair_errors = PlanState.from_decision(
+                        decision,
+                        journal=journal,
+                        previous=state,
+                    )
+                if repair_errors or next_state is None:
+                    termination_reason = "planning_output_invalid"
+                    break
+            assert next_state is not None
+            state = next_state
+            planning_outputs += 1
+
+        if state is None:
+            return _result(
+                status="inconclusive",
+                termination_reason=termination_reason,
+                state=None,
+                planning_outputs=planning_outputs,
+                http_tool_rounds=http_tool_rounds,
+            )
+        if not state.ready:
+            no_parameter_issue = (
+                not state.pending
+                and not state.unplanned_failure_refs
+                and set(state.non_parameter_failure_refs)
+                == journal.known_failure_refs
+            )
+            return _result(
+                status=(
+                    "no_parameter_issue"
+                    if no_parameter_issue
+                    else "inconclusive"
                 ),
-            ),
+                termination_reason=termination_reason,
+                state=state,
+                planning_outputs=planning_outputs,
+                http_tool_rounds=http_tool_rounds,
+            )
+
+        affected_node_ids = {
+            journal.semantic_inputs.node_by_handle[solution.input]
+            for item in state.ready
+            for solution in item.solutions
+        }
+        options = list(reference_options or [])
+        if reference_option_provider is not None:
+            options = reference_option_provider(affected_node_ids)
+        patch_prompt = build_joint_patch_prompt(
+            config=config,
+            plan_state=state,
+            journal=journal,
+            reference_options=options,
+        )
+        patch_messages = [
+            LLMMessage(role="system", content=patch_prompt.system),
+            LLMMessage(role="user", content=patch_prompt.user),
         ]
-        repaired_response = self.client.invoke(
+        patch_response = self.client.invoke(
             self._request(
-                messages=repair_messages,
-                role=role,
+                model=self.patch_model,
+                messages=patch_messages,
+                role="operation_smoke_generator_patch",
+                tools=[],
+                tool_choice="none",
             )
         )
-        parsed, errors = self._validate(
-            repaired_response,
-            output_model=output_model,
-            semantic_validate=semantic_validate,
+        patch_decision, patch_errors = self._parse(
+            patch_response,
+            JointPatchDecision,
         )
-        if errors or parsed is None:
-            raise OperationSmokeOutputError(
-                "operation_smoke_output_invalid",
-                "Operation Smoke output remained invalid: "
-                + "; ".join(errors[:5]),
+        if patch_decision is not None and not patch_errors:
+            patch_errors = validate_joint_patch(
+                patch_decision,
+                prompt=patch_prompt,
+                config=config,
             )
-        return parsed
+        if patch_errors:
+            repaired = self._repair(
+                model=self.patch_model,
+                messages=patch_messages,
+                response=patch_response,
+                role="operation_smoke_generator_patch",
+                errors=[
+                    *patch_errors,
+                    generator_intent_repair_guidance(),
+                ],
+            )
+            patch_decision, patch_errors = self._parse(
+                repaired,
+                JointPatchDecision,
+            )
+            if patch_decision is not None and not patch_errors:
+                patch_errors = validate_joint_patch(
+                    patch_decision,
+                    prompt=patch_prompt,
+                    config=config,
+                )
+        if patch_decision is None or patch_errors:
+            return _result(
+                status="inconclusive",
+                termination_reason="patch_output_invalid",
+                state=state,
+                planning_outputs=planning_outputs,
+                http_tool_rounds=http_tool_rounds,
+            )
+
+        draft, selected_options = compile_joint_patch(
+            patch_decision,
+            prompt=patch_prompt,
+        )
+        deferred = [
+            DeferredPlanItem(
+                item_id=item.item_id,
+                reason=item.reason,
+            )
+            for item in patch_decision.deferred_items
+        ]
+        if draft is None:
+            return _result(
+                status="inconclusive",
+                termination_reason="all_ready_items_deferred",
+                state=state,
+                planning_outputs=planning_outputs,
+                http_tool_rounds=http_tool_rounds,
+                covered_item_ids=patch_decision.covered_item_ids,
+                deferred_items=deferred,
+            )
+        resolved_updates = _resolve_generator_updates(
+            draft,
+            reference_options=selected_options,
+        )
+        return _result(
+            status="patch_ready",
+            termination_reason=termination_reason,
+            state=state,
+            planning_outputs=planning_outputs,
+            http_tool_rounds=http_tool_rounds,
+            patch=GeneratorPatchDraft(updates=resolved_updates),
+            selected_reference_options=selected_options,
+            covered_item_ids=patch_decision.covered_item_ids,
+            deferred_items=deferred,
+        )
 
     def _request(
         self,
         *,
+        model: LLMModelConfig,
         messages: list[LLMMessage],
         role: str,
+        tools: list[ToolSpec],
+        tool_choice: str,
     ) -> LLMRequest:
         return LLMRequest(
-            provider=self.model.provider,
-            model=self.model.model,
+            provider=model.provider,
+            model=model.model,
             messages=messages,
-            temperature=self.model.temperature,
-            max_tokens=self.model.max_tokens,
+            temperature=model.temperature,
+            max_tokens=model.max_tokens,
             response_format="json",
-            tool_choice="none",
-            timeout_seconds=self.model.timeout_seconds,
-            reasoning=self.model.reasoning,
+            tools=tools,
+            tool_choice=tool_choice,
+            timeout_seconds=model.timeout_seconds,
+            reasoning=model.reasoning,
             metadata={"role": role},
         )
 
-    def _validate(
+    def _parse(
         self,
         response: LLMResponse,
-        *,
         output_model: type[_OutputT],
-        semantic_validate: Callable[[_OutputT], list[str]],
     ) -> tuple[_OutputT | None, list[str]]:
         validation = self.validator.validate(
             response=response,
             output_model=output_model,
         )
         if not validation.valid:
-            if output_model is GeneratorIntentBatch:
-                return None, [generator_intent_repair_guidance()]
             return None, [
-                "The diagnosis JSON must contain no_parameter_issue and "
-                "suspects. Each suspect must contain input, confidence, "
-                "reason, and evidence, using only the supplied aliases."
+                (
+                    f"{issue.location}: {issue.message}"
+                    if issue.location
+                    else issue.message
+                )
+                for issue in validation.errors[:_MAX_REPAIR_ERRORS]
             ]
-        parsed = output_model.model_validate(validation.validated_object)
-        return parsed, semantic_validate(parsed)
+        return output_model.model_validate(validation.validated_object), []
 
-
-def build_parameter_diagnosis_context(
-    report: OperationExecutionReport,
-) -> dict[str, Any]:
-    """Project one batch into a deterministic, bounded first-round prompt."""
-
-    source_messages = report.failure_report.unique_failure_messages
-    included_messages: list[dict[str, str]] = []
-    messages_truncated = report.failure_report.truncated
-    for item in source_messages:
-        candidate = {
-            "failure_id": item.failure_id,
-            "message": item.message,
-        }
-        if _json_size([*included_messages, candidate]) > _FIRST_ROUND_SECTION_BYTES:
-            messages_truncated = True
-            continue
-        included_messages.append(candidate)
-
-    included_message_ids = {
-        item["failure_id"] for item in included_messages
-    }
-    refs_by_case: OrderedDict[str, list[str]] = OrderedDict()
-    for failure in source_messages:
-        if failure.failure_id not in included_message_ids:
-            continue
-        for case_id in failure.case_ids:
-            refs_by_case.setdefault(case_id, []).append(failure.failure_id)
-
-    cases_by_id = {case.case_id: case for case in report.cases}
-    test_inputs: list[dict[str, Any]] = []
-    inputs_truncated = False
-    for case_id, failure_ids in refs_by_case.items():
-        case = cases_by_id.get(case_id)
-        if case is None:
-            continue
-        projected, projection_truncated = _project_case_values(
-            case_id=case_id,
-            failure_ids=failure_ids,
-            generated_values=case.generated_test_case.generated_values,
-            omitted_input_node_ids=case.generated_test_case.omitted_input_node_ids,
-            existing=test_inputs,
+    def _repair(
+        self,
+        *,
+        model: LLMModelConfig,
+        messages: list[LLMMessage],
+        response: LLMResponse,
+        role: str,
+        errors: list[str],
+    ) -> LLMResponse:
+        return self.client.invoke(
+            self._request(
+                model=model,
+                messages=[
+                    *messages,
+                    LLMMessage(
+                        role="assistant",
+                        content=_response_json(response),
+                    ),
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "Your previous output could not be used.\n"
+                            + "\n".join(
+                                f"- {error}"
+                                for error in errors[:_MAX_REPAIR_ERRORS]
+                            )
+                            + "\nReturn one complete corrected JSON object "
+                            "using only the supplied names and references."
+                        ),
+                    ),
+                ],
+                role=role,
+                tools=[],
+                tool_choice="none",
+            )
         )
-        if projected is None:
-            inputs_truncated = True
-            continue
-        test_inputs.append(projected)
-        inputs_truncated = inputs_truncated or projection_truncated
-
-    context = {
-        "failure_messages": included_messages,
-        "test_inputs": test_inputs,
-        "context_truncated": messages_truncated or inputs_truncated,
-        "failure_message_count": len(source_messages),
-        "included_failure_message_count": len(included_messages),
-        "failed_case_count": len(refs_by_case),
-        "included_failed_case_count": len(test_inputs),
-    }
-    while _json_size(context) > MAX_FIRST_ROUND_USER_BYTES:
-        context["context_truncated"] = True
-        if context["test_inputs"]:
-            context["test_inputs"].pop()
-            context["included_failed_case_count"] -= 1
-        elif context["failure_messages"]:
-            removed = context["failure_messages"].pop()
-            context["included_failure_message_count"] -= 1
-            removed_id = removed["failure_id"]
-            for item in context["test_inputs"]:
-                item["failure_message_ids"] = [
-                    ref
-                    for ref in item["failure_message_ids"]
-                    if ref != removed_id
-                ]
-        else:
-            break
-    return context
 
 
-def _project_case_values(
+def _result(
     *,
-    case_id: str,
-    failure_ids: list[str],
-    generated_values,
-    omitted_input_node_ids: list[str],
-    existing: list[dict[str, Any]],
-) -> tuple[dict[str, Any] | None, bool]:
-    base: dict[str, Any] = {
-        "case_id": case_id,
-        "failure_message_ids": failure_ids,
-        "values": {},
-        "omitted_input_node_ids": [],
-    }
-    if _json_size([*existing, base]) > _FIRST_ROUND_SECTION_BYTES:
-        return None, True
-    truncated = False
-    grouped: OrderedDict[str, list[Any]] = OrderedDict()
-    for item in generated_values:
-        grouped.setdefault(item.input_node_id, []).append(item.value)
-    for node_id, values in grouped.items():
-        value: Any = values[0] if len(values) == 1 else values
-        candidate = {
-            **base,
-            "values": {**base["values"], node_id: value},
-        }
-        if _json_size([*existing, candidate]) > _FIRST_ROUND_SECTION_BYTES:
-            truncated = True
-            continue
-        base = candidate
-    for node_id in omitted_input_node_ids:
-        candidate = {
-            **base,
-            "omitted_input_node_ids": [
-                *base["omitted_input_node_ids"],
-                node_id,
-            ],
-        }
-        if _json_size([*existing, candidate]) > _FIRST_ROUND_SECTION_BYTES:
-            truncated = True
-            continue
-        base = candidate
-    return base, truncated
+    status: str,
+    termination_reason: str,
+    state: PlanState | None,
+    planning_outputs: int,
+    http_tool_rounds: int,
+    patch: GeneratorPatchDraft | None = None,
+    selected_reference_options: list[AvailableReferenceOption] | None = None,
+    covered_item_ids: list[str] | None = None,
+    deferred_items: list[DeferredPlanItem] | None = None,
+) -> PlanSolveDiagnosisResult:
+    return PlanSolveDiagnosisResult(
+        status=status,
+        termination_reason=termination_reason,
+        patch=patch,
+        selected_reference_options=selected_reference_options or [],
+        ready_items=(
+            [item.summary() for item in state.ready]
+            if state is not None
+            else []
+        ),
+        pending_items=(
+            [item.summary() for item in state.pending]
+            if state is not None
+            else []
+        ),
+        non_parameter_failures=(
+            state.non_parameter_failure_refs if state is not None else []
+        ),
+        unplanned_failures=(
+            state.unplanned_failure_refs if state is not None else []
+        ),
+        covered_item_ids=covered_item_ids or [],
+        deferred_items=deferred_items or [],
+        planning_outputs=planning_outputs,
+        http_tool_rounds=http_tool_rounds,
+    )
+
+
+def _tool_response_errors(
+    response: LLMResponse,
+    *,
+    tools_allowed: bool,
+) -> list[str]:
+    if not response.tool_calls:
+        return []
+    errors: list[str] = []
+    if not tools_allowed:
+        errors.append("HTTP tools are not available for this decision.")
+    if len(response.tool_calls) > MAX_TOOL_CALLS_PER_ROUND:
+        errors.append(
+            f"At most {MAX_TOOL_CALLS_PER_ROUND} HTTP requests are allowed "
+            "in one tool round."
+        )
+    if response.parsed_json is not None or (
+        response.content is not None and response.content.strip()
+    ):
+        errors.append("Do not mix HTTP tool calls with a plan decision.")
+    if any(
+        call.name != "restscope.http.request"
+        for call in response.tool_calls
+    ):
+        errors.append("Only restscope.http.request may be called.")
+    return errors
 
 
 def _resolve_generator_updates(
@@ -483,9 +638,31 @@ def _resolve_generator_updates(
     return updates
 
 
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+def _validate_budgets(
+    *,
+    max_planning_outputs: int,
+    max_http_tool_rounds: int,
+) -> None:
+    if not 1 <= max_planning_outputs <= 20:
+        raise ValueError("max_planning_outputs must be between 1 and 20")
+    if not 0 <= max_http_tool_rounds <= 40:
+        raise ValueError("max_http_tool_rounds must be between 0 and 40")
 
 
-def _json_size(value: Any) -> int:
-    return len(_json(value).encode("utf-8"))
+def _response_json(response: LLMResponse) -> str:
+    value = (
+        response.parsed_json
+        if response.parsed_json is not None
+        else response.content
+        if response.content is not None
+        else {
+            "tool_calls": [
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                }
+                for call in response.tool_calls
+            ]
+        }
+    )
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)

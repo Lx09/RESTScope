@@ -125,6 +125,55 @@ def test_agent_updates_ir_before_success_trackers_receive_evidence() -> None:
     ]
 
 
+def test_response_processor_keeps_private_monitor_summary() -> None:
+    from restscope.agent.api_behavior_monitor import (
+        APIBehaviorMonitorAgent,
+        APIBehaviorResponseProcessor,
+        ResponseContractTracker,
+    )
+    from restscope.http_transport import TargetResponseOperationContext
+
+    ir = _ir()
+    agent = APIBehaviorMonitorAgent(
+        contract_tracker=ResponseContractTracker(),
+        resource_identifier_tracker=_CapturingResourceTracker(),
+        response_value_tracker=_CapturingValueTracker(),
+    )
+
+    result = APIBehaviorResponseProcessor(agent).process(
+        _observation(201, b'{"id":7,"name":"Ada"}'),
+        TargetResponseOperationContext(
+            ir=ir,
+            operation_key="POST /users",
+            operation_method="POST",
+            operation_path="/users",
+        ),
+    )
+
+    assert result.response_validation == "evaluated"
+    assert result.details == {
+        "operation_key": "POST /users",
+        "status_code": 201,
+        "media_type": "application/json",
+        "contract_status": "updated",
+        "contract_changes": [
+            "response:201",
+            "response:201:schema",
+        ],
+        "resource_identifier": {
+            "status": "updated",
+            "groups_processed": 0,
+            "identifiers_recorded": 0,
+            "warning_code": None,
+        },
+        "response_values": {
+            "sources_processed": 1,
+            "values_recorded": 1,
+        },
+        "warning_codes": [],
+    }
+
+
 def test_non_success_response_only_updates_contract() -> None:
     from restscope.agent.api_behavior_monitor import (
         APIBehaviorMonitorAgent,

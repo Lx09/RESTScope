@@ -13,12 +13,12 @@ class ModelSelector:
         "result_analyst",
         "check_designer",
         "intelligence_updater",
+        "operation_smoke_plan_solve",
     }
     FAST_ROLES = {
         "api_behavior_monitor",
         "decision_maker",
         "operation_smoke_generator_patch",
-        "operation_smoke_parameter_diagnosis",
     }
 
     def __init__(self, *, thinking: LLMModelConfig, fast: LLMModelConfig) -> None:

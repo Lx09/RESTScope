@@ -79,6 +79,7 @@ class TargetResponseProcessorResult:
 
     response_validation: Literal["evaluated", "partial", "not_evaluated"]
     warnings: tuple[TargetResponseProcessorWarning, ...] = ()
+    details: Mapping[str, Any] | None = None
 
 
 class TargetResponseProcessor(Protocol):

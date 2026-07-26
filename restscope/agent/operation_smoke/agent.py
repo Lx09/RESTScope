@@ -18,11 +18,12 @@ from restscope.testing import (
 )
 
 from .diagnosis import OperationSmokeDiagnoser
+from .evidence import build_semantic_input_map
 from .schemas import (
     AvailableReferenceOption,
     OperationSmokeRequest,
     OperationSmokeResult,
-    TwoRoundDiagnosisResult,
+    PlanSolveDiagnosisResult,
 )
 
 
@@ -69,6 +70,8 @@ class OperationSmokeAgent:
                 "case_count": request.case_count,
                 "success_rate_threshold": request.success_rate_threshold,
                 "max_feedback_rounds": request.max_feedback_rounds,
+                "max_planning_outputs": request.max_planning_outputs,
+                "max_http_tool_rounds": request.max_http_tool_rounds,
                 "seed": request.seed,
             },
             attributes={
@@ -79,6 +82,12 @@ class OperationSmokeAgent:
                 ),
                 "restscope.smoke.max_feedback_rounds": (
                     request.max_feedback_rounds
+                ),
+                "restscope.smoke.max_planning_outputs": (
+                    request.max_planning_outputs
+                ),
+                "restscope.smoke.max_http_tool_rounds": (
+                    request.max_http_tool_rounds
                 ),
             },
         ) as span:
@@ -149,7 +158,7 @@ class OperationSmokeAgent:
                 failure_kind="unsupported_operation",
             )
         reports: list[OperationExecutionReport] = []
-        diagnoses: list[TwoRoundDiagnosisResult] = []
+        diagnoses: list[PlanSolveDiagnosisResult] = []
         success_rate = 0.0
         seed = request.seed if request.seed is not None else secrets.randbits(63)
         current_history = self.config_catalog.get_revision(
@@ -170,8 +179,9 @@ class OperationSmokeAgent:
                     self.reference_values,
                 )
 
-                report = self.batch_runner.run_operation(
-                    context,
+                report, private_case_evidence = _run_smoke_batch(
+                    self.batch_runner,
+                    context=context,
                     operation_key=request.operation_key,
                     case_count=request.case_count,
                     seed=seed,
@@ -238,8 +248,20 @@ class OperationSmokeAgent:
                             input_node_ids=input_node_ids,
                         )
                     ),
+                    private_case_evidence=private_case_evidence,
+                    previous_experiment=(
+                        _previous_experiment_summary(
+                            diagnoses[-1],
+                            evaluation=evaluation,
+                            config=current,
+                        )
+                        if is_candidate and diagnoses
+                        else None
+                    ),
+                    max_planning_outputs=request.max_planning_outputs,
+                    max_http_tool_rounds=request.max_http_tool_rounds,
                 )
-                if diagnosis.diagnosis.no_parameter_issue:
+                if diagnosis.status != "patch_ready":
                     diagnoses.append(diagnosis)
                     if is_candidate:
                         current = self.config_catalog.reject_candidate_and_rollback(
@@ -254,19 +276,30 @@ class OperationSmokeAgent:
                         success_rate=success_rate,
                         reports=reports,
                         diagnoses=diagnoses,
-                        failure_kind="no_parameter_issue",
+                        failure_kind=(
+                            "no_parameter_issue"
+                            if diagnosis.status == "no_parameter_issue"
+                            else "diagnosis_inconclusive"
+                        ),
                     )
 
+                assert diagnosis.patch is not None
                 updates = _prepare_reference_updates(
                     self.reference_values,
                     context=context,
                     config=current,
-                    updates=diagnosis.updates,
+                    updates=diagnosis.patch.updates,
                     selected_reference_options=(
                         diagnosis.selected_reference_options
                     ),
                 )
-                diagnosis = diagnosis.model_copy(update={"updates": updates})
+                diagnosis = diagnosis.model_copy(
+                    update={
+                        "patch": diagnosis.patch.model_copy(
+                            update={"updates": updates}
+                        )
+                    }
+                )
                 diagnoses.append(diagnosis)
                 if is_candidate:
                     current = self.config_catalog.reject_candidate_and_rollback(
@@ -278,7 +311,7 @@ class OperationSmokeAgent:
                     operation_key=request.operation_key,
                     expected_revision=current.revision,
                     updates=updates,
-                    hypothesis=diagnosis.diagnosis.model_dump(mode="json"),
+                    hypothesis={"kind": "operation_smoke_joint_patch"},
                 )
                 feedback_rounds += 1
         except SQLAlchemyError:
@@ -338,7 +371,7 @@ class OperationSmokeAgent:
         current: OperationGeneratorConfig,
         success_rate: float,
         reports: list[OperationExecutionReport],
-        diagnoses: list[TwoRoundDiagnosisResult],
+        diagnoses: list[PlanSolveDiagnosisResult],
         failure_kind: str | None = None,
         error: dict[str, str] | None = None,
     ) -> OperationSmokeResult:
@@ -446,3 +479,69 @@ def _prepare_reference_updates(
                 f"{update.input_node_id}"
             )
     return prepared
+
+
+def _run_smoke_batch(
+    runner: OperationBatchRunner,
+    *,
+    context,
+    operation_key: str,
+    case_count: int,
+    seed: int,
+) -> tuple[OperationExecutionReport, dict[str, object]]:
+    run_for_smoke = getattr(runner, "run_operation_for_smoke", None)
+    if not callable(run_for_smoke):
+        return (
+            runner.run_operation(
+                context,
+                operation_key=operation_key,
+                case_count=case_count,
+                seed=seed,
+            ),
+            {},
+        )
+    outcome = run_for_smoke(
+        context,
+        operation_key=operation_key,
+        case_count=case_count,
+        seed=seed,
+    )
+    return (
+        outcome.report,
+        {item.case_id: item for item in outcome.case_evidence},
+    )
+
+
+def _previous_experiment_summary(
+    diagnosis: PlanSolveDiagnosisResult,
+    *,
+    evaluation: dict,
+    config: OperationGeneratorConfig,
+) -> dict:
+    semantic_inputs = build_semantic_input_map(config)
+    changes = []
+    if diagnosis.patch is not None:
+        for update in diagnosis.patch.updates:
+            handle = semantic_inputs.handle_by_node.get(update.input_node_id)
+            if handle is None:
+                continue
+            changes.append(
+                {
+                    "input": handle,
+                    "inclusion_probability": update.inclusion_probability,
+                    "generation": (
+                        update.strategy.model_dump(mode="json")
+                        if update.strategy is not None
+                        else None
+                    ),
+                }
+            )
+    return {
+        "diagnosis_status": diagnosis.status,
+        "termination_reason": diagnosis.termination_reason,
+        "covered_item_count": len(diagnosis.covered_item_ids),
+        "deferred_item_count": len(diagnosis.deferred_items),
+        "generator_changes": changes,
+        "candidate_success_rate": evaluation.get("success_rate"),
+        "candidate_case_count": evaluation.get("case_count"),
+    }

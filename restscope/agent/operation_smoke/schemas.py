@@ -1,4 +1,4 @@
-"""Internal contracts for two-round Operation Smoke diagnosis."""
+"""Public contracts for bounded Operation Smoke planning and feedback."""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    StrictBool,
-    field_validator,
     model_validator,
 )
 
@@ -66,48 +64,6 @@ class ReferenceGeneratorSelection(BaseModel):
     inclusion_probability: float | None = Field(default=None, ge=0, le=1)
 
 
-class ParameterSuspect(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    input_node_id: str = Field(min_length=1, max_length=1000)
-    confidence: float = Field(ge=0, le=1)
-    reason: str = Field(min_length=1, max_length=2000)
-    evidence_refs: list[str] = Field(min_length=1, max_length=20)
-
-    @field_validator("input_node_id", "reason")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("text cannot be blank")
-        return normalized
-
-    @field_validator("evidence_refs")
-    @classmethod
-    def normalize_evidence_refs(cls, values: list[str]) -> list[str]:
-        normalized = [value.strip() for value in values]
-        if any(not value for value in normalized):
-            raise ValueError("evidence references cannot be blank")
-        if len(normalized) != len(set(normalized)):
-            raise ValueError("evidence references cannot repeat")
-        return normalized
-
-
-class ParameterDiagnosis(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    no_parameter_issue: StrictBool
-    suspects: list[ParameterSuspect] = Field(max_length=100)
-
-    @model_validator(mode="after")
-    def validate_outcome(self) -> "ParameterDiagnosis":
-        if self.no_parameter_issue and self.suspects:
-            raise ValueError("no_parameter_issue=true requires no suspects")
-        if not self.no_parameter_issue and not self.suspects:
-            raise ValueError("no_parameter_issue=false requires suspects")
-        return self
-
-
 class GeneratorPatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -126,14 +82,70 @@ class GeneratorPatchDraft(BaseModel):
         return self
 
 
-class TwoRoundDiagnosisResult(BaseModel):
+class PlanItemSummary(BaseModel):
+    """One in-memory failure analysis returned for audit and tracing."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    diagnosis: ParameterDiagnosis
-    updates: list[InputGeneratorPatch] = Field(default_factory=list)
+    item_id: str = Field(min_length=1, max_length=20)
+    failure_refs: list[str] = Field(min_length=1, max_length=100)
+    cause: str = Field(min_length=1, max_length=4000)
+    confidence: float = Field(ge=0, le=1)
+    affected_inputs: list[str] = Field(default_factory=list, max_length=100)
+    solution: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+    interaction_notes: list[str] = Field(default_factory=list, max_length=100)
+
+
+class PendingPlanItemSummary(BaseModel):
+    """One failure hypothesis that still needs bounded evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    item_id: str = Field(min_length=1, max_length=20)
+    failure_refs: list[str] = Field(min_length=1, max_length=100)
+    hypothesis: str = Field(min_length=1, max_length=4000)
+    missing_evidence: str = Field(min_length=1, max_length=4000)
+    next_probe: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+
+
+class DeferredPlanItem(BaseModel):
+    """A ready analysis intentionally excluded from the joint patch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    item_id: str = Field(min_length=1, max_length=20)
+    reason: str = Field(min_length=1, max_length=4000)
+
+
+class PlanSolveDiagnosisResult(BaseModel):
+    """Bounded Plan & Solve outcome consumed by the Smoke feedback loop."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["patch_ready", "no_parameter_issue", "inconclusive"]
+    termination_reason: str = Field(min_length=1, max_length=200)
+    patch: GeneratorPatchDraft | None = None
     selected_reference_options: list[AvailableReferenceOption] = Field(
         default_factory=list
     )
+    ready_items: list[PlanItemSummary] = Field(default_factory=list)
+    pending_items: list[PendingPlanItemSummary] = Field(default_factory=list)
+    non_parameter_failures: list[str] = Field(default_factory=list)
+    unplanned_failures: list[str] = Field(default_factory=list)
+    covered_item_ids: list[str] = Field(default_factory=list)
+    deferred_items: list[DeferredPlanItem] = Field(default_factory=list)
+    planning_outputs: int = Field(default=0, ge=0, le=20)
+    http_tool_rounds: int = Field(default=0, ge=0, le=40)
+
+    @model_validator(mode="after")
+    def validate_patch_status(self) -> "PlanSolveDiagnosisResult":
+        if self.status == "patch_ready" and self.patch is None:
+            raise ValueError("patch_ready requires a patch")
+        if self.status != "patch_ready" and self.patch is not None:
+            raise ValueError("only patch_ready may contain a patch")
+        return self
 
 
 class OperationSmokeRequest(BaseModel):
@@ -145,6 +157,8 @@ class OperationSmokeRequest(BaseModel):
     case_count: int = Field(default=10, ge=1, le=20)
     success_rate_threshold: float = Field(default=0.8, ge=0, le=1)
     max_feedback_rounds: int = Field(default=3, ge=0, le=10)
+    max_planning_outputs: int = Field(default=20, ge=1, le=20)
+    max_http_tool_rounds: int = Field(default=40, ge=0, le=40)
     seed: int | None = Field(default=None, ge=0)
 
 
@@ -159,10 +173,11 @@ class OperationSmokeResult(BaseModel):
     required_success_rate: float = Field(ge=0, le=1)
     active_config_revision: int = Field(ge=1)
     batch_reports: list[OperationExecutionReport] = Field(default_factory=list)
-    diagnoses: list[TwoRoundDiagnosisResult] = Field(default_factory=list)
+    diagnoses: list[PlanSolveDiagnosisResult] = Field(default_factory=list)
     failure_kind: Literal[
         "threshold_exhausted",
         "no_parameter_issue",
+        "diagnosis_inconclusive",
         "unsupported_operation",
         "operation_error",
     ] | None = None
@@ -172,7 +187,11 @@ class OperationSmokeResult(BaseModel):
     def validate_failure_kind(self) -> "OperationSmokeResult":
         allowed = {
             "passed": {None},
-            "retry": {"threshold_exhausted", "no_parameter_issue"},
+            "retry": {
+                "threshold_exhausted",
+                "no_parameter_issue",
+                "diagnosis_inconclusive",
+            },
             "unsupported": {"unsupported_operation"},
             "errored": {"operation_error"},
         }

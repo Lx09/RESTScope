@@ -36,7 +36,7 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
     assert request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
 
 
-def test_operation_smoke_roles_use_the_shared_fast_model() -> None:
+def test_operation_smoke_planning_uses_thinking_and_patch_uses_fast() -> None:
     from restscope.llm import LLMModelConfig, ModelSelector
 
     selector = ModelSelector(
@@ -52,7 +52,7 @@ def test_operation_smoke_roles_use_the_shared_fast_model() -> None:
         ),
     )
 
-    assert selector.select("operation_smoke_parameter_diagnosis").model == "fast-model"
+    assert selector.select("operation_smoke_plan_solve").model == "thinking-model"
     assert selector.select("operation_smoke_generator_patch").model == "fast-model"
 
 

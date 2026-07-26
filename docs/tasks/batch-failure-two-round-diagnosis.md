@@ -1,6 +1,12 @@
 # Batch Failure Reporting and Two-Round Generator Diagnosis
 
-Status: Implemented; local verification complete
+Status: Superseded
+
+The deterministic batch failure report remains active. The two bounded
+FAST-model diagnosis rounds described below were replaced by
+`docs/tasks/operation-smoke-plan-solve.md`: diagnosis now uses a bounded THINK
+Plan & Solve state machine with current-operation HTTP probes, followed by one
+joint FAST patch.
 
 ## Objective
 

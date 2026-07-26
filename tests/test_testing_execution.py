@@ -84,12 +84,13 @@ def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
         headers={"Authorization": "Bearer runtime-secret"},
     )
 
-    report = service.run_operation(
+    outcome = service.run_operation_for_smoke(
         context,
         operation_key=operation.operation_key,
         case_count=2,
         seed=42,
     )
+    report = outcome.report
 
     assert len(requests) == 2
     assert all(request.headers["Authorization"] == "Bearer runtime-secret" for request in requests)
@@ -114,6 +115,14 @@ def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
         "truncated": False,
     }
     assert "runtime-secret" in report.model_dump_json()
+    private = {
+        item.case_id: item for item in outcome.case_evidence
+    }
+    assert private[report.cases[0].case_id].response_body is None
+    assert private[report.cases[1].case_id].response_body == (
+        b'{"message":"dependency unavailable"}'
+    )
+    assert not hasattr(report.cases[1], "response_body")
 
 
 def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema(

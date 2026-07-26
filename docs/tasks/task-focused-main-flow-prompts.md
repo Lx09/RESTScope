@@ -2,6 +2,10 @@
 
 Status: Implemented and verified; uncommitted
 
+The Operation Smoke `P*` two-round prompt described in this historical record
+was later superseded by `docs/tasks/operation-smoke-plan-solve.md`. API Behavior
+Monitor prompt decisions and the Retrieval removal remain current.
+
 ## Objective
 
 Make each default main-flow LLM call read like a small business task instead

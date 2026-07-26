@@ -105,6 +105,7 @@ class RESTScopeApp:
                         config_catalog=generator_catalog,
                         batch_runner=operation_testing_service,
                         reference_values=reference_values,
+                        tool_executor=built_runtime.tool_executor,
                         tracing_runtime=self._tracing_runtime,
                     )
             elif smoke_agent is None:
@@ -253,6 +254,7 @@ class RESTScopeApp:
                     config_catalog=generator_catalog,
                     batch_runner=operation_testing_service,
                     reference_values=reference_values,
+                    tool_executor=runtime.tool_executor,
                     tracing_runtime=trace_runtime,
                 )
 

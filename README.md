@@ -310,35 +310,58 @@ internally by Operation Smoke.
 ## Operation Smoke Agent
 
 `OperationSmokeAgent` runs a bounded generated batch and measures its 2xx
-success rate. When the threshold is not met, the shared FAST model is called in
-two narrow rounds. Both prompts are short English task cards. The first sees
-only the operation, `P*` input aliases, unique `F*` failures, and failed `C*`
-cases with their actual generated values and omitted inputs. It returns
-confidence, a short reason, and evidence aliases; code maps those aliases back
-to internal IDs.
+success rate. When the threshold is not met,
+`OperationSmokeDiagnoser` starts a fresh in-memory Plan & Solve session. A
+THINK model first classifies every failure as:
 
-The second round sees only the suspect diagnosis, natural-language summaries
-of the affected generators, and non-empty observed-value sources labeled
-`R*`. It returns a generator intent such as `sample_values`,
-`integer_between`, or `observed_value`. Code—not the model—compiles that intent
-into an `InputGeneratorPatch`, resolves real resource/response pool names, and
-enforces required inputs and Generator validity. Actual pool values, internal
-IDs, Generator classes, config revisions, prepared requests, headers, and
-Pydantic JSON Schemas are not sent to either round.
+- `ready` when the cause, affected request input, and change direction are
+  known;
+- `pending` when a falsifiable hypothesis still needs evidence;
+- `non-parameter` when changing a generated input cannot solve it; or
+- `unplanned` when no bounded investigation is currently available.
 
-The task card states the exact fields accepted by every Generator intent,
-including the supported `formatted_value` formats. Internal request-body
-control nodes are excluded from `P*` aliases. Observed resource/response
-choices are exposed only for scalar inputs; exact normalized field names are
-preferred before a bounded semantic match. Scalar OpenAPI parameters may reuse
-any observed scalar because their serialization is textual, while JSON body
-fields retain their declared type boundary.
+The model uses semantic request paths such as `path.projectId`,
+`query.filter`, or `body.items[].sku`; internal node IDs stay in code. Failure,
+case, and HTTP-observation evidence use request-local `F*`, `C*`, and `O*`
+references. Each prompt is rebuilt from typed `PlanState` and
+`EvidenceJournal`, not from an accumulating chat transcript.
+
+After the initial tool-free plan, THINK may call a constrained view of
+`restscope.http.request`. Each tool round contains at most four serial requests
+and can only use the current frozen operation's method and a concrete path
+matching its path template. Context authentication is injected by code. Query,
+ordinary headers, and JSON/text/form bodies may be varied to test a hypothesis.
+Responses pass through the same API Behavior Monitor and can add new `F*` and
+`O*` evidence. Tool failures are evidence and are not automatically retried.
+
+One diagnosis allows at most 20 valid plan decisions and 40 HTTP tool rounds;
+callers may lower both limits. A malformed model decision gets one free repair.
+HTTP tool rounds do not consume the decision budget. When the decision budget
+is exhausted, already-ready analyses still proceed to patching while pending
+or unplanned work remains visible in the result.
+
+At analysis completion, the FAST model is called once to convert all ready
+items into one compatible Generator patch. It must account for every ready
+item as covered or deferred and may change each semantic input at most once.
+Code—not the model—maps semantic paths and observed-value `R*` aliases to real
+input nodes and pools, compiles generator intents such as `sample_values`,
+`integer_between`, or `observed_value`, and enforces required inputs,
+serialization, and Generator validity. The final output gets one repair
+outside the THINK decision budget.
+
+The diagnosis input includes generated values, omitted inputs, bounded failure
+response bodies, monitor summaries, and the previous candidate experiment
+summary. Full Schema, config revisions, internal node IDs, prepared target
+headers, ToolContext Authorization/Cookie values, and observed pool values are
+not sent to the model. Private response bodies and the in-memory plan do not
+enter the public testing report, LangGraph state, or the database.
 
 The patch is stored as a candidate revision and is never validated by replaying
 or cloning one failed case. A complete next batch accepts the candidate when it
 meets the threshold. Otherwise the candidate is rejected and a compensating
-rollback revision restores its parent configuration. Each model round can make
-one structured-output repair call.
+rollback revision restores its parent configuration. A new failing batch starts
+a new PlanState and receives only a compact summary of the previous patch
+experiment.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.

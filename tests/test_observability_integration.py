@@ -173,35 +173,54 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
 
 def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
-    from restscope.llm import LLMClient, LLMProviderRegistry
+    from restscope.llm import (
+        LLMClient,
+        LLMModelConfig,
+        LLMProviderRegistry,
+        LLMResponse,
+    )
     from restscope.llm.providers.base import BaseLLMProvider
-    from tests.test_operation_smoke_diagnosis import (
-        _config,
-        _model,
-        _report,
-        _response,
+    from tests._operation_smoke_plan_solve_fixtures import (
+        smoke_config,
+        smoke_report,
     )
 
     runtime, exporter = _recording_runtime()
     responses = [
-        _response(
-            {
-                "no_parameter_issue": False,
-                "suspects": [
+        LLMResponse(
+            provider="stub",
+            model="think-model",
+            parsed_json={
+                "ready": [
                     {
-                        "input": "P1",
+                        "failure_refs": ["F1"],
+                        "cause": "The generated identifier was rejected.",
                         "confidence": 0.9,
-                        "reason": "The generated identifier was rejected.",
-                        "evidence": ["F1", "C1"],
+                        "solutions": [
+                            {
+                                "input": "path.projectId",
+                                "desired_behavior": "Use a known project ID.",
+                            }
+                        ],
+                        "evidence_refs": ["F1", "C1"],
+                        "interaction_notes": [],
                     }
                 ],
+                "pending": [],
+                "non_parameter_failure_refs": [],
+                "unplanned_failure_refs": [],
+                "finish": True,
             }
         ),
-        _response(
-            {
+        LLMResponse(
+            provider="stub",
+            model="fast-model",
+            parsed_json={
+                "covered_item_ids": ["I1"],
+                "deferred_items": [],
                 "changes": [
                     {
-                        "input": "P1",
+                        "input": "path.projectId",
                         "generation": {
                             "kind": "exact_value",
                             "value": "known-project",
@@ -224,16 +243,25 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
 
     OperationSmokeDiagnoser(
         client=client,
-        model=_model(),
+        planning_model=LLMModelConfig(
+            role="operation_smoke_plan_solve",
+            provider="stub",
+            model="think-model",
+        ),
+        patch_model=LLMModelConfig(
+            role="operation_smoke_generator_patch",
+            provider="stub",
+            model="fast-model",
+        ),
         tracing_runtime=runtime,
-    ).diagnose(report=_report(), config=_config())
+    ).diagnose(report=smoke_report(), config=smoke_config())
     runtime.close()
 
     rendered = json.dumps(
         [dict(span.attributes) for span in exporter.get_finished_spans()],
         default=str,
     )
-    assert "[P1] required path parameter" in rendered
+    assert "path.projectId" in rendered
     assert "random-123" in rendered
     for forbidden in (
         "$defs",

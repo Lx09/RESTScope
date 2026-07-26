@@ -252,7 +252,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     )
 
 
-def test_smoke_diagnosis_groups_fast_llm_calls_under_agent_span(
+def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
     tmp_path: Path,
 ) -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
@@ -280,8 +280,11 @@ def test_smoke_diagnosis_groups_fast_llm_calls_under_agent_span(
                 provider=self.name,
                 model=request.model,
                 parsed_json={
-                    "no_parameter_issue": True,
-                    "suspects": [],
+                    "ready": [],
+                    "pending": [],
+                    "non_parameter_failure_refs": ["F1"],
+                    "unplanned_failure_refs": [],
+                    "finish": True,
                 },
             )
 
@@ -290,8 +293,14 @@ def test_smoke_diagnosis_groups_fast_llm_calls_under_agent_span(
     runtime, exporter = _recording_runtime()
     diagnoser = OperationSmokeDiagnoser(
         client=LLMClient(registry, tracing_runtime=runtime),
-        model=LLMModelConfig(
-            role="operation_smoke_parameter_diagnosis",
+        planning_model=LLMModelConfig(
+            role="operation_smoke_plan_solve",
+            provider="stub",
+            model="think",
+            enabled=True,
+        ),
+        patch_model=LLMModelConfig(
+            role="operation_smoke_generator_patch",
             provider="stub",
             model="fast",
             enabled=True,
@@ -340,7 +349,11 @@ def test_smoke_diagnosis_groups_fast_llm_calls_under_agent_span(
         span for span in spans if span.name == "OperationSmokeDiagnoser.diagnose"
     )
     llm_span = next(span for span in spans if span.name == "LLMClient.invoke")
-    assert result.diagnosis.no_parameter_issue is True
+    assert result.status == "no_parameter_issue"
     assert llm_span.parent.span_id == diagnosis_span.context.span_id
     assert diagnosis_span.attributes["restscope.operation.key"] == "GET /items"
     assert diagnosis_span.attributes["restscope.test.run_id"] == "run_failure"
+    assert diagnosis_span.attributes["restscope.smoke.planning_outputs"] == 1
+    assert diagnosis_span.attributes["restscope.smoke.http_tool_rounds"] == 0
+    assert diagnosis_span.attributes["restscope.smoke.ready_count"] == 0
+    assert diagnosis_span.attributes["restscope.smoke.non_parameter_count"] == 1

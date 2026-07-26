@@ -129,10 +129,24 @@ class _BatchRunner:
 class _Diagnoser:
     def __init__(self, results) -> None:
         self.results = list(results)
-        self.calls: list[tuple[Any, Any]] = []
+        self.calls: list[dict[str, Any]] = []
 
-    def diagnose(self, *, report, config, reference_option_provider):
-        self.calls.append((report, config, reference_option_provider))
+    def diagnose(
+        self,
+        *,
+        report,
+        config,
+        reference_option_provider,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "report": report,
+                "config": config,
+                "reference_option_provider": reference_option_provider,
+                **kwargs,
+            }
+        )
         return self.results.pop(0)
 
 
@@ -178,31 +192,22 @@ def _diagnosis(
     strategy: dict[str, Any],
     selected_reference_options=None,
 ):
-    from restscope.agent.operation_smoke import (
-        ParameterDiagnosis,
-        ParameterSuspect,
-        TwoRoundDiagnosisResult,
-    )
+    from restscope.agent.operation_smoke import PlanSolveDiagnosisResult
+    from restscope.agent.operation_smoke.schemas import GeneratorPatchDraft
 
-    return TwoRoundDiagnosisResult(
-        diagnosis=ParameterDiagnosis(
-            no_parameter_issue=False,
-            suspects=[
-                ParameterSuspect(
-                    input_node_id=node_id,
-                    confidence=0.9,
-                    reason="failure points to this input",
-                    evidence_refs=["failure_1"],
-                )
-            ],
+    return PlanSolveDiagnosisResult(
+        status="patch_ready",
+        termination_reason="model_finalize",
+        patch=GeneratorPatchDraft(
+            updates=[
+                {
+                    "input_node_id": node_id,
+                    "strategy": strategy,
+                }
+            ]
         ),
-        updates=[
-            {
-                "input_node_id": node_id,
-                "strategy": strategy,
-            }
-        ],
         selected_reference_options=selected_reference_options or [],
+        covered_item_ids=["I1"],
     )
 
 
@@ -247,6 +252,69 @@ def test_candidate_is_validated_only_by_the_next_batch_and_then_accepted(
     assert catalog.list_revisions(operation_key)[1].evaluation[
         "run_id"
     ] == "run_2"
+
+
+def test_agent_passes_private_smoke_evidence_and_lowered_budgets(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.testing.execution import (
+        SmokeCaseExecutionEvidence,
+        SmokeExecutionOutcome,
+    )
+
+    catalog, operation_key = _catalog(tmp_path)
+
+    class SmokeRunner(_BatchRunner):
+        def run_operation_for_smoke(self, context, /, **arguments):
+            report = self.run_operation(context, **arguments)
+            return SmokeExecutionOutcome(
+                report=report,
+                case_evidence=(
+                    SmokeCaseExecutionEvidence(
+                        case_id="private_case",
+                        response_body=b'{"detail":"private failure"}',
+                    ),
+                ),
+            )
+
+    runner = SmokeRunner(catalog, [(0, 1)])
+    diagnoser = _Diagnoser(
+        [
+            PlanSolveDiagnosisResult(
+                status="no_parameter_issue",
+                termination_reason="model_finalize",
+                non_parameter_failures=["F1"],
+                planning_outputs=1,
+            )
+        ]
+    )
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        diagnoser=diagnoser,
+        reference_values=_ReferenceValues(),
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            max_planning_outputs=3,
+            max_http_tool_rounds=2,
+        ),
+    )
+
+    assert result.failure_kind == "no_parameter_issue"
+    call = diagnoser.calls[0]
+    evidence = call["private_case_evidence"]["private_case"]
+    assert evidence.response_body == b'{"detail":"private failure"}'
+    assert call["max_planning_outputs"] == 3
+    assert call["max_http_tool_rounds"] == 2
 
 
 def test_failed_candidate_is_rejected_and_compensated_without_case_probe(

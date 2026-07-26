@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 import secrets
 import time
+from typing import Any, Mapping
 from uuid import uuid4
 
 from restscope.capabilities.tool_context import ToolContext
@@ -41,6 +43,25 @@ from .serialization import serialize_test_case
 BEHAVIOR_MONITOR_RESPONSE_BYTES = 1024 * 1024
 
 
+@dataclass(frozen=True, slots=True)
+class SmokeCaseExecutionEvidence:
+    """Private response evidence retained only for one Smoke diagnosis."""
+
+    case_id: str
+    response_body: bytes | None = None
+    response_body_truncated: bool = False
+    response_encoding: str | None = None
+    behavior_monitor: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SmokeExecutionOutcome:
+    """Public report plus private, App-lifetime-only diagnosis evidence."""
+
+    report: OperationExecutionReport
+    case_evidence: tuple[SmokeCaseExecutionEvidence, ...]
+
+
 class TestingExecutionError(RuntimeError):
     """Stable preflight error raised before any target request is sent."""
 
@@ -74,6 +95,40 @@ class OperationTestingService:
         case_count: int = 1,
         seed: int | None = None,
     ) -> OperationExecutionReport:
+        return self._run_operation_traced(
+            context,
+            operation_key=operation_key,
+            case_count=case_count,
+            seed=seed,
+        ).report
+
+    def run_operation_for_smoke(
+        self,
+        context: ToolContext,
+        /,
+        *,
+        operation_key: str,
+        case_count: int = 1,
+        seed: int | None = None,
+    ) -> SmokeExecutionOutcome:
+        """Execute once while retaining bounded evidence outside the report."""
+
+        return self._run_operation_traced(
+            context,
+            operation_key=operation_key,
+            case_count=case_count,
+            seed=seed,
+        )
+
+    def _run_operation_traced(
+        self,
+        context: ToolContext,
+        /,
+        *,
+        operation_key: str,
+        case_count: int,
+        seed: int | None,
+    ) -> SmokeExecutionOutcome:
         with self.tracing_runtime.span(
             "OperationTestingService.run_operation",
             kind="CHAIN",
@@ -87,12 +142,13 @@ class OperationTestingService:
                 "restscope.test.case_count": case_count,
             },
         ) as span:
-            report = self._run_operation(
+            outcome = self._run_operation(
                 context,
                 operation_key=operation_key,
                 case_count=case_count,
                 seed=seed,
             )
+            report = outcome.report
             span.set_output(
                 {
                     "run_id": report.run_id,
@@ -124,7 +180,7 @@ class OperationTestingService:
                 "restscope.test.observed_2xx",
                 report.observed_2xx,
             )
-            return report
+            return outcome
 
     def _run_operation(
         self,
@@ -134,7 +190,7 @@ class OperationTestingService:
         operation_key: str,
         case_count: int = 1,
         seed: int | None = None,
-    ) -> OperationExecutionReport:
+    ) -> SmokeExecutionOutcome:
         if not 1 <= case_count <= 20:
             raise TestingExecutionError(
                 "invalid_case_count",
@@ -170,17 +226,23 @@ class OperationTestingService:
         run_id = f"test_run_{uuid4().hex}"
         reports: list[TestCaseExecutionReport] = []
         failure_evidence: list[FailureCaseEvidence] = []
-        for case_index, (generated, request, target_request) in enumerate(prepared):
-            case_report, case_failure_evidence = self._execute_case(
-                context,
-                run_id=run_id,
-                case_index=case_index,
-                generated=generated,
-                request=request,
-                target_request=target_request,
+        smoke_evidence: list[SmokeCaseExecutionEvidence] = []
+        for case_index, (generated, request, target_request) in enumerate(
+            prepared
+        ):
+            case_report, case_failure_evidence, case_smoke_evidence = (
+                self._execute_case(
+                    context,
+                    run_id=run_id,
+                    case_index=case_index,
+                    generated=generated,
+                    request=request,
+                    target_request=target_request,
+                )
             )
             reports.append(case_report)
             failure_evidence.append(case_failure_evidence)
+            smoke_evidence.append(case_smoke_evidence)
 
         status_counts = Counter(
             str(case.response.status_code)
@@ -192,7 +254,13 @@ class OperationTestingService:
             len(case.behavior_monitor_warnings) for case in reports
         )
         response_validation = _response_validation(reports)
-        status = "completed" if error_count == 0 else "errored" if error_count == len(reports) else "partial"
+        status = (
+            "completed"
+            if error_count == 0
+            else "errored"
+            if error_count == len(reports)
+            else "partial"
+        )
         report = OperationExecutionReport(
             run_id=run_id,
             operation_key=operation_key,
@@ -210,8 +278,11 @@ class OperationTestingService:
             behavior_monitor_warning_count=warning_count,
             failure_report=build_batch_failure_report(failure_evidence),
         )
-        return OperationExecutionReport.model_validate(
-            self.tracing_runtime.redactor.redact(report)
+        return SmokeExecutionOutcome(
+            report=OperationExecutionReport.model_validate(
+                self.tracing_runtime.redactor.redact(report)
+            ),
+            case_evidence=tuple(smoke_evidence),
         )
 
     def _execute_case(
@@ -223,7 +294,11 @@ class OperationTestingService:
         generated: GeneratedTestCase,
         request: PreparedTestRequest,
         target_request: PreparedTargetRequest,
-    ) -> tuple[TestCaseExecutionReport, FailureCaseEvidence]:
+    ) -> tuple[
+        TestCaseExecutionReport,
+        FailureCaseEvidence,
+        SmokeCaseExecutionEvidence,
+    ]:
         case_id = f"{run_id}_case_{case_index + 1}"
         request_summary = _request_summary(
             request,
@@ -235,6 +310,7 @@ class OperationTestingService:
         monitor_warnings: list[BehaviorMonitorWarningSummary] = []
         response_validation = "not_evaluated"
         failure_evidence = FailureCaseEvidence(case_id=case_id)
+        smoke_evidence = SmokeCaseExecutionEvidence(case_id=case_id)
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
             kind="TOOL",
@@ -250,7 +326,11 @@ class OperationTestingService:
                 response = self.transport.request_prepared(
                     target_request,
                     timeout_seconds=30,
-                    request_kwargs={"content": request.content} if request.content is not None else {},
+                    request_kwargs=(
+                        {"content": request.content}
+                        if request.content is not None
+                        else {}
+                    ),
                     response_body_limit=(
                         BEHAVIOR_MONITOR_RESPONSE_BYTES
                         if self.transport.has_response_processor
@@ -269,13 +349,22 @@ class OperationTestingService:
                     ),
                 )
                 elapsed = (time.perf_counter() - started) * 1000
-                media_type = response.headers.get("content-type", "").split(";", 1)[0].strip() or None
+                media_type = (
+                    response.headers.get("content-type", "")
+                    .split(";", 1)[0]
+                    .strip()
+                    or None
+                )
                 raw_length = response.headers.get("content-length")
                 response_summary = ResponseSummary(
                     status_code=response.status_code,
                     reason_phrase=response.reason_phrase,
                     media_type=media_type,
-                    content_length=int(raw_length) if raw_length and raw_length.isdigit() else None,
+                    content_length=(
+                        int(raw_length)
+                        if raw_length and raw_length.isdigit()
+                        else None
+                    ),
                     latency_ms=elapsed,
                 )
                 if response.processor_result is not None:
@@ -299,6 +388,21 @@ class OperationTestingService:
                     body_truncated=response.body_truncated,
                     encoding=response.encoding,
                 )
+                smoke_evidence = SmokeCaseExecutionEvidence(
+                    case_id=case_id,
+                    response_body=(
+                        response.body
+                        if not 200 <= response.status_code < 300
+                        else None
+                    ),
+                    response_body_truncated=response.body_truncated,
+                    response_encoding=response.encoding,
+                    behavior_monitor=(
+                        response.processor_result.details
+                        if response.processor_result is not None
+                        else None
+                    ),
+                )
                 span.set_output(response_summary)
             except TargetHTTPTimeout:
                 error_summary = TransportErrorSummary(
@@ -312,7 +416,10 @@ class OperationTestingService:
                 )
                 span.mark_error(error_summary.message)
             except TargetHTTPTransportError as exc:
-                error_summary = TransportErrorSummary(code=exc.code, message=str(exc))
+                error_summary = TransportErrorSummary(
+                    code=exc.code,
+                    message=str(exc),
+                )
                 failure_evidence = FailureCaseEvidence(
                     case_id=case_id,
                     transport_error_code=error_summary.code,
@@ -331,6 +438,7 @@ class OperationTestingService:
                 response_validation=response_validation,
             ),
             failure_evidence,
+            smoke_evidence,
         )
 
 

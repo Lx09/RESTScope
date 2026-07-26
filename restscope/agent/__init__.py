@@ -34,6 +34,7 @@ from .operation_smoke import (
     OperationSmokeOutputError,
     OperationSmokeRequest,
     OperationSmokeResult,
+    PlanSolveDiagnosisResult,
     build_operation_smoke_agent,
 )
 from .supervisor import (
@@ -57,6 +58,7 @@ __all__ = [
     "OperationSmokeOutputError",
     "OperationSmokeRequest",
     "OperationSmokeResult",
+    "PlanSolveDiagnosisResult",
     "OperationReference",
     "OperationAttempt",
     "OperationFailureKind",
