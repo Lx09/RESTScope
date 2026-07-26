@@ -23,6 +23,7 @@ from .constraints import (
     referenced_input_node_ids,
     validate_constraint_set,
 )
+from .constraint_solver import ConstraintSolveError, solve_input_overrides
 from .execution import OperationTestingService, TestingExecutionError
 from .models import (
     BatchFailureReport,
@@ -53,6 +54,7 @@ __all__ = [
     "CardinalityConstraint",
     "ComparePredicate",
     "ConstraintSet",
+    "ConstraintSolveError",
     "ConstraintValidationError",
     "GeneratorConfigCatalog",
     "GeneratorConfigError",
@@ -90,5 +92,6 @@ __all__ = [
     "generate_strategy_value",
     "normalize_constraint_set",
     "referenced_input_node_ids",
+    "solve_input_overrides",
     "validate_constraint_set",
 ]

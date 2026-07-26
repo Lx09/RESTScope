@@ -216,6 +216,23 @@ def evaluate_constraint_set(
     return all(_evaluate_boolean(item, assignments) for item in constraints.constraints)
 
 
+def evaluate_constraint_set_partial(
+    constraints: ConstraintSet,
+    assignments: Mapping[str, InputAssignment],
+) -> bool | None:
+    """Evaluate known inputs and return None while the result is undecidable."""
+
+    results = [
+        _evaluate_boolean_partial(item, assignments)
+        for item in constraints.constraints
+    ]
+    if any(result is False for result in results):
+        return False
+    if all(result is True for result in results):
+        return True
+    return None
+
+
 def referenced_input_node_ids(constraints: ConstraintSet) -> tuple[str, ...]:
     """Return stable first-seen input references from one constraint set."""
 
@@ -493,6 +510,7 @@ def _is_all_or_none(expression: BooleanExpression) -> bool:
 
 
 _UNAVAILABLE = object()
+_PARTIAL_UNKNOWN = object()
 
 
 def _evaluate_boolean(
@@ -556,6 +574,127 @@ def _evaluate_value(
     if isinstance(expression, ArithmeticValue):
         left = _evaluate_value(expression.left, assignments)
         right = _evaluate_value(expression.right, assignments)
+        if (
+            left is _UNAVAILABLE
+            or right is _UNAVAILABLE
+            or not _is_number(left)
+            or not _is_number(right)
+        ):
+            return _UNAVAILABLE
+        try:
+            if expression.operator == "+":
+                return left + right
+            if expression.operator == "-":
+                return left - right
+            if expression.operator == "*":
+                return left * right
+            if right == 0:
+                return _UNAVAILABLE
+            return left / right
+        except (ArithmeticError, TypeError, ValueError):
+            return _UNAVAILABLE
+    return _UNAVAILABLE
+
+
+def _evaluate_boolean_partial(
+    expression: BooleanExpression,
+    assignments: Mapping[str, InputAssignment],
+) -> bool | None:
+    if isinstance(expression, PresentPredicate):
+        assignment = assignments.get(expression.input_node_id)
+        return assignment.present if assignment is not None else None
+    if isinstance(expression, ComparePredicate):
+        left = _evaluate_value_partial(expression.left, assignments)
+        right = _evaluate_value_partial(expression.right, assignments)
+        if left is _PARTIAL_UNKNOWN or right is _PARTIAL_UNKNOWN:
+            return None
+        if left is _UNAVAILABLE or right is _UNAVAILABLE:
+            return False
+        return _compare_values(expression.operator, left, right)
+    if isinstance(expression, MatchesPredicate):
+        value = _evaluate_value_partial(expression.value, assignments)
+        if value is _PARTIAL_UNKNOWN:
+            return None
+        if not isinstance(value, str):
+            return False
+        try:
+            return re.search(expression.pattern, value) is not None
+        except re.error:
+            return False
+    if isinstance(expression, ImplicationConstraint):
+        condition = _evaluate_boolean_partial(expression.condition, assignments)
+        consequence = _evaluate_boolean_partial(
+            expression.consequence,
+            assignments,
+        )
+        if condition is False or consequence is True:
+            return True
+        if condition is True:
+            return consequence
+        return None
+    if isinstance(expression, CardinalityConstraint):
+        results = [
+            _evaluate_boolean_partial(item, assignments)
+            for item in expression.expressions
+        ]
+        true_count = sum(result is True for result in results)
+        unknown_count = sum(result is None for result in results)
+        if true_count > expression.maximum:
+            return False
+        if true_count + unknown_count < expression.minimum:
+            return False
+        if unknown_count == 0:
+            return expression.minimum <= true_count <= expression.maximum
+        if (
+            expression.minimum <= true_count
+            and true_count + unknown_count <= expression.maximum
+        ):
+            return True
+        return None
+    if isinstance(expression, AndConstraint):
+        results = [
+            _evaluate_boolean_partial(item, assignments)
+            for item in expression.expressions
+        ]
+        if any(result is False for result in results):
+            return False
+        if all(result is True for result in results):
+            return True
+        return None
+    if isinstance(expression, OrConstraint):
+        results = [
+            _evaluate_boolean_partial(item, assignments)
+            for item in expression.expressions
+        ]
+        if any(result is True for result in results):
+            return True
+        if all(result is False for result in results):
+            return False
+        return None
+    if isinstance(expression, NotConstraint):
+        result = _evaluate_boolean_partial(expression.expression, assignments)
+        return None if result is None else not result
+    return False
+
+
+def _evaluate_value_partial(
+    expression: ValueExpression,
+    assignments: Mapping[str, InputAssignment],
+) -> Any:
+    if isinstance(expression, InputValue):
+        assignment = assignments.get(expression.input_node_id)
+        if assignment is None:
+            return _PARTIAL_UNKNOWN
+        if not assignment.present or not assignment.has_value:
+            return _UNAVAILABLE
+        return assignment.value
+    if isinstance(expression, LiteralValue):
+        return expression.value
+    if isinstance(expression, ArithmeticValue):
+        left = _evaluate_value_partial(expression.left, assignments)
+        right = _evaluate_value_partial(expression.right, assignments)
+        if left is _PARTIAL_UNKNOWN or right is _PARTIAL_UNKNOWN:
+            return _PARTIAL_UNKNOWN
         if (
             left is _UNAVAILABLE
             or right is _UNAVAILABLE
@@ -673,6 +812,7 @@ __all__ = [
     "ValueExpression",
     "classify_constraint",
     "evaluate_constraint_set",
+    "evaluate_constraint_set_partial",
     "normalize_constraint_set",
     "referenced_input_node_ids",
     "validate_constraint_set",
