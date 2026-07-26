@@ -60,9 +60,9 @@ class OperationSmokeAgent:
         config_catalog: GeneratorConfigCatalog,
         batch_runner: OperationBatchRunner,
         diagnoser: OperationSmokeDiagnoser,
-        group_planner: PatchGroupPlanner,
-        patch_agent_factory: ParameterPatchAgentFactory,
         reference_values: ReferenceValueProvider,
+        group_planner: PatchGroupPlanner | None = None,
+        patch_agent_factory: ParameterPatchAgentFactory | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         self.config_catalog = config_catalog
@@ -258,6 +258,14 @@ class OperationSmokeAgent:
                         ),
                     )
 
+                if (
+                    self.group_planner is None
+                    or self.patch_agent_factory is None
+                ):
+                    raise RuntimeError(
+                        "Operation Smoke patch-phase dependencies are not "
+                        "configured"
+                    )
                 grouping = self.group_planner.group(
                     actionable_failures=diagnosis.actionable_failures,
                     config=current,

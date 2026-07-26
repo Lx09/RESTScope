@@ -312,7 +312,7 @@ class OperationSmokeDiagnoser:
                     "transport_error_count": baseline_report.error_count,
                     "failures": baseline_failures,
                     "cases": [
-                        case.model_dump(mode="json")
+                        _effect_case_evidence(case)
                         for case in baseline_report.cases
                     ],
                 },
@@ -321,7 +321,7 @@ class OperationSmokeDiagnoser:
                     "transport_error_count": candidate_report.error_count,
                     "failures": candidate_failures,
                     "cases": [
-                        case.model_dump(mode="json")
+                        _effect_case_evidence(case)
                         for case in candidate_report.cases
                     ],
                 },
@@ -1023,6 +1023,41 @@ def _effect_decision_errors(
                 f"{reference} was not supplied as an initial failure."
             )
     return errors
+
+
+def _effect_case_evidence(case) -> dict[str, Any]:
+    generated = case.generated_test_case
+    return {
+        "case_ref": case.case_id,
+        "request": {
+            "method": case.request.method,
+            "path": case.request.path,
+            "query": list(case.request.query_items),
+            "generated_parameters": {
+                "path": generated.path_parameters,
+                "query": generated.query_parameters,
+                "headers": generated.header_parameters,
+                "cookies": generated.cookie_parameters,
+            },
+            "body_present": generated.body_present,
+            "body": generated.body if generated.body_present else None,
+        },
+        "response": (
+            case.response.model_dump(mode="json")
+            if case.response is not None
+            else None
+        ),
+        "transport_error": (
+            case.transport_error.model_dump(mode="json")
+            if case.transport_error is not None
+            else None
+        ),
+        "response_validation": case.response_validation,
+        "behavior_monitor_warnings": [
+            warning.model_dump(mode="json")
+            for warning in case.behavior_monitor_warnings
+        ],
+    }
 
 
 def _response_json(response: LLMResponse) -> str:

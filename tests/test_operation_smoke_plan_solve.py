@@ -1022,6 +1022,8 @@ def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
     rendered_prompt = str(client.requests[0].messages)
     assert "known-project" not in rendered_prompt
     assert '"samples":' not in rendered_prompt
+    assert "input_node_id" not in rendered_prompt
+    assert "Authorization" not in rendered_prompt
     assert client.requests[0].metadata["role"] == (
         "operation_smoke_effect_validation"
     )

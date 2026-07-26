@@ -26,6 +26,41 @@ def test_request_rejects_removed_successful_operation_keys() -> None:
         raise AssertionError("removed successful_operation_keys field was accepted")
 
 
+def test_successful_batch_does_not_require_patch_phase_dependencies(
+    tmp_path: Path,
+) -> None:
+    from restscope.agent.operation_smoke import (
+        OperationSmokeAgent,
+        OperationSmokeRequest,
+    )
+
+    catalog, operation_key = _catalog(tmp_path)
+
+    class UnexpectedDiagnoser:
+        def diagnose(self, **kwargs):
+            del kwargs
+            raise AssertionError("a successful batch must not invoke diagnosis")
+
+    smoke = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=_BatchRunner(catalog, [(10, 0)]),
+        diagnoser=UnexpectedDiagnoser(),
+        reference_values=_ReferenceValues(),
+    )
+
+    result = smoke.run(
+        object(),
+        OperationSmokeRequest(
+            operation_key=operation_key,
+            case_count=10,
+            seed=13,
+        ),
+    )
+
+    assert result.status == "passed"
+    assert result.success_rate == 1
+
+
 def test_groups_run_in_fresh_agents_then_one_candidate_batch_is_finalized(
     tmp_path: Path,
 ) -> None:
