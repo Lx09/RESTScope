@@ -51,11 +51,7 @@ def build_operation_smoke_agent(
             ),
             tracing_runtime=runtime,
         ),
-        group_planner=PatchGroupPlanner(
-            client=client,
-            model=selector.select("operation_smoke_patch_grouping"),
-            tracing_runtime=runtime,
-        ),
+        group_planner=PatchGroupPlanner(),
         patch_agent_factory=ParameterPatchAgentFactory(
             client=client,
             model=selector.select("parameter_patch_agent"),

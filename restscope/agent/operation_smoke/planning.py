@@ -108,7 +108,7 @@ def build_failure_decision_protocol(
                 "Change the generated value while testing this explanation."
             ],
             "expected_outcome": (
-                "The probe no longer reproduces the active failure."
+                "The probe response changes as predicted by this explanation."
             ),
             "evidence_refs": [failure_ref],
         }

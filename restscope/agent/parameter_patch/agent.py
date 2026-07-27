@@ -95,6 +95,8 @@ class ParameterPatchAgent:
             dict[str, list[Any]],
         ] | None = None
         latest_errors: list[str] = []
+        last_candidate_signature: str | None = None
+        repeated_candidates = 0
 
         with self.tracing_runtime.span(
             "ParameterPatchAgent.run",
@@ -117,7 +119,7 @@ class ParameterPatchAgent:
                         provider=self.model.provider,
                         model=self.model.model,
                         messages=messages,
-                        temperature=self.model.temperature,
+                        temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
                         tools=[],
@@ -128,6 +130,9 @@ class ParameterPatchAgent:
                     )
                 )
                 decision, errors = self._parse(response)
+                if decision is None or decision.action != "propose":
+                    last_candidate_signature = None
+                    repeated_candidates = 0
                 if decision is not None and not errors:
                     if decision.action == "accept":
                         if validated is None:
@@ -197,6 +202,42 @@ class ParameterPatchAgent:
                         except (KeyError, TypeError, ValueError) as exc:
                             errors = [str(exc)]
                         else:
+                            signature = _candidate_signature(
+                                decision.patch,
+                                [],
+                            )
+                            if signature == last_candidate_signature:
+                                repeated_candidates += 1
+                            else:
+                                last_candidate_signature = signature
+                                repeated_candidates = 1
+                            if repeated_candidates >= 3:
+                                failure = PatchGroupFailure(
+                                    group_id=task.group_id,
+                                    item_ids=task.item_ids,
+                                    root_failure_refs=(
+                                        task.root_failure_refs
+                                    ),
+                                    reason="stalled_candidate",
+                                    attempts=attempt,
+                                    errors=[],
+                                )
+                                span.set_output(
+                                    {
+                                        "status": failure.status,
+                                        "reason": failure.reason,
+                                        "attempts": failure.attempts,
+                                    }
+                                )
+                                span.set_attribute(
+                                    "restscope.patch.attempts",
+                                    failure.attempts,
+                                )
+                                span.set_attribute(
+                                    "restscope.patch.validation_result",
+                                    failure.reason,
+                                )
+                                return failure
                             messages.extend(
                                 (
                                     LLMMessage(
@@ -233,6 +274,45 @@ class ParameterPatchAgent:
                             )
                             continue
                 latest_errors = errors or ["The model output could not be used"]
+                if (
+                    decision is not None
+                    and decision.action == "propose"
+                    and decision.patch is not None
+                ):
+                    signature = _candidate_signature(
+                        decision.patch,
+                        latest_errors,
+                    )
+                    if signature == last_candidate_signature:
+                        repeated_candidates += 1
+                    else:
+                        last_candidate_signature = signature
+                        repeated_candidates = 1
+                    if repeated_candidates >= 3:
+                        failure = PatchGroupFailure(
+                            group_id=task.group_id,
+                            item_ids=task.item_ids,
+                            root_failure_refs=task.root_failure_refs,
+                            reason="stalled_candidate",
+                            attempts=attempt,
+                            errors=latest_errors[:_MAX_ERRORS],
+                        )
+                        span.set_output(
+                            {
+                                "status": failure.status,
+                                "reason": failure.reason,
+                                "attempts": failure.attempts,
+                            }
+                        )
+                        span.set_attribute(
+                            "restscope.patch.attempts",
+                            failure.attempts,
+                        )
+                        span.set_attribute(
+                            "restscope.patch.validation_result",
+                            failure.reason,
+                        )
+                        return failure
                 messages.extend(
                     (
                         LLMMessage(
@@ -296,6 +376,22 @@ class ParameterPatchAgent:
             ParameterPatchDecision.model_validate(result.validated_object),
             [],
         )
+
+
+def _candidate_signature(
+    proposal: ParameterPatchProposal,
+    errors: list[str],
+) -> str:
+    return json.dumps(
+        {
+            "patch": proposal.model_dump(mode="json"),
+            "errors": [" ".join(error.split()) for error in errors],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _compile_patch(

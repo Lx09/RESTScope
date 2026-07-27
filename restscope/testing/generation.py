@@ -194,15 +194,20 @@ def project_generated_input_value(
         active_media_node_id = operation.media_type_node_ids.get(
             (generated.media_type or "").strip().lower()
         )
-        if (
-            not generated.body_present
-            or active_media_node_id is None
-            or root.input_node_id != active_media_node_id
-        ):
+        media_root_index = next(
+            (
+                index
+                for index, node in enumerate(ancestors)
+                if node.input_node_id == active_media_node_id
+            ),
+            None,
+        )
+        if not generated.body_present or media_root_index is None:
             raise KeyError(
                 f"Generated input has no request-shaped root: {input_node_id}"
             )
         value = deepcopy(generated.body)
+        ancestors = ancestors[media_root_index:]
 
     for parent, child in zip(ancestors, ancestors[1:]):
         suffix = child.canonical_path.removeprefix(

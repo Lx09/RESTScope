@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass, is_dataclass
 import json
 from typing import Any, Mapping
 
-from restscope.observability.content import TraceContentEncoder
 from restscope.redaction import Redactor
 from restscope.testing import (
     FailureCaseEvidence,
@@ -32,8 +31,8 @@ class EvidenceEntry:
 class EvidenceJournal:
     """Canonical evidence aliases rebuilt into each task-focused prompt."""
 
-    MAX_ITEM_BYTES = 64 * 1024
-    MAX_TOTAL_BYTES = 256 * 1024
+    MAX_PROMPT_BODY_BYTES = 4 * 1024
+    MAX_PROMPT_BYTES = 64 * 1024
 
     def __init__(
         self,
@@ -50,7 +49,6 @@ class EvidenceJournal:
         self.observation_aliases: dict[str, str] = {}
         self.observation_failure_refs: dict[str, list[str]] = {}
         self.batch_summary: dict[str, Any] = {}
-        self._total_bytes = 0
 
     @classmethod
     def from_batch(
@@ -76,7 +74,6 @@ class EvidenceJournal:
             ),
         }
         private = dict(private_case_evidence or {})
-        cases_by_id = {case.case_id: case for case in report.cases}
         failure_alias_by_id: dict[str, str] = {}
         for index, failure in enumerate(
             report.failure_report.unique_failure_messages,
@@ -95,19 +92,14 @@ class EvidenceJournal:
                 },
             )
 
-        failed_case_ids: list[str] = []
         failure_refs_by_case: dict[str, list[str]] = {}
         for failure in report.failure_report.unique_failure_messages:
             alias = failure_alias_by_id[failure.failure_id]
             for case_id in failure.case_ids:
                 failure_refs_by_case.setdefault(case_id, []).append(alias)
-                if case_id not in failed_case_ids:
-                    failed_case_ids.append(case_id)
 
-        for index, case_id in enumerate(failed_case_ids, start=1):
-            case = cases_by_id.get(case_id)
-            if case is None:
-                continue
+        for index, case in enumerate(report.cases, start=1):
+            case_id = case.case_id
             alias = f"C{index}"
             journal.case_aliases[alias] = case_id
             value = _case_evidence(
@@ -142,16 +134,36 @@ class EvidenceJournal:
         )
 
     def prompt_records(self) -> list[dict[str, Any]]:
-        return [
+        records = [
             {
                 "ref": entry.alias,
                 "kind": entry.kind,
-                "value": entry.value,
-                "original_size_bytes": entry.original_size_bytes,
+                "value": _compact_prompt_value(
+                    entry.kind,
+                    entry.value,
+                ),
                 "truncated": entry.truncated,
             }
             for entry in self.entries
         ]
+        skeletons = [_prompt_record_skeleton(record) for record in records]
+        if _encoded_size(skeletons) > self.MAX_PROMPT_BYTES:
+            skeletons = [
+                {
+                    "ref": record["ref"],
+                    "kind": record["kind"],
+                    "value": {"truncated": True},
+                    "truncated": True,
+                }
+                for record in records
+            ]
+        output = list(skeletons)
+        for index, record in enumerate(records):
+            candidate = [*output]
+            candidate[index] = record
+            if _encoded_size(candidate) <= self.MAX_PROMPT_BYTES:
+                output[index] = record
+        return output
 
     def record_tool_result(self, tool_call, result) -> tuple[str, str | None]:
         """Record one HTTP observation and optionally classify a new failure."""
@@ -224,47 +236,14 @@ class EvidenceJournal:
         )
 
     def _append(self, alias: str, kind: str, value: Any) -> None:
-        encoder = TraceContentEncoder(
-            self.redactor,
-            max_content_bytes=self.MAX_ITEM_BYTES,
-        )
-        prepared = encoder.prepare(value)
-        decoded = json.loads(prepared.value or "{}")
-        if prepared.truncated:
-            decoded = {
-                **decoded,
-                "original_size_bytes": prepared.original_size_bytes,
-            }
-        encoded_size = len(
-            json.dumps(
-                decoded,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        )
-        if self._total_bytes + encoded_size > self.MAX_TOTAL_BYTES:
-            decoded = {
-                "preview": {},
-                "original_size_bytes": prepared.original_size_bytes,
-                "truncated": True,
-                "journal_limit_reached": True,
-            }
-            encoded_size = len(
-                json.dumps(decoded, separators=(",", ":")).encode("utf-8")
-            )
-        self._total_bytes += encoded_size
+        normalized = self.redactor.redact(value)
         self.entries.append(
             EvidenceEntry(
                 alias=alias,
                 kind=kind,
-                value=decoded,
-                original_size_bytes=prepared.original_size_bytes,
-                truncated=prepared.truncated
-                or bool(
-                    isinstance(decoded, dict)
-                    and decoded.get("journal_limit_reached")
-                ),
+                value=normalized,
+                original_size_bytes=_encoded_size(normalized),
+                truncated=False,
             )
         )
 
@@ -332,6 +311,213 @@ def _case_evidence(
         if isinstance(private, Mapping):
             payload["private_response"] = dict(private)
     return payload
+
+
+def _compact_prompt_value(kind: str, value: Any) -> Any:
+    if kind != "case" or not isinstance(value, Mapping):
+        return value
+    request = value.get("request")
+    request = request if isinstance(request, Mapping) else {}
+    response = value.get("response")
+    response = response if isinstance(response, Mapping) else None
+    private = value.get("private_response")
+    private = private if isinstance(private, Mapping) else {}
+    response_body = _decoded_response_body(
+        private.get("response_body"),
+        encoding=private.get("response_encoding"),
+        media_type=(
+            str(response.get("media_type"))
+            if response is not None
+            and response.get("media_type") is not None
+            else None
+        ),
+    )
+    return {
+        "failure_refs": value.get("failure_refs", []),
+        "generated_inputs": _bounded_value(
+            value.get("generated_inputs", {}),
+            max_bytes=EvidenceJournal.MAX_PROMPT_BODY_BYTES,
+        ),
+        "omitted_inputs": value.get("omitted_inputs", []),
+        "request": {
+            "method": request.get("method"),
+            "path": request.get("path"),
+            "query": request.get("query", []),
+            "body": _bounded_value(
+                request.get("body"),
+                max_bytes=EvidenceJournal.MAX_PROMPT_BODY_BYTES,
+            ),
+        },
+        "response": (
+            {
+                "status_code": response.get("status_code"),
+                "reason_phrase": response.get("reason_phrase"),
+                "media_type": response.get("media_type"),
+                "body": _bounded_value(
+                    response_body,
+                    max_bytes=EvidenceJournal.MAX_PROMPT_BODY_BYTES,
+                ),
+                "body_truncated": bool(
+                    private.get("response_body_truncated")
+                ),
+            }
+            if response is not None
+            else None
+        ),
+        "transport_error": value.get("transport_error"),
+        "response_validation": (
+            value.get("behavior_monitor", {}).get("response_validation")
+            if isinstance(value.get("behavior_monitor"), Mapping)
+            else None
+        ),
+    }
+
+
+def _decoded_response_body(
+    value: Any,
+    *,
+    encoding: Any,
+    media_type: str | None,
+) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode(
+            str(encoding)
+            if isinstance(encoding, str) and encoding
+            else "utf-8",
+            errors="replace",
+        )
+    elif isinstance(value, str):
+        text = value
+    else:
+        return value
+    if media_type is not None and "json" in media_type.lower():
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    return text
+
+
+def _bounded_value(value: Any, *, max_bytes: int) -> Any:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    preview_bytes = encoded[: max(0, max_bytes - 256)]
+    return {
+        "preview": preview_bytes.decode("utf-8", errors="ignore"),
+        "original_size_bytes": len(encoded),
+        "truncated": True,
+    }
+
+
+def _prompt_record_skeleton(record: dict[str, Any]) -> dict[str, Any]:
+    value = record["value"] if isinstance(record["value"], dict) else {}
+    kind = record["kind"]
+    if kind == "failure":
+        compact_value = {
+            "message": _bounded_value(
+                value.get("message"),
+                max_bytes=512,
+            ),
+            "case_refs": value.get("case_refs", []),
+            "observation_refs": value.get("observation_refs", []),
+        }
+    elif kind == "case":
+        request = value.get("request") or {}
+        response = value.get("response") or {}
+        transport_error = value.get("transport_error") or {}
+        generated = value.get("generated_inputs")
+        compact_value = {
+            "failure_refs": value.get("failure_refs", []),
+            "generated_inputs": (
+                {
+                    key: {"truncated": True}
+                    for key in generated
+                }
+                if isinstance(generated, dict)
+                else {"truncated": True}
+            ),
+            "omitted_inputs": value.get("omitted_inputs", []),
+            "request": {
+                "method": request.get("method"),
+                "path": request.get("path"),
+                "query": _bounded_value(
+                    request.get("query", []),
+                    max_bytes=512,
+                ),
+                "body": {"truncated": True},
+            },
+            "response": (
+                {
+                    "status_code": response.get("status_code"),
+                    "reason_phrase": response.get("reason_phrase"),
+                    "media_type": response.get("media_type"),
+                    "body": {"truncated": True},
+                }
+                if response
+                else None
+            ),
+            "transport_error": (
+                {
+                    "code": transport_error.get("code"),
+                    "message": _bounded_value(
+                        transport_error.get("message"),
+                        max_bytes=512,
+                    ),
+                }
+                if transport_error
+                else None
+            ),
+            "response_validation": value.get("response_validation"),
+        }
+    elif kind == "http_observation":
+        request = value.get("request") or {}
+        response = value.get("response") or {}
+        error = value.get("error") or {}
+        compact_value = {
+            "request": {
+                "method": request.get("method"),
+                "path": request.get("path"),
+            },
+            "status": value.get("status"),
+            "response": {
+                "status_code": response.get("status_code"),
+                "body": {"truncated": True},
+            },
+            "error": {
+                "code": error.get("code"),
+                "message": _bounded_value(
+                    error.get("message"),
+                    max_bytes=512,
+                ),
+            },
+        }
+    else:
+        compact_value = {"truncated": True}
+    return {
+        "ref": record["ref"],
+        "kind": kind,
+        "value": compact_value,
+        "truncated": True,
+    }
+
+
+def _encoded_size(value: Any) -> int:
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    )
 
 
 def _tool_failure_messages(result) -> list[str]:

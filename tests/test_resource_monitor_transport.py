@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 class CapturingProcessor:
     def __init__(self, *, warning=None) -> None:
@@ -196,6 +198,135 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
     ]
     assert processor.calls[0][1].operation_key is None
     assert processor.calls[0][1].ir is ir
+
+
+def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
+    tmp_path: Path,
+) -> None:
+    del tmp_path
+    import httpx
+
+    from restscope.agent.operation_smoke.probe import CurrentOperationHTTPProbe
+    from restscope.capabilities import (
+        ToolCallValidator,
+        ToolContext,
+        ToolExecutor,
+        ToolPolicy,
+        ToolRegistry,
+        register_http_request_tool,
+    )
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.llm import ToolCall
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    processor = CapturingProcessor()
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"Content-Type": "application/json"},
+                    content=b'{"id":7}',
+                )
+            ),
+            **kwargs,
+        ),
+        response_processor=processor,
+    )
+    registry = ToolRegistry()
+    spec = register_http_request_tool(registry, transport=transport)
+    executor = ToolExecutor(
+        registry,
+        ToolCallValidator(registry, ToolPolicy()),
+    )
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "route collision", "version": "1"},
+            "paths": {
+                "/users/me": {
+                    "get": {"responses": {"200": {"description": "ok"}}}
+                },
+                "/users/{userId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "userId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                },
+            },
+        }
+    )
+    executor.bind_context(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": "{}",
+            },
+            base_url="https://api.example.test",
+        )
+    )
+    config = build_initial_operation_config(
+        ir.operations["GET /users/{userId}"]
+    )
+    probe = CurrentOperationHTTPProbe(executor)
+
+    result = probe.execute(
+        config=config,
+        tool_call=ToolCall(
+            id="scoped",
+            name="restscope.http.request",
+            arguments={"method": "GET", "path": "/users/me"},
+        ),
+    )
+    unscoped = executor.execute(
+        tool_call=ToolCall(
+            id="unscoped",
+            name="restscope.http.request",
+            arguments={"method": "GET", "path": "/users/me"},
+        ),
+        role="future_agent",
+        state={},
+    )
+
+    assert result.status == "succeeded"
+    assert unscoped.status == "succeeded"
+    scoped_context = processor.calls[0][1]
+    assert scoped_context.operation_key == "GET /users/{userId}"
+    assert scoped_context.operation_method == "GET"
+    assert scoped_context.operation_path == "/users/{userId}"
+    assert processor.calls[1][1].operation_key is None
+    assert "operation_key" not in spec.input_schema["properties"]
+
+
+def test_target_operation_scope_resets_after_exception() -> None:
+    from restscope.http_transport import (
+        TargetOperationIdentity,
+        current_target_operation_identity,
+        target_operation_scope,
+    )
+
+    identity = TargetOperationIdentity(
+        operation_key="GET /users/{userId}",
+        method="GET",
+        path="/users/{userId}",
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        with target_operation_scope(identity):
+            assert current_target_operation_identity() == identity
+            raise RuntimeError("probe failed")
+
+    assert current_target_operation_identity() is None
 
 
 def test_operation_testing_truncates_monitor_body_at_one_mib(

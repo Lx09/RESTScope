@@ -44,27 +44,26 @@ def test_operation_smoke_phases_select_independent_models() -> None:
             role="thinking",
             provider="stub",
             model="thinking-model",
+            temperature=0.7,
         ),
         fast=LLMModelConfig(
             role="fast",
             provider="stub",
             model="fast-model",
+            temperature=0.7,
         ),
     )
 
-    assert (
-        selector.select("operation_smoke_root_cause_diagnosis").model
-        == "thinking-model"
-    )
-    assert (
-        selector.select("operation_smoke_effect_validation").model
-        == "thinking-model"
-    )
-    assert (
-        selector.select("operation_smoke_patch_grouping").model
-        == "fast-model"
-    )
-    assert selector.select("parameter_patch_agent").model == "fast-model"
+    for role, expected_model in (
+        ("operation_smoke_root_cause_diagnosis", "thinking-model"),
+        ("operation_smoke_effect_validation", "thinking-model"),
+        ("parameter_patch_agent", "fast-model"),
+    ):
+        selected = selector.select(role)
+        assert selected.model == expected_model
+        assert selected.temperature == 0
+    with pytest.raises(ValueError, match="Unsupported LLM role"):
+        selector.select("operation_smoke_patch_grouping")
 
 
 def test_reasoning_config_and_tool_provider_context_round_trip() -> None:

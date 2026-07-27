@@ -459,6 +459,94 @@ def test_constrained_body_property_forces_request_body_ancestors_present() -> No
     assert body_id not in generated.omitted_input_node_ids
 
 
+def test_body_projection_uses_the_active_media_root_for_arrays_and_scalars() -> None:
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import (
+        build_semantic_input_map,
+        project_generated_input_value,
+    )
+    from restscope.testing.generation import generate_test_case
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Body projection", "version": "1"},
+            "paths": {
+                "/items": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "maxItems": 1,
+                                        "items": {
+                                            "type": "object",
+                                            "required": ["code"],
+                                            "properties": {
+                                                "code": {
+                                                    "type": "string",
+                                                    "enum": ["known"],
+                                                }
+                                            },
+                                        },
+                                    }
+                                },
+                                "text/plain": {
+                                    "schema": {
+                                        "type": "string",
+                                        "enum": ["known"],
+                                    }
+                                },
+                            },
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /items"]
+    json_config = build_initial_operation_config(operation)
+    json_case = generate_test_case(
+        json_config.snapshot,
+        json_config,
+        run_seed=1,
+        case_index=0,
+    )
+    json_semantic = build_semantic_input_map(json_config)
+
+    assert project_generated_input_value(
+        json_config.snapshot,
+        json_case,
+        input_node_id=json_semantic.node_by_handle["body"],
+    ) == [{"code": "known"}]
+    assert project_generated_input_value(
+        json_config.snapshot,
+        json_case,
+        input_node_id=json_semantic.node_by_handle["body[].code"],
+    ) == ["known"]
+
+    text_config = json_config.model_copy(
+        update={"active_media_type": "text/plain"}
+    )
+    text_case = generate_test_case(
+        text_config.snapshot,
+        text_config,
+        run_seed=1,
+        case_index=0,
+    )
+    text_semantic = build_semantic_input_map(text_config)
+
+    assert project_generated_input_value(
+        text_config.snapshot,
+        text_case,
+        input_node_id=text_semantic.node_by_handle["body"],
+    ) == "known"
+
+
 def test_constrained_generation_rechecks_the_completed_case(
     monkeypatch,
 ) -> None:

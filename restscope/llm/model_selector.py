@@ -19,7 +19,11 @@ class ModelSelector:
     FAST_ROLES = {
         "api_behavior_monitor",
         "decision_maker",
-        "operation_smoke_patch_grouping",
+        "parameter_patch_agent",
+    }
+    ZERO_TEMPERATURE_ROLES = {
+        "operation_smoke_root_cause_diagnosis",
+        "operation_smoke_effect_validation",
         "parameter_patch_agent",
     }
 
@@ -35,10 +39,15 @@ class ModelSelector:
 
     def select(self, role: str) -> LLMModelConfig:
         if role in self.FAST_ROLES:
-            return self.fast.model_copy(update={"role": role})
-        if role in self.THINKING_ROLES:
-            return self.thinking.model_copy(update={"role": role})
-        raise ValueError(f"Unsupported LLM role: {role}")
+            selected = self.fast
+        elif role in self.THINKING_ROLES:
+            selected = self.thinking
+        else:
+            raise ValueError(f"Unsupported LLM role: {role}")
+        update = {"role": role}
+        if role in self.ZERO_TEMPERATURE_ROLES:
+            update["temperature"] = 0
+        return selected.model_copy(update=update)
 
     @staticmethod
     def _from_model_config(role: str, raw_config) -> LLMModelConfig:

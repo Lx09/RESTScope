@@ -18,7 +18,9 @@ from restscope.http_transport import (
     TargetHTTPTimeout,
     TargetHTTPTransport,
     TargetHTTPTransportError,
+    TargetOperationIdentity,
     TargetResponseOperationContext,
+    current_target_operation_identity,
 )
 
 
@@ -217,7 +219,11 @@ class TargetHTTPRequestTool:
                 request_kwargs=request_kwargs,
                 response_body_limit=MAX_RESPONSE_BYTES,
                 truncate_response_body=False,
-                processor_context=TargetResponseOperationContext(ir=context.ir),
+                processor_context=_response_operation_context(
+                    context,
+                    request=request,
+                    identity=current_target_operation_identity(),
+                ),
             )
             payload = _response_payload(response)
         except TargetHTTPTimeout as exc:
@@ -235,6 +241,37 @@ class TargetHTTPRequestTool:
             ),
             "structured": payload,
         }
+
+
+def _response_operation_context(
+    context: ToolContext,
+    *,
+    request: HTTPRequestArguments,
+    identity: TargetOperationIdentity | None,
+) -> TargetResponseOperationContext:
+    if identity is None:
+        return TargetResponseOperationContext(ir=context.ir)
+    operation = context.ir.operations.get(identity.operation_key)
+    if operation is None:
+        raise HTTPRequestToolError(
+            "operation_context_invalid",
+            "The scoped operation is not present in the current OpenAPI IR",
+        )
+    if (
+        operation.method.upper() != identity.method.upper()
+        or operation.path != identity.path
+        or request.method.upper() != identity.method.upper()
+    ):
+        raise HTTPRequestToolError(
+            "operation_context_invalid",
+            "The scoped operation identity does not match the HTTP request",
+        )
+    return TargetResponseOperationContext(
+        ir=context.ir,
+        operation_key=operation.operation_key,
+        operation_method=identity.method.upper(),
+        operation_path=operation.path,
+    )
 
 
 def _validate_arguments(arguments: Mapping[str, Any]) -> HTTPRequestArguments:

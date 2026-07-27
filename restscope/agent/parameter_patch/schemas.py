@@ -198,6 +198,6 @@ class PatchGroupFailure(_Model):
     group_id: str = Field(min_length=1, max_length=20)
     item_ids: list[str] = Field(min_length=1, max_length=100)
     root_failure_refs: list[str] = Field(min_length=1, max_length=10)
-    reason: Literal["attempt_limit"]
+    reason: Literal["attempt_limit", "stalled_candidate"]
     attempts: int = Field(ge=1, le=20)
     errors: list[str] = Field(default_factory=list, max_length=20)

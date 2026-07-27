@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,93 @@ class PatchValidationDecision(_PromptModel):
 
 
 @dataclass(slots=True, frozen=True)
+class PatchValidationDecisionProtocol:
+    """DTO-derived model-facing contract for one effect decision."""
+
+    allowed_fields: tuple[str, ...]
+    item_allowed_fields: tuple[str, ...]
+    example: dict[str, Any]
+    text: str
+
+
+def build_patch_validation_decision_protocol(
+    *,
+    target_refs: list[str],
+    candidate_failure_refs: list[str],
+) -> PatchValidationDecisionProtocol:
+    """Render one complete example accepted by PatchValidationDecision."""
+
+    candidate_refs = list(dict.fromkeys(candidate_failure_refs))
+    example_items = [
+        {
+            "item_id": reference,
+            "status": (
+                "persisting" if candidate_refs else "resolved"
+            ),
+            "current_failure_refs": (
+                candidate_refs[:1] if candidate_refs else []
+            ),
+            "reason": (
+                "Candidate HTTP evidence still contains a corresponding "
+                "failure."
+                if candidate_refs
+                else "The initial failure is absent from candidate evidence."
+            ),
+            "confidence": 0.5,
+        }
+        for reference in target_refs
+    ]
+    example = {"items": example_items}
+    decision = PatchValidationDecision.model_validate(example)
+    supplied_refs = [item.item_id for item in decision.items]
+    if supplied_refs != target_refs:
+        raise RuntimeError(
+            "invalid PatchValidationDecision protocol example references"
+        )
+
+    allowed_fields = tuple(PatchValidationDecision.model_fields)
+    item_allowed_fields = tuple(
+        PatchItemValidationDecision.model_fields
+    )
+    text = "\n".join(
+        (
+            "PatchValidationDecision JSON protocol:",
+            "The only legal top-level shape is an object with exactly this "
+            "field: "
+            + ", ".join(allowed_fields)
+            + ".",
+            "items must be a JSON array containing exactly one object for "
+            "every supplied initial failure ref, in supplied order.",
+            "Each items object has exactly these fields: "
+            + ", ".join(item_allowed_fields)
+            + ".",
+            "status must be resolved, persisting, or unknown. "
+            "current_failure_refs is a JSON array and may cite only supplied "
+            "candidate failure refs. Use an empty array when none applies.",
+            "reason is a non-empty evidence-based string. confidence is a "
+            "number from 0 through 1.",
+            "Never return initial failure refs ("
+            + ", ".join(target_refs)
+            + ") as top-level keys and never use wrappers such as results, "
+            "assessments, failure_statuses, or statuses.",
+            "This example illustrates structure only; determine every status "
+            "from the supplied baseline and candidate evidence:",
+            json.dumps(
+                example,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+    )
+    return PatchValidationDecisionProtocol(
+        allowed_fields=allowed_fields,
+        item_allowed_fields=item_allowed_fields,
+        example=example,
+        text=text,
+    )
+
+
+@dataclass(slots=True, frozen=True)
 class FailureInvestigationPrompt:
     system: str
     user: str
@@ -48,7 +135,8 @@ def build_failure_investigation_prompt(
     failure_ref: str,
     root_failure_refs: list[str],
     active_hypothesis: FailureHypothesis | None,
-    hypothesis_observation_refs: set[str] | None = None,
+    inherited_observation_refs: set[str] | None = None,
+    probe_observation_refs: set[str] | None = None,
 ) -> FailureInvestigationPrompt:
     """Render one task card for exactly one active failure investigation."""
 
@@ -76,7 +164,9 @@ def build_failure_investigation_prompt(
         if active_hypothesis is not None
         else (inputs[0]["input"] if inputs else None)
     )
-    observation_refs = sorted(hypothesis_observation_refs or ())
+    inherited_refs = sorted(inherited_observation_refs or ())
+    probe_refs = sorted(probe_observation_refs or ())
+    observation_refs = list(dict.fromkeys([*inherited_refs, *probe_refs]))
     protocol = build_failure_decision_protocol(
         input_handle=example_input,
         failure_ref=failure_ref,
@@ -92,8 +182,12 @@ def build_failure_investigation_prompt(
             "Otherwise use action=hypothesis with one testable explanation, "
             "target_inputs, proposed_changes, and expected_outcome.",
             "After HTTP observations exist, use action=confirmed only when "
-            "the observations support the active hypothesis and no longer "
-            "reproduce the active failure.",
+            "your comparison of their complete responses supports the active "
+            "hypothesis's predicted change. A repeated HTTP status alone does "
+            "not prove that the same failure persisted.",
+            "While a hypothesis is active, either probe it, confirm it, replace "
+            "it with a materially different target/change/outcome, or defer it. "
+            "Do not restate the same material hypothesis.",
             "Use action=deferred when the failure is not parameter-related or "
             "no safe parameter diagnosis is possible.",
             "Only use input handles supplied under Request inputs and evidence "
@@ -125,7 +219,14 @@ def build_failure_investigation_prompt(
                 "",
                 "Active hypothesis",
                 _formatted_json(
-                    active_hypothesis.model_dump(mode="json")
+                    {
+                        "hypothesis": active_hypothesis.model_dump(
+                            mode="json"
+                        ),
+                        "inherited_observation_refs": inherited_refs,
+                        "probe_observation_refs": probe_refs,
+                        "confirmation_observation_refs": observation_refs,
+                    }
                     if active_hypothesis is not None
                     else None
                 ),

@@ -61,6 +61,7 @@ def patch_model():
         role="parameter_patch_agent",
         provider="stub",
         model="fast-model",
+        temperature=0.7,
         reasoning={"mode": "disabled"},
     )
 
@@ -159,6 +160,152 @@ def test_agent_validates_samples_then_accepts_complete_patch() -> None:
     ]
     assert result.patch.updates[0].input_node_id == "path/projectId"
     assert result.patch.attributions[0].group_ids == ["G1"]
+    assert "10 generated parameter value groups" in (
+        client.requests[1].messages[-1].content
+    )
+    assert all(request.temperature == 0 for request in client.requests)
+
+
+def request_body_date_config():
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Assignments", "version": "1"},
+            "paths": {
+                "/assignments": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": [
+                                            "commitDate",
+                                            "employee",
+                                            "project",
+                                        ],
+                                        "properties": {
+                                            "commitDate": {
+                                                "type": "string",
+                                                "format": "date-time",
+                                            },
+                                            "employee": {
+                                                "type": "object",
+                                                "required": ["hiredate"],
+                                                "properties": {
+                                                    "hiredate": {
+                                                        "type": "string",
+                                                        "format": "date",
+                                                    }
+                                                },
+                                            },
+                                            "project": {
+                                                "type": "object",
+                                                "required": [
+                                                    "startDate",
+                                                    "endDate",
+                                                ],
+                                                "properties": {
+                                                    "startDate": {
+                                                        "type": "string",
+                                                        "format": "date",
+                                                    },
+                                                    "endDate": {
+                                                        "type": "string",
+                                                        "format": "date",
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    }
+                                },
+                                "application/xml": {
+                                    "schema": {"type": "string"}
+                                },
+                            },
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /assignments"]
+    return build_initial_operation_config(operation)
+
+
+def request_body_date_task():
+    from restscope.agent.parameter_patch import PatchGroupTask
+
+    inputs = [
+        "body.commitDate",
+        "body.employee.hiredate",
+        "body.project.startDate",
+        "body.project.endDate",
+    ]
+    return PatchGroupTask(
+        group_id="G-body-dates",
+        item_ids=["I-body-dates"],
+        root_failure_refs=["F1"],
+        inputs=inputs,
+        objective="Generate assignment dates accepted by the API.",
+        requirements=[f"{handle} uses its declared date format." for handle in inputs],
+    )
+
+
+def request_body_date_patch():
+    return {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "body.commitDate",
+                    "strategy": {"type": "format", "format": "date-time"},
+                },
+                {
+                    "input": "body.employee.hiredate",
+                    "strategy": {"type": "format", "format": "date"},
+                },
+                {
+                    "input": "body.project.startDate",
+                    "strategy": {"type": "format", "format": "date"},
+                },
+                {
+                    "input": "body.project.endDate",
+                    "strategy": {"type": "format", "format": "date"},
+                },
+            ],
+            "constraints": [],
+        },
+    }
+
+
+def test_request_body_patch_projects_four_nested_dates_into_ten_samples() -> None:
+    from restscope.agent.parameter_patch import ParameterPatchAgent
+
+    client = StubClient(
+        [
+            llm_response(request_body_date_patch()),
+            llm_response({"action": "accept"}),
+        ]
+    )
+
+    result = ParameterPatchAgent(client=client, model=patch_model()).run(
+        task=request_body_date_task(),
+        config=request_body_date_config(),
+        active_constraints=[],
+    )
+
+    assert result.status == "validated"
+    assert len(result.samples) == 10
+    for sample in result.samples:
+        assert sample["present"] == {
+            handle: True for handle in request_body_date_task().inputs
+        }
+        assert set(sample["values"]) == set(request_body_date_task().inputs)
     assert "10 generated parameter value groups" in (
         client.requests[1].messages[-1].content
     )
@@ -652,6 +799,57 @@ def test_every_model_output_counts_toward_twenty_attempt_limit() -> None:
     assert result.reason == "attempt_limit"
     assert result.attempts == 20
     assert len(client.requests) == 20
+
+
+def test_third_identical_patch_and_error_stops_as_stalled_candidate() -> None:
+    from restscope.agent.parameter_patch import ParameterPatchAgent
+
+    invalid = {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "strategy": {"type": "object"},
+                }
+            ],
+            "constraints": [],
+        },
+    }
+    client = StubClient([llm_response(invalid) for _ in range(20)])
+
+    result = ParameterPatchAgent(client=client, model=patch_model()).run(
+        task=group_task(),
+        config=sampleable_config(),
+        active_constraints=[],
+        max_attempts=20,
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "stalled_candidate"
+    assert result.attempts == 3
+    assert len(client.requests) == 3
+
+
+def test_third_identical_sampled_patch_stops_as_stalled_candidate() -> None:
+    from restscope.agent.parameter_patch import ParameterPatchAgent
+
+    client = StubClient(
+        [llm_response(constant_patch()) for _ in range(20)]
+    )
+
+    result = ParameterPatchAgent(client=client, model=patch_model()).run(
+        task=group_task(),
+        config=sampleable_config(),
+        active_constraints=[],
+        max_attempts=20,
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "stalled_candidate"
+    assert result.attempts == 3
+    assert result.errors == []
+    assert len(client.requests) == 3
 
 
 def test_reference_provider_infrastructure_error_propagates() -> None:

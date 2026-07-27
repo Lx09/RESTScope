@@ -51,24 +51,26 @@ def test_model_selector_has_independent_smoke_phase_roles() -> None:
             role="thinking",
             provider="stub",
             model="think-model",
+            temperature=0.7,
         ),
         fast=LLMModelConfig(
             role="fast",
             provider="stub",
             model="fast-model",
+            temperature=0.7,
         ),
     )
 
-    assert selector.select(
-        "operation_smoke_root_cause_diagnosis"
-    ).model == "think-model"
-    assert selector.select(
-        "operation_smoke_patch_grouping"
-    ).model == "fast-model"
-    assert selector.select("parameter_patch_agent").model == "fast-model"
-    assert selector.select(
-        "operation_smoke_effect_validation"
-    ).model == "think-model"
+    for role, expected_model in (
+        ("operation_smoke_root_cause_diagnosis", "think-model"),
+        ("parameter_patch_agent", "fast-model"),
+        ("operation_smoke_effect_validation", "think-model"),
+    ):
+        selected = selector.select(role)
+        assert selected.model == expected_model
+        assert selected.temperature == 0
+    with pytest.raises(ValueError, match="Unsupported LLM role"):
+        selector.select("operation_smoke_patch_grouping")
 
 
 def ready_decision():
@@ -141,6 +143,30 @@ def test_failure_decision_protocol_hides_confirmed_without_observation() -> None
 
     assert "confirmed" not in protocol.examples
     assert "action=confirmed is unavailable" in protocol.text
+
+
+def test_effect_decision_protocol_matches_the_dto() -> None:
+    from restscope.agent.operation_smoke.prompts import (
+        PatchItemValidationDecision,
+        PatchValidationDecision,
+        build_patch_validation_decision_protocol,
+    )
+
+    protocol = build_patch_validation_decision_protocol(
+        target_refs=["F1", "F2"],
+        candidate_failure_refs=["CF1"],
+    )
+
+    assert protocol.allowed_fields == tuple(
+        PatchValidationDecision.model_fields
+    )
+    assert protocol.item_allowed_fields == tuple(
+        PatchItemValidationDecision.model_fields
+    )
+    decision = PatchValidationDecision.model_validate(protocol.example)
+    assert [item.item_id for item in decision.items] == ["F1", "F2"]
+    assert '"items":[' in protocol.text
+    assert "Never return initial failure refs (F1, F2)" in protocol.text
 
 
 def test_failure_prompt_and_repair_share_the_complete_dto_protocol() -> None:
@@ -374,6 +400,89 @@ def test_probe_failure_uses_batch_failure_signature_for_reproduction() -> None:
     assert journal.observation_reproduces(observation_ref, "F1")
 
 
+def test_diagnosis_prompt_compacts_all_ten_cases_with_bounded_bodies() -> None:
+    import json
+
+    from restscope.agent.operation_smoke.evidence import EvidenceJournal
+    from restscope.testing import UniqueFailureMessage
+
+    base = smoke_report()
+    cases = []
+    private = {}
+    for index in range(10):
+        case_id = f"case_{index}"
+        cases.append(
+            base.cases[0].model_copy(
+                update={
+                    "case_id": case_id,
+                    "generated_test_case": base.cases[
+                        0
+                    ].generated_test_case.model_copy(
+                        update={"case_index": index}
+                    ),
+                }
+            )
+        )
+        private[case_id] = {
+            "response_body": (
+                b'{"message":"' + (b"x" * 8192) + b'"}'
+            ),
+            "response_body_truncated": False,
+            "response_encoding": "utf-8",
+            "behavior_monitor": {
+                "duplicate": "must not enter compact prompt"
+            },
+        }
+    report = base.model_copy(
+        update={
+            "cases": cases,
+            "failure_report": base.failure_report.model_copy(
+                update={
+                    "unique_failure_messages": [
+                        UniqueFailureMessage(
+                            failure_id="f1",
+                            message="HTTP 404: Project not found",
+                            case_ids=[case.case_id for case in cases],
+                        )
+                    ]
+                }
+            ),
+        }
+    )
+
+    journal = EvidenceJournal.from_batch(
+        report=report,
+        config=smoke_config(),
+        private_case_evidence=private,
+    )
+    records = journal.prompt_records()
+    case_records = [record for record in records if record["kind"] == "case"]
+
+    assert len(case_records) == 10
+    assert len(
+        json.dumps(
+            records,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ) <= 64 * 1024
+    for record in case_records:
+        value = record["value"]
+        assert "private_response" not in value
+        assert "behavior_monitor" not in value
+        assert "headers" not in value["request"]
+        assert value["response"]["status_code"] == 404
+        assert value["response"]["body"] is not None
+        assert len(
+            json.dumps(
+                value["response"]["body"],
+                ensure_ascii=False,
+                default=str,
+            ).encode("utf-8")
+        ) <= 4 * 1024 + 512
+
+
 def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall, ToolResult
@@ -406,8 +515,9 @@ def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
     replacement["proposed_changes"] = [
         "Use an observed project pool value."
     ]
+    replacement["evidence_refs"] = ["F1", "C1", "O1"]
     confirmed = confirmed_decision()
-    confirmed["evidence_refs"] = ["F1", "C1", "O2"]
+    confirmed["evidence_refs"] = ["F1", "C1", "O1"]
     client = StubClient(
         [
             llm_response(hypothesis_decision()),
@@ -421,15 +531,6 @@ def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
                 ]
             ),
             llm_response(replacement),
-            llm_response(
-                tool_calls=[
-                    ToolCall(
-                        id="probe-2",
-                        name="restscope.http.request",
-                        arguments={"method": "GET", "path": "/projects/two"},
-                    )
-                ]
-            ),
             llm_response(confirmed),
             llm_response(
                 {
@@ -448,8 +549,58 @@ def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
 
     assert result.status == "actionable"
     assert result.investigations[0].hypothesis_count == 2
-    assert result.investigations[0].valid_outputs == 5
-    assert result.investigations[0].http_tool_calls == 2
+    assert result.investigations[0].valid_outputs == 4
+    assert result.investigations[0].http_tool_calls == 1
+    replacement_prompt = client.requests[3].messages[-1].content
+    assert '"inherited_observation_refs": [' in replacement_prompt
+    assert '"O1"' in replacement_prompt
+    assert '"probe_observation_refs": []' in replacement_prompt
+
+
+def test_repair_keeps_http_tool_available_for_active_hypothesis() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    from restscope.llm import ToolCall
+
+    client = StubClient(
+        [
+            llm_response(hypothesis_decision()),
+            llm_response(
+                {
+                    **confirmed_decision(),
+                    "evidence_refs": ["F1", "C1"],
+                }
+            ),
+            llm_response(
+                tool_calls=[
+                    ToolCall(
+                        id="repair-probe",
+                        name="restscope.http.request",
+                        arguments={
+                            "method": "GET",
+                            "path": "/projects/known",
+                        },
+                    )
+                ]
+            ),
+            llm_response(
+                {
+                    **confirmed_decision(),
+                    "evidence_refs": ["F1", "C1", "O1"],
+                }
+            ),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+        http_probe=Probe(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "actionable"
+    assert client.requests[2].tool_choice == "auto"
+    assert len(client.requests[2].tools) == 1
+    assert result.http_tool_calls == 1
 
 
 def test_invalid_tool_call_prevents_the_entire_tool_batch_from_executing() -> None:
@@ -686,9 +837,13 @@ def test_diagnosis_queue_processes_at_most_ten_unique_failures() -> None:
 def test_valid_output_limit_is_per_failure() -> None:
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
-    client = StubClient(
-        [llm_response(hypothesis_decision()) for _ in range(20)]
-    )
+    decisions = []
+    for index in range(20):
+        decision = hypothesis_decision()
+        decision["proposed_changes"] = [f"Try candidate value {index}."]
+        decision["expected_outcome"] = f"Candidate {index} changes the response."
+        decisions.append(llm_response(decision))
+    client = StubClient(decisions)
 
     result = OperationSmokeDiagnoser(
         client=client,
@@ -702,6 +857,25 @@ def test_valid_output_limit_is_per_failure() -> None:
     assert result.status == "inconclusive"
     assert result.valid_outputs == 20
     assert result.deferred_failures[0].reason == "output_limit"
+
+
+def test_third_identical_material_hypothesis_defers_as_stalled() -> None:
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    client = StubClient(
+        [llm_response(hypothesis_decision()) for _ in range(3)]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.status == "inconclusive"
+    assert result.valid_outputs == 1
+    assert result.invalid_outputs == 2
+    assert result.investigations[0].hypothesis_count == 1
+    assert result.deferred_failures[0].reason == "stalled_hypothesis"
 
 
 def test_three_consecutive_invalid_outputs_defer_without_using_valid_budget() -> None:
@@ -722,7 +896,7 @@ def test_three_consecutive_invalid_outputs_defer_without_using_valid_budget() ->
     assert result.deferred_failures[0].reason == "invalid_output_limit"
 
 
-def test_patch_grouping_only_combines_confirmed_inputs_and_requirements() -> None:
+def test_patch_grouping_is_deterministic_and_uses_no_llm() -> None:
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         ParameterSolution,
@@ -745,26 +919,10 @@ def test_patch_grouping_only_combines_confirmed_inputs_and_requirements() -> Non
         affected_inputs=["path.projectId"],
         evidence_refs=["F1", "C1"],
     )
-    client = StubClient(
-        [
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": ["path.projectId"],
-                        }
-                    ],
-                    "deferred_item_ids": [],
-                }
-            )
-        ]
+    result = PatchGroupPlanner().group(
+        actionable_failures=[actionable],
+        config=smoke_config(),
     )
-
-    result = PatchGroupPlanner(
-        client=client,
-        model=patch_model_for_grouping(),
-    ).group(actionable_failures=[actionable], config=smoke_config())
 
     assert result.status == "grouped"
     assert len(result.tasks) == 1
@@ -776,12 +934,9 @@ def test_patch_grouping_only_combines_confirmed_inputs_and_requirements() -> Non
         "path.projectId: Use an identifier accepted by the API."
     ]
     assert task.candidate_hints == ["known-project"]
-    assert client.requests[0].metadata["role"] == (
-        "operation_smoke_patch_grouping"
-    )
 
 
-def test_patch_grouping_repairs_an_invented_input_once() -> None:
+def test_patch_grouping_splits_independent_inputs_for_one_failure() -> None:
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         ParameterSolution,
@@ -793,122 +948,71 @@ def test_patch_grouping_repairs_an_invented_input_once() -> None:
         failure_ref="F1",
         root_failure_refs=["F1"],
         evidence_origin="initial",
-        cause="The project identifier does not exist.",
+        cause="Both generated inputs are rejected independently.",
         solutions=[
             ParameterSolution(
                 input="path.projectId",
                 desired_behavior="Use an identifier accepted by the API.",
-            )
-        ],
-        affected_inputs=["path.projectId"],
-        evidence_refs=["F1", "C1"],
-    )
-    client = StubClient(
-        [
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": ["query.region"],
-                        }
-                    ],
-                    "deferred_item_ids": [],
-                }
-            ),
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": ["path.projectId"],
-                        }
-                    ],
-                    "deferred_item_ids": [],
-                }
-            ),
-        ]
-    )
-
-    result = PatchGroupPlanner(
-        client=client,
-        model=patch_model_for_grouping(),
-    ).group(actionable_failures=[actionable], config=smoke_config())
-
-    assert result.status == "grouped"
-    assert len(client.requests) == 2
-    assert "query.region was not supplied" in (
-        client.requests[1].messages[-1].content
-    )
-
-
-def test_patch_grouping_must_route_every_actionable_parameter() -> None:
-    from restscope.agent.operation_smoke import (
-        ActionableFailure,
-        ParameterSolution,
-        PatchGroupPlanner,
-    )
-
-    actionable = ActionableFailure(
-        item_id="I1",
-        failure_ref="F1",
-        root_failure_refs=["F1"],
-        evidence_origin="initial",
-        cause="The two parameters must be coordinated.",
-        solutions=[
-            ParameterSolution(
-                input="path.projectId",
-                desired_behavior="Use an accepted project.",
             ),
             ParameterSolution(
                 input="query.region",
-                desired_behavior="Use its matching region.",
+                desired_behavior="Use an accepted region.",
             ),
         ],
         affected_inputs=["path.projectId", "query.region"],
         evidence_refs=["F1", "C1"],
     )
-    client = StubClient(
-        [
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": ["path.projectId"],
-                        }
-                    ],
-                    "deferred_item_ids": [],
-                }
-            ),
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": [
-                                "path.projectId",
-                                "query.region",
-                            ],
-                        }
-                    ],
-                    "deferred_item_ids": [],
-                }
-            ),
-        ]
+    result = PatchGroupPlanner().group(
+        actionable_failures=[actionable],
+        config=smoke_config(),
     )
 
-    result = PatchGroupPlanner(
-        client=client,
-        model=patch_model_for_grouping(),
-    ).group(actionable_failures=[actionable], config=smoke_config())
+    assert result.status == "grouped"
+    assert [task.group_id for task in result.tasks] == ["G1", "G2"]
+    assert [task.inputs for task in result.tasks] == [
+        ["path.projectId"],
+        ["query.region"],
+    ]
+    assert [task.item_ids for task in result.tasks] == [["I1"], ["I1"]]
+
+
+def test_patch_grouping_merges_shared_inputs_and_collects_all_items() -> None:
+    from restscope.agent.operation_smoke import (
+        ActionableFailure,
+        ParameterSolution,
+        PatchGroupPlanner,
+    )
+
+    def actionable(item_id, failure_ref, behavior):
+        return ActionableFailure(
+            item_id=item_id,
+            failure_ref=failure_ref,
+            root_failure_refs=[failure_ref],
+            evidence_origin="initial",
+            cause=behavior,
+            solutions=[
+                ParameterSolution(
+                    input="path.projectId",
+                    desired_behavior=behavior,
+                )
+            ],
+            affected_inputs=["path.projectId"],
+            evidence_refs=[failure_ref, "C1"],
+        )
+
+    result = PatchGroupPlanner().group(
+        actionable_failures=[
+            actionable("I1", "F1", "Use an accepted project."),
+            actionable("I2", "F2", "Use a visible project."),
+        ],
+        config=smoke_config(),
+    )
 
     assert result.status == "grouped"
-    assert result.tasks[0].inputs == [
-        "path.projectId",
-        "query.region",
-    ]
-    assert "query.region" in client.requests[1].messages[-1].content
+    assert len(result.tasks) == 1
+    assert result.tasks[0].inputs == ["path.projectId"]
+    assert result.tasks[0].item_ids == ["I1", "I2"]
+    assert result.tasks[0].root_failure_refs == ["F1", "F2"]
 
 
 def test_patch_grouping_keeps_constraint_linked_inputs_in_one_group() -> None:
@@ -940,62 +1044,16 @@ def test_patch_grouping_keeps_constraint_linked_inputs_in_one_group() -> None:
             "path.projectId and query.region require one same-request constraint."
         ],
     )
-    client = StubClient(
-        [
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": ["path.projectId"],
-                        },
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": ["query.region"],
-                        },
-                    ],
-                    "deferred_item_ids": [],
-                }
-            ),
-            llm_response(
-                {
-                    "groups": [
-                        {
-                            "item_ids": ["I1"],
-                            "inputs": [
-                                "path.projectId",
-                                "query.region",
-                            ],
-                        }
-                    ],
-                    "deferred_item_ids": [],
-                }
-            ),
-        ]
+    result = PatchGroupPlanner().group(
+        actionable_failures=[actionable],
+        config=smoke_config(),
     )
-
-    result = PatchGroupPlanner(
-        client=client,
-        model=patch_model_for_grouping(),
-    ).group(actionable_failures=[actionable], config=smoke_config())
 
     assert result.status == "grouped"
     assert result.tasks[0].inputs == [
         "path.projectId",
         "query.region",
     ]
-    assert "same Patch Group" in client.requests[1].messages[-1].content
-
-
-def patch_model_for_grouping():
-    from restscope.llm import LLMModelConfig
-
-    return LLMModelConfig(
-        role="operation_smoke_patch_grouping",
-        provider="stub",
-        model="fast-model",
-        reasoning={"mode": "disabled"},
-    )
 
 
 def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
@@ -1080,32 +1138,36 @@ def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
             "status_code_counts": {"200": 1},
             "observed_2xx": True,
             "failure_report": baseline.failure_report.model_copy(
-                update={"unique_failure_messages": []}
+                update={
+                    "unique_failure_messages": (
+                        baseline.failure_report.unique_failure_messages[1:]
+                    )
+                }
             ),
         }
     )
+    valid_effect_decision = {
+        "items": [
+            {
+                "item_id": "F1",
+                "status": "resolved",
+                "current_failure_refs": [],
+                "reason": "The initial failure no longer occurs.",
+                "confidence": 0.95,
+            },
+            {
+                "item_id": "F2",
+                "status": "persisting",
+                "current_failure_refs": ["CF1"],
+                "reason": "The unrelated initial failure remains.",
+                "confidence": 0.9,
+            },
+        ]
+    }
     client = StubClient(
         [
-            llm_response(
-                {
-                    "items": [
-                        {
-                            "item_id": "F1",
-                            "status": "resolved",
-                            "current_failure_refs": [],
-                            "reason": "The initial failure no longer occurs.",
-                            "confidence": 0.95,
-                        },
-                        {
-                            "item_id": "F2",
-                            "status": "persisting",
-                            "current_failure_refs": ["CF1"],
-                            "reason": "The unrelated initial failure remains.",
-                            "confidence": 0.9,
-                        },
-                    ]
-                }
-            )
+            llm_response({"F1": "resolved", "F2": "persisting"}),
+            llm_response(valid_effect_decision),
         ]
     )
 
@@ -1130,6 +1192,11 @@ def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
     assert '"samples":' not in rendered_prompt
     assert "input_node_id" not in rendered_prompt
     assert "Authorization" not in rendered_prompt
+    assert '"items":[' in rendered_prompt
+    repair_prompt = client.requests[1].messages[-1].content
+    assert "items: Field required" in repair_prompt
+    assert "The only legal top-level shape" in repair_prompt
+    assert "Never return initial failure refs (F1, F2)" in repair_prompt
     assert client.requests[0].metadata["role"] == (
         "operation_smoke_effect_validation"
     )

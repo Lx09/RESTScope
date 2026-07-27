@@ -13,6 +13,10 @@ from restscope.capabilities.http_request import (
     HTTPRequestArguments,
 )
 from restscope.llm import ToolCall, ToolResult, ToolSpec
+from restscope.http_transport import (
+    TargetOperationIdentity,
+    target_operation_scope,
+)
 from restscope.testing import OperationGeneratorConfig
 
 
@@ -83,11 +87,18 @@ class CurrentOperationHTTPProbe:
                 span.set_output(result)
                 span.set_attribute("restscope.tool.status", result.status)
                 return result
-        return self.executor.execute(
-            tool_call=tool_call,
-            role=self.ROLE,
-            state={},
-        )
+        with target_operation_scope(
+            TargetOperationIdentity(
+                operation_key=config.operation_key,
+                method=config.snapshot.method,
+                path=config.snapshot.path,
+            )
+        ):
+            return self.executor.execute(
+                tool_call=tool_call,
+                role=self.ROLE,
+                state={},
+            )
 
     def validate(
         self,

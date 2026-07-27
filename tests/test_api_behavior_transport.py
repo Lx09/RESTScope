@@ -38,6 +38,41 @@ class _CapturingValueTracker:
         return 0
 
 
+class _RecordingSpan:
+    def __init__(self, *, name, input_value, attributes):
+        self.name = name
+        self.input = input_value
+        self.attributes = dict(attributes)
+        self.output = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def set_output(self, value):
+        self.output = value
+
+    def set_attribute(self, name, value):
+        self.attributes[name] = value
+
+
+class _RecordingTracing:
+    def __init__(self):
+        self.spans = []
+
+    def span(self, name, *, input_value, attributes, **kwargs):
+        del kwargs
+        span = _RecordingSpan(
+            name=name,
+            input_value=input_value,
+            attributes=attributes,
+        )
+        self.spans.append(span)
+        return span
+
+
 def _ir():
     return OpenAPIParser.parse(
         {
@@ -123,6 +158,37 @@ def test_agent_updates_ir_before_success_trackers_receive_evidence() -> None:
             "body": {"id": 7, "name": "Ada"},
         }
     ]
+
+
+def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> None:
+    from restscope.agent.api_behavior_monitor import (
+        APIBehaviorMonitorAgent,
+        ResponseContractTracker,
+    )
+    from restscope.http_transport import TargetResponseOperationContext
+
+    tracing = _RecordingTracing()
+    agent = APIBehaviorMonitorAgent(
+        contract_tracker=ResponseContractTracker(),
+        resource_identifier_tracker=_CapturingResourceTracker(),
+        response_value_tracker=_CapturingValueTracker(),
+        tracing_runtime=tracing,
+    )
+
+    result = agent.observe_response(
+        _observation(201, b'{"id":7}'),
+        TargetResponseOperationContext(
+            ir=_ir(),
+            operation_key="POST /users",
+            operation_method="POST",
+            operation_path="/users",
+        ),
+    )
+
+    span = tracing.spans[0]
+    assert span.input["operation_key"] == "POST /users"
+    assert span.attributes["restscope.operation.key"] == "POST /users"
+    assert result.contract.key.operation_key == "POST /users"
 
 
 def test_response_processor_keeps_private_monitor_summary() -> None:

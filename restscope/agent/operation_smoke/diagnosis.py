@@ -31,6 +31,7 @@ from .planning import FailureDecision
 from .prompts import (
     PatchValidationDecision,
     build_failure_investigation_prompt,
+    build_patch_validation_decision_protocol,
 )
 from .schemas import (
     ActionableFailure,
@@ -281,6 +282,9 @@ class OperationSmokeDiagnoser:
                 start=1,
             )
         ]
+        candidate_failure_refs = [
+            failure["ref"] for failure in candidate_failures
+        ]
         actionables = [
             {
                 "item_id": item.item_id,
@@ -298,12 +302,17 @@ class OperationSmokeDiagnoser:
             for item in diagnosis.actionable_failures
             if any(root in target_refs for root in item.root_failure_refs)
         ]
+        protocol = build_patch_validation_decision_protocol(
+            target_refs=target_refs,
+            candidate_failure_refs=candidate_failure_refs,
+        )
         system = (
             "Assess the real effect of a combined Operation Smoke candidate. "
             "For every supplied initial failure ref, return resolved, "
             "persisting, or unknown. Compare only baseline and candidate HTTP "
             "evidence. Do not evaluate Generator or Constraint syntax and do "
-            "not infer success from local samples."
+            "not infer success from local samples.\n\n"
+            + protocol.text
         )
         user = json.dumps(
             {
@@ -356,6 +365,7 @@ class OperationSmokeDiagnoser:
             errors = _effect_decision_errors(
                 decision,
                 target_refs=target_refs,
+                candidate_failure_refs=candidate_failure_refs,
             )
         if errors:
             response = self._repair(
@@ -374,6 +384,7 @@ class OperationSmokeDiagnoser:
                 errors = _effect_decision_errors(
                     decision,
                     target_refs=target_refs,
+                    candidate_failure_refs=candidate_failure_refs,
                 )
         if decision is None or errors:
             items = [
@@ -615,9 +626,10 @@ class OperationSmokeDiagnoser:
                 failure_ref=failure_ref,
                 root_failure_refs=root_failure_refs,
                 active_hypothesis=state.active_hypothesis,
-                hypothesis_observation_refs=(
-                    state.hypothesis_observation_refs
+                inherited_observation_refs=(
+                    state.inherited_observation_refs
                 ),
+                probe_observation_refs=state.probe_observation_refs,
             )
             tools = (
                 [self.http_probe.tool_spec(config)]
@@ -645,17 +657,31 @@ class OperationSmokeDiagnoser:
                 failure_ref=failure_ref,
                 active_hypothesis=state.active_hypothesis,
                 hypothesis_observation_refs=(
-                    state.hypothesis_observation_refs
+                    state.inherited_observation_refs
+                    | state.probe_observation_refs
                 ),
                 tools_allowed=bool(tools),
             )
-            while (
-                errors
-                and state.consecutive_invalid_outputs
-                < MAX_CONSECUTIVE_INVALID_OUTPUTS
-            ):
+            stalled_hypothesis = False
+            if not errors:
+                progress_error, stalled_hypothesis = (
+                    _hypothesis_progress_error(decision, state=state)
+                )
+                if progress_error is not None:
+                    errors.append(progress_error)
+            while errors:
                 state.consecutive_invalid_outputs += 1
                 state.invalid_outputs += 1
+                if stalled_hypothesis:
+                    return _deferred_outcome(
+                        failure_ref=failure_ref,
+                        root_failure_refs=root_failure_refs,
+                        reason="stalled_hypothesis",
+                        valid_outputs=state.valid_outputs,
+                        invalid_outputs=state.invalid_outputs,
+                        hypothesis_count=state.hypothesis_count,
+                        http_tool_calls=state.http_tool_calls,
+                    )
                 if (
                     state.consecutive_invalid_outputs
                     >= MAX_CONSECUTIVE_INVALID_OUTPUTS
@@ -668,6 +694,8 @@ class OperationSmokeDiagnoser:
                     role="operation_smoke_root_cause_diagnosis",
                     errors=errors,
                     guidance=prompt.repair_guidance,
+                    tools=tools,
+                    tool_choice="auto" if tools else "none",
                 )
                 decision, errors = self._failure_response(
                     response,
@@ -676,10 +704,18 @@ class OperationSmokeDiagnoser:
                     failure_ref=failure_ref,
                     active_hypothesis=state.active_hypothesis,
                     hypothesis_observation_refs=(
-                        state.hypothesis_observation_refs
+                        state.inherited_observation_refs
+                        | state.probe_observation_refs
                     ),
-                    tools_allowed=False,
+                    tools_allowed=bool(tools),
                 )
+                stalled_hypothesis = False
+                if not errors:
+                    progress_error, stalled_hypothesis = (
+                        _hypothesis_progress_error(decision, state=state)
+                    )
+                    if progress_error is not None:
+                        errors.append(progress_error)
             if errors:
                 return _deferred_outcome(
                     failure_ref=failure_ref,
@@ -704,9 +740,7 @@ class OperationSmokeDiagnoser:
                         tool_call,
                         result,
                     )
-                    state.hypothesis_observation_refs.add(
-                        observation_ref
-                    )
+                    state.probe_observation_refs.add(observation_ref)
                 state.http_tool_calls += len(response.tool_calls)
                 continue
 
@@ -754,7 +788,12 @@ class OperationSmokeDiagnoser:
                     expected_outcome=decision.expected_outcome,
                     evidence_refs=decision.evidence_refs,
                 )
-                state.hypothesis_observation_refs = set()
+                state.inherited_observation_refs = {
+                    reference
+                    for reference in decision.evidence_refs
+                    if reference in journal.observation_aliases
+                }
+                state.probe_observation_refs = set()
                 continue
             return _deferred_outcome(
                 failure_ref=failure_ref,
@@ -845,13 +884,6 @@ class OperationSmokeDiagnoser:
                     "confirmed may only cite observations from the active "
                     "hypothesis."
                 )
-            elif any(
-                journal.observation_reproduces(reference, failure_ref)
-                for reference in cited_observations
-            ):
-                errors.append(
-                    "confirmed observations still reproduce the active failure."
-                )
         return decision, errors
 
     def _request(
@@ -867,7 +899,7 @@ class OperationSmokeDiagnoser:
             provider=model.provider,
             model=model.model,
             messages=messages,
-            temperature=model.temperature,
+            temperature=0,
             max_tokens=model.max_tokens,
             response_format="json",
             tools=tools,
@@ -906,6 +938,8 @@ class OperationSmokeDiagnoser:
         role: str,
         errors: list[str],
         guidance: str | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str = "none",
     ) -> LLMResponse:
         return self.client.invoke(
             self._request(
@@ -935,10 +969,55 @@ class OperationSmokeDiagnoser:
                     ),
                 ],
                 role=role,
-                tools=[],
-                tool_choice="none",
+                tools=list(tools or []),
+                tool_choice=tool_choice,
             )
         )
+
+
+def _hypothesis_progress_error(
+    decision: FailureDecision | None,
+    *,
+    state: FailureInvestigationState,
+) -> tuple[str | None, bool]:
+    if decision is None or decision.action != "hypothesis":
+        return None, False
+    assert decision.expected_outcome is not None
+    signature = json.dumps(
+        {
+            "target_inputs": list(dict.fromkeys(decision.target_inputs)),
+            "proposed_changes": [
+                _normalized_hypothesis_text(value)
+                for value in decision.proposed_changes
+            ],
+            "expected_outcome": _normalized_hypothesis_text(
+                decision.expected_outcome
+            ),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if signature == state.last_hypothesis_signature:
+        state.repeated_hypothesis_outputs = min(
+            3,
+            state.repeated_hypothesis_outputs + 1,
+        )
+    else:
+        state.last_hypothesis_signature = signature
+        state.repeated_hypothesis_outputs = 1
+    if state.repeated_hypothesis_outputs < 2:
+        return None, False
+    return (
+        "The hypothesis repeats the same target inputs, proposed changes, "
+        "and expected outcome. Probe it, confirm it, materially replace it, "
+        "or defer it.",
+        state.repeated_hypothesis_outputs >= 3,
+    )
+
+
+def _normalized_hypothesis_text(value: str) -> str:
+    return " ".join(value.split()).casefold()
 
 
 def _deferred_outcome(
@@ -1014,6 +1093,7 @@ def _effect_decision_errors(
     decision: PatchValidationDecision,
     *,
     target_refs: list[str],
+    candidate_failure_refs: list[str],
 ) -> list[str]:
     supplied = [item.item_id for item in decision.items]
     errors: list[str] = []
@@ -1025,6 +1105,13 @@ def _effect_decision_errors(
             errors.append(
                 f"{reference} was not supplied as an initial failure."
             )
+    allowed_candidate_refs = set(candidate_failure_refs)
+    for item in decision.items:
+        for reference in item.current_failure_refs:
+            if reference not in allowed_candidate_refs:
+                errors.append(
+                    f"{reference} was not supplied as a candidate failure."
+                )
     return errors
 
 

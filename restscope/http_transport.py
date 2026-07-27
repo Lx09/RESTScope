@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import re
 from typing import Any, Literal, Protocol
@@ -48,6 +49,37 @@ class TargetResponseOperationContext:
     operation_key: str | None = None
     operation_method: str | None = None
     operation_path: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class TargetOperationIdentity:
+    """Exact operation identity bound around one internal HTTP invocation."""
+
+    operation_key: str
+    method: str
+    path: str
+
+
+_TARGET_OPERATION_IDENTITY: ContextVar[TargetOperationIdentity | None] = (
+    ContextVar("restscope_target_operation_identity", default=None)
+)
+
+
+@contextmanager
+def target_operation_scope(
+    identity: TargetOperationIdentity,
+) -> Iterator[None]:
+    """Bind an exact operation without adding it to model-visible arguments."""
+
+    token = _TARGET_OPERATION_IDENTITY.set(identity)
+    try:
+        yield
+    finally:
+        _TARGET_OPERATION_IDENTITY.reset(token)
+
+
+def current_target_operation_identity() -> TargetOperationIdentity | None:
+    return _TARGET_OPERATION_IDENTITY.get()
 
 
 @dataclass(slots=True, frozen=True)
