@@ -190,6 +190,12 @@ def prepare_fresh_sqlite(config: DBConfig) -> tuple[DBConfig, _FreshSQLiteDataba
 
 
 def _normalize_sqlite_config(config: DBConfig) -> tuple[DBConfig, Path]:
+    """
+    Normalize sqlite config for the repository and database persistence boundary.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     try:
         url = make_url(config.url)
     except (ArgumentError, TypeError, ValueError) as exc:

@@ -37,10 +37,24 @@ class MonitoredOperation(BaseModel):
     @field_validator("method")
     @classmethod
     def normalize_method(cls, value: str) -> str:
+        """
+        Normalize method for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return value.strip().upper()
 
     @property
     def access_mode(self) -> AccessMode:
+        """
+        Handle access mode as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return "read" if self.method in {"GET", "HEAD", "OPTIONS"} else "write"
 
 
@@ -65,6 +79,13 @@ class DetectedResourceGroup(BaseModel):
     @field_validator("resource_name", "id_field_name")
     @classmethod
     def strip_name(cls, value: str | None) -> str | None:
+        """
+        Handle strip name as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if value is None:
             return None
         normalized = value.strip()
@@ -75,6 +96,13 @@ class DetectedResourceGroup(BaseModel):
     @field_validator("resource_aliases")
     @classmethod
     def normalize_aliases(cls, values: list[str]) -> list[str]:
+        """
+        Normalize aliases for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         output: list[str] = []
         normalized_seen: set[str] = set()
         for value in values:
@@ -95,6 +123,13 @@ class DetectedResourceGroup(BaseModel):
         cls,
         values: list[IdentifierValue],
     ) -> list[IdentifierValue]:
+        """
+        Validate identifier values for API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         output: list[IdentifierValue] = []
         seen: set[tuple[type[object], object]] = set()
         for value in values:
@@ -108,6 +143,13 @@ class DetectedResourceGroup(BaseModel):
 
     @model_validator(mode="after")
     def require_resource_fields(self) -> "DetectedResourceGroup":
+        """
+        Handle require resource fields as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         required = (
             self.resource_name,
             self.resource_aliases,
@@ -170,6 +212,13 @@ class ResourceLookupRequest(BaseModel):
     @field_validator("resource")
     @classmethod
     def normalize_resource_query(cls, value: str) -> str:
+        """
+        Normalize resource query for API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         value = value.strip()
         if not value:
             raise ValueError("resource cannot be empty")
@@ -177,12 +226,26 @@ class ResourceLookupRequest(BaseModel):
 
 
 class ResourceIdentifierSummary(BaseModel):
+    """
+    Carry validated resource identifier summary data across API response monitoring and
+    its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     value: IdentifierValue
     value_type: Literal["string", "integer"]
     last_seen_at: datetime
 
 
 class ResourceOperationSummary(BaseModel):
+    """
+    Carry validated resource operation summary data across API response monitoring and
+    its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     operation_key: str
     method: str
     path: str
@@ -194,6 +257,13 @@ class ResourceOperationSummary(BaseModel):
 
 
 class ResourceMonitorErrorSummary(BaseModel):
+    """
+    Carry validated resource monitor error summary data across API response monitoring
+    and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     operation_key: str
     group_path: str
     code: str
@@ -203,6 +273,13 @@ class ResourceMonitorErrorSummary(BaseModel):
 
 
 class ResourceLookupResult(BaseModel):
+    """
+    Carry validated resource lookup result data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     status: Literal["found", "not_found"]
     canonical_resource: str | None = None
     aliases: list[str] = Field(default_factory=list)
@@ -226,6 +303,13 @@ class ResourceObservation(BaseModel):
 
 
 class ResourceMonitorResult(BaseModel):
+    """
+    Carry validated resource monitor result data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     status: Literal["updated", "ignored", "warning"]
     groups_processed: int = 0
     identifiers_recorded: int = 0

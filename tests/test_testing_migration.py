@@ -1,3 +1,5 @@
+"""Regression scenarios for testing migration. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -5,6 +7,7 @@ from pathlib import Path
 
 
 def test_generator_config_migration_upgrades_existing_schema_catalog(tmp_path: Path) -> None:
+    """Scenario: verify that generator config migration upgrades existing schema catalog."""
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import inspect
@@ -84,6 +87,7 @@ def test_generator_config_migration_upgrades_existing_schema_catalog(tmp_path: P
 def test_generator_revision_migration_backfills_existing_active_configs(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that generator revision migration backfills existing active configs."""
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import text

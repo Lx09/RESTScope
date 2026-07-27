@@ -1,3 +1,5 @@
+"""Regression scenarios for resource monitor transport. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -92,6 +94,7 @@ def _testing_service(
 def test_operation_testing_supplies_known_operation_and_body_to_processor(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that operation testing supplies known operation and body to processor."""
     from restscope.capabilities import ToolContext
 
     processor = CapturingProcessor()
@@ -128,6 +131,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
 
 
 def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> None:
+    """Scenario: verify that processor warning does not replace raw http result."""
     import httpx
 
     from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
@@ -203,6 +207,7 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
 def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that operation smoke probe pins exact operation context without leaking."""
     del tmp_path
     import httpx
 
@@ -309,6 +314,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
 
 
 def test_target_operation_scope_resets_after_exception() -> None:
+    """Scenario: verify that target operation scope resets after exception."""
     from restscope.http_transport import (
         TargetOperationIdentity,
         current_target_operation_identity,
@@ -332,6 +338,7 @@ def test_target_operation_scope_resets_after_exception() -> None:
 def test_operation_testing_truncates_monitor_body_at_one_mib(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that operation testing truncates monitor body at one mib."""
     from restscope.capabilities import ToolContext
     from restscope.http_transport import TargetResponseProcessorWarning
 
@@ -374,6 +381,7 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
 def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that operation testing buffers and monitors non successful 2xx  response once."""
     from restscope.capabilities import ToolContext
 
     processor = CapturingProcessor()
@@ -462,6 +470,7 @@ def _resource_monitor(tmp_path: Path):
 def test_raw_http_matches_operation_before_synchronously_updating_catalog(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that raw http matches operation before synchronously updating catalog."""
     import httpx
 
     from restscope.agent.api_behavior_monitor import (
@@ -541,6 +550,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
 def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that raw http ambiguous operation match warns without catalog write."""
     import httpx
 
     from restscope.agent.api_behavior_monitor import (
@@ -606,6 +616,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
 def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that resolved operation monitor error is persisted and later cleared."""
     from restscope.agent.api_behavior_monitor import (
         MonitoredOperation,
         ResourceLookupRequest,
@@ -682,6 +693,7 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
 def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that schema only dotted property fails closed without learning selector."""
     from restscope.agent.api_behavior_monitor import (
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
@@ -743,6 +755,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
 
 
 def test_response_schema_fields_include_collection_item_resource_name() -> None:
+    """Scenario: verify that response schema fields include collection item resource name."""
     from restscope.agent.api_behavior_monitor.agent import _response_schema_fields
     from restscope.openapi_parser import OpenAPIParser
 
@@ -804,6 +817,7 @@ def test_response_schema_fields_include_collection_item_resource_name() -> None:
 def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default app uses one monitored transport and registers lookup tool."""
     from restscope import RESTScopeApp
     from restscope.restscope_config import RESTScopeConfig
     from tests._operation_smoke_stub import PassingOperationSmokeAgent

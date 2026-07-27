@@ -10,6 +10,7 @@ import pytest
 
 
 def test_request_rejects_removed_successful_operation_keys() -> None:
+    """Scenario: verify that request rejects removed successful operation keys."""
     from pydantic import ValidationError
 
     from restscope.agent.operation_smoke import OperationSmokeRequest
@@ -29,6 +30,7 @@ def test_request_rejects_removed_successful_operation_keys() -> None:
 def test_successful_batch_does_not_require_patch_phase_dependencies(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that successful batch does not require patch phase dependencies."""
     from restscope.agent.operation_smoke import (
         OperationSmokeAgent,
         OperationSmokeRequest,
@@ -64,6 +66,7 @@ def test_successful_batch_does_not_require_patch_phase_dependencies(
 def test_groups_run_in_fresh_agents_then_one_candidate_batch_is_finalized(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that groups run in fresh agents then one candidate batch is finalized."""
     from restscope.agent.operation_smoke import OperationSmokeRequest
 
     catalog, operation_key = _catalog(tmp_path)
@@ -131,6 +134,7 @@ def test_groups_run_in_fresh_agents_then_one_candidate_batch_is_finalized(
 def test_candidate_is_rolled_back_before_database_error_propagates(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that candidate is rolled back before database error propagates."""
     from sqlalchemy.exc import SQLAlchemyError
 
     from restscope.agent.operation_smoke import OperationSmokeRequest
@@ -184,6 +188,7 @@ def test_candidate_is_rolled_back_before_database_error_propagates(
 def test_generator_groups_finalize_atomically_by_resolved_initial_failure(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that generator groups finalize atomically by resolved initial failure."""
     from restscope.agent.operation_smoke import OperationSmokeRequest
 
     catalog, operation_key = _catalog(tmp_path)
@@ -259,6 +264,7 @@ def test_generator_groups_finalize_atomically_by_resolved_initial_failure(
 def test_failed_group_does_not_accumulate_into_later_provisional_group(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that failed group does not accumulate into later provisional group."""
     from restscope.agent.operation_smoke import OperationSmokeRequest
     from restscope.agent.parameter_patch import PatchGroupFailure
 
@@ -343,6 +349,7 @@ def test_failed_group_does_not_accumulate_into_later_provisional_group(
 def test_grouping_deferred_item_is_removed_from_actionable_routing(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that grouping deferred item is removed from actionable routing."""
     from restscope.agent.operation_smoke import (
         OperationSmokeRequest,
         PatchGroupingResult,
@@ -419,6 +426,7 @@ def test_grouping_deferred_item_is_removed_from_actionable_routing(
 def test_constraint_only_group_is_run_local_and_does_not_create_revision(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that constraint only group is run local and does not create revision."""
     from restscope.agent.operation_smoke import OperationSmokeRequest
     from restscope.agent.parameter_patch import (
         CompiledConstraintPatch,
@@ -495,6 +503,7 @@ def test_constraint_only_group_is_run_local_and_does_not_create_revision(
 def test_success_threshold_accepts_every_successful_group(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that success threshold accepts every successful group."""
     from restscope.agent.operation_smoke import OperationSmokeRequest
 
     catalog, operation_key = _catalog(tmp_path)

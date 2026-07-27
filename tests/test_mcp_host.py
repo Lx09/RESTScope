@@ -1,3 +1,5 @@
+"""Regression scenarios for mcp host. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -56,6 +58,7 @@ def test_load_mcp_server_configs_reads_file_and_env_var(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """Scenario: verify that load mcp server configs reads file and env var."""
     from restscope.capabilities.mcp import load_mcp_server_configs
 
     config_path = tmp_path / "mcp.servers.json"
@@ -90,6 +93,7 @@ def test_load_mcp_server_configs_reads_file_and_env_var(
 
 
 def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
+    """Scenario: verify that mcp host discovers tools calls original name and closes."""
     from restscope.capabilities.mcp import MCPHost, MCPServerConfig
 
     calls: list[tuple[str, dict]] = []
@@ -142,6 +146,7 @@ def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
 def test_mcp_source_builder_registers_discovered_tools_through_runtime(
     tool_context,
 ) -> None:
+    """Scenario: verify that mcp source builder registers discovered tools through runtime."""
     from restscope.capabilities import (
         ToolCallValidator,
         ToolExecutor,
@@ -218,6 +223,7 @@ def test_mcp_source_builder_registers_discovered_tools_through_runtime(
 
 
 def test_build_capabilities_with_mcp_host_discovers_all_servers_by_default() -> None:
+    """Scenario: verify that build capabilities with mcp host discovers all servers by default."""
     from restscope.capabilities import build_capabilities_with_mcp_host
     from restscope.capabilities.mcp import MCPHost, MCPServerConfig
 
@@ -279,6 +285,7 @@ def test_build_capabilities_with_mcp_host_discovers_all_servers_by_default() -> 
 
 
 def test_build_capabilities_with_mcp_host_can_filter_generic_server_names() -> None:
+    """Scenario: verify that build capabilities with mcp host can filter generic server names."""
     from restscope.capabilities import build_capabilities_with_mcp_host
     from restscope.capabilities.mcp import MCPHost, MCPServerConfig
 
@@ -324,6 +331,7 @@ def test_build_capabilities_with_mcp_host_can_filter_generic_server_names() -> N
 
 
 def test_build_capabilities_with_empty_mcp_host_keeps_builtin_tools() -> None:
+    """Scenario: verify that build capabilities with empty mcp host keeps builtin tools."""
     from restscope.capabilities import build_capabilities_with_mcp_host
     from restscope.capabilities.mcp import MCPHost
 
@@ -339,6 +347,7 @@ def test_build_capabilities_with_empty_mcp_host_keeps_builtin_tools() -> None:
 def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure(
     monkeypatch,
 ) -> None:
+    """Scenario: verify that build capabilities with mcp host closes owned host on discovery failure."""
     from restscope.capabilities import build_capabilities_with_mcp_host
 
     class Host:
@@ -366,6 +375,7 @@ def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure
 def test_build_capabilities_with_mcp_host_keeps_injected_host_on_failure(
     monkeypatch,
 ) -> None:
+    """Scenario: verify that build capabilities with mcp host keeps injected host on failure."""
     from restscope.capabilities import build_capabilities_with_mcp_host
 
     class Host:
@@ -392,6 +402,7 @@ def test_build_capabilities_with_mcp_host_keeps_injected_host_on_failure(
 def test_build_capabilities_with_mcp_host_closes_owned_host_on_interrupt(
     monkeypatch,
 ) -> None:
+    """Scenario: verify that build capabilities with mcp host closes owned host on interrupt."""
     from restscope.capabilities import build_capabilities_with_mcp_host
 
     class Host:

@@ -1,3 +1,5 @@
+"""Shared pytest setup that isolates environment variables and other process-wide state between RESTScope scenarios."""
+
 from __future__ import annotations
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 
 @pytest.fixture
 def tool_context():
+    """Fixture: provide tool context for isolated scenarios."""
     from restscope.capabilities import ToolContext
     from restscope.openapi_parser import OpenAPIParser
 

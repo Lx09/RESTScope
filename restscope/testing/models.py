@@ -13,17 +13,38 @@ class _Strategy(BaseModel):
 
 
 class ConstantGenerator(_Strategy):
+    """
+    Represent the constant generator expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["constant"]
     value: Any
 
 
 class ChoiceGenerator(_Strategy):
+    """
+    Represent the choice generator expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["choice"]
     values: list[Any] = Field(min_length=1)
     weights: list[float] | None = None
 
     @model_validator(mode="after")
     def validate_weights(self) -> "ChoiceGenerator":
+        """
+        Validate weights for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.weights is not None:
             if len(self.weights) != len(self.values):
                 raise ValueError("weights must have the same length as values")
@@ -33,30 +54,65 @@ class ChoiceGenerator(_Strategy):
 
 
 class IntegerRangeGenerator(_Strategy):
+    """
+    Represent the integer range generator expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["integer_range"]
     minimum: int
     maximum: int
 
     @model_validator(mode="after")
     def validate_range(self) -> "IntegerRangeGenerator":
+        """
+        Validate range for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.minimum > self.maximum:
             raise ValueError("minimum cannot exceed maximum")
         return self
 
 
 class NumberRangeGenerator(_Strategy):
+    """
+    Represent the number range generator expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["number_range"]
     minimum: float
     maximum: float
 
     @model_validator(mode="after")
     def validate_range(self) -> "NumberRangeGenerator":
+        """
+        Validate range for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.minimum > self.maximum:
             raise ValueError("minimum cannot exceed maximum")
         return self
 
 
 class RandomStringGenerator(_Strategy):
+    """
+    Represent the random string generator expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["random_string"]
     min_length: int = Field(default=1, ge=0)
     max_length: int = Field(default=16, ge=0)
@@ -64,6 +120,13 @@ class RandomStringGenerator(_Strategy):
 
     @model_validator(mode="after")
     def validate_string_options(self) -> "RandomStringGenerator":
+        """
+        Validate string options for deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.min_length > self.max_length:
             raise ValueError("min_length cannot exceed max_length")
         if not self.alphabet and self.max_length:
@@ -72,37 +135,86 @@ class RandomStringGenerator(_Strategy):
 
 
 class BooleanGenerator(_Strategy):
+    """
+    Represent the boolean generator expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["boolean"]
     true_probability: float = Field(default=0.5, ge=0, le=1)
 
 
 class FormatGenerator(_Strategy):
+    """
+    Represent the format generator expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["format"]
     format: Literal["uuid", "date", "date-time", "email"]
 
 
 class ObjectGenerator(_Strategy):
+    """
+    Represent the object generator expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["object"]
 
 
 class ArrayGenerator(_Strategy):
+    """
+    Represent the array generator expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["array"]
     min_items: int = Field(default=1, ge=0)
     max_items: int = Field(default=1, ge=0)
 
     @model_validator(mode="after")
     def validate_length(self) -> "ArrayGenerator":
+        """
+        Validate length for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.min_items > self.max_items:
             raise ValueError("min_items cannot exceed max_items")
         return self
 
 
 class VariantGenerator(_Strategy):
+    """
+    Represent the variant generator expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["variant"]
     branch_weights: list[float] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_branch_weights(self) -> "VariantGenerator":
+        """
+        Validate branch weights for deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if any(weight < 0 for weight in self.branch_weights) or not any(self.branch_weights):
             raise ValueError(
                 "branch_weights must be non-negative with at least one positive value"
@@ -111,6 +223,13 @@ class VariantGenerator(_Strategy):
 
 
 class RequestBodyGenerator(_Strategy):
+    """
+    Represent the request body generator expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["request_body"]
 
 
@@ -167,6 +286,13 @@ class InputGeneratorPatch(BaseModel):
 
     @model_validator(mode="after")
     def validate_change(self) -> "InputGeneratorPatch":
+        """
+        Validate change for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.inclusion_probability is None and self.strategy is None:
             raise ValueError("generator patch must change strategy or inclusion_probability")
         return self
@@ -260,6 +386,13 @@ class OperationTestSnapshot(BaseModel):
 
 
 class GeneratorDisabledReason(BaseModel):
+    """
+    Coordinate generator disabled reason behavior for deterministic request generation,
+    constraint solving, and execution.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     code: str
@@ -374,6 +507,13 @@ class ResponseSummary(BaseModel):
 
 
 class TransportErrorSummary(BaseModel):
+    """
+    Carry validated transport error summary data across deterministic request
+    generation, constraint solving, and execution.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     code: str
@@ -381,6 +521,13 @@ class TransportErrorSummary(BaseModel):
 
 
 class BehaviorMonitorWarningSummary(BaseModel):
+    """
+    Carry validated behavior monitor warning summary data across deterministic request
+    generation, constraint solving, and execution.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     code: str
@@ -410,6 +557,13 @@ class BatchFailureReport(BaseModel):
 
 
 class TestCaseExecutionReport(BaseModel):
+    """
+    Coordinate test case execution report behavior for deterministic request generation,
+    constraint solving, and execution.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     case_id: str

@@ -1,7 +1,10 @@
+"""Regression scenarios for context mvp. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 
 def test_context_budget_keeps_required_sections_and_high_priority_optional_content() -> None:
+    """Scenario: verify that context budget keeps required sections and high priority optional content."""
     from restscope.context import ContextBudgetManager, ContextSection
 
     required = ContextSection(
@@ -33,6 +36,7 @@ def test_context_budget_keeps_required_sections_and_high_priority_optional_conte
 
 
 def test_prompt_renderer_builds_context_without_persistence_dependency() -> None:
+    """Scenario: verify that prompt renderer builds context without persistence dependency."""
     from restscope.context import (
         ContextBuildRequest,
         ContextSection,

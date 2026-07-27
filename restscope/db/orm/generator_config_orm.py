@@ -13,12 +13,24 @@ from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
 class GeneratorCatalogStateORM(CreatedAtMixin, Base):
+    """
+    Map persisted generator catalog state rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "generator_catalog_state"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
 
 class OperationGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted operation generator config rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "operation_generator_configs"
 
     operation_key: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -30,6 +42,12 @@ class OperationGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class InputGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted input generator config rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "input_generator_configs"
 
     input_node_id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -44,6 +62,12 @@ class InputGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class GeneratorConfigRevisionORM(CreatedAtMixin, Base):
+    """
+    Map persisted generator config revision rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "generator_config_revisions"
 
     operation_key: Mapped[str] = mapped_column(

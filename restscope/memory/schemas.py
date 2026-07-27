@@ -49,6 +49,12 @@ class MemoryItem(BaseModel):
     estimated_tokens: int = 0
 
     def model_post_init(self, __context: Any) -> None:
+        """
+        Handle model post init as part of bounded in-process conversation history.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.estimated_tokens <= 0:
             object.__setattr__(self, "estimated_tokens", estimate_tokens(self.title, self.content))
 
@@ -95,6 +101,12 @@ class MemoryPackage(BaseModel):
         items: list[MemoryItem],
         selected_operation_ids: list[str] | None = None,
     ) -> "MemoryPackage":
+        """
+        Handle from items as part of bounded in-process conversation history.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         grouped: dict[str, list[MemoryItem]] = {
             "working": [],
             "operation": [],
@@ -128,5 +140,10 @@ class MemoryPackage(BaseModel):
 
 
 def estimate_tokens(*parts: str) -> int:
+    """
+    Estimate tokens for bounded in-process conversation history.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     text = " ".join(part for part in parts if part)
     return max(1, len(text.split()))

@@ -38,7 +38,14 @@ from restscope.testing import OperationTestingService
 
 
 class RESTScopeApp:
-    """Program-level bootstrap object for running RESTScope graphs."""
+    """Own all long-lived services used by one RESTScope process.
+
+    Creating the app is intentionally more than constructing a data object.  It
+    opens the run-local database, tracing exporter, behavior monitor, HTTP
+    transport, testing service, capability registry, and top-level Agent graph.
+    The app also records which resources it created so :meth:`close` can release
+    them if startup succeeds *or* fails part-way through.
+    """
 
     def __init__(
         self,
@@ -48,11 +55,24 @@ class RESTScopeApp:
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
+        """Build the dependency graph, or adopt explicitly injected test doubles.
+
+        ``capability_runtime`` and ``operation_smoke_agent`` are injection
+        points used by tests and embedders.  In the normal path both are
+        omitted and RESTScope wires the complete production stack itself.
+        """
+
+        # Keep local ownership markers until construction completes.  If any
+        # later constructor raises, the exception handler can close only the
+        # resources opened by this method and leave injected objects untouched.
         database: _FreshSQLiteDatabase | None = None
         built_runtime: CapabilityRuntime | Any | None = None
         built_tracing_runtime = tracing_runtime is None
         trace_runtime: TracingRuntime | None = None
         try:
+            # A default runtime needs a private, freshly migrated SQLite file.
+            # An injected runtime owns its own persistence and must not be
+            # silently paired with another database.
             if capability_runtime is None:
                 config, database = _prepare_app_database(config)
 
@@ -72,6 +92,10 @@ class RESTScopeApp:
                 )
             )
             if capability_runtime is None:
+                # The catalog stores durable generator revisions.  The behavior
+                # monitor supplies observed identifiers/response values to
+                # generators, while the transport sends requests and returns
+                # every response to that monitor.
                 generator_catalog = build_generator_config_catalog(config)
                 api_behavior_monitor_agent = build_api_behavior_monitor_agent(
                     config,
@@ -91,6 +115,9 @@ class RESTScopeApp:
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
                 )
+                # Capabilities expose these concrete services as policy-checked
+                # tools.  Agents receive the runtime instead of importing
+                # database or network implementations directly.
                 built_runtime = build_capabilities(
                     tracing_runtime=self._tracing_runtime,
                     generator_config_catalog=generator_catalog,
@@ -109,6 +136,9 @@ class RESTScopeApp:
                         tracing_runtime=self._tracing_runtime,
                     )
             elif smoke_agent is None:
+                # Mixing a custom tool runtime with a default Smoke Agent would
+                # connect two unrelated dependency graphs, so require callers
+                # to inject the matching Agent explicitly.
                 raise ValueError(
                     "A custom capability runtime requires an injected "
                     "OperationSmokeAgent"
@@ -123,12 +153,17 @@ class RESTScopeApp:
             if callable(bind_tracing_runtime):
                 bind_tracing_runtime(self._tracing_runtime)
             else:
+                # Compatibility path for small test doubles that predate the
+                # runtime-level binding method.
                 executor = getattr(self.capability_runtime, "tool_executor", None)
                 if executor is not None:
                     executor.tracing_runtime = self._tracing_runtime
             self._tool_context: ToolContext | None = None
             self._closed = False
         except BaseException:
+            # Startup is transactional from the caller's perspective: a failed
+            # constructor must not leave an MCP host, exporter, or temporary
+            # database running in the background.
             _close_runtime_host(built_runtime)
             if built_tracing_runtime and trace_runtime is not None:
                 trace_runtime.close()
@@ -275,10 +310,22 @@ class RESTScopeApp:
 
     @property
     def tool_context(self) -> ToolContext | None:
+        """
+        Handle tool context as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self._tool_context
 
     @property
     def tracing_runtime(self) -> TracingRuntime:
+        """
+        Handle tracing runtime as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self._tracing_runtime
 
     def initialize(

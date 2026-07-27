@@ -72,6 +72,39 @@ and task records. Do not load unrelated large documents by default.
 - A skill's preferred multi-Agent workflow does not override these project
   rules or an explicit user instruction to work inline.
 
+## Beginner-readable code requirement
+
+The user has explicitly decided that RESTScope must remain understandable to a
+reader who has never written code. This is a continuing project rule for all
+production code and tests:
+
+- Every production module must start with a module docstring that explains its
+  responsibility, its main inputs and outputs, and where it sits in the
+  end-to-end runtime flow.
+- Every public class, public function, and non-trivial private helper must have
+  a docstring that explains why it exists, what each important argument means,
+  what it returns, which state it changes, and which errors or boundary cases a
+  maintainer must understand.
+- Add nearby comments before non-obvious branches, loops, transformations,
+  validation rules, state transitions, security boundaries, and cleanup paths.
+  Explain the intent and consequence, not merely the Python syntax.
+- Domain terms and compact identifiers such as IR, DTO, F/C/O evidence refs,
+  Patch Group, Generator, Constraint, and operation key must be introduced in
+  plain language where a new reader first encounters them.
+- Tests must explain the behavior or failure scenario they protect. Prefer a
+  short scenario docstring or arrange/act/assert comments over narration of
+  each assertion.
+- Comments and docstrings are part of the maintained behavior contract. Update
+  them in the same change whenever the code's behavior, ownership, or data flow
+  changes.
+- “Detailed” means that every logical step can be understood from names,
+  docstrings, and the nearest relevant comment. Do not add comments that only
+  restate punctuation, imports, obvious assignments, or the literal wording of
+  the next line; such noise makes the important explanations harder to find.
+
+Use `docs/code-reading-guide.md` as the high-level map before adding or
+reviewing local comments.
+
 ## Project posture
 
 There is no mandatory project-wide governance package at this stage. Planning

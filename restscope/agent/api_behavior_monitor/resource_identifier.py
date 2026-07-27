@@ -71,10 +71,19 @@ class _EvidenceLimitExceeded(ValueError):
 
 @dataclass(slots=True)
 class _EvidenceBudget:
+    """Count untrusted response/schema items before building an LLM prompt.
+
+    Target APIs control response size and nesting.  These counters make the
+    prompt-building traversal fail closed when that untrusted input exceeds a
+    deliberate bound, preventing one response from consuming unbounded memory
+    or model context.
+    """
+
     groups: int = 0
     schema_items: int = 0
 
     def add_group(self) -> None:
+        """Record one response group and reject evidence beyond the group cap."""
         self.groups += 1
         if self.groups > MAX_RESPONSE_GROUPS:
             raise _EvidenceLimitExceeded(
@@ -82,6 +91,7 @@ class _EvidenceBudget:
             )
 
     def add_schema_item(self) -> None:
+        """Record one inspected schema item and reject evidence beyond its cap."""
         self.schema_items += 1
         if self.schema_items > MAX_SCHEMA_EVIDENCE_ITEMS:
             raise _EvidenceLimitExceeded(
@@ -173,9 +183,23 @@ class ResourceIdentifierTracker:
             return result
 
     def lookup(self, request: ResourceLookupRequest) -> ResourceLookupResult:
+        """
+        Look up bounded evidence used by API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.catalog.lookup(request)
 
     def _observe(self, observation: ResourceObservation) -> ResourceMonitorResult:
+        """
+        Handle observe as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         if observation.body_truncated:
             return self._record_warning(
                 operation=observation.operation,
@@ -269,6 +293,13 @@ class ResourceIdentifierTracker:
         observation: ResourceObservation,
         rules: list[LearnedResourceRule],
     ) -> ResourceMonitorResult:
+        """
+        Apply rules for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         detections: list[DetectedResourceGroup] = []
         warnings: list[tuple[str, ResourceMonitorWarning]] = []
         for rule in rules:
@@ -354,6 +385,13 @@ class ResourceIdentifierTracker:
         groups_processed: int = 0,
         identifiers_recorded: int = 0,
     ) -> ResourceMonitorResult:
+        """
+        Handle persist observation warnings as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         for group_path, warning in warnings:
             self.catalog.record_error(
                 operation=operation,
@@ -380,6 +418,13 @@ class ResourceIdentifierTracker:
         observation: ResourceObservation,
         groups: list[_ResponseGroup],
     ) -> _FirstObservationOutcome:
+        """
+        Handle classify first observation as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         existing_resources = self.catalog.list_resources(
             limit=MAX_EXISTING_RESOURCES_IN_PROMPT + 1,
             aliases_per_resource=MAX_RESOURCE_ALIAS_COUNT + 1,
@@ -574,6 +619,13 @@ class ResourceIdentifierTracker:
         group: _ResponseGroup,
         resource_name: str,
     ) -> _FieldCandidate | None:
+        """
+        Select identifier candidate for API response monitoring and its narrowly
+        approved evidence catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         candidates = _identifier_candidates(group.fields.values())
         suffix_candidates = [
             field
@@ -669,6 +721,13 @@ class ResourceIdentifierTracker:
         list[str],
         LLMResponse,
     ]:
+        """
+        Handle invoke selection as part of API response monitoring and its narrowly
+        approved evidence catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         if not self.model.enabled:
             raise ResourceIdentifierOutputError(
                 "resource_monitor_model_not_configured",
@@ -731,6 +790,12 @@ class ResourceIdentifierTracker:
 
 
 def _build_groups(observation: ResourceObservation) -> list[_ResponseGroup]:
+    """
+    Build groups for API response monitoring and its narrowly approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     body = observation.body
     groups: list[_ResponseGroup] = []
     budget = _EvidenceBudget()
@@ -800,6 +865,13 @@ def _build_item_group(
     group_path: str,
     suggested_alias: str,
 ) -> _ResponseGroup:
+    """
+    Build item group for API response monitoring and its narrowly approved evidence
+    catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     fields: dict[str, _FieldCandidate] = {}
     issues: list[str] = []
     bounded_items = items[:MAX_RESOURCE_ITEMS]
@@ -840,6 +912,13 @@ def _collect_item_fields(
     fields: dict[str, _FieldCandidate],
     issues: list[str],
 ) -> None:
+    """
+    Handle collect item fields as part of API response monitoring and its narrowly
+    approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     for raw_name, value in item.items():
         name = str(raw_name)
         _require_evidence_text(
@@ -922,6 +1001,13 @@ def _merge_schema_fields(
     *,
     budget: _EvidenceBudget,
 ) -> None:
+    """
+    Merge schema fields for API response monitoring and its narrowly approved evidence
+    catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     for item in observation.response_schema_fields:
         budget.add_schema_item()
         selector = str(item.get("selector") or "")
@@ -1016,6 +1102,13 @@ def _resolve_resource_name(
     operation: MonitoredOperation,
     resource_context: _ResourcePromptContext,
 ) -> str:
+    """
+    Resolve resource name for API response monitoring and its narrowly approved evidence
+    catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     operation_alias = _operation_resource_alias(operation.path)
     aliases = [
         value
@@ -1050,6 +1143,13 @@ def _extract_group_identifier_values(
     group_path: str,
     selector: str,
 ) -> _SelectorExtraction:
+    """
+    Handle extract group identifier values as part of API response monitoring and its
+    narrowly approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     prefix = f"{group_path}."
     if not selector.startswith(prefix):
         return _SelectorExtraction(
@@ -1113,6 +1213,13 @@ def _items_for_group(body: Any, group_path: str) -> list[Any]:
 
 
 def _extract_selector_values(body: Any, selector: str) -> list[Any]:
+    """
+    Handle extract selector values as part of API response monitoring and its narrowly
+    approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if not selector.startswith("$"):
         return []
     tokens = [
@@ -1174,6 +1281,13 @@ def _identifier_values(values: list[Any]) -> list[str | int]:
 def _resource_prompt_context(
     resources: list[ResourceNameSummary],
 ) -> _ResourcePromptContext:
+    """
+    Handle resource prompt context as part of API response monitoring and its narrowly
+    approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if len(resources) > MAX_EXISTING_RESOURCES_IN_PROMPT:
         raise _EvidenceLimitExceeded(
             "existing resources exceed "
@@ -1214,6 +1328,13 @@ def _selection_prompt(
     resource_name: str,
     candidates: list[tuple[str, _FieldCandidate]],
 ) -> IdentifierPrompt:
+    """
+    Handle selection prompt as part of API response monitoring and its narrowly approved
+    evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     return build_identifier_prompt(
         method=observation.operation.method,
         path=observation.operation.path,

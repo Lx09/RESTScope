@@ -1,3 +1,5 @@
+"""Regression scenarios for supervisor operation smoke. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -91,6 +93,7 @@ class _SmokeAgent:
 
 
 def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() -> None:
+    """Scenario: verify that supervisor uses smoke agent without exposing successful operations."""
     from restscope.agent import OperationAttempt, RESTScopeMainGraph, RESTScopeRunReport, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["passed", "passed"])
@@ -137,6 +140,7 @@ def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() ->
 
 
 def test_supervisor_retries_smoke_operation_in_the_next_round() -> None:
+    """Scenario: verify that supervisor retries smoke operation in the next round."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["retry", "passed", "passed"])
@@ -164,6 +168,7 @@ def test_supervisor_retries_smoke_operation_in_the_next_round() -> None:
 
 
 def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> None:
+    """Scenario: verify that supervisor exhausts retries without interrupting other operations."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["retry", "passed", "retry", "retry"])
@@ -200,6 +205,7 @@ def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> 
 
 
 def test_inconclusive_diagnosis_does_not_interrupt_other_operations() -> None:
+    """Scenario: verify that inconclusive diagnosis does not interrupt other operations."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["diagnosis_inconclusive", "passed"])
@@ -226,6 +232,7 @@ def test_inconclusive_diagnosis_does_not_interrupt_other_operations() -> None:
 
 
 def test_unsupported_smoke_operation_does_not_retry_or_stop_following_work() -> None:
+    """Scenario: verify that unsupported smoke operation does not retry or stop following work."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["unsupported", "passed"])
@@ -246,6 +253,7 @@ def test_unsupported_smoke_operation_does_not_retry_or_stop_following_work() -> 
 
 
 def test_operation_scoped_smoke_error_retries_after_other_operations() -> None:
+    """Scenario: verify that operation scoped smoke error retries after other operations."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     smoke = _SmokeAgent(["errored", "passed", "passed"])
@@ -269,6 +277,7 @@ def test_operation_scoped_smoke_error_retries_after_other_operations() -> None:
 
 
 def test_smoke_runtime_exception_is_a_global_technical_error() -> None:
+    """Scenario: verify that smoke runtime exception is a global technical error."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
     class BrokenSmokeAgent:

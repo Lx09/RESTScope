@@ -22,12 +22,18 @@ class SchemaSourceValidationError(ValueError):
 
 
 class SchemaCatalog:
-    """Validate schema sources and persist them through an injected port."""
+    """Validate OpenAPI sources before persisting their original source reference.
+
+    A record stores either a readable file path or raw text, never both. Parsing
+    happens before commit so invalid replacement data cannot destroy the last
+    valid catalog entry.
+    """
 
     def __init__(self, unit_of_work_factory: SchemaUnitOfWorkFactory) -> None:
         self.unit_of_work_factory = unit_of_work_factory
 
     def register(self, source: SchemaSourceInput) -> SchemaRecord:
+        """Validate and atomically store a new schema source."""
         file_path, raw_content = self._prepare(source)
         self._parse(file_path=file_path, raw_content=raw_content)
         with self.unit_of_work_factory() as uow:
@@ -40,6 +46,7 @@ class SchemaCatalog:
             return record
 
     def get(self, schema_id: str) -> SchemaRecord:
+        """Return one stored source or raise ``SchemaNotFoundError``."""
         with self.unit_of_work_factory() as uow:
             record = uow.schemas.get(schema_id)
         if record is None:
@@ -47,10 +54,12 @@ class SchemaCatalog:
         return record
 
     def list(self) -> list[SchemaRecord]:
+        """Return all stored schema-source records in repository order."""
         with self.unit_of_work_factory() as uow:
             return uow.schemas.list()
 
     def replace(self, schema_id: str, source: SchemaSourceInput) -> SchemaRecord:
+        """Validate a replacement completely before committing it."""
         file_path, raw_content = self._prepare(source)
         self._parse(file_path=file_path, raw_content=raw_content)
         with self.unit_of_work_factory() as uow:
@@ -65,6 +74,7 @@ class SchemaCatalog:
             return record
 
     def load(self, schema_id: str) -> OpenAPISpecIR:
+        """Re-read and parse one stored source into a fresh in-memory IR."""
         record = self.get(schema_id)
         return self._parse(file_path=record.file_path, raw_content=record.raw_content)
 

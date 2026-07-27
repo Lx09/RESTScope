@@ -73,7 +73,13 @@ class TestingExecutionError(RuntimeError):
 
 
 class OperationTestingService:
-    """Preflight and sequentially execute one configured operation batch."""
+    """Generate, preflight, and sequentially execute one operation batch.
+
+    Every case is generated and serialized before the first request is sent.
+    Configuration or Constraint errors therefore fail without partial network
+    effects. Requests then run sequentially so behavior-monitor learning has a
+    stable order.
+    """
 
     def __init__(
         self,
@@ -97,6 +103,7 @@ class OperationTestingService:
         case_count: int = 1,
         seed: int | None = None,
     ) -> OperationExecutionReport:
+        """Run a public batch and return only its bounded serializable report."""
         return self._run_operation_traced(
             context,
             operation_key=operation_key,
@@ -135,6 +142,13 @@ class OperationTestingService:
         seed: int | None,
         constraints: ConstraintSet | None,
     ) -> SmokeExecutionOutcome:
+        """
+        Run operation traced for deterministic request generation, constraint solving,
+        and execution.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         with self.tracing_runtime.span(
             "OperationTestingService.run_operation",
             kind="CHAIN",
@@ -209,6 +223,7 @@ class OperationTestingService:
         seed: int | None = None,
         constraints: ConstraintSet | None = None,
     ) -> SmokeExecutionOutcome:
+        """Perform fail-before-send preflight, then execute prepared cases."""
         if not 1 <= case_count <= 20:
             raise TestingExecutionError(
                 "invalid_case_count",
@@ -217,6 +232,8 @@ class OperationTestingService:
         config = self.config_catalog.require_operation(operation_key)
         operation = config.snapshot
         run_seed = seed if seed is not None else secrets.randbits(63)
+        # Build the complete request list before any network call. If one case
+        # cannot be solved or serialized, the target sees none of the batch.
         prepared: list[
             tuple[GeneratedTestCase, PreparedTestRequest, PreparedTargetRequest]
         ] = []
@@ -245,6 +262,7 @@ class OperationTestingService:
         except (ConstraintValidationError, ConstraintSolveError) as exc:
             raise TestingExecutionError(exc.code, str(exc)) from exc
 
+        # Network execution begins only after preflight succeeds for every case.
         run_id = f"test_run_{uuid4().hex}"
         reports: list[TestCaseExecutionReport] = []
         failure_evidence: list[FailureCaseEvidence] = []
@@ -321,6 +339,13 @@ class OperationTestingService:
         FailureCaseEvidence,
         SmokeCaseExecutionEvidence,
     ]:
+        """
+        Execute case for deterministic request generation, constraint solving, and
+        execution.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         case_id = f"{run_id}_case_{case_index + 1}"
         request_summary = _request_summary(
             request,

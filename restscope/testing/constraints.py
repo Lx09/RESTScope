@@ -17,7 +17,12 @@ class _ConstraintModel(BaseModel):
 
 
 class InputAssignment(_ConstraintModel):
-    """Presence and optional value for one frozen input node."""
+    """Presence and optional value for one frozen input node.
+
+    ``present`` and ``has_value`` are separate because container/control nodes
+    such as a request body may be present without having a scalar value that can
+    participate in arithmetic or comparison.
+    """
 
     present: bool
     has_value: bool = False
@@ -25,6 +30,7 @@ class InputAssignment(_ConstraintModel):
 
     @model_validator(mode="after")
     def validate_value_state(self) -> "InputAssignment":
+        """Reject impossible combinations of presence, value flag, and value."""
         if not self.present and self.has_value:
             raise ValueError("an absent input cannot have a value")
         if not self.has_value and self.value is not None:
@@ -37,16 +43,37 @@ class InputNodeOverride(InputAssignment):
 
 
 class InputValue(_ConstraintModel):
+    """
+    Represent the input value expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["input_value"]
     input_node_id: str = Field(min_length=1, max_length=1000)
 
 
 class LiteralValue(_ConstraintModel):
+    """
+    Represent the literal value expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["literal"]
     value: Any
 
 
 class ArithmeticValue(_ConstraintModel):
+    """
+    Represent the arithmetic value expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["arithmetic"]
     operator: Literal["+", "-", "*", "/"]
     left: "ValueExpression"
@@ -54,11 +81,25 @@ class ArithmeticValue(_ConstraintModel):
 
 
 class PresentPredicate(_ConstraintModel):
+    """
+    Represent the present predicate expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["present"]
     input_node_id: str = Field(min_length=1, max_length=1000)
 
 
 class ComparePredicate(_ConstraintModel):
+    """
+    Represent the compare predicate expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["compare"]
     operator: Literal["==", "!=", "<", "<=", ">", ">="]
     left: "ValueExpression"
@@ -66,18 +107,39 @@ class ComparePredicate(_ConstraintModel):
 
 
 class MatchesPredicate(_ConstraintModel):
+    """
+    Represent the matches predicate expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["matches"]
     value: "ValueExpression"
     pattern: str = Field(max_length=2000)
 
 
 class ImplicationConstraint(_ConstraintModel):
+    """
+    Represent the implication constraint expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["implies"]
     condition: "BooleanExpression"
     consequence: "BooleanExpression"
 
 
 class CardinalityConstraint(_ConstraintModel):
+    """
+    Represent the cardinality constraint expression used by deterministic request
+    generation, constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["cardinality"]
     expressions: list["BooleanExpression"] = Field(min_length=1, max_length=100)
     minimum: int = Field(ge=0)
@@ -85,16 +147,37 @@ class CardinalityConstraint(_ConstraintModel):
 
 
 class AndConstraint(_ConstraintModel):
+    """
+    Represent the and constraint expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["and"]
     expressions: list["BooleanExpression"] = Field(min_length=1, max_length=100)
 
 
 class OrConstraint(_ConstraintModel):
+    """
+    Represent the or constraint expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["or"]
     expressions: list["BooleanExpression"] = Field(min_length=1, max_length=100)
 
 
 class NotConstraint(_ConstraintModel):
+    """
+    Represent the not constraint expression used by deterministic request generation,
+    constraint solving, and execution.
+
+    Its fields describe data only; generation or evaluation behavior lives in the
+    corresponding service functions.
+    """
     type: Literal["not"]
     expression: "BooleanExpression"
 
@@ -118,6 +201,13 @@ BooleanExpression: TypeAlias = Annotated[
 
 
 class ConstraintSet(_ConstraintModel):
+    """Top-level conjunction of up to twenty same-request constraints.
+
+    Each item in ``constraints`` must be true for the request to be valid.
+    Nested ``and``/``or``/``not`` nodes express richer Boolean structure inside
+    an item.  Constraints contain only typed expressions and input-node IDs;
+    they do not execute network requests or persist themselves.
+    """
     constraints: list[BooleanExpression] = Field(min_length=1, max_length=20)
 
 
@@ -167,7 +257,12 @@ def validate_constraint_set(
     constraints: ConstraintSet,
     operation: OperationTestSnapshot,
 ) -> ConstraintSet:
-    """Validate all references and typed operations against one snapshot."""
+    """Validate references and operand types against one frozen operation.
+
+    Pydantic proves only that the JSON shape is valid.  This second validation
+    proves semantic facts such as “the input exists”, “a regular expression is
+    applied to a string”, and “ordered comparisons use compatible types”.
+    """
 
     nodes = {node.input_node_id: node for node in operation.input_nodes}
     for expression in constraints.constraints:
@@ -176,7 +271,7 @@ def validate_constraint_set(
 
 
 def normalize_constraint_set(constraints: ConstraintSet) -> ConstraintSet:
-    """Return a stable representation for equality and identity derivation."""
+    """Canonicalize equivalent expression trees for comparison and stable IDs."""
 
     normalized = [_normalize_boolean(item) for item in constraints.constraints]
     normalized.sort(key=_canonical_key)
@@ -220,7 +315,12 @@ def evaluate_constraint_set_partial(
     constraints: ConstraintSet,
     assignments: Mapping[str, InputAssignment],
 ) -> bool | None:
-    """Evaluate known inputs and return None while the result is undecidable."""
+    """Evaluate a partial search assignment using three-valued logic.
+
+    ``False`` lets the solver prune a branch immediately, ``True`` means every
+    constraint is already decided, and ``None`` means unassigned inputs could
+    still change the result.
+    """
 
     results = [
         _evaluate_boolean_partial(item, assignments)
@@ -248,6 +348,13 @@ def _validate_boolean(
     expression: BooleanExpression,
     nodes: Mapping[str, InputNodeSnapshot],
 ) -> None:
+    """
+    Validate boolean for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(expression, PresentPredicate):
         _validate_input_reference(expression.input_node_id, nodes, for_value=False)
         return
@@ -341,6 +448,13 @@ def _validate_input_reference(
     *,
     for_value: bool,
 ) -> InputNodeSnapshot:
+    """
+    Validate input reference for deterministic request generation, constraint solving,
+    and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     node = nodes.get(input_node_id)
     if node is None:
         raise ConstraintValidationError(
@@ -438,6 +552,13 @@ def _comparison_types_compatible(
 
 
 def _normalize_boolean(expression: BooleanExpression) -> BooleanExpression:
+    """
+    Normalize boolean for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(expression, ComparePredicate):
         left = _normalize_value(expression.left)
         right = _normalize_value(expression.right)
@@ -517,6 +638,13 @@ def _evaluate_boolean(
     expression: BooleanExpression,
     assignments: Mapping[str, InputAssignment],
 ) -> bool:
+    """
+    Handle evaluate boolean as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(expression, PresentPredicate):
         assignment = assignments.get(expression.input_node_id)
         return assignment.present if assignment is not None else False
@@ -564,6 +692,13 @@ def _evaluate_value(
     expression: ValueExpression,
     assignments: Mapping[str, InputAssignment],
 ) -> Any:
+    """
+    Handle evaluate value as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(expression, InputValue):
         assignment = assignments.get(expression.input_node_id)
         if assignment is None or not assignment.present or not assignment.has_value:
@@ -600,6 +735,13 @@ def _evaluate_boolean_partial(
     expression: BooleanExpression,
     assignments: Mapping[str, InputAssignment],
 ) -> bool | None:
+    """
+    Handle evaluate boolean partial as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(expression, PresentPredicate):
         assignment = assignments.get(expression.input_node_id)
         return assignment.present if assignment is not None else None
@@ -681,6 +823,13 @@ def _evaluate_value_partial(
     expression: ValueExpression,
     assignments: Mapping[str, InputAssignment],
 ) -> Any:
+    """
+    Handle evaluate value partial as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(expression, InputValue):
         assignment = assignments.get(expression.input_node_id)
         if assignment is None:

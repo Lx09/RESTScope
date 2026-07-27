@@ -23,13 +23,32 @@ from ..orm import (
 
 
 class SqlAlchemyGeneratorConfigRepository:
+    """
+    Define the collaborator contract for sql alchemy generator config repository.
+
+    Concrete implementations may vary while callers in the repository and database
+    persistence boundary depend only on these declared operations.
+    """
     def __init__(self, session: Session) -> None:
         self.session = session
 
     def is_initialized(self) -> bool:
+        """
+        Return whether initialized applies in the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.session.get(GeneratorCatalogStateORM, 1) is not None
 
     def initialize(self, records: list[OperationGeneratorConfig]) -> None:
+        """
+        Handle initialize as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         self.session.add(GeneratorCatalogStateORM(id=1))
         for record in records:
             self._insert_record(record)
@@ -44,6 +63,12 @@ class SqlAlchemyGeneratorConfigRepository:
             raise GeneratorConfigConcurrentWrite("generator_catalog_state") from exc
 
     def get(self, operation_key: str) -> OperationGeneratorConfig | None:
+        """
+        Handle get as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         operation = self.session.get(OperationGeneratorConfigORM, operation_key)
         if operation is None:
             return None
@@ -86,6 +111,12 @@ class SqlAlchemyGeneratorConfigRepository:
         rollback_of_revision: int | None = None,
         restored_from_revision: int | None = None,
     ) -> OperationGeneratorConfig:
+        """
+        Handle replace as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         updated = self.session.execute(
             update(OperationGeneratorConfigORM)
             .where(
@@ -128,6 +159,12 @@ class SqlAlchemyGeneratorConfigRepository:
         operation_key: str,
         revision: int,
     ) -> GeneratorConfigRevision | None:
+        """
+        Return revision for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         row = self.session.get(
             GeneratorConfigRevisionORM,
             (operation_key, revision),
@@ -138,6 +175,12 @@ class SqlAlchemyGeneratorConfigRepository:
         self,
         operation_key: str,
     ) -> list[GeneratorConfigRevision]:
+        """
+        Return revisions for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         rows = self.session.scalars(
             select(GeneratorConfigRevisionORM)
             .where(GeneratorConfigRevisionORM.operation_key == operation_key)
@@ -154,6 +197,13 @@ class SqlAlchemyGeneratorConfigRepository:
         lifecycle: str,
         evaluation: dict | None,
     ) -> GeneratorConfigRevision:
+        """
+        Handle update revision as part of the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         updated = self.session.execute(
             update(GeneratorConfigRevisionORM)
             .where(
@@ -220,6 +270,13 @@ class SqlAlchemyGeneratorConfigRepository:
         rollback_of_revision: int | None = None,
         restored_from_revision: int | None = None,
     ) -> None:
+        """
+        Handle insert revision as part of the repository and database persistence
+        boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         self.session.add(
             GeneratorConfigRevisionORM(
                 operation_key=record.operation_key,

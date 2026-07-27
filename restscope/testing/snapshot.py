@@ -23,9 +23,16 @@ from .models import (
 
 
 def build_initial_operation_config(operation: OperationIR) -> OperationGeneratorConfig:
-    """Create the immutable request snapshot and its one-to-one default generators."""
+    """Freeze one operation and infer a conservative Generator for every input.
+
+    Unsupported selected inputs disable the operation with explicit reasons.
+    Fallback strategies still keep the record structurally inspectable without
+    pretending the operation is safe to execute.
+    """
 
     snapshot, reasons = build_operation_snapshot(operation)
+    # A concrete configuration selects one request media type. Preference
+    # ordering chooses JSON-compatible contracts before form encodings.
     active_media_type = snapshot.available_media_types[0] if snapshot.available_media_types else None
     selected_node_ids = _selected_node_ids(snapshot, active_media_type)
     configs: list[InputGeneratorConfig] = []
@@ -34,6 +41,8 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
         if reason is not None and node.input_node_id in selected_node_ids:
             reasons.append(reason)
         try:
+            # Required nodes are always present. Optional nodes start at 50% so
+            # a batch can exercise both inclusion and omission.
             config = InputGeneratorConfig(
                 input_node_id=node.input_node_id,
                 inclusion_probability=1.0 if node.required else 0.5,
@@ -72,6 +81,7 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
 
 
 def build_initial_catalog(ir: OpenAPISpecIR) -> list[OperationGeneratorConfig]:
+    """Build revision-one Generator configurations for every parsed operation."""
     return [
         build_initial_operation_config(operation)
         for operation in ir.operations.values()
@@ -81,6 +91,13 @@ def build_initial_catalog(ir: OpenAPISpecIR) -> list[OperationGeneratorConfig]:
 def build_operation_snapshot(
     operation: OperationIR,
 ) -> tuple[OperationTestSnapshot, list[GeneratorDisabledReason]]:
+    """Project mutable OpenAPI IR into the immutable testing contract.
+
+    The snapshot retains parameter serialization rules, supported media types,
+    schema constraints, defaults/examples, and semantic input nodes. Parser-only
+    objects and unsupported media branches are omitted so later generation has
+    one explicit interpretation.
+    """
     reasons: list[GeneratorDisabledReason] = []
     node_by_path = {
         node.canonical_path: node for node in operation.input_nodes.values()
@@ -196,6 +213,13 @@ def build_operation_snapshot(
 
 
 def _schema_snapshot(schema: SchemaIR | None) -> SchemaSnapshot | None:
+    """
+    Handle schema snapshot as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if schema is None:
         return None
     additional = schema.additional_properties
@@ -323,6 +347,13 @@ def _request_property_schema(
 def _default_strategy(
     node: InputNodeSnapshot,
 ) -> tuple[dict[str, Any], GeneratorDisabledReason | None]:
+    """
+    Handle default strategy as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if node.node_kind == "request_body":
         return {"type": "request_body"}, None
     schema = node.schema_contract
@@ -463,6 +494,13 @@ def _number_bounds(schema: SchemaSnapshot) -> tuple[float, float]:
 def _schema_unsupported_reasons(
     node: InputNodeSnapshot,
 ) -> list[GeneratorDisabledReason]:
+    """
+    Handle schema unsupported reasons as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     schema = node.schema_contract
     assert schema is not None
     if schema.enum is not None:
@@ -546,6 +584,13 @@ def _schema_unsupported_reasons(
 def _parameter_unsupported_reason(
     parameter: ParameterIR,
 ) -> GeneratorDisabledReason | None:
+    """
+    Handle parameter unsupported reason as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if parameter.content:
         return GeneratorDisabledReason(
             code="request_parameter_unsupported",
@@ -583,6 +628,13 @@ def _node_is_required(
     canonical_path: str,
     parent_node_id: str | None,
 ) -> bool:
+    """
+    Handle node is required as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     parameter = next(
         (
             item
@@ -684,6 +736,13 @@ def _selected_node_ids(
     snapshot: OperationTestSnapshot,
     active_media_type: str | None,
 ) -> set[str]:
+    """
+    Handle selected node ids as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     active_root_id = (
         snapshot.media_type_node_ids.get(active_media_type)
         if active_media_type is not None

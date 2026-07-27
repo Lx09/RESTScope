@@ -1,3 +1,5 @@
+"""Regression scenarios for parameter patch agent. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import pytest
@@ -130,6 +132,7 @@ def constant_patch():
 
 
 def test_agent_validates_samples_then_accepts_complete_patch() -> None:
+    """Scenario: verify that agent validates samples then accepts complete patch."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
@@ -284,6 +287,7 @@ def request_body_date_patch():
 
 
 def test_request_body_patch_projects_four_nested_dates_into_ten_samples() -> None:
+    """Scenario: verify that request body patch projects four nested dates into ten samples."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
@@ -312,6 +316,7 @@ def test_request_body_patch_projects_four_nested_dates_into_ten_samples() -> Non
 
 
 def test_local_samples_project_array_values_and_parameter_presence() -> None:
+    """Scenario: verify that local samples project array values and parameter presence."""
     from restscope.agent.parameter_patch import (
         ParameterPatchAgent,
         PatchGroupTask,
@@ -423,6 +428,7 @@ def test_local_samples_project_array_values_and_parameter_presence() -> None:
 
 
 def test_expert_prompt_contains_complete_generator_and_constraint_catalogs() -> None:
+    """Scenario: verify that expert prompt contains complete generator and constraint catalogs."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
@@ -497,6 +503,7 @@ def test_expert_prompt_contains_complete_generator_and_constraint_catalogs() -> 
 
 
 def test_accept_before_sample_feedback_is_rejected_and_repaired() -> None:
+    """Scenario: verify that accept before sample feedback is rejected and repaired."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
@@ -526,6 +533,7 @@ def test_accept_before_sample_feedback_is_rejected_and_repaired() -> None:
 
 
 def test_reference_patch_keeps_system_option_and_reviews_raw_pool_values() -> None:
+    """Scenario: verify that reference patch keeps system option and reviews raw pool values."""
     from restscope.agent.parameter_patch import (
         AvailableReferenceOption,
         ParameterPatchAgent,
@@ -599,6 +607,7 @@ def test_reference_patch_keeps_system_option_and_reviews_raw_pool_values() -> No
 
 
 def test_agent_revision_replaces_previous_complete_patch_after_samples() -> None:
+    """Scenario: verify that agent revision replaces previous complete patch after samples."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     revised = constant_patch()
@@ -629,6 +638,7 @@ def test_agent_revision_replaces_previous_complete_patch_after_samples() -> None
 
 
 def test_invalid_revision_prevents_accepting_previous_sampled_patch() -> None:
+    """Scenario: verify that invalid revision prevents accepting previous sampled patch."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     invalid_revision = {
@@ -664,6 +674,7 @@ def test_invalid_revision_prevents_accepting_previous_sampled_patch() -> None:
 
 
 def test_unsatisfiable_constraint_exhausts_attempts_as_group_failure() -> None:
+    """Scenario: verify that unsatisfiable constraint exhausts attempts as group failure."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     impossible = {
@@ -712,6 +723,7 @@ def test_unsatisfiable_constraint_exhausts_attempts_as_group_failure() -> None:
 
 
 def test_system_managed_generator_is_repaired_with_a_complete_patch() -> None:
+    """Scenario: verify that system managed generator is repaired with a complete patch."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     object_patch = {
@@ -746,6 +758,7 @@ def test_system_managed_generator_is_repaired_with_a_complete_patch() -> None:
 
 
 def test_observed_generators_cannot_bypass_system_reference_aliases() -> None:
+    """Scenario: verify that observed generators cannot bypass system reference aliases."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     invented_reference = {
@@ -784,6 +797,7 @@ def test_observed_generators_cannot_bypass_system_reference_aliases() -> None:
 
 
 def test_every_model_output_counts_toward_twenty_attempt_limit() -> None:
+    """Scenario: verify that every model output counts toward twenty attempt limit."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     client = StubClient([llm_response({}) for _ in range(20)])
@@ -802,6 +816,7 @@ def test_every_model_output_counts_toward_twenty_attempt_limit() -> None:
 
 
 def test_third_identical_patch_and_error_stops_as_stalled_candidate() -> None:
+    """Scenario: verify that third identical patch and error stops as stalled candidate."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     invalid = {
@@ -832,6 +847,7 @@ def test_third_identical_patch_and_error_stops_as_stalled_candidate() -> None:
 
 
 def test_third_identical_sampled_patch_stops_as_stalled_candidate() -> None:
+    """Scenario: verify that third identical sampled patch stops as stalled candidate."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
@@ -853,6 +869,7 @@ def test_third_identical_sampled_patch_stops_as_stalled_candidate() -> None:
 
 
 def test_reference_provider_infrastructure_error_propagates() -> None:
+    """Scenario: verify that reference provider infrastructure error propagates."""
     from restscope.agent.parameter_patch import (
         AvailableReferenceOption,
         ParameterPatchAgent,

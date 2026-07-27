@@ -26,6 +26,12 @@ def build_api_behavior_monitor_agent(
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> APIBehaviorMonitorAgent:
+    """
+    Build api behavior monitor agent for API response monitoring and its narrowly
+    approved evidence catalog.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     runtime = tracing_runtime
     if runtime is None and llm_client is not None:
         runtime = getattr(llm_client, "tracing_runtime", None)

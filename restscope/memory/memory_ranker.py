@@ -9,9 +9,21 @@ class MemoryRanker:
     """Rank memory using the design score formula."""
 
     def rank(self, items: list[MemoryItem], query: MemoryQuery) -> list[MemoryItem]:
+        """
+        Handle rank as part of bounded in-process conversation history.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return sorted(items, key=lambda item: self.score(item, query), reverse=True)
 
     def score(self, item: MemoryItem, query: MemoryQuery) -> float:
+        """
+        Handle score as part of bounded in-process conversation history.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         relevance = item.relevance_score
         if item.operation_id and item.operation_id in query.operation_ids:
             relevance = max(relevance, 1.0)

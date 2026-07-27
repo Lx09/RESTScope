@@ -11,6 +11,12 @@ class MCPToolAdapter:
     """Map MCP tool metadata to the unified tool schema."""
 
     def to_tool_spec(self, *, server_name: str, mcp_tool: dict) -> ToolSpec:
+        """
+        Handle to tool spec as part of the policy-controlled model tool boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         annotations = self._annotations_dict(self._get(mcp_tool, "annotations"))
         read_only, requires_approval, risk_level = self._classify(annotations)
         return ToolSpec(

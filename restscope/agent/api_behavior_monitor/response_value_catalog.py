@@ -11,6 +11,13 @@ from restscope.db.time import utc_now
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueCatalogRegistration:
+    """
+    Coordinate response value catalog registration behavior for API response monitoring
+    and its narrowly approved evidence catalog.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     value_name: str
     consumer_operation_key: str
     consumer_input_node_id: str
@@ -20,6 +27,13 @@ class ResponseValueCatalogRegistration:
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueMonitorRecord:
+    """
+    Carry validated response value monitor record data across API response monitoring
+    and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     monitor_id: str
     value_name: str
     consumer_operation_key: str
@@ -32,6 +46,13 @@ class ResponseValueMonitorRecord:
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueSource:
+    """
+    Carry validated response value source data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     producer_operation_key: str
     status_code: str
     media_type: str
@@ -41,11 +62,24 @@ class ResponseValueSource:
 
 @dataclass(frozen=True, slots=True)
 class PersistedResponseValueSource(ResponseValueSource):
+    """
+    Carry validated persisted response value source data across API response monitoring
+    and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     source_id: str
     monitor_id: str
 
 
 class _ResponseValueRepository(Protocol):
+    """
+    Define the collaborator contract for response value repository.
+
+    Concrete implementations may vary while callers in API response monitoring and its
+    narrowly approved evidence catalog depend only on these declared operations.
+    """
     def ensure_monitor(
         self,
         registration: ResponseValueCatalogRegistration,
@@ -116,6 +150,13 @@ class ResponseValueCatalog:
         self,
         registration: ResponseValueCatalogRegistration,
     ) -> ResponseValueMonitorRecord:
+        """
+        Handle ensure monitor as part of API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             result = uow.response_values.ensure_monitor(
                 registration,
@@ -129,6 +170,13 @@ class ResponseValueCatalog:
         monitor_id: str,
         sources: list[ResponseValueSource],
     ) -> list[PersistedResponseValueSource]:
+        """
+        Handle add sources as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             result = uow.response_values.add_sources(
                 monitor_id,
@@ -146,6 +194,13 @@ class ResponseValueCatalog:
         ResponseValueMonitorRecord,
         list[PersistedResponseValueSource],
     ]:
+        """
+        Handle register with backfill as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             now = utc_now()
             monitor = uow.response_values.ensure_monitor(
@@ -196,12 +251,26 @@ class ResponseValueCatalog:
         self,
         producer_operation_key: str,
     ) -> list[PersistedResponseValueSource]:
+        """
+        Return sources for operation for API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.response_values.list_sources_for_operation(
                 producer_operation_key
             )
 
     def list_active_monitors(self) -> list[ResponseValueMonitorRecord]:
+        """
+        Return active monitors for API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.response_values.list_active_monitors()
 
@@ -210,6 +279,13 @@ class ResponseValueCatalog:
         monitor_id: str,
         values: list[object],
     ) -> int:
+        """
+        Record values for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             count = uow.response_values.record_values(
                 monitor_id,
@@ -227,6 +303,13 @@ class ResponseValueCatalog:
         media_type: str,
         scalars: list[tuple[str, object]],
     ) -> None:
+        """
+        Record observation for API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             uow.response_values.record_observation(
                 operation_key=operation_key,
@@ -243,6 +326,13 @@ class ResponseValueCatalog:
         *,
         limit: int = 100,
     ) -> list[object]:
+        """
+        Handle historical values for source as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.response_values.historical_values_for_source(
                 source,
@@ -250,6 +340,13 @@ class ResponseValueCatalog:
             )
 
     def values_for(self, value_name: str, *, limit: int = 100) -> list[object]:
+        """
+        Handle values for as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.response_values.values_for(value_name, limit=limit)
 

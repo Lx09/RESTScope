@@ -1,3 +1,5 @@
+"""Regression scenarios for app database bootstrap. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -43,6 +45,7 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default app creates migrated fresh sqlite and normalizes relative url."""
     from sqlalchemy import inspect
 
     from restscope.db import create_engine_from_url
@@ -79,6 +82,7 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
 
 
 def test_default_app_preserves_absolute_sqlite_location(tmp_path: Path) -> None:
+    """Scenario: verify that default app preserves absolute sqlite location."""
     database = tmp_path / "absolute.sqlite"
     app = _build_default_app(_config(f"sqlite:///{database}"))
 
@@ -89,6 +93,7 @@ def test_default_app_preserves_absolute_sqlite_location(tmp_path: Path) -> None:
 
 
 def test_public_database_bootstrap_error_preserves_code_and_message() -> None:
+    """Scenario: verify that public database bootstrap error preserves code and message."""
     from restscope.db import DatabaseBootstrapError
 
     error = DatabaseBootstrapError("database_test", "Database test failure")
@@ -113,6 +118,7 @@ def test_default_app_rejects_unsupported_database_urls(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default app rejects unsupported database urls."""
     from restscope.db import UnsupportedDatabaseURLError
 
     monkeypatch.chdir(tmp_path)
@@ -138,6 +144,7 @@ def test_default_app_rejects_sqlite_authority_before_creating_a_file(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default app rejects sqlite authority before creating a file."""
     import os
 
     from restscope.db import UnsupportedDatabaseURLError
@@ -171,6 +178,7 @@ def test_default_app_rejects_every_existing_database_path_without_changing_it(
     existing_kind: str,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default app rejects every existing database path without changing it."""
     from restscope.db import DatabaseAlreadyExistsError
 
     database = tmp_path / "occupied.sqlite"
@@ -214,6 +222,7 @@ def test_default_app_rejects_every_existing_database_path_without_changing_it(
 def test_successful_app_close_preserves_database_and_second_start_rejects_it(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that successful app close preserves database and second start rejects it."""
     from restscope.db import DatabaseAlreadyExistsError
 
     database = tmp_path / "one-shot.sqlite"
@@ -227,6 +236,7 @@ def test_successful_app_close_preserves_database_and_second_start_rejects_it(
 
 
 def test_complete_injected_capability_runtime_skips_database_validation() -> None:
+    """Scenario: verify that complete injected capability runtime skips database validation."""
     runtime = SimpleNamespace()
     config = _config("postgresql://ignored.example/restscope")
 
@@ -239,6 +249,7 @@ def test_complete_injected_capability_runtime_skips_database_validation() -> Non
 
 
 def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
+    """Scenario: verify that falsey injected capability runtime is not replaced."""
     from restscope import RESTScopeApp
     from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
@@ -267,6 +278,7 @@ def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
 
 
 def test_falsey_injected_tracing_runtime_is_preserved(tmp_path: Path) -> None:
+    """Scenario: verify that falsey injected tracing runtime is preserved."""
     trace_runtime = _TrackingTracingRuntime(falsey=True)
     database = tmp_path / "falsey-tracing.sqlite"
     app = _build_default_app_with_tracing(
@@ -285,6 +297,7 @@ def test_falsey_injected_tracing_runtime_is_not_closed_on_factory_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that falsey injected tracing runtime is not closed on factory failure."""
     trace_runtime = _TrackingTracingRuntime(falsey=True)
     database = tmp_path / "falsey-tracing-failure.sqlite"
     monkeypatch.setattr(
@@ -309,6 +322,7 @@ def test_falsey_injected_tracing_runtime_is_not_closed_on_factory_failure(
 
 
 def test_only_injected_smoke_agent_still_enforces_fresh_sqlite() -> None:
+    """Scenario: verify that only injected smoke agent still enforces fresh sqlite."""
     from restscope import RESTScopeApp
     from restscope.db import UnsupportedDatabaseURLError
     from tests._operation_smoke_stub import PassingOperationSmokeAgent
@@ -321,6 +335,7 @@ def test_only_injected_smoke_agent_still_enforces_fresh_sqlite() -> None:
 
 
 def test_direct_default_app_construction_bootstraps_database(tmp_path: Path) -> None:
+    """Scenario: verify that direct default app construction bootstraps database."""
     from restscope import RESTScopeApp
     from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
@@ -340,6 +355,7 @@ def test_from_environment_bootstraps_relative_database_from_startup_cwd(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that from environment bootstraps relative database from startup cwd."""
     from restscope import RESTScopeApp
     from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
@@ -360,6 +376,7 @@ def test_migration_failure_removes_only_files_created_by_this_bootstrap(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that migration failure removes only files created by this bootstrap."""
     from restscope.db import DatabaseBootstrapError
 
     database = tmp_path / "failed-migration.sqlite"
@@ -390,6 +407,7 @@ def test_migration_failure_preserves_replacement_database_and_its_sidecar(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that migration failure preserves replacement database and its sidecar."""
     from restscope.db import DatabaseBootstrapError
 
     database = tmp_path / "replaced.sqlite"
@@ -423,6 +441,7 @@ def test_migration_process_interrupt_cleans_claimed_database_and_sidecars(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that migration process interrupt cleans claimed database and sidecars."""
     database = tmp_path / "interrupted-migration.sqlite"
     sidecar = Path(f"{database}-wal")
 
@@ -446,6 +465,7 @@ def test_default_runtime_construction_failure_removes_created_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default runtime construction failure removes created database."""
     database = tmp_path / "failed-runtime.sqlite"
     monkeypatch.setattr(
         "restscope.app.build_capabilities",
@@ -465,6 +485,7 @@ def test_direct_app_keyboard_interrupt_cleans_owned_database_and_tracing(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that direct app keyboard interrupt cleans owned database and tracing."""
     from restscope import RESTScopeApp
     from tests._operation_smoke_stub import PassingOperationSmokeAgent
 
@@ -493,6 +514,7 @@ def test_from_config_keyboard_interrupt_cleans_owned_resources(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that from config keyboard interrupt cleans owned resources."""
     from restscope import RESTScopeApp
 
     trace_runtime = _TrackingTracingRuntime()
@@ -531,6 +553,7 @@ def test_file_claim_failure_after_creation_removes_created_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that file claim failure after creation removes created database."""
     import os
 
     from restscope.db import DatabaseBootstrapError
@@ -555,6 +578,7 @@ def test_fstat_failure_closes_descriptor_and_removes_claimed_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that fstat failure closes descriptor and removes claimed database."""
     import os
 
     from restscope.db import DatabaseBootstrapError
@@ -583,6 +607,7 @@ def test_fstat_keyboard_interrupt_closes_descriptor_and_removes_claimed_database
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that fstat keyboard interrupt closes descriptor and removes claimed database."""
     import os
 
     database = tmp_path / "interrupted-fstat.sqlite"
@@ -614,6 +639,7 @@ def test_close_interrupt_removes_claimed_database_without_reclosing_descriptor(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that close interrupt removes claimed database without reclosing descriptor."""
     import os
 
     database = tmp_path / "interrupted-close.sqlite"
@@ -640,6 +666,7 @@ def test_close_interrupt_removes_claimed_database_without_reclosing_descriptor(
 def test_parent_path_file_is_reported_as_database_bootstrap_failed(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that parent path file is reported as database bootstrap failed."""
     from restscope.db import DatabaseBootstrapError
 
     parent = tmp_path / "parent"
@@ -656,6 +683,7 @@ def test_parent_path_file_is_reported_as_database_bootstrap_failed(
 
 
 def test_nul_database_path_is_reported_as_database_bootstrap_failed() -> None:
+    """Scenario: verify that nul database path is reported as database bootstrap failed."""
     from restscope.db import DatabaseBootstrapError
 
     with pytest.raises(DatabaseBootstrapError) as exc_info:
@@ -670,6 +698,7 @@ def test_smoke_agent_construction_failure_closes_runtime_and_removes_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that smoke agent construction failure closes runtime and removes database."""
     from restscope import RESTScopeApp
     database = tmp_path / "failed-analyzer.sqlite"
     host = SimpleNamespace(closed=False)
@@ -706,6 +735,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that from config defaults to local operation smoke without mcp host."""
     from restscope import RESTScopeApp
     from restscope.observability import TracingRuntime
 
@@ -748,6 +778,7 @@ def test_app_constructor_failure_removes_created_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that app constructor failure removes created database."""
     from restscope import RESTScopeApp
 
     database = tmp_path / "failed-app.sqlite"

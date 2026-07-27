@@ -26,6 +26,12 @@ class ToolPolicy:
     }
 
     def is_allowed(self, *, role: str, tool_spec: ToolSpec, state: dict) -> bool:
+        """
+        Return whether allowed applies in the policy-controlled model tool boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if tool_spec.name == "restscope.resource.lookup":
             return True
         if tool_spec.name in {HTTP_REQUEST_TOOL_NAME, RUN_OPERATION_TOOL_NAME}:

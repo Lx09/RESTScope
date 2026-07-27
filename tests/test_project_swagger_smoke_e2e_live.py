@@ -1,3 +1,5 @@
+"""Regression scenarios for project swagger smoke e2e live. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -220,6 +222,7 @@ def _diagnosis_protocol_report(
 
 
 def test_live_diagnosis_protocol_coverage_accepts_one_valid_decision() -> None:
+    """Scenario: verify that live diagnosis protocol coverage accepts one valid decision."""
     _assert_live_diagnosis_protocol_coverage(
         _diagnosis_protocol_report(
             (0, "invalid_output_limit"),
@@ -229,12 +232,14 @@ def test_live_diagnosis_protocol_coverage_accepts_one_valid_decision() -> None:
 
 
 def test_live_diagnosis_protocol_coverage_allows_no_failures() -> None:
+    """Scenario: verify that live diagnosis protocol coverage allows no failures."""
     _assert_live_diagnosis_protocol_coverage(
         _diagnosis_protocol_report()
     )
 
 
 def test_live_diagnosis_protocol_coverage_rejects_all_invalid_outputs() -> None:
+    """Scenario: verify that live diagnosis protocol coverage rejects all invalid outputs."""
     with pytest.raises(AssertionError):
         _assert_live_diagnosis_protocol_coverage(
             _diagnosis_protocol_report(
@@ -277,6 +282,7 @@ def _diagnosis_trace_spans(
 
 
 def test_diagnosis_trace_contract_accepts_nested_investigation_llm() -> None:
+    """Scenario: verify that diagnosis trace contract accepts nested investigation llm."""
     _assert_diagnosis_trace_hierarchy(
         spans=_diagnosis_trace_spans(),
         report=_trace_contract_report(),
@@ -294,6 +300,7 @@ def test_diagnosis_trace_contract_rejects_incomplete_hierarchy(
     investigation_parent: str,
     include_llm: bool,
 ) -> None:
+    """Scenario: verify that diagnosis trace contract rejects incomplete hierarchy."""
     with pytest.raises(AssertionError):
         _assert_diagnosis_trace_hierarchy(
             spans=_diagnosis_trace_spans(
@@ -478,6 +485,7 @@ def _assert_phoenix_coverage(
 
 @pytest.mark.live_e2e
 def test_project_swagger_runs_every_operation_through_smoke_and_phoenix() -> None:
+    """Scenario: verify that project swagger runs every operation through smoke and phoenix."""
     if os.environ.get("RUN_PROJECT_SWAGGER_SMOKE_E2E") != "1":
         pytest.skip("set RUN_PROJECT_SWAGGER_SMOKE_E2E=1 to run the live target")
 

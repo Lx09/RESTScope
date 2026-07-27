@@ -1,3 +1,5 @@
+"""Regression scenarios for testing execution. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -109,6 +111,7 @@ def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
 def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that operation testing reads only failure body and reports unique messages."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -218,6 +221,7 @@ def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
 def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that operation testing executes feedback generator outside the frozen schema."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -307,6 +311,7 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
 def test_smoke_execution_applies_constraints_and_traces_only_the_count(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that smoke execution applies constraints and traces only the count."""
     from restscope.testing import ConstraintSet
 
     tracing = _RecordingTracingRuntime()
@@ -359,6 +364,7 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Scenario: verify that constrained smoke preflight failure on later case sends no requests."""
     import pytest
 
     from restscope.testing import ConstraintSet, TestingExecutionError
@@ -408,6 +414,7 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
 def test_ordinary_operation_execution_does_not_accept_constraints(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that ordinary operation execution does not accept constraints."""
     import pytest
 
     from restscope.testing import ConstraintSet
@@ -437,6 +444,7 @@ def test_ordinary_operation_execution_does_not_accept_constraints(
 
 
 def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -> None:
+    """Scenario: verify that operation testing preflight failure sends no requests."""
     import httpx
     import pytest
 
@@ -532,6 +540,7 @@ def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -
 
 
 def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors(tmp_path: Path) -> None:
+    """Scenario: verify that operation testing isolates cookies and reports partial transport errors."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -604,6 +613,7 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
 
 
 def test_testing_transport_overrides_ordinary_context_headers_but_not_context_cookie() -> None:
+    """Scenario: verify that testing transport overrides ordinary context headers but not context cookie."""
     import httpx
 
     from restscope.http_transport import TargetHTTPTransport
@@ -643,6 +653,7 @@ def test_testing_transport_overrides_ordinary_context_headers_but_not_context_co
 
 
 def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(tmp_path: Path) -> None:
+    """Scenario: verify that execution report preserves sensitive named values in the rendered path."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -725,6 +736,7 @@ def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(
 
 
 def test_transport_preflight_validates_every_case_before_the_first_request(tmp_path: Path) -> None:
+    """Scenario: verify that transport preflight validates every case before the first request."""
     import httpx
     import pytest
 

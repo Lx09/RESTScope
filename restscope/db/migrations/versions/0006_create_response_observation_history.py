@@ -18,6 +18,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """
+    Handle upgrade as part of the repository and database persistence boundary.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     op.create_table(
         "response_observations",
         sa.Column("id", sa.String(), primary_key=True),
@@ -60,6 +65,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """
+    Handle downgrade as part of the repository and database persistence boundary.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     op.drop_index(
         "ix_response_observation_scalars_observation_id",
         table_name="response_observation_scalars",

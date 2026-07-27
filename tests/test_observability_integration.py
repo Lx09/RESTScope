@@ -1,3 +1,5 @@
+"""Regression scenarios for observability integration. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -32,6 +34,7 @@ def _recording_runtime(*, secret_values=()):
 
 
 def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
+    """Scenario: verify that llm client records sanitized request response and metrics."""
     from restscope.llm import (
         LLMClient,
         LLMMessage,
@@ -172,6 +175,7 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
 
 
 def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
+    """Scenario: verify that operation smoke trace contains task cards not internal models."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.agent.operation_smoke import PlanSolveDiagnosisResult
     from restscope.agent.parameter_patch import (
@@ -313,6 +317,7 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
 
 
 def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
+    """Scenario: verify that tool executor uses actual tool name and sanitizes trace payload."""
     from opentelemetry.trace.status import StatusCode
 
     from restscope.capabilities import ToolContext, build_capabilities
@@ -410,6 +415,7 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
 
 
 def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) -> None:
+    """Scenario: verify that app owns one runtime and emits chain agent hierarchy."""
     from restscope import RESTScopeApp
     from restscope.agent import RESTScopeRunRequest
     from restscope.restscope_config import RESTScopeConfig
@@ -525,6 +531,7 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
 
 
 def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> None:
+    """Scenario: verify that app rebinds every builtin capability trace consumer."""
     from restscope import RESTScopeApp
     from restscope.capabilities import build_capabilities
     from restscope.observability import TracingRuntime
@@ -561,6 +568,7 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
 
 
 def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> None:
+    """Scenario: verify that http request tool keeps full result while trace output is bounded."""
     import httpx
 
     from restscope.capabilities import (
@@ -621,6 +629,7 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
 
 
 def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> None:
+    """Scenario: verify that generated operation tool emits sanitized batch and case spans."""
     import httpx
 
     from restscope.capabilities import RUN_OPERATION_TOOL_NAME, ToolContext, build_capabilities

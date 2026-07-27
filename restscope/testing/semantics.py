@@ -11,6 +11,13 @@ from .models import OperationGeneratorConfig
 
 @dataclass(slots=True, frozen=True)
 class SemanticInputMap:
+    """
+    Carry validated semantic input map data across deterministic request generation,
+    constraint solving, and execution.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     handle_by_node: Mapping[str, str]
     node_by_handle: Mapping[str, str]
 

@@ -59,6 +59,13 @@ class EvidenceJournal:
         private_case_evidence: Mapping[str, Any] | None = None,
         redactor: Redactor | None = None,
     ) -> "EvidenceJournal":
+        """
+        Handle from batch as part of the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         journal = cls(
             semantic_inputs=build_semantic_input_map(config),
             redactor=redactor,
@@ -117,10 +124,24 @@ class EvidenceJournal:
 
     @property
     def known_failure_refs(self) -> set[str]:
+        """
+        Handle known failure refs as part of the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return set(self.failure_aliases)
 
     @property
     def known_evidence_refs(self) -> set[str]:
+        """
+        Handle known evidence refs as part of the run-local Operation Smoke diagnosis
+        and candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return {
             *self.failure_aliases,
             *self.case_aliases,
@@ -128,12 +149,26 @@ class EvidenceJournal:
         }
 
     def entry(self, alias: str) -> EvidenceEntry | None:
+        """
+        Handle entry as part of the run-local Operation Smoke diagnosis and candidate
+        workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return next(
             (entry for entry in self.entries if entry.alias == alias),
             None,
         )
 
     def prompt_records(self) -> list[dict[str, Any]]:
+        """
+        Handle prompt records as part of the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         records = [
             {
                 "ref": entry.alias,
@@ -255,6 +290,13 @@ def _case_evidence(
     failure_refs: list[str],
     private: Any,
 ) -> dict[str, Any]:
+    """
+    Handle case evidence as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     values: dict[str, list[Any]] = {}
     for generated in case.generated_test_case.generated_values:
         handle = semantic.handle_by_node.get(generated.input_node_id)
@@ -314,6 +356,13 @@ def _case_evidence(
 
 
 def _compact_prompt_value(kind: str, value: Any) -> Any:
+    """
+    Handle compact prompt value as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if kind != "case" or not isinstance(value, Mapping):
         return value
     request = value.get("request")
@@ -379,6 +428,13 @@ def _decoded_response_body(
     encoding: Any,
     media_type: str | None,
 ) -> Any:
+    """
+    Handle decoded response body as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if value is None:
         return None
     if isinstance(value, bytes):
@@ -418,6 +474,13 @@ def _bounded_value(value: Any, *, max_bytes: int) -> Any:
 
 
 def _prompt_record_skeleton(record: dict[str, Any]) -> dict[str, Any]:
+    """
+    Handle prompt record skeleton as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     value = record["value"] if isinstance(record["value"], dict) else {}
     kind = record["kind"]
     if kind == "failure":
@@ -521,6 +584,13 @@ def _encoded_size(value: Any) -> int:
 
 
 def _tool_failure_messages(result) -> list[str]:
+    """
+    Handle tool failure messages as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if result.status != "succeeded":
         error = result.error or {}
         code = str(error.get("code") or result.status)

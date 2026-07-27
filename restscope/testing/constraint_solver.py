@@ -62,7 +62,13 @@ def build_candidate_domains(
     reference_values: ReferenceValueProvider | None = None,
     max_domain_size: int = 8,
 ) -> dict[str, tuple[InputNodeOverride, ...]]:
-    """Build bounded baseline-first override domains for referenced inputs."""
+    """Build a small, deterministic value domain for every referenced input.
+
+    Each domain starts with the baseline assignment so the search preserves the
+    originally generated request when it already works. Additional candidates
+    come from the configured Generator, schema boundaries, constraint literals,
+    and observed-value pools. ``max_domain_size`` keeps work bounded.
+    """
 
     if max_domain_size < 1:
         raise ValueError("max_domain_size must be positive")
@@ -115,7 +121,13 @@ def solve_input_overrides(
     max_domain_size: int = 8,
     max_search_states: int = 10_000,
 ) -> dict[str, InputNodeOverride]:
-    """Return the first deterministic joint assignment satisfying all constraints."""
+    """Return the first deterministic joint assignment satisfying all constraints.
+
+    This is bounded depth-first search, not an external SMT solver. Inputs with
+    smaller domains and more references are assigned first, partial Boolean
+    evaluation prunes impossible branches, and state caps make failure
+    predictable.
+    """
 
     if max_search_states < 1:
         raise ValueError("max_search_states must be positive")
@@ -130,6 +142,8 @@ def solve_input_overrides(
         max_domain_size=max_domain_size,
     )
     reference_counts = _reference_counts(constraints)
+    # “Most constrained first” generally finds contradictions sooner. The node
+    # ID tie-breaker keeps the search order reproducible.
     ordered_ids = sorted(
         domains,
         key=lambda node_id: (
@@ -145,12 +159,16 @@ def solve_input_overrides(
     exhausted = False
 
     def search(index: int) -> dict[str, InputNodeOverride] | None:
+        """Explore one input domain and stop at the first complete solution."""
+
         nonlocal explored, exhausted
         if index == len(ordered_ids):
             if explored >= max_search_states:
                 exhausted = True
                 return None
             explored += 1
+            # Container presence is derived only when the selected scalar and
+            # control assignments form a coherent request tree.
             completed = _complete_candidate(
                 selected,
                 baseline=baseline_assignments,
@@ -166,6 +184,8 @@ def solve_input_overrides(
         for candidate in domains[node_id]:
             selected[node_id] = candidate
             if index + 1 < len(ordered_ids):
+                # A definitively false partial expression cannot be repaired by
+                # later inputs, so prune the remaining subtree.
                 partial = _partial_candidate(selected, nodes=nodes)
                 if partial is None or evaluate_constraint_set_partial(
                     constraints,
@@ -270,6 +290,13 @@ def _mark_body_descendants(
     assignments: dict[str, InputAssignment],
     nodes: Mapping[str, InputNodeSnapshot],
 ) -> None:
+    """
+    Handle mark body descendants as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     parent = nodes[parent_id]
     prefix = f"{parent.canonical_path}/properties/"
     for child in nodes.values():
@@ -299,6 +326,13 @@ def _assignment_for_generated_value(
     node: InputNodeSnapshot,
     value: Any,
 ) -> InputAssignment:
+    """
+    Handle assignment for generated value as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     schema = node.schema_contract
     declared = (
         {schema.type}
@@ -333,6 +367,13 @@ def _candidate_domain(
     reference_values: ReferenceValueProvider | None,
     max_domain_size: int,
 ) -> tuple[InputNodeOverride, ...]:
+    """
+    Handle candidate domain as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     presence = _presence_candidates(node, config, baseline)
     values = _value_candidates(
         config,
@@ -388,6 +429,13 @@ def _value_candidates(
     reference_values: ReferenceValueProvider | None,
     max_domain_size: int,
 ) -> tuple[Any, ...]:
+    """
+    Handle value candidates as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     strategy = config.strategy
     result: list[Any] = []
     if baseline.present and baseline.has_value:
@@ -462,6 +510,13 @@ def _append_generated_samples(
     reference_values: ReferenceValueProvider | None,
     max_domain_size: int,
 ) -> None:
+    """
+    Handle append generated samples as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     from .generation import generate_strategy_value
 
     for sample_index in range(max_domain_size * 2):
@@ -493,6 +548,13 @@ def _complete_candidate(
     dict[str, InputAssignment],
     dict[str, InputNodeOverride],
 ] | None:
+    """
+    Handle complete candidate as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     assignments = dict(baseline)
     overrides = dict(selected)
     for node_id, override in selected.items():

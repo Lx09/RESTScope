@@ -3,6 +3,11 @@
 RESTScope is currently a small Python package for parsing Swagger 2.0 and
 OpenAPI 3.x specifications into a normalized intermediate representation.
 
+If you are new to programming or to this repository, start with the
+[code-reading guide](docs/code-reading-guide.md). It explains the runtime
+flow, package ownership, domain terms, and safe places to investigate or
+optimize before you read individual modules.
+
 ## Configuration
 
 The parser-only package uses a short optional `.env` file:

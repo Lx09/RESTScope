@@ -18,6 +18,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """
+    Handle upgrade as part of the repository and database persistence boundary.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     op.create_table(
         "generator_catalog_state",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -57,6 +62,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """
+    Handle downgrade as part of the repository and database persistence boundary.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     op.drop_index(
         "ix_input_generator_configs_operation_key",
         table_name="input_generator_configs",

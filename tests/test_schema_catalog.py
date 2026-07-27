@@ -1,3 +1,5 @@
+"""Regression scenarios for schema catalog. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import ast
@@ -45,6 +47,7 @@ def _catalog(tmp_path: Path):
 
 
 def test_schema_source_input_requires_exactly_one_nonblank_source() -> None:
+    """Scenario: verify that schema source input requires exactly one nonblank source."""
     from restscope.catalog import SchemaSourceInput
 
     SchemaSourceInput(file_path=Path("openapi.yaml"))
@@ -59,6 +62,7 @@ def test_schema_source_input_requires_exactly_one_nonblank_source() -> None:
 
 
 def test_register_preserves_verbatim_raw_content_and_lists_records(tmp_path: Path) -> None:
+    """Scenario: verify that register preserves verbatim raw content and lists records."""
     from restscope.catalog import SchemaSourceInput
 
     catalog, _ = _catalog(tmp_path)
@@ -75,6 +79,7 @@ def test_register_preserves_verbatim_raw_content_and_lists_records(tmp_path: Pat
 
 
 def test_file_source_stores_only_absolute_path_and_loads_current_content(tmp_path: Path) -> None:
+    """Scenario: verify that file source stores only absolute path and loads current content."""
     from restscope.catalog import SchemaSourceInput
 
     catalog, _ = _catalog(tmp_path)
@@ -90,6 +95,7 @@ def test_file_source_stores_only_absolute_path_and_loads_current_content(tmp_pat
 
 
 def test_invalid_sources_do_not_create_or_replace_records(tmp_path: Path) -> None:
+    """Scenario: verify that invalid sources do not create or replace records."""
     from restscope.catalog import SchemaSourceInput, SchemaSourceValidationError
 
     catalog, _ = _catalog(tmp_path)
@@ -114,6 +120,7 @@ def test_invalid_sources_do_not_create_or_replace_records(tmp_path: Path) -> Non
 
 
 def test_replace_changes_the_whole_source_and_missing_ids_are_explicit(tmp_path: Path) -> None:
+    """Scenario: verify that replace changes the whole source and missing ids are explicit."""
     from restscope.catalog import SchemaNotFoundError, SchemaSourceInput
 
     catalog, _ = _catalog(tmp_path)
@@ -137,6 +144,7 @@ def test_replace_changes_the_whole_source_and_missing_ids_are_explicit(tmp_path:
 
 
 def test_orm_metadata_contains_all_approved_persistence_tables(tmp_path: Path) -> None:
+    """Scenario: verify that orm metadata contains all approved persistence tables."""
     from restscope.db import Base, create_engine_from_url
 
     assert set(Base.metadata.tables) == {
@@ -170,6 +178,7 @@ def test_orm_metadata_contains_all_approved_persistence_tables(tmp_path: Path) -
 
 
 def test_alembic_chain_upgrades_and_downgrades_all_persistence_tables(tmp_path: Path) -> None:
+    """Scenario: verify that alembic chain upgrades and downgrades all persistence tables."""
     from alembic import command
     from alembic.config import Config
 
@@ -216,6 +225,7 @@ def test_alembic_chain_upgrades_and_downgrades_all_persistence_tables(tmp_path: 
 
 
 def test_catalog_package_has_no_database_or_sqlalchemy_imports() -> None:
+    """Scenario: verify that catalog package has no database or sqlalchemy imports."""
     import restscope.catalog as catalog_package
     import restscope.db as db_package
 
@@ -236,6 +246,7 @@ def test_catalog_package_has_no_database_or_sqlalchemy_imports() -> None:
 
 
 def test_public_builder_wires_configured_database(tmp_path: Path) -> None:
+    """Scenario: verify that public builder wires configured database."""
     from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
     from restscope.db import Base, create_engine_from_config
     from restscope.restscope_config import DBConfig

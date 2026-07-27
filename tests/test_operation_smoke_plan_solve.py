@@ -44,6 +44,7 @@ def planning_model():
 
 
 def test_model_selector_has_independent_smoke_phase_roles() -> None:
+    """Scenario: verify that model selector has independent smoke phase roles."""
     from restscope.llm import LLMModelConfig, ModelSelector
 
     selector = ModelSelector(
@@ -108,6 +109,7 @@ def confirmed_decision():
 
 
 def test_failure_decision_protocol_examples_match_the_dto() -> None:
+    """Scenario: verify that failure decision protocol examples match the dto."""
     from restscope.agent.operation_smoke.planning import (
         FailureDecision,
         build_failure_decision_protocol,
@@ -132,6 +134,7 @@ def test_failure_decision_protocol_examples_match_the_dto() -> None:
 
 
 def test_failure_decision_protocol_hides_confirmed_without_observation() -> None:
+    """Scenario: verify that failure decision protocol hides confirmed without observation."""
     from restscope.agent.operation_smoke.planning import (
         build_failure_decision_protocol,
     )
@@ -146,6 +149,7 @@ def test_failure_decision_protocol_hides_confirmed_without_observation() -> None
 
 
 def test_effect_decision_protocol_matches_the_dto() -> None:
+    """Scenario: verify that effect decision protocol matches the dto."""
     from restscope.agent.operation_smoke.prompts import (
         PatchItemValidationDecision,
         PatchValidationDecision,
@@ -170,6 +174,7 @@ def test_effect_decision_protocol_matches_the_dto() -> None:
 
 
 def test_failure_prompt_and_repair_share_the_complete_dto_protocol() -> None:
+    """Scenario: verify that failure prompt and repair share the complete dto protocol."""
     from restscope.agent.operation_smoke.evidence import EvidenceJournal
     from restscope.agent.operation_smoke.prompts import (
         build_failure_investigation_prompt,
@@ -199,6 +204,7 @@ def test_failure_prompt_and_repair_share_the_complete_dto_protocol() -> None:
 
 
 def test_repair_recovers_the_live_invalid_hypothesis_shape() -> None:
+    """Scenario: verify that repair recovers the live invalid hypothesis shape."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
     invalid_live_shape = {
@@ -271,6 +277,7 @@ class Probe:
 
 
 def test_request_replaces_global_plan_and_http_budgets() -> None:
+    """Scenario: verify that request replaces global plan and http budgets."""
     from restscope.agent.operation_smoke import (
         OperationSmokeDiagnoser,
         OperationSmokeRequest,
@@ -297,6 +304,7 @@ def test_request_replaces_global_plan_and_http_budgets() -> None:
 
 
 def test_ready_failure_becomes_actionable_without_http_probe() -> None:
+    """Scenario: verify that ready failure becomes actionable without http probe."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
     client = StubClient([llm_response(ready_decision())])
@@ -326,6 +334,7 @@ def test_ready_failure_becomes_actionable_without_http_probe() -> None:
 
 
 def test_hypothesis_executes_many_probes_then_confirms_from_observations() -> None:
+    """Scenario: verify that hypothesis executes many probes then confirms from observations."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall
 
@@ -366,6 +375,7 @@ def test_hypothesis_executes_many_probes_then_confirms_from_observations() -> No
 
 
 def test_probe_failure_uses_batch_failure_signature_for_reproduction() -> None:
+    """Scenario: verify that probe failure uses batch failure signature for reproduction."""
     from restscope.agent.operation_smoke.evidence import EvidenceJournal
     from restscope.llm import ToolCall, ToolResult
 
@@ -401,6 +411,7 @@ def test_probe_failure_uses_batch_failure_signature_for_reproduction() -> None:
 
 
 def test_diagnosis_prompt_compacts_all_ten_cases_with_bounded_bodies() -> None:
+    """Scenario: verify that diagnosis prompt compacts all ten cases with bounded bodies."""
     import json
 
     from restscope.agent.operation_smoke.evidence import EvidenceJournal
@@ -484,6 +495,7 @@ def test_diagnosis_prompt_compacts_all_ten_cases_with_bounded_bodies() -> None:
 
 
 def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
+    """Scenario: verify that disproved hypothesis is replaced before confirmation."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall, ToolResult
 
@@ -558,6 +570,7 @@ def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
 
 
 def test_repair_keeps_http_tool_available_for_active_hypothesis() -> None:
+    """Scenario: verify that repair keeps http tool available for active hypothesis."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall
 
@@ -604,6 +617,7 @@ def test_repair_keeps_http_tool_available_for_active_hypothesis() -> None:
 
 
 def test_invalid_tool_call_prevents_the_entire_tool_batch_from_executing() -> None:
+    """Scenario: verify that invalid tool call prevents the entire tool batch from executing."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall
 
@@ -651,6 +665,7 @@ def test_invalid_tool_call_prevents_the_entire_tool_batch_from_executing() -> No
 
 
 def test_http_probe_preflight_rejects_invalid_argument_structure() -> None:
+    """Scenario: verify that http probe preflight rejects invalid argument structure."""
     from restscope.agent.operation_smoke.probe import CurrentOperationHTTPProbe
     from restscope.llm import ToolCall
 
@@ -673,6 +688,7 @@ def test_http_probe_preflight_rejects_invalid_argument_structure() -> None:
 
 
 def test_failures_are_investigated_serially_in_first_seen_order() -> None:
+    """Scenario: verify that failures are investigated serially in first seen order."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.testing import UniqueFailureMessage
 
@@ -718,6 +734,7 @@ def test_failures_are_investigated_serially_in_first_seen_order() -> None:
 
 
 def test_probe_failure_is_deduplicated_and_inherits_root_provenance() -> None:
+    """Scenario: verify that probe failure is deduplicated and inherits root provenance."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import ToolCall, ToolResult
 
@@ -793,6 +810,7 @@ def test_probe_failure_is_deduplicated_and_inherits_root_provenance() -> None:
 
 
 def test_diagnosis_queue_processes_at_most_ten_unique_failures() -> None:
+    """Scenario: verify that diagnosis queue processes at most ten unique failures."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.testing import UniqueFailureMessage
 
@@ -835,6 +853,7 @@ def test_diagnosis_queue_processes_at_most_ten_unique_failures() -> None:
 
 
 def test_valid_output_limit_is_per_failure() -> None:
+    """Scenario: verify that valid output limit is per failure."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
     decisions = []
@@ -860,6 +879,7 @@ def test_valid_output_limit_is_per_failure() -> None:
 
 
 def test_third_identical_material_hypothesis_defers_as_stalled() -> None:
+    """Scenario: verify that third identical material hypothesis defers as stalled."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
     client = StubClient(
@@ -879,6 +899,7 @@ def test_third_identical_material_hypothesis_defers_as_stalled() -> None:
 
 
 def test_three_consecutive_invalid_outputs_defer_without_using_valid_budget() -> None:
+    """Scenario: verify that three consecutive invalid outputs defer without using valid budget."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
     client = StubClient(
@@ -897,6 +918,7 @@ def test_three_consecutive_invalid_outputs_defer_without_using_valid_budget() ->
 
 
 def test_patch_grouping_is_deterministic_and_uses_no_llm() -> None:
+    """Scenario: verify that patch grouping is deterministic and uses no llm."""
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         ParameterSolution,
@@ -937,6 +959,7 @@ def test_patch_grouping_is_deterministic_and_uses_no_llm() -> None:
 
 
 def test_patch_grouping_splits_independent_inputs_for_one_failure() -> None:
+    """Scenario: verify that patch grouping splits independent inputs for one failure."""
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         ParameterSolution,
@@ -977,6 +1000,7 @@ def test_patch_grouping_splits_independent_inputs_for_one_failure() -> None:
 
 
 def test_patch_grouping_merges_shared_inputs_and_collects_all_items() -> None:
+    """Scenario: verify that patch grouping merges shared inputs and collects all items."""
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         ParameterSolution,
@@ -1016,6 +1040,7 @@ def test_patch_grouping_merges_shared_inputs_and_collects_all_items() -> None:
 
 
 def test_patch_grouping_keeps_constraint_linked_inputs_in_one_group() -> None:
+    """Scenario: verify that patch grouping keeps constraint linked inputs in one group."""
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         ParameterSolution,
@@ -1057,6 +1082,7 @@ def test_patch_grouping_keeps_constraint_linked_inputs_in_one_group() -> None:
 
 
 def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
+    """Scenario: verify that effect validation accepts group from initial failure only."""
     from restscope.agent.operation_smoke import (
         ActionableFailure,
         OperationSmokeDiagnoser,

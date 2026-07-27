@@ -29,6 +29,12 @@ class ReferenceValueProvider(Protocol):
 
 
 class GeneratorConfigRepository(Protocol):
+    """
+    Define the collaborator contract for generator config repository.
+
+    Concrete implementations may vary while callers in deterministic request generation,
+    constraint solving, and execution depend only on these declared operations.
+    """
     def is_initialized(self) -> bool: ...
 
     def initialize(self, records: list[OperationGeneratorConfig]) -> None: ...
@@ -76,6 +82,12 @@ class GeneratorConfigRepository(Protocol):
 
 
 class GeneratorConfigUnitOfWork(Protocol):
+    """
+    Define the collaborator contract for generator config unit of work.
+
+    Concrete implementations may vary while callers in deterministic request generation,
+    constraint solving, and execution depend only on these declared operations.
+    """
     generator_configs: GeneratorConfigRepository
 
     def __enter__(self) -> "GeneratorConfigUnitOfWork": ...

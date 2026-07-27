@@ -1,3 +1,5 @@
+"""Regression scenarios for testing snapshot catalog. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -51,6 +53,7 @@ def test_catalog_initializes_all_operation_generators_once_from_ir(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Scenario: verify that catalog initializes all operation generators once from ir."""
     from restscope.openapi_parser import OpenAPIParser
 
     catalog = _catalog(tmp_path)
@@ -93,6 +96,7 @@ def test_catalog_initializes_all_operation_generators_once_from_ir(
 
 
 def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -> None:
+    """Scenario: verify that app initialize creates catalog before binding context."""
     import json
 
     from restscope import RESTScopeApp
@@ -129,6 +133,7 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
 def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that second app start is rejected after first catalog is initialized."""
     import json
 
     import pytest
@@ -167,6 +172,7 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
 def test_run_operation_uses_persisted_snapshot_when_current_ir_is_different(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that run operation uses persisted snapshot when current ir is different."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -217,6 +223,7 @@ def test_run_operation_uses_persisted_snapshot_when_current_ir_is_different(
 def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that catalog patch and replace modify frozen generators by revision."""
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
@@ -303,6 +310,7 @@ def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
 
 
 def test_generator_patch_requires_an_actual_change() -> None:
+    """Scenario: verify that generator patch requires an actual change."""
     import pytest
     from pydantic import ValidationError
 

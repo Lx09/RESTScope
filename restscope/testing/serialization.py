@@ -117,6 +117,13 @@ def serialize_path_parameter_value(parameter: ParameterSnapshot, value: Any) -> 
 
 
 def _serialize_query(parameter: ParameterSnapshot, value: Any) -> list[tuple[str, str]]:
+    """
+    Serialize query for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     collection_format = parameter.collection_format
     if isinstance(value, list) and isinstance(collection_format, str):
         return _legacy_collection(parameter.name, value, collection_format)

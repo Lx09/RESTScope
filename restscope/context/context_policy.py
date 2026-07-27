@@ -8,6 +8,12 @@ from .schemas import ContextRole, ContextSectionKind
 
 
 class SectionPolicy(BaseModel):
+    """
+    Coordinate section policy behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     kind: ContextSectionKind
     required: bool
     max_tokens: int
@@ -15,6 +21,12 @@ class SectionPolicy(BaseModel):
 
 
 class ContextPolicy(BaseModel):
+    """
+    Coordinate context policy behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     role: ContextRole
     prompt_version: str
     default_token_budget: int
@@ -23,10 +35,22 @@ class ContextPolicy(BaseModel):
 
 
 class ContextPolicyRegistry:
+    """
+    Coordinate context policy registry behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     def __init__(self, policies: list[ContextPolicy] | None = None) -> None:
         self._policies = {policy.role: policy for policy in (policies or default_policies())}
 
     def get(self, role: ContextRole, prompt_version: str | None = None) -> ContextPolicy:
+        """
+        Handle get as part of bounded prompt-context construction.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         policy = self._policies[role]
         if prompt_version is None or prompt_version == policy.prompt_version:
             return policy
@@ -34,6 +58,11 @@ class ContextPolicyRegistry:
 
 
 def default_policies() -> list[ContextPolicy]:
+    """
+    Handle default policies as part of bounded prompt-context construction.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     return [
         ContextPolicy(
             role="planner",

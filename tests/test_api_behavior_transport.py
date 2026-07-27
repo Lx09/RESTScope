@@ -1,3 +1,5 @@
+"""Regression scenarios for api behavior transport. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -117,6 +119,7 @@ def _observation(status_code: int, body: bytes):
 
 
 def test_agent_updates_ir_before_success_trackers_receive_evidence() -> None:
+    """Scenario: verify that agent updates ir before success trackers receive evidence."""
     from restscope.agent.api_behavior_monitor import (
         APIBehaviorMonitorAgent,
         ResponseContractTracker,
@@ -161,6 +164,7 @@ def test_agent_updates_ir_before_success_trackers_receive_evidence() -> None:
 
 
 def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> None:
+    """Scenario: verify that behavior monitor trace uses supplied operation key consistently."""
     from restscope.agent.api_behavior_monitor import (
         APIBehaviorMonitorAgent,
         ResponseContractTracker,
@@ -192,6 +196,7 @@ def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> No
 
 
 def test_response_processor_keeps_private_monitor_summary() -> None:
+    """Scenario: verify that response processor keeps private monitor summary."""
     from restscope.agent.api_behavior_monitor import (
         APIBehaviorMonitorAgent,
         APIBehaviorResponseProcessor,
@@ -241,6 +246,7 @@ def test_response_processor_keeps_private_monitor_summary() -> None:
 
 
 def test_non_success_response_only_updates_contract() -> None:
+    """Scenario: verify that non success response only updates contract."""
     from restscope.agent.api_behavior_monitor import (
         APIBehaviorMonitorAgent,
         ResponseContractTracker,
@@ -268,6 +274,7 @@ def test_non_success_response_only_updates_contract() -> None:
 
 
 def test_unknown_context_operation_preserves_stable_warning_code() -> None:
+    """Scenario: verify that unknown context operation preserves stable warning code."""
     from restscope.agent.api_behavior_monitor import (
         APIBehaviorMonitorAgent,
         APIBehaviorResponseProcessor,

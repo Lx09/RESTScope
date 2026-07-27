@@ -49,10 +49,24 @@ class _Arguments(BaseModel):
 
 
 class InspectOperationInputsArguments(_Arguments):
+    """
+    Carry validated inspect operation inputs arguments data across the policy-controlled
+    model tool boundary.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     operation_key: str
 
 
 class ReplaceOperationGeneratorsArguments(_Arguments):
+    """
+    Carry validated replace operation generators arguments data across the policy-
+    controlled model tool boundary.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     operation_key: str
     expected_revision: int = Field(ge=1)
     active_media_type: str | None = None
@@ -60,12 +74,26 @@ class ReplaceOperationGeneratorsArguments(_Arguments):
 
 
 class PatchOperationGeneratorsArguments(_Arguments):
+    """
+    Carry validated patch operation generators arguments data across the policy-
+    controlled model tool boundary.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     operation_key: str
     expected_revision: int = Field(ge=1)
     updates: list[InputGeneratorPatch] = Field(min_length=1)
 
 
 class RunOperationArguments(_Arguments):
+    """
+    Carry validated run operation arguments data across the policy-controlled model tool
+    boundary.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     operation_key: str
     case_count: int = Field(default=1, ge=1, le=20)
     seed: int | None = None
@@ -162,6 +190,13 @@ def _configuration_spec(
 
 
 class _TestingToolHandlers:
+    """
+    Coordinate testing tool handlers behavior for the policy-controlled model tool
+    boundary.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     def __init__(
         self,
         *,
@@ -172,6 +207,13 @@ class _TestingToolHandlers:
         self.service = operation_testing_service
 
     def inspect_operation_inputs(self, context: ToolContext, /, **arguments: Any) -> dict[str, Any]:
+        """
+        Handle inspect operation inputs as part of the policy-controlled model tool
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         del context
         request = _validate(InspectOperationInputsArguments, arguments)
         config = self.catalog.inspect_operation(request.operation_key)
@@ -189,6 +231,13 @@ class _TestingToolHandlers:
         /,
         **arguments: Any,
     ) -> dict[str, Any]:
+        """
+        Handle replace operation generators as part of the policy-controlled model tool
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         del context
         request = _validate(ReplaceOperationGeneratorsArguments, arguments)
         config = self.catalog.replace_operation(
@@ -211,6 +260,13 @@ class _TestingToolHandlers:
         /,
         **arguments: Any,
     ) -> dict[str, Any]:
+        """
+        Handle patch operation generators as part of the policy-controlled model tool
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         del context
         request = _validate(PatchOperationGeneratorsArguments, arguments)
         config = self.catalog.patch_operation(
@@ -224,6 +280,12 @@ class _TestingToolHandlers:
         )
 
     def run_operation(self, context: ToolContext, /, **arguments: Any) -> dict[str, Any]:
+        """
+        Run operation for the policy-controlled model tool boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         request = _validate(RunOperationArguments, arguments)
         report = self.service.run_operation(context, **request.model_dump())
         return _result(

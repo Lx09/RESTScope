@@ -1,3 +1,5 @@
+"""Regression scenarios for redaction. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,6 +8,7 @@ from pydantic import BaseModel
 
 
 def test_redactor_only_replaces_registered_values_recursively() -> None:
+    """Scenario: verify that redactor only replaces registered values recursively."""
     from restscope.redaction import Redactor
 
     @dataclass
@@ -46,6 +49,7 @@ def test_redactor_only_replaces_registered_values_recursively() -> None:
 
 
 def test_redactor_registration_is_exact_value_based_and_repr_is_safe() -> None:
+    """Scenario: verify that redactor registration is exact value based and repr is safe."""
     from restscope.redaction import Redactor
 
     redactor = Redactor(["short-key"])
@@ -62,6 +66,7 @@ def test_redactor_registration_is_exact_value_based_and_repr_is_safe() -> None:
 
 
 def test_redactor_preserves_mapping_entries_when_redacted_keys_collide() -> None:
+    """Scenario: verify that redactor preserves mapping entries when redacted keys collide."""
     from restscope.redaction import Redactor
 
     redactor = Redactor(["first-key", "second-key"])
@@ -80,6 +85,7 @@ def test_redactor_preserves_mapping_entries_when_redacted_keys_collide() -> None
 
 
 def test_llm_package_no_longer_exports_redactor() -> None:
+    """Scenario: verify that llm package no longer exports redactor."""
     import restscope.llm as llm
 
     assert not hasattr(llm, "Redactor")

@@ -19,6 +19,12 @@ class OutputValidator:
         response: LLMResponse,
         output_model: Any,
     ) -> ValidationResult:
+        """
+        Handle validate as part of provider-independent language-model invocation.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         raw_json, parse_errors = self._load_json(response)
         if parse_errors:
             return ValidationResult(valid=False, errors=parse_errors)

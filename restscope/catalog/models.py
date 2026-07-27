@@ -17,6 +17,12 @@ class SchemaSourceInput(BaseModel):
 
     @model_validator(mode="after")
     def require_exactly_one_source(self) -> "SchemaSourceInput":
+        """
+        Handle require exactly one source as part of schema-source catalog access.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if (self.file_path is None) == (self.raw_content is None):
             raise ValueError("Exactly one of file_path or raw_content is required")
         if self.raw_content is not None and not self.raw_content.strip():

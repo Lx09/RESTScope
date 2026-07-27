@@ -1,3 +1,5 @@
+"""Regression scenarios for tool context. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import pytest
@@ -30,6 +32,7 @@ def _context(*, secret: str = "Bearer runtime-secret"):
 
 
 def test_tool_executor_binds_context_once_and_injects_it_out_of_band() -> None:
+    """Scenario: verify that tool executor binds context once and injects it out of band."""
     from restscope.capabilities import ToolCallValidator, ToolContextError, ToolExecutor, ToolPolicy, ToolRegistry
     from restscope.llm import ToolCall, ToolSpec
 
@@ -71,6 +74,7 @@ def test_tool_executor_binds_context_once_and_injects_it_out_of_band() -> None:
 
 
 def test_model_arguments_cannot_replace_the_bound_context() -> None:
+    """Scenario: verify that model arguments cannot replace the bound context."""
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry
     from restscope.llm import ToolCall, ToolSpec
 
@@ -109,6 +113,7 @@ def test_model_arguments_cannot_replace_the_bound_context() -> None:
 
 
 def test_tool_executor_requires_context_and_preserves_bound_header_values() -> None:
+    """Scenario: verify that tool executor requires context and preserves bound header values."""
     from restscope.capabilities import ToolCallValidator, ToolContextError, ToolExecutor, ToolPolicy, ToolRegistry
     from restscope.llm import ToolCall, ToolSpec
 

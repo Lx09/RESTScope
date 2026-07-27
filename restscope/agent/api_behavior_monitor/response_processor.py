@@ -13,6 +13,13 @@ from .agent import APIBehaviorMonitorAgent, APIBehaviorMonitorError
 
 
 class APIBehaviorResponseProcessor:
+    """
+    Coordinate apibehavior response processor behavior for API response monitoring and
+    its narrowly approved evidence catalog.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     def __init__(self, agent: APIBehaviorMonitorAgent) -> None:
         self.agent = agent
 
@@ -21,6 +28,13 @@ class APIBehaviorResponseProcessor:
         observation: TargetResponseObservation,
         context: TargetResponseOperationContext,
     ) -> TargetResponseProcessorResult:
+        """
+        Process one input at the boundary of API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         try:
             result = self.agent.observe_response(observation, context)
         except APIBehaviorMonitorError as exc:
@@ -61,6 +75,13 @@ class APIBehaviorResponseProcessor:
 
 
 def _result_details(result) -> dict:
+    """
+    Handle result details as part of API response monitoring and its narrowly approved
+    evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     resource = result.resource_identifier
     response_values = result.response_values
     return {

@@ -18,6 +18,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """
+    Handle upgrade as part of the repository and database persistence boundary.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     op.create_table(
         "generator_config_revisions",
         sa.Column(
@@ -119,4 +124,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """
+    Handle downgrade as part of the repository and database persistence boundary.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     op.drop_table("generator_config_revisions")

@@ -12,7 +12,13 @@ from restscope.observability import TracingRuntime
 
 
 class ToolExecutor:
-    """Execute approved local handlers and summarize results."""
+    """Validate model tool calls, invoke registered handlers, and redact results.
+
+    The registry says what tools exist, while the validator combines tool
+    schema, role policy, and current Agent state. Only calls that pass that
+    boundary reach a handler. Expected handler failures become structured
+    ``ToolResult`` values so an Agent can reason about them safely.
+    """
 
     def __init__(
         self,
@@ -29,9 +35,11 @@ class ToolExecutor:
 
     @property
     def tool_context(self) -> ToolContext | None:
+        """Return the App-bound target context, if startup has bound one."""
         return self._tool_context
 
     def bind_context(self, context: ToolContext) -> None:
+        """Bind target URL, headers, and current IR exactly once."""
         if self._tool_context is not None:
             raise ToolContextError(
                 "tool_context_already_initialized",
@@ -40,6 +48,7 @@ class ToolExecutor:
         self._tool_context = context
 
     def require_context(self) -> ToolContext:
+        """Return the bound context or raise a stable startup-order error."""
         if self._tool_context is None:
             raise ToolContextError(
                 "tool_context_not_initialized",
@@ -48,9 +57,16 @@ class ToolExecutor:
         return self._tool_context
 
     def clear_context(self) -> None:
+        """Remove App-bound context during shutdown so it cannot be reused."""
         self._tool_context = None
 
     def execute(self, *, tool_call: ToolCall, role: str, state: dict) -> ToolResult:
+        """
+        Execute one bounded unit of work in the policy-controlled model tool boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.tracing_runtime.span(
             tool_call.name,
             kind="TOOL",
@@ -69,6 +85,10 @@ class ToolExecutor:
             return result
 
     def _execute(self, *, tool_call: ToolCall, role: str, state: dict) -> ToolResult:
+        """Apply policy first, then translate handler outcomes into one result shape."""
+
+        # Validation precedes even handler lookup so a denied model call cannot
+        # learn whether an unavailable or private implementation is registered.
         errors = self.validator.validate(tool_call=tool_call, role=role, state=state)
         if errors:
             return ToolResult(

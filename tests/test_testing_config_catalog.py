@@ -1,3 +1,5 @@
+"""Regression scenarios for testing config catalog. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -78,6 +80,7 @@ def _catalog(tmp_path: Path):
 
 
 def test_first_initialization_creates_every_operation_and_default_generator(tmp_path: Path) -> None:
+    """Scenario: verify that first initialization creates every operation and default generator."""
     catalog, _ = _catalog(tmp_path)
     ir = _ir()
 
@@ -113,6 +116,7 @@ def test_first_initialization_creates_every_operation_and_default_generator(tmp_
 def test_non_empty_enum_has_priority_over_const_default_example_and_other_constraints(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that non empty enum has priority over const default example and other constraints."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -160,6 +164,7 @@ def test_non_empty_enum_has_priority_over_const_default_example_and_other_constr
 def test_empty_enum_disables_operation_with_node_attributed_recoverable_reason(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that empty enum disables operation with node attributed recoverable reason."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -200,6 +205,7 @@ def test_empty_enum_disables_operation_with_node_attributed_recoverable_reason(
 
 
 def test_body_media_priority_and_encoding_contract_are_frozen(tmp_path: Path) -> None:
+    """Scenario: verify that body media priority and encoding contract are frozen."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -261,6 +267,7 @@ def test_body_media_priority_and_encoding_contract_are_frozen(tmp_path: Path) ->
 def test_full_replace_can_activate_media_with_feedback_generator_constraints(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that full replace can activate media with feedback generator constraints."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -326,6 +333,7 @@ def test_media_schema_incompatible_with_serializer_is_disabled(
     media_type: str,
     schema: dict,
 ) -> None:
+    """Scenario: verify that media schema incompatible with serializer is disabled."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -358,6 +366,7 @@ def test_wildcard_request_media_type_is_not_frozen_as_executable(
     tmp_path: Path,
     media_type: str,
 ) -> None:
+    """Scenario: verify that wildcard request media type is not frozen as executable."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -407,6 +416,7 @@ def test_unserializable_deep_object_parameter_disables_operation(
     schema: dict,
     explode: bool | None,
 ) -> None:
+    """Scenario: verify that unserializable deep object parameter disables operation."""
     from restscope.openapi_parser import OpenAPIParser
 
     parameter = {
@@ -444,6 +454,7 @@ def test_unserializable_deep_object_parameter_disables_operation(
 def test_read_only_required_property_is_not_frozen_as_a_request_input(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that read only required property is not frozen as a request input."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -533,6 +544,7 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
 
 
 def test_replace_and_patch_use_revision_lock_and_preserve_snapshot(tmp_path: Path) -> None:
+    """Scenario: verify that replace and patch use revision lock and preserve snapshot."""
     from restscope.testing import GeneratorConfigRevisionConflict
 
     catalog, _ = _catalog(tmp_path)
@@ -584,6 +596,7 @@ def test_replace_and_patch_use_revision_lock_and_preserve_snapshot(tmp_path: Pat
 
 
 def test_replace_requires_complete_frozen_node_set_and_required_inclusion(tmp_path: Path) -> None:
+    """Scenario: verify that replace requires complete frozen node set and required inclusion."""
     from restscope.testing import GeneratorConfigError
 
     catalog, _ = _catalog(tmp_path)
@@ -621,6 +634,7 @@ def test_replace_requires_complete_frozen_node_set_and_required_inclusion(tmp_pa
 
 
 def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) -> None:
+    """Scenario: verify that structural generator strategy must match frozen node."""
     from restscope.testing import GeneratorConfigError
 
     catalog, _ = _catalog(tmp_path)
@@ -645,6 +659,7 @@ def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) ->
 def test_unsupported_operation_is_saved_disabled_without_blocking_other_operations(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that unsupported operation is saved disabled without blocking other operations."""
     from restscope.testing import GeneratorConfigError
 
     catalog, _ = _catalog(tmp_path)
@@ -673,6 +688,7 @@ def test_unsupported_operation_is_saved_disabled_without_blocking_other_operatio
 def test_default_derivation_failure_disables_only_that_operation(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default derivation failure disables only that operation."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -712,6 +728,7 @@ def test_default_derivation_failure_disables_only_that_operation(
 def test_json_schema_nullable_type_array_builds_a_valid_default(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that json schema nullable type array builds a valid default."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -745,6 +762,7 @@ def test_json_schema_nullable_type_array_builds_a_valid_default(
 def test_combiner_with_sibling_constraints_is_saved_as_unsupported(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that combiner with sibling constraints is saved as unsupported."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -790,6 +808,7 @@ def test_combiner_with_sibling_constraints_is_saved_as_unsupported(
 def test_object_cardinality_requires_a_generator_set_that_always_conforms(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that object cardinality requires a generator set that always conforms."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import InputGeneratorConfig
 
@@ -858,6 +877,7 @@ def test_object_cardinality_requires_a_generator_set_that_always_conforms(
 def test_constant_object_replace_ignores_unused_child_inclusion_probabilities(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that constant object replace ignores unused child inclusion probabilities."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import InputGeneratorConfig
 
@@ -919,6 +939,7 @@ def test_constant_object_replace_ignores_unused_child_inclusion_probabilities(
 def test_nullable_text_body_rejects_a_null_generator_before_execution(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that nullable text body rejects a null generator before execution."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import GeneratorConfigError, InputGeneratorConfig
 
@@ -982,6 +1003,7 @@ def test_manual_range_generator_can_override_a_discrete_enum(
     tmp_path: Path,
     strategy: dict,
 ) -> None:
+    """Scenario: verify that manual range generator can override a discrete enum."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import InputGeneratorConfig
 
@@ -1036,6 +1058,7 @@ def test_manual_range_generator_can_override_a_discrete_enum(
 def test_patch_with_feedback_generator_clears_its_recoverable_reason(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that patch with feedback generator clears its recoverable reason."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1092,6 +1115,7 @@ def test_patch_with_feedback_generator_clears_its_recoverable_reason(
 def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that patch clears only recoverable reasons for updated nodes."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1165,6 +1189,7 @@ def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
 def test_patch_does_not_hide_an_unrelated_default_configuration_failure(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that patch does not hide an unrelated default configuration failure."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1238,6 +1263,7 @@ def test_catalog_initialization_rolls_back_all_records_and_can_retry(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Scenario: verify that catalog initialization rolls back all records and can retry."""
     from restscope.db.repositories import SqlAlchemyGeneratorConfigRepository
 
     catalog, _ = _catalog(tmp_path)
@@ -1268,6 +1294,7 @@ def test_catalog_initialization_rolls_back_all_records_and_can_retry(
 def test_repository_compare_and_swap_rejects_a_concurrent_old_revision(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that repository compare and swap rejects a concurrent old revision."""
     from restscope.db import SqlAlchemyGeneratorConfigUnitOfWork, make_session_factory
     from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
@@ -1302,6 +1329,7 @@ def test_repository_compare_and_swap_rejects_a_concurrent_old_revision(
 
 
 def test_generator_catalog_has_no_delete_operation(tmp_path: Path) -> None:
+    """Scenario: verify that generator catalog has no delete operation."""
     catalog, _ = _catalog(tmp_path)
 
     assert not hasattr(catalog, "delete_operation")

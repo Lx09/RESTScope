@@ -29,6 +29,13 @@ class CurrentOperationHTTPProbe:
         self.executor = executor
 
     def tool_spec(self, config: OperationGeneratorConfig) -> ToolSpec:
+        """
+        Handle tool spec as part of the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         source = self.executor.registry.get_spec(HTTP_REQUEST_TOOL_NAME)
         schema = deepcopy(source.input_schema)
         schema["properties"]["method"]["enum"] = [
@@ -61,6 +68,13 @@ class CurrentOperationHTTPProbe:
         config: OperationGeneratorConfig,
         tool_call: ToolCall,
     ) -> ToolResult:
+        """
+        Execute one bounded unit of work in the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         error = _scope_error(config, tool_call)
         if error is not None:
             with self.executor.tracing_runtime.span(
@@ -115,6 +129,13 @@ def _scope_error(
     config: OperationGeneratorConfig,
     tool_call: ToolCall,
 ) -> str | None:
+    """
+    Handle scope error as part of the run-local Operation Smoke diagnosis and candidate
+    workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if tool_call.name != HTTP_REQUEST_TOOL_NAME:
         return f"{tool_call.name} is not the allowed HTTP probe tool"
     try:

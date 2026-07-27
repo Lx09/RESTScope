@@ -57,7 +57,12 @@ class HTTPRequestTimeoutError(TimeoutError):
 
 
 class HTTPRequestArguments(BaseModel):
-    """Strict model for one target-bound HTTP request."""
+    """Strict model for model-visible parts of one target-bound HTTP request.
+
+    The target host, App authentication headers, OpenAPI IR, and scoped
+    operation identity are intentionally absent. A model can choose only the
+    relative request data declared here.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -72,6 +77,7 @@ class HTTPRequestArguments(BaseModel):
 
     @model_validator(mode="after")
     def require_one_body_encoding(self) -> "HTTPRequestArguments":
+        """Reject ambiguous requests that supply more than one body encoding."""
         supplied = self.model_fields_set.intersection(_BODY_FIELDS)
         if len(supplied) > 1:
             raise ValueError("json_body, text_body, and form_body are mutually exclusive")
@@ -184,7 +190,13 @@ def register_http_request_tool(
 
 
 class TargetHTTPRequestTool:
-    """Send one bounded request to the App's configured target."""
+    """Send one bounded request to the App's configured target.
+
+    Arguments are validated twice: Pydantic checks their data shape, then the
+    shared transport checks URL/header security. During an Operation Smoke probe
+    an invisible operation identity is also attached for unambiguous Behavior
+    Monitor attribution.
+    """
 
     def __init__(
         self,
@@ -197,6 +209,7 @@ class TargetHTTPRequestTool:
         )
 
     def execute(self, context: ToolContext, /, **arguments: Any) -> dict[str, Any]:
+        """Validate, send, monitor, decode, and summarize one HTTP tool call."""
         request = _validate_arguments(arguments)
         request_kwargs = _body_arguments(request)
         request_headers = dict(request.headers)
@@ -249,6 +262,12 @@ def _response_operation_context(
     request: HTTPRequestArguments,
     identity: TargetOperationIdentity | None,
 ) -> TargetResponseOperationContext:
+    """Attach verified probe identity or leave ordinary tool calls open-world.
+
+    A scoped identity is checked against both current IR and requested method.
+    The concrete path is intentionally not rematched because static and
+    parameter routes can overlap.
+    """
     if identity is None:
         return TargetResponseOperationContext(ir=context.ir)
     operation = context.ir.operations.get(identity.operation_key)
@@ -327,6 +346,7 @@ def _contains_header(headers: Mapping[str, str], expected: str) -> bool:
 def _response_payload(
     response: BufferedTargetResponse,
 ) -> dict[str, Any]:
+    """Convert a buffered transport response into the tool's public JSON result."""
     assert response.body is not None
     content = response.body
     media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -366,6 +386,12 @@ def _decode_response(
     content: bytes,
     media_type: str,
 ) -> tuple[Literal["json", "text"], Any]:
+    """Decode only declared JSON or safely recognizable text response bodies.
+
+    Binary data is rejected rather than embedded in model context. A response
+    declaring JSON must actually decode as JSON; silently falling back to text
+    would hide a target contract failure.
+    """
     if media_type == "application/json" or media_type.endswith("+json"):
         try:
             return "json", json.loads(content.decode(response.encoding or "utf-8"))

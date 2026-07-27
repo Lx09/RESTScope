@@ -1,3 +1,5 @@
+"""Regression scenarios for openapi document builder. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -441,6 +443,7 @@ def _raw_attributes_spec() -> dict:
 
 
 def test_builds_multiple_operations_from_typed_ir() -> None:
+    """Scenario: verify that builds multiple operations from typed ir."""
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     ir = OpenAPIParser().parse(_oas3_spec())
@@ -486,6 +489,7 @@ def test_builds_multiple_operations_from_typed_ir() -> None:
 
 
 def test_groups_selected_operations_across_paths_and_validates_keys() -> None:
+    """Scenario: verify that groups selected operations across paths and validates keys."""
     from restscope.openapi_parser import (
         OpenAPIParser,
         OperationDocumentGenerationError,
@@ -512,6 +516,7 @@ def test_groups_selected_operations_across_paths_and_validates_keys() -> None:
 
 
 def test_recursive_schemas_use_only_the_minimum_component_closure() -> None:
+    """Scenario: verify that recursive schemas use only the minimum component closure."""
     from restscope.openapi_parser import (
         OpenAPIParser,
         OperationDocumentGenerationError,
@@ -537,6 +542,7 @@ def test_recursive_schemas_use_only_the_minimum_component_closure() -> None:
 
 
 def test_swagger2_ir_is_normalized_to_openapi31() -> None:
+    """Scenario: verify that swagger2 ir is normalized to openapi31."""
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     ir = OpenAPIParser().parse(_swagger2_spec())
@@ -594,6 +600,7 @@ def test_swagger2_ir_is_normalized_to_openapi31() -> None:
 
 
 def test_raw_schema_attributes_are_normalized_recursively() -> None:
+    """Scenario: verify that raw schema attributes are normalized recursively."""
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     ir = OpenAPIParser().parse(_raw_attributes_spec())
@@ -662,6 +669,7 @@ def test_raw_schema_attributes_are_normalized_recursively() -> None:
 
 
 def test_typed_ir_fields_override_or_remove_raw_values() -> None:
+    """Scenario: verify that typed ir fields override or remove raw values."""
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     ir = OpenAPIParser().parse(_raw_attributes_spec())
@@ -697,6 +705,7 @@ def test_typed_ir_fields_override_or_remove_raw_values() -> None:
 
 
 def test_non_schema_raw_attributes_are_filtered_and_examples_are_inlined() -> None:
+    """Scenario: verify that non schema raw attributes are filtered and examples are inlined."""
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     ir = OpenAPIParser().parse(_raw_attributes_spec())
@@ -776,6 +785,7 @@ def test_non_schema_raw_attributes_are_filtered_and_examples_are_inlined() -> No
     ],
 )
 def test_raw_schema_reference_failures_are_explicit(ref_path: str) -> None:
+    """Scenario: verify that raw schema reference failures are explicit."""
     from restscope.openapi_parser import (
         OpenAPIParser,
         OperationDocumentGenerationError,
@@ -800,6 +810,7 @@ def test_raw_schema_reference_failures_are_explicit(ref_path: str) -> None:
     ["https://example.com/example.json", "#/components/examples/Missing"],
 )
 def test_raw_example_reference_failures_are_explicit(ref_path: str) -> None:
+    """Scenario: verify that raw example reference failures are explicit."""
     from restscope.openapi_parser import (
         OpenAPIParser,
         OperationDocumentGenerationError,
@@ -819,6 +830,7 @@ def test_raw_example_reference_failures_are_explicit(ref_path: str) -> None:
 
 
 def test_public_facades_export_document_builder() -> None:
+    """Scenario: verify that public facades export document builder."""
     import restscope
     from restscope.openapi_parser import build_openapi_document
 

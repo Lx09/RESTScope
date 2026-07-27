@@ -35,6 +35,13 @@ StopReason = Literal[
 
 
 class FileSchemaSource(BaseModel):
+    """
+    Carry validated file schema source data across the dynamic top-level operation
+    scheduling loop.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["file"]
@@ -42,6 +49,13 @@ class FileSchemaSource(BaseModel):
 
 
 class UrlSchemaSource(BaseModel):
+    """
+    Carry validated url schema source data across the dynamic top-level operation
+    scheduling loop.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["url"]
@@ -49,6 +63,13 @@ class UrlSchemaSource(BaseModel):
 
 
 class InlineSchemaSource(BaseModel):
+    """
+    Carry validated inline schema source data across the dynamic top-level operation
+    scheduling loop.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["inline"]

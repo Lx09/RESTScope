@@ -1,3 +1,5 @@
+"""Regression scenarios for openapi input nodes. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 
@@ -55,6 +57,7 @@ def _spec() -> dict:
 
 
 def test_parser_builds_stable_operation_input_nodes_with_canonical_parents() -> None:
+    """Scenario: verify that parser builds stable operation input nodes with canonical parents."""
     from restscope.openapi_parser import OpenAPIParser
 
     operation = OpenAPIParser.parse(_spec()).operations["POST /orders/{orderId}"]
@@ -94,6 +97,7 @@ def test_parser_builds_stable_operation_input_nodes_with_canonical_parents() -> 
 
 
 def test_input_nodes_expand_complex_parameters_and_schema_variants() -> None:
+    """Scenario: verify that input nodes expand complex parameters and schema variants."""
     from restscope.openapi_parser import OpenAPIParser
 
     spec = {
@@ -155,6 +159,7 @@ def test_input_nodes_expand_complex_parameters_and_schema_variants() -> None:
 
 
 def test_input_node_identity_ignores_parameter_order_ref_location_and_descriptions() -> None:
+    """Scenario: verify that input node identity ignores parameter order ref location and descriptions."""
     from copy import deepcopy
 
     from restscope.openapi_parser import OpenAPIParser
@@ -186,6 +191,7 @@ def test_input_node_identity_ignores_parameter_order_ref_location_and_descriptio
 
 
 def test_new_optional_sibling_preserves_existing_node_ids() -> None:
+    """Scenario: verify that new optional sibling preserves existing node ids."""
     from copy import deepcopy
 
     from restscope.openapi_parser import OpenAPIParser
@@ -208,6 +214,7 @@ def test_new_optional_sibling_preserves_existing_node_ids() -> None:
 
 
 def test_header_and_media_type_casing_do_not_change_semantic_input_identity() -> None:
+    """Scenario: verify that header and media type casing do not change semantic input identity."""
     from copy import deepcopy
 
     from restscope.openapi_parser import OpenAPIParser

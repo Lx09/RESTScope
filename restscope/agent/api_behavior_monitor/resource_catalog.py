@@ -31,6 +31,13 @@ class ResourceCatalog:
         groups: list[DetectedResourceGroup],
         observed_at: datetime | None = None,
     ) -> None:
+        """
+        Record groups for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         timestamp = observed_at or utc_now()
         with self.unit_of_work_factory() as uow:
             uow.resources.record_groups(
@@ -41,6 +48,13 @@ class ResourceCatalog:
             uow.commit()
 
     def list_rules(self, operation_key: str) -> list[LearnedResourceRule]:
+        """
+        Return rules for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.resources.list_rules(operation_key)
 
@@ -50,6 +64,13 @@ class ResourceCatalog:
         limit: int | None = None,
         aliases_per_resource: int | None = None,
     ) -> list[ResourceNameSummary]:
+        """
+        Return resources for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.resources.list_resources(
                 limit=limit,
@@ -64,6 +85,13 @@ class ResourceCatalog:
         warning: ResourceMonitorWarning,
         observed_at: datetime | None = None,
     ) -> None:
+        """
+        Record error for API response monitoring and its narrowly approved evidence
+        catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             uow.resources.record_error(
                 operation=operation,
@@ -80,6 +108,13 @@ class ResourceCatalog:
         warning: ResourceMonitorWarning,
         observed_at: datetime | None = None,
     ) -> None:
+        """
+        Record operation error for API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             uow.resources.record_operation_error(
                 operation=operation,
@@ -89,10 +124,24 @@ class ResourceCatalog:
             uow.commit()
 
     def clear_operation_errors(self, operation_key: str) -> None:
+        """
+        Handle clear operation errors as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             uow.resources.clear_operation_errors(operation_key)
             uow.commit()
 
     def lookup(self, request: ResourceLookupRequest) -> ResourceLookupResult:
+        """
+        Look up bounded evidence used by API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.resources.lookup(request)

@@ -12,6 +12,12 @@ from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
 class ResourceORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted resource rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "resources"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -20,6 +26,12 @@ class ResourceORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class ResourceAliasORM(CreatedAtMixin, Base):
+    """
+    Map persisted resource alias rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "resource_aliases"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -33,6 +45,12 @@ class ResourceAliasORM(CreatedAtMixin, Base):
 
 
 class OperationResourceRuleORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted operation resource rule rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "operation_resource_rules"
     __table_args__ = (
         UniqueConstraint("operation_key", "group_path", name="uq_operation_resource_rule"),
@@ -58,6 +76,12 @@ class OperationResourceRuleORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class ResourceIdentifierORM(CreatedAtMixin, Base):
+    """
+    Map persisted resource identifier rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "resource_identifiers"
     __table_args__ = (
         UniqueConstraint(
@@ -80,6 +104,12 @@ class ResourceIdentifierORM(CreatedAtMixin, Base):
 
 
 class ResourceOperationUsageORM(Base):
+    """
+    Map persisted resource operation usage rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "resource_operation_usages"
     __table_args__ = (
         UniqueConstraint(
@@ -104,6 +134,12 @@ class ResourceOperationUsageORM(Base):
 
 
 class ResourceMonitorErrorORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted resource monitor error rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "resource_monitor_errors"
     __table_args__ = (
         UniqueConstraint("operation_key", "group_path", name="uq_resource_monitor_error"),

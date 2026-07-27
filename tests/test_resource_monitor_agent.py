@@ -1,3 +1,5 @@
+"""Regression scenarios for resource monitor agent. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -110,6 +112,7 @@ def _record_user_resource(catalog, *, aliases: list[str] | None = None) -> None:
 
 
 def test_exact_id_is_recorded_without_calling_llm(tmp_path: Path) -> None:
+    """Scenario: verify that exact id is recorded without calling llm."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
@@ -126,6 +129,7 @@ def test_exact_id_is_recorded_without_calling_llm(tmp_path: Path) -> None:
 
 
 def test_exact_id_wins_over_other_id_suffix_fields(tmp_path: Path) -> None:
+    """Scenario: verify that exact id wins over other id suffix fields."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
@@ -144,6 +148,7 @@ def test_exact_id_wins_over_other_id_suffix_fields(tmp_path: Path) -> None:
 def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that semantic identifier prompt is minimal and hides values."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(_selection("I1"))
@@ -189,6 +194,7 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
 def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that non exact id suffix candidates are preferred but require llm."""
     client = StubLLMClient(_selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
 
@@ -207,6 +213,7 @@ def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
 def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that prompt excludes invalid scalar types and mixed schema types."""
     client = StubLLMClient(_selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
     observation = _observation(
@@ -240,6 +247,7 @@ def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
 def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that invalid exact id type does not hide a valid semantic candidate."""
     client = StubLLMClient(_selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
 
@@ -260,6 +268,7 @@ def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
 def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that semantic identifier uses two stable batches of 50 candidates."""
     client = StubLLMClient(_selection(None), _selection("I51"))
     tracker, _catalog = _agent(tmp_path, client)
     body = {f"field{index}": f"value-{index}" for index in range(51)}
@@ -279,6 +288,7 @@ def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
 def test_semantic_identifier_ignores_candidates_after_first_100(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that semantic identifier ignores candidates after first 100."""
     client = StubLLMClient(_selection(None), _selection(None))
     tracker, catalog = _agent(tmp_path, client)
     body = {f"field{index}": f"value-{index}" for index in range(101)}
@@ -300,6 +310,7 @@ def test_semantic_identifier_ignores_candidates_after_first_100(
 def test_invalid_first_selection_uses_second_and_final_call_for_repair(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that invalid first selection uses second and final call for repair."""
     client = StubLLMClient(_selection("forged"), _selection("I1"))
     tracker, _catalog = _agent(tmp_path, client)
     body = {f"field{index}": f"value-{index}" for index in range(51)}
@@ -317,6 +328,7 @@ def test_invalid_first_selection_uses_second_and_final_call_for_repair(
 def test_two_invalid_model_outputs_do_not_persist_partial_rules(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that two invalid model outputs do not persist partial rules."""
     import pytest
 
     from restscope.agent.api_behavior_monitor import (
@@ -347,6 +359,7 @@ def test_two_invalid_model_outputs_do_not_persist_partial_rules(
 def test_extra_model_fields_are_repaired_and_not_persisted(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that extra model fields are repaired and not persisted."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(
@@ -378,6 +391,7 @@ def test_extra_model_fields_are_repaired_and_not_persisted(
 def test_null_identifier_selection_is_retried_without_negative_rule(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that null identifier selection is retried without negative rule."""
     client = StubLLMClient(_selection(None), _selection(None))
     tracker, catalog = _agent(tmp_path, client)
     observation = _observation(
@@ -396,6 +410,7 @@ def test_null_identifier_selection_is_retried_without_negative_rule(
 def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that learned rule is reused and missing identifier returns warning."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(_selection("I1"))
@@ -429,6 +444,7 @@ def test_learned_rule_is_reused_and_missing_identifier_returns_warning(
 def test_schema_only_semantic_identifier_retries_until_value_is_observed(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that schema only semantic identifier retries until value is observed."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(_selection("I2"), _selection("I1"))
@@ -476,6 +492,7 @@ def test_schema_only_semantic_identifier_retries_until_value_is_observed(
 
 
 def test_schema_only_exact_id_warns_without_rule_or_llm(tmp_path: Path) -> None:
+    """Scenario: verify that schema only exact id warns without rule or llm."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
@@ -509,6 +526,7 @@ def test_schema_only_exact_id_warns_without_rule_or_llm(tmp_path: Path) -> None:
 def test_wrapped_collection_items_are_one_resource_group(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that wrapped collection items are one resource group."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
@@ -549,6 +567,7 @@ def test_wrapped_collection_items_are_one_resource_group(
 def test_generic_wrapper_uses_schema_resource_name_without_llm(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that generic wrapper uses schema resource name without llm."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
@@ -583,6 +602,7 @@ def test_generic_wrapper_uses_schema_resource_name_without_llm(
 
 
 def test_existing_alias_resolves_canonical_name_locally(tmp_path: Path) -> None:
+    """Scenario: verify that existing alias resolves canonical name locally."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(_selection("I1"))
@@ -609,6 +629,7 @@ def test_existing_alias_resolves_canonical_name_locally(tmp_path: Path) -> None:
 def test_collection_truncates_after_1000_and_persists_first_1000(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that collection truncates after 1000 and persists first 1000."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     tracker, catalog = _agent(tmp_path, StubLLMClient())
@@ -634,6 +655,7 @@ def test_collection_truncates_after_1000_and_persists_first_1000(
 def test_oversized_collection_item_is_skipped_without_losing_other_ids(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that oversized collection item is skipped without losing other ids."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     tracker, catalog = _agent(tmp_path, StubLLMClient())
@@ -660,6 +682,7 @@ def test_oversized_collection_item_is_skipped_without_losing_other_ids(
 def test_learned_collection_rule_saves_present_ids_and_warns_for_missing(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that learned collection rule saves present ids and warns for missing."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     tracker, catalog = _agent(tmp_path, StubLLMClient())
@@ -686,6 +709,7 @@ def test_learned_collection_rule_saves_present_ids_and_warns_for_missing(
 def test_oversized_schema_format_fails_closed_without_llm(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that oversized schema format fails closed without llm."""
     client = StubLLMClient()
     tracker, _catalog = _agent(tmp_path, client)
     observation = _observation(body={"sha": "abc123"}).model_copy(
@@ -712,6 +736,7 @@ def test_oversized_schema_format_fails_closed_without_llm(
 def test_invalid_response_field_names_fail_without_catalog_pollution(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that invalid response field names fail without catalog pollution."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient()
@@ -730,6 +755,7 @@ def test_invalid_response_field_names_fail_without_catalog_pollution(
 
 
 def test_oversized_identifier_returns_bounded_warning(tmp_path: Path) -> None:
+    """Scenario: verify that oversized identifier returns bounded warning."""
     from restscope.agent.api_behavior_monitor import ResourceLookupRequest
 
     tracker, catalog = _agent(tmp_path, StubLLMClient())
@@ -747,6 +773,7 @@ def test_oversized_identifier_returns_bounded_warning(tmp_path: Path) -> None:
 def test_legacy_negative_rule_is_replaced_by_positive_evidence(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that legacy negative rule is replaced by positive evidence."""
     from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
@@ -787,6 +814,7 @@ def test_legacy_negative_rule_is_replaced_by_positive_evidence(
 
 
 def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
+    """Scenario: verify that builder selects configured fast model."""
     from restscope.agent.api_behavior_monitor import build_api_behavior_monitor_agent
     from restscope.restscope_config import RESTScopeConfig
 
@@ -816,6 +844,7 @@ def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
 def test_resource_lookup_tool_returns_complete_structured_result(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that resource lookup tool returns complete structured result."""
     from restscope.agent.api_behavior_monitor import (
         DetectedResourceGroup,
         MonitoredOperation,
@@ -897,6 +926,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
 def test_first_observation_requests_bounded_alias_window(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that first observation requests bounded alias window."""
     client = StubLLMClient(_selection("I1"))
     tracker, catalog = _agent(tmp_path, client)
     original = catalog.list_resources
@@ -927,6 +957,7 @@ def test_first_observation_requests_bounded_alias_window(
 
 
 def test_existing_resource_context_limits_fail_closed() -> None:
+    """Scenario: verify that existing resource context limits fail closed."""
     import pytest
 
     from restscope.agent.api_behavior_monitor.resource_identifier import (

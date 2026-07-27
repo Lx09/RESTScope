@@ -1,3 +1,5 @@
+"""Regression scenarios for testing tools. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -61,6 +63,7 @@ def _runtime(tmp_path: Path):
 
 
 def test_testing_tools_register_with_run_allowed_for_every_role_and_config_tools_denied(tmp_path: Path) -> None:
+    """Scenario: verify that testing tools register with run allowed for every role and config tools denied."""
     import json
 
     from restscope.capabilities.testing_tools import (
@@ -107,6 +110,7 @@ def test_testing_tools_register_with_run_allowed_for_every_role_and_config_tools
 
 
 def test_run_operation_tool_returns_the_execution_report(tmp_path: Path) -> None:
+    """Scenario: verify that run operation tool returns the execution report."""
     from restscope.capabilities.testing_tools import RUN_OPERATION_TOOL_NAME
     from restscope.llm import ToolCall
 
@@ -132,6 +136,7 @@ def test_run_operation_tool_returns_the_execution_report(tmp_path: Path) -> None
 def test_default_app_runtime_registers_testing_tools_against_configured_database(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that default app runtime registers testing tools against configured database."""
     from restscope import RESTScopeApp
     from restscope.capabilities import RUN_OPERATION_TOOL_NAME
     from restscope.restscope_config import RESTScopeConfig
@@ -155,6 +160,7 @@ def test_default_app_runtime_registers_testing_tools_against_configured_database
 
 
 def test_configuration_tools_patch_and_return_complete_generator_values(tmp_path: Path) -> None:
+    """Scenario: verify that configuration tools patch and return complete generator values."""
     from restscope.capabilities.testing_tools import (
         INSPECT_INPUTS_TOOL_NAME,
         PATCH_GENERATORS_TOOL_NAME,
@@ -207,6 +213,7 @@ def test_configuration_tools_patch_and_return_complete_generator_values(tmp_path
 
 
 def test_configuration_tools_use_frozen_catalog_when_current_ir_changes(tmp_path: Path) -> None:
+    """Scenario: verify that configuration tools use frozen catalog when current ir changes."""
     from restscope.capabilities import ToolContext
     from restscope.capabilities.testing_tools import INSPECT_INPUTS_TOOL_NAME
     from restscope.openapi_parser import OpenAPIParser
@@ -243,6 +250,7 @@ def test_configuration_tools_use_frozen_catalog_when_current_ir_changes(tmp_path
 
 
 def test_delete_generator_tool_is_not_registered(tmp_path: Path) -> None:
+    """Scenario: verify that delete generator tool is not registered."""
     runtime = _runtime(tmp_path)
     names = {spec.name for spec in runtime.tool_registry.list_specs()}
 

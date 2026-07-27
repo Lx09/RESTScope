@@ -15,11 +15,25 @@ class _PromptModel(BaseModel):
 
 
 class IdentifierSelectionDecision(_PromptModel):
+    """
+    Carry validated identifier selection decision data across API response monitoring
+    and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     identifier: str | None = Field(default=None, max_length=20)
 
     @field_validator("identifier")
     @classmethod
     def reject_blank_identifier(cls, value: str | None) -> str | None:
+        """
+        Handle reject blank identifier as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if value is None:
             return None
         normalized = value.strip()
@@ -29,11 +43,25 @@ class IdentifierSelectionDecision(_PromptModel):
 
 
 class ResponseSourceSelectionDecision(_PromptModel):
+    """
+    Carry validated response source selection decision data across API response
+    monitoring and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     sources: list[str] = Field(max_length=100)
 
 
 @dataclass(slots=True, frozen=True)
 class IdentifierCandidateView:
+    """
+    Carry validated identifier candidate view data across API response monitoring and
+    its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     alias: str
     field_path: str
     value_types: tuple[str, ...]
@@ -44,6 +72,13 @@ class IdentifierCandidateView:
 
 @dataclass(slots=True, frozen=True)
 class IdentifierPrompt:
+    """
+    Carry validated identifier prompt data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     system: str
     user: str
     candidate_aliases: tuple[str, ...]
@@ -51,6 +86,13 @@ class IdentifierPrompt:
 
 @dataclass(slots=True, frozen=True)
 class ResponseSourceView:
+    """
+    Carry validated response source view data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     alias: str
     producer_operation_key: str
     status_code: str
@@ -65,6 +107,13 @@ class ResponseSourceView:
 
 @dataclass(slots=True, frozen=True)
 class ResponseSourcePrompt:
+    """
+    Carry validated response source prompt data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     system: str
     user: str
     source_by_alias: Mapping[str, Any]
@@ -78,6 +127,12 @@ def build_identifier_prompt(
     response_location: str,
     candidates: list[IdentifierCandidateView],
 ) -> IdentifierPrompt:
+    """
+    Build identifier prompt for API response monitoring and its narrowly approved
+    evidence catalog.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     lines = [
         "Operation",
         f"{method} {path}",
@@ -123,6 +178,12 @@ def validate_identifier_decision(
     draft: IdentifierSelectionDecision,
     prompt: IdentifierPrompt,
 ) -> list[str]:
+    """
+    Validate identifier decision for API response monitoring and its narrowly approved
+    evidence catalog.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     if (
         draft.identifier is not None
         and draft.identifier not in prompt.candidate_aliases
@@ -140,6 +201,12 @@ def build_response_source_prompt(
     expected_type: str | None,
     sources: list[ResponseSourceView],
 ) -> ResponseSourcePrompt:
+    """
+    Build response source prompt for API response monitoring and its narrowly approved
+    evidence catalog.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     lines = [
         "Consumer input",
         f'[P1] parameter "{parameter_name}"; expected type='
@@ -177,6 +244,12 @@ def validate_response_source_decision(
     draft: ResponseSourceSelectionDecision,
     prompt: ResponseSourcePrompt,
 ) -> list[str]:
+    """
+    Validate response source decision for API response monitoring and its narrowly
+    approved evidence catalog.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     duplicates = sorted(
         alias for alias in set(draft.sources) if draft.sources.count(alias) > 1
     )

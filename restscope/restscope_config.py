@@ -38,6 +38,12 @@ class PathsConfig:
 
     @property
     def logs_dir_resolved(self) -> Path:
+        """
+        Handle logs dir resolved as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         logs_dir = self.data_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         return logs_dir
@@ -120,6 +126,12 @@ class RESTScopeConfig:
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
+        """
+        Handle from environment as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         values = _merged_environment(env_file or PROJECT_ROOT / ".env")
         data_dir = Path(values.get("DATA_DIR", str(PROJECT_ROOT / "data"))).expanduser()
         log_file = values.get("LOG_FILE")
@@ -178,6 +190,12 @@ class RESTScopeConfig:
 
     @property
     def log_file(self) -> Path:
+        """
+        Handle log file as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.logging.file or self.paths.logs_dir_resolved / "restscope.log"
 
 

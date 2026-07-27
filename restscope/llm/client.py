@@ -20,6 +20,13 @@ class LLMClient:
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
+        """
+        Invoke the configured collaborator for provider-independent language-model
+        invocation.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         provider = self.registry.get(request.provider)
         with self.tracing_runtime.span(
             "LLMClient.invoke",

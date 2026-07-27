@@ -146,6 +146,13 @@ write the catalog, persist state, or emit prose.
 
 @dataclass(slots=True, frozen=True)
 class ParameterPatchPrompt:
+    """
+    Carry validated parameter patch prompt data across one isolated Generator and
+    Constraint Patch Group.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     system: str
     user: str
     reference_by_alias: dict[str, AvailableReferenceOption]
@@ -157,6 +164,11 @@ def build_parameter_patch_prompt(
     config: OperationGeneratorConfig,
     reference_options: list[AvailableReferenceOption],
 ) -> ParameterPatchPrompt:
+    """
+    Build parameter patch prompt for one isolated Generator and Constraint Patch Group.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     semantic = build_semantic_input_map(config)
     configs = {item.input_node_id: item for item in config.configs}
     current = {

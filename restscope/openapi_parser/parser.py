@@ -303,17 +303,20 @@ class OpenAPIParser:
         Returns:
             An OpenAPISpecIR instance.
         """
-        # Load input
+        # Loading accepts a mapping, text, file, or URL and records the source
+        # location so relative `$ref` values can later be resolved correctly.
         parse_input = load_parse_input(source)
         raw_schema = parse_input.raw_document
 
-        # Detect version and get adapter
+        # Version-specific syntax is isolated behind an adapter. Downstream IR
+        # construction can therefore treat Swagger 2 and OpenAPI 3 uniformly.
         spec_format, spec_version, adapter = detect_spec_version_and_adapter(raw_schema)
 
         # Validate top-level schema
         adapter.validate_top_level(raw_schema)
 
-        # Initialize resolver
+        # The resolver tracks nested-document scope and protects reference
+        # expansion from losing the original document location.
         resolver = ReferenceResolver(
             root_location=parse_input.source_location,
             root_document=raw_schema,
@@ -343,7 +346,8 @@ class OpenAPIParser:
             diagnostics=diagnostics,
         )
 
-        # Initialize IR
+        # Build the top-level container before paths so diagnostics can retain
+        # partial parse evidence even when individual operations fail.
         ir = OpenAPISpecIR(
             meta=meta,
             components=components,
@@ -356,7 +360,8 @@ class OpenAPIParser:
             diagnostics=diagnostics,
         )
 
-        # Parse paths
+        # Parse path items independently. An operation is indexed only after its
+        # normalized IR and semantic input-node tree are complete.
         raw_paths = raw_schema.get("paths", {})
         if not isinstance(raw_paths, dict):
             raise InvalidTopLevelSchemaError("`paths` must be an object.")

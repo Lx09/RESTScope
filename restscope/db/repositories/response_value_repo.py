@@ -28,6 +28,12 @@ MAX_RESPONSE_OBSERVATIONS_PER_OPERATION = 100
 
 
 class SqlAlchemyResponseValueCatalogRepository:
+    """
+    Define the collaborator contract for sql alchemy response value catalog repository.
+
+    Concrete implementations may vary while callers in the repository and database
+    persistence boundary depend only on these declared operations.
+    """
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -37,6 +43,13 @@ class SqlAlchemyResponseValueCatalogRepository:
         *,
         now: datetime,
     ) -> ResponseValueMonitorRecord:
+        """
+        Handle ensure monitor as part of the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         row = self.session.scalar(
             select(ResponseValueMonitorORM).where(
                 ResponseValueMonitorORM.consumer_operation_key
@@ -74,6 +87,12 @@ class SqlAlchemyResponseValueCatalogRepository:
         *,
         now: datetime,
     ) -> list[PersistedResponseValueSource]:
+        """
+        Handle add sources as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session.get(ResponseValueMonitorORM, monitor_id) is None:
             raise ValueError(f"Unknown response-value monitor: {monitor_id}")
         for source in sources:
@@ -107,6 +126,13 @@ class SqlAlchemyResponseValueCatalogRepository:
         self,
         producer_operation_key: str,
     ) -> list[PersistedResponseValueSource]:
+        """
+        Return sources for operation for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         rows = self.session.scalars(
             select(ResponseValueSourceORM)
             .join(
@@ -128,6 +154,12 @@ class SqlAlchemyResponseValueCatalogRepository:
         return [_source_record(row) for row in rows]
 
     def list_active_monitors(self) -> list[ResponseValueMonitorRecord]:
+        """
+        Return active monitors for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         rows = self.session.scalars(
             select(ResponseValueMonitorORM)
             .where(ResponseValueMonitorORM.active.is_(True))
@@ -145,6 +177,12 @@ class SqlAlchemyResponseValueCatalogRepository:
         *,
         now: datetime,
     ) -> int:
+        """
+        Record values for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session.get(ResponseValueMonitorORM, monitor_id) is None:
             raise ValueError(f"Unknown response-value monitor: {monitor_id}")
         recorded = 0
@@ -189,6 +227,12 @@ class SqlAlchemyResponseValueCatalogRepository:
         scalars: list[tuple[str, object]],
         now: datetime,
     ) -> None:
+        """
+        Record observation for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         observation_id = f"rvo_{uuid4().hex}"
         self.session.add(
             ResponseObservationORM(
@@ -256,6 +300,13 @@ class SqlAlchemyResponseValueCatalogRepository:
         *,
         limit: int,
     ) -> list[object]:
+        """
+        Handle historical values for source as part of the repository and database
+        persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         rows = self.session.execute(
             select(
                 ResponseObservationORM.status_code,
@@ -294,6 +345,12 @@ class SqlAlchemyResponseValueCatalogRepository:
         return values
 
     def values_for(self, value_name: str, *, limit: int) -> list[object]:
+        """
+        Handle values for as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         monitor = self.session.scalar(
             select(ResponseValueMonitorORM).where(
                 ResponseValueMonitorORM.value_name == value_name,

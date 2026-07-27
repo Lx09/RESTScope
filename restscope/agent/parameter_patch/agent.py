@@ -51,7 +51,14 @@ _MAX_ERRORS = 20
 
 
 class ParameterPatchAgent:
-    """Construct and self-review one complete parameter Patch Group."""
+    """Construct, validate, sample, and self-review one isolated Patch Group.
+
+    The model proposes complete Generator/Constraint patches, but deterministic
+    code owns every safety boundary: allowed inputs, schema parsing, reference
+    aliases, constraint satisfiability, compatibility with prior groups, and
+    generation of exactly ten samples.  The same model may accept only after it
+    has seen those samples.  No sample is sent to the target API or catalog.
+    """
 
     def __init__(
         self,
@@ -76,6 +83,7 @@ class ParameterPatchAgent:
         reference_options: list[AvailableReferenceOption] | None = None,
         max_attempts: int = 20,
     ) -> ValidatedPatchGroup | PatchGroupFailure:
+        """Run the bounded propose → validate → sample → review conversation."""
         if not 2 <= max_attempts <= 20:
             raise ValueError("max_attempts must be between 2 and 20")
         if not self.model.enabled:
@@ -89,6 +97,9 @@ class ParameterPatchAgent:
             LLMMessage(role="system", content=prompt.system),
             LLMMessage(role="user", content=prompt.user),
         ]
+        # ``validated`` is deliberately reset by every proposal.  Therefore an
+        # accept decision can refer only to the most recently compiled and
+        # sampled complete patch.
         validated: tuple[
             GeneratorPatchDraft,
             list[dict[str, Any]],
@@ -114,6 +125,8 @@ class ParameterPatchAgent:
             },
         ) as span:
             for attempt in range(1, max_attempts + 1):
+                # Structured roles use temperature zero to reduce schema drift
+                # and make repeated-candidate detection meaningful.
                 response = self.client.invoke(
                     LLMRequest(
                         provider=self.model.provider,
@@ -175,6 +188,10 @@ class ParameterPatchAgent:
                         # when compilation or sampling later rejects it.
                         validated = None
                         try:
+                            # Compilation translates model-facing semantic
+                            # handles into internal node IDs.  Sampling then
+                            # checks the patch together with constraints already
+                            # accepted from earlier groups.
                             patch = _compile_patch(
                                 decision.patch,
                                 task=task,
@@ -211,6 +228,9 @@ class ParameterPatchAgent:
                             else:
                                 last_candidate_signature = signature
                                 repeated_candidates = 1
+                            # A model that returns the same already-valid patch
+                            # three times without accepting it is stalled; stop
+                            # early instead of spending the full attempt budget.
                             if repeated_candidates >= 3:
                                 failure = PatchGroupFailure(
                                     group_id=task.group_id,
@@ -273,6 +293,9 @@ class ParameterPatchAgent:
                                 )
                             )
                             continue
+                # Invalid output is returned to the same isolated conversation
+                # with concrete errors.  Nothing from this group is shared with
+                # another Parameter Patch Agent.
                 latest_errors = errors or ["The model output could not be used"]
                 if (
                     decision is not None
@@ -401,6 +424,13 @@ def _compile_patch(
     config: OperationGeneratorConfig,
     reference_by_alias: dict[str, AvailableReferenceOption],
 ) -> GeneratorPatchDraft:
+    """Translate model-facing handles and aliases into validated runtime objects.
+
+    This is the trust boundary between free-form model output and the testing
+    engine.  It rejects edits outside the assigned group, duplicate edits,
+    system-managed generators, invented observed-value sources, and malformed
+    constraints before previewing the patch against the current configuration.
+    """
     semantic = build_semantic_input_map(config)
     allowed = set(task.inputs)
     supplied = [change.input for change in proposal.changes]
@@ -497,6 +527,12 @@ def _compile_constraint(
     semantic,
     config: OperationGeneratorConfig,
 ) -> CompiledConstraintPatch:
+    """
+    Compile constraint for one isolated Generator and Constraint Patch Group.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     referenced: list[str] = []
 
     def convert(value: Any) -> Any:
@@ -551,6 +587,12 @@ def _sample_patch(
     active_constraints: list[CompiledConstraintPatch],
     reference_values: ReferenceValueProvider | None,
 ) -> list[dict[str, Any]]:
+    """
+    Handle sample patch as part of one isolated Generator and Constraint Patch Group.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     candidate = preview_generator_patch(config, patch.updates)
     all_constraints = [
         expression

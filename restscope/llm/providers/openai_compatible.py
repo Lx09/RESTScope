@@ -32,6 +32,13 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.client = client or self._build_client(api_key=api_key, base_url=base_url)
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
+        """
+        Invoke the configured collaborator for provider-independent language-model
+        invocation.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         kwargs = self._request_kwargs(request)
         started = time.perf_counter()
         try:
@@ -150,6 +157,13 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         )
 
     def _extract_tool_calls(self, message: Any, *, request: LLMRequest) -> list[ToolCall]:
+        """
+        Handle extract tool calls as part of provider-independent language-model
+        invocation.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         raw_tool_calls = getattr(message, "tool_calls", None) or []
         internal_names = {
             _provider_tool_name(tool.name): tool.name

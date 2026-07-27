@@ -63,6 +63,13 @@ class PatchValidationSummary(BaseModel):
 
     @model_validator(mode="after")
     def validate_partitions(self) -> "PatchValidationSummary":
+        """
+        Validate partitions for the run-local Operation Smoke diagnosis and candidate
+        workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         item_ids = [item.item_id for item in self.items]
         accepted_items = set(self.accepted_item_ids)
         resolved_items = {
@@ -172,6 +179,13 @@ class ActionableFailure(BaseModel):
 
     @model_validator(mode="after")
     def validate_affected_inputs(self) -> "ActionableFailure":
+        """
+        Validate affected inputs for the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         derived = list(dict.fromkeys(item.input for item in self.solutions))
         if self.affected_inputs != derived:
             raise ValueError(
@@ -221,6 +235,13 @@ class PatchGroupRunSummary(BaseModel):
 
     @model_validator(mode="after")
     def validate_failure_reason(self) -> "PatchGroupRunSummary":
+        """
+        Validate failure reason for the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.status == "failed" and self.failure_reason is None:
             raise ValueError("failed Patch Group runs require a reason")
         if self.status == "validated" and self.failure_reason is not None:
@@ -264,6 +285,13 @@ class PlanSolveDiagnosisResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_status(self) -> "PlanSolveDiagnosisResult":
+        """
+        Validate status for the run-local Operation Smoke diagnosis and candidate
+        workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.status == "actionable" and not self.actionable_failures:
             raise ValueError("actionable requires at least one actionable failure")
         if self.status != "actionable" and self.actionable_failures:
@@ -310,6 +338,13 @@ class OperationSmokeResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_failure_kind(self) -> "OperationSmokeResult":
+        """
+        Validate failure kind for the run-local Operation Smoke diagnosis and candidate
+        workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         allowed = {
             "passed": {None},
             "retry": {

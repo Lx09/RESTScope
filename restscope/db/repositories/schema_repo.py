@@ -18,16 +18,34 @@ class SqlAlchemySchemaRepository:
         self.session = session
 
     def add(self, *, id: str, file_path: str | None, raw_content: str | None) -> SchemaRecord:
+        """
+        Add one validated record to the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         obj = SchemaORM(id=id, file_path=file_path, raw_content=raw_content)
         self.session.add(obj)
         self.session.flush()
         return self._to_record(obj)
 
     def get(self, schema_id: str) -> SchemaRecord | None:
+        """
+        Handle get as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         obj = self.session.get(SchemaORM, schema_id)
         return self._to_record(obj) if obj is not None else None
 
     def list(self) -> list[SchemaRecord]:
+        """
+        Handle list as part of the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         objects = self.session.scalars(
             select(SchemaORM).order_by(SchemaORM.created_at, SchemaORM.id)
         ).all()
@@ -40,6 +58,13 @@ class SqlAlchemySchemaRepository:
         file_path: str | None,
         raw_content: str | None,
     ) -> SchemaRecord | None:
+        """
+        Handle replace source as part of the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         obj = self.session.get(SchemaORM, schema_id)
         if obj is None:
             return None

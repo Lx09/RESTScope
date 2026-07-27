@@ -1,3 +1,5 @@
+"""Regression scenarios for llm deepseek. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -44,6 +46,7 @@ def deepseek_response(
 
 
 def test_deepseek_provider_uses_official_endpoint_by_default() -> None:
+    """Scenario: verify that deepseek provider uses official endpoint by default."""
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
     provider = DeepSeekProvider(api_key="test-key", client=RecordingClient())
@@ -53,6 +56,7 @@ def test_deepseek_provider_uses_official_endpoint_by_default() -> None:
 
 
 def test_deepseek_provider_translates_reasoning_and_json_schema_request() -> None:
+    """Scenario: verify that deepseek provider translates reasoning and json schema request."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -90,6 +94,7 @@ def test_deepseek_provider_translates_reasoning_and_json_schema_request() -> Non
 
 
 def test_deepseek_json_mode_does_not_duplicate_an_existing_json_instruction() -> None:
+    """Scenario: verify that deepseek json mode does not duplicate an existing json instruction."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -118,6 +123,7 @@ def test_deepseek_json_mode_does_not_duplicate_an_existing_json_instruction() ->
 
 
 def test_deepseek_provider_applies_configured_reasoning_without_agent_changes() -> None:
+    """Scenario: verify that deepseek provider applies configured reasoning without agent changes."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -141,6 +147,7 @@ def test_deepseek_provider_applies_configured_reasoning_without_agent_changes() 
 
 
 def test_deepseek_non_thinking_omits_reasoning_effort() -> None:
+    """Scenario: verify that deepseek non thinking omits reasoning effort."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -178,6 +185,7 @@ def _search_tool():
 
 
 def test_deepseek_thinking_auto_keeps_tools_but_omits_tool_choice() -> None:
+    """Scenario: verify that deepseek thinking auto keeps tools but omits tool choice."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -200,6 +208,7 @@ def test_deepseek_thinking_auto_keeps_tools_but_omits_tool_choice() -> None:
 
 
 def test_deepseek_thinking_none_omits_tools() -> None:
+    """Scenario: verify that deepseek thinking none omits tools."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -222,6 +231,7 @@ def test_deepseek_thinking_none_omits_tools() -> None:
 
 
 def test_deepseek_thinking_rejects_forced_tool_choice_before_network() -> None:
+    """Scenario: verify that deepseek thinking rejects forced tool choice before network."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
 
@@ -243,6 +253,7 @@ def test_deepseek_thinking_rejects_forced_tool_choice_before_network() -> None:
 
 
 def test_deepseek_thinking_rejects_forced_tool_choice_without_tools() -> None:
+    """Scenario: verify that deepseek thinking rejects forced tool choice without tools."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
 
@@ -274,6 +285,7 @@ def _provider_tool_call() -> Any:
 
 
 def test_deepseek_provider_carries_and_replays_tool_call_reasoning() -> None:
+    """Scenario: verify that deepseek provider carries and replays tool call reasoning."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -331,6 +343,7 @@ def test_deepseek_provider_carries_and_replays_tool_call_reasoning() -> None:
 
 
 def test_deepseek_provider_rejects_tool_response_without_reasoning() -> None:
+    """Scenario: verify that deepseek provider rejects tool response without reasoning."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
 
@@ -361,6 +374,7 @@ def test_deepseek_provider_rejects_tool_response_without_reasoning() -> None:
 
 
 def test_deepseek_provider_rejects_thinking_history_without_reasoning() -> None:
+    """Scenario: verify that deepseek provider rejects thinking history without reasoning."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest, ToolCall
     from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
 

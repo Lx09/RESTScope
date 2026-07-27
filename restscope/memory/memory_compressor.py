@@ -9,6 +9,12 @@ class MemoryCompressor:
     """Dedupe memory and fit it into a rough token budget."""
 
     def fit_budget(self, items: list[MemoryItem], token_budget: int) -> list[MemoryItem]:
+        """
+        Handle fit budget as part of bounded in-process conversation history.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         selected: list[MemoryItem] = []
         seen_sources: set[tuple[str, str]] = set()
         used_tokens = 0

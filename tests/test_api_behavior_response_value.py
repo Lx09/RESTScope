@@ -1,3 +1,5 @@
+"""Regression scenarios for api behavior response value. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from sqlalchemy.pool import StaticPool
@@ -88,6 +90,7 @@ def _response_value_ir():
 
 
 def test_registers_ir_source_extracts_values_and_deduplicates_them() -> None:
+    """Scenario: verify that registers ir source extracts values and deduplicates them."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -175,6 +178,7 @@ def test_registers_ir_source_extracts_values_and_deduplicates_them() -> None:
 
 
 def test_observation_history_flattens_all_scalars_and_keeps_latest_100() -> None:
+    """Scenario: verify that observation history flattens all scalars and keeps latest 100."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -225,6 +229,7 @@ def test_observation_history_flattens_all_scalars_and_keeps_latest_100() -> None
 
 
 def test_observation_history_ignores_non_2xx_and_non_json() -> None:
+    """Scenario: verify that observation history ignores non successful 2xx  and non json."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -263,6 +268,7 @@ def test_observation_history_ignores_non_2xx_and_non_json() -> None:
 
 
 def test_registration_rejects_sources_without_observed_values() -> None:
+    """Scenario: verify that registration rejects sources without observed values."""
     import pytest
 
     from restscope.agent.api_behavior_monitor.response_value import (
@@ -289,6 +295,7 @@ def test_registration_rejects_sources_without_observed_values() -> None:
 
 
 def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
+    """Scenario: verify that empty backfill rolls back monitor and source atomically."""
     import pytest
 
     from restscope.agent.api_behavior_monitor import (
@@ -322,6 +329,7 @@ def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
 
 
 def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> None:
+    """Scenario: verify that preview rejects observed values incompatible with consumer type."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -345,6 +353,7 @@ def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> No
 
 
 def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
+    """Scenario: verify that response values are typed and boolean is not an integer."""
     from restscope.agent.api_behavior_monitor.response_value_catalog import (
         ResponseValueCatalogRegistration,
         ResponseValueSource,
@@ -381,6 +390,7 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
 
 
 def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
+    """Scenario: verify that semantic source selection uses bounded ir metadata only."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -502,6 +512,7 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
 
 
 def test_available_source_options_prefer_backed_exact_name_fields() -> None:
+    """Scenario: verify that available source options prefer backed exact name fields."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
     )
@@ -577,6 +588,7 @@ def test_available_source_options_prefer_backed_exact_name_fields() -> None:
 
 
 def test_semantic_source_selection_fails_closed_without_repair() -> None:
+    """Scenario: verify that semantic source selection fails closed without repair."""
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,
         _SourceCandidate,
@@ -633,6 +645,7 @@ def test_semantic_source_selection_fails_closed_without_repair() -> None:
 
 
 def test_newly_materialized_success_schema_supports_late_registration() -> None:
+    """Scenario: verify that newly materialized success schema supports late registration."""
     from restscope.agent.api_behavior_monitor import ResponseContractTracker
     from restscope.agent.api_behavior_monitor.response_value import (
         ResponseValueTracker,

@@ -40,11 +40,25 @@ class SqlAlchemySchemaUnitOfWork:
         self.session.close()
 
     def commit(self) -> None:
+        """
+        Commit the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.commit()
 
     def rollback(self) -> None:
+        """
+        Roll back the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.rollback()
@@ -76,11 +90,25 @@ class SqlAlchemyGeneratorConfigUnitOfWork:
         self.session.close()
 
     def commit(self) -> None:
+        """
+        Commit the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.commit()
 
     def rollback(self) -> None:
+        """
+        Roll back the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.rollback()
@@ -112,11 +140,25 @@ class SqlAlchemyResourceCatalogUnitOfWork:
         self.session.close()
 
     def commit(self) -> None:
+        """
+        Commit the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.commit()
 
     def rollback(self) -> None:
+        """
+        Roll back the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.rollback()
@@ -148,11 +190,25 @@ class SqlAlchemyResponseValueCatalogUnitOfWork:
         self.session.close()
 
     def commit(self) -> None:
+        """
+        Commit the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.commit()
 
     def rollback(self) -> None:
+        """
+        Roll back the current transaction for the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.session is None:
             raise RuntimeError("Unit of work is not active")
         self.session.rollback()

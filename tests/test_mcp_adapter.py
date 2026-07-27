@@ -1,3 +1,5 @@
+"""Regression scenarios for mcp adapter. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 
@@ -17,6 +19,7 @@ def _mcp_tool(
 
 
 def test_mcp_tool_adapter_uses_annotations_before_names() -> None:
+    """Scenario: verify that mcp tool adapter uses annotations before names."""
     from restscope.capabilities.mcp import MCPToolAdapter
 
     adapter = MCPToolAdapter()
@@ -80,6 +83,7 @@ def test_mcp_tool_adapter_uses_annotations_before_names() -> None:
 def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
     tool_context,
 ) -> None:
+    """Scenario: verify that register tool source uses external call bridge and summarizes results."""
     from restscope.capabilities import (
         ToolCallValidator,
         ToolExecutor,
@@ -150,6 +154,7 @@ def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
 
 
 def test_tool_policy_allows_generic_read_only_mcp_tools_and_denies_unsafe_tools() -> None:
+    """Scenario: verify that tool policy allows generic read only mcp tools and denies unsafe tools."""
     from restscope.capabilities import ToolPolicy, ToolRegistry, ToolSelector
     from restscope.capabilities.mcp import MCPToolAdapter
 
@@ -198,6 +203,7 @@ def test_tool_policy_allows_generic_read_only_mcp_tools_and_denies_unsafe_tools(
 
 
 def test_register_tool_source_rejects_unsupported_source_kind() -> None:
+    """Scenario: verify that register tool source rejects unsupported source kind."""
     import pytest
 
     from restscope.capabilities import (
@@ -222,6 +228,7 @@ def test_register_tool_source_rejects_unsupported_source_kind() -> None:
 
 
 def test_build_capabilities_registers_all_explicit_sources_without_presets() -> None:
+    """Scenario: verify that build capabilities registers all explicit sources without presets."""
     import inspect
 
     import restscope.capabilities as capabilities
@@ -264,6 +271,7 @@ def test_build_capabilities_registers_all_explicit_sources_without_presets() -> 
 
 
 def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
+    """Scenario: verify that build capabilities initializes tools and prompt only skills."""
     from restscope.capabilities import SkillManifest, build_capabilities
 
     runtime = build_capabilities(
@@ -309,6 +317,7 @@ def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
 
 
 def test_build_capabilities_defaults_to_builtin_tools_only() -> None:
+    """Scenario: verify that build capabilities defaults to builtin tools only."""
     from restscope.capabilities import build_capabilities
 
     runtime = build_capabilities()
@@ -320,6 +329,7 @@ def test_build_capabilities_defaults_to_builtin_tools_only() -> None:
 
 
 def test_default_tools_are_not_public_api() -> None:
+    """Scenario: verify that default tools are not public api."""
     import importlib
 
     import pytest
@@ -333,6 +343,7 @@ def test_default_tools_are_not_public_api() -> None:
 
 
 def test_mcp_package_exports_generic_host_and_adapter_only() -> None:
+    """Scenario: verify that mcp package exports generic host and adapter only."""
     import restscope.capabilities.mcp as mcp
 
     assert mcp.__all__ == [

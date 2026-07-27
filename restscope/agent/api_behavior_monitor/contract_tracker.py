@@ -30,6 +30,13 @@ class ResponseContractError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ResponseContractKey:
+    """
+    Coordinate response contract key behavior for API response monitoring and its
+    narrowly approved evidence catalog.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     operation_key: str
     status_code: int
     media_type: str | None
@@ -37,6 +44,13 @@ class ResponseContractKey:
 
 @dataclass(frozen=True, slots=True)
 class ContractCheckResult:
+    """
+    Carry validated contract check result data across API response monitoring and its
+    narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     key: ResponseContractKey
     status: ContractCheckStatus
     changes: tuple[str, ...] = ()
@@ -59,6 +73,13 @@ class ResponseContractTracker:
         body: bytes,
         body_truncated: bool = False,
     ) -> ContractCheckResult:
+        """
+        Handle observe as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         normalized_media = normalize_media_type(media_type)
         key = ResponseContractKey(
             operation_key=operation_key,
@@ -100,6 +121,12 @@ class ResponseContractTracker:
 
 
 def normalize_media_type(media_type: str | None) -> str | None:
+    """
+    Normalize media type for API response monitoring and its narrowly approved evidence
+    catalog.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     if media_type is None:
         return None
     normalized = media_type.split(";", 1)[0].strip().lower()
@@ -135,6 +162,13 @@ def _merge_response(
     observed_schema: SchemaIR | None,
     body_kind: Literal["json", "text", "empty", "binary"],
 ) -> list[str]:
+    """
+    Merge response for API response monitoring and its narrowly approved evidence
+    catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     exact_key = str(status_code)
     response = responses.get(exact_key)
     changes: list[str] = []
@@ -203,6 +237,13 @@ def _response_baseline(
 
 
 def _infer_schema(value: Any) -> SchemaIR:
+    """
+    Handle infer schema as part of API response monitoring and its narrowly approved
+    evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if value is None:
         return _new_schema("null")
     if isinstance(value, bool):
@@ -284,6 +325,13 @@ def _type_set(value: str | list[str] | None) -> list[str]:
 
 
 def _new_schema(schema_type: str | None) -> SchemaIR:
+    """
+    Handle new schema as part of API response monitoring and its narrowly approved
+    evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     return SchemaIR(
         type=schema_type,
         format=None,

@@ -1,3 +1,5 @@
+"""Regression scenarios for http request tool. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -72,6 +74,7 @@ def _execute(executor, **arguments):
 
 
 def test_capability_runtime_registers_http_request_tool_for_every_role() -> None:
+    """Scenario: verify that capability runtime registers http request tool for every role."""
     from restscope.capabilities import build_capabilities
 
     runtime = build_capabilities()
@@ -96,6 +99,7 @@ def test_capability_runtime_registers_http_request_tool_for_every_role() -> None
 
 
 def test_http_request_tool_sends_target_json_and_preserves_full_response() -> None:
+    """Scenario: verify that http request tool sends target json and preserves full response."""
     import httpx
 
     requests: list[httpx.Request] = []
@@ -188,6 +192,7 @@ def test_http_request_tool_sends_target_json_and_preserves_full_response() -> No
     ],
 )
 def test_http_request_tool_encodes_text_and_form_bodies(arguments, expected_content) -> None:
+    """Scenario: verify that http request tool encodes text and form bodies."""
     import httpx
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -208,6 +213,7 @@ def test_http_request_tool_encodes_text_and_form_bodies(arguments, expected_cont
 
 
 def test_http_request_tool_does_not_follow_redirects() -> None:
+    """Scenario: verify that http request tool does not follow redirects."""
     import httpx
 
     requests: list[httpx.Request] = []
@@ -243,6 +249,7 @@ def test_http_request_tool_does_not_follow_redirects() -> None:
     ],
 )
 def test_http_request_tool_rejects_paths_that_can_escape_the_target(path) -> None:
+    """Scenario: verify that http request tool rejects paths that can escape the target."""
     import httpx
 
     result = _execute(
@@ -271,6 +278,7 @@ def test_http_request_tool_rejects_paths_that_can_escape_the_target(path) -> Non
     ],
 )
 def test_http_request_tool_rejects_sensitive_and_transport_header_overrides(header) -> None:
+    """Scenario: verify that http request tool rejects sensitive and transport header overrides."""
     import httpx
 
     result = _execute(
@@ -286,6 +294,7 @@ def test_http_request_tool_rejects_sensitive_and_transport_header_overrides(head
 
 
 def test_http_request_tool_requires_one_request_body_encoding() -> None:
+    """Scenario: verify that http request tool requires one request body encoding."""
     import httpx
 
     result = _execute(
@@ -301,6 +310,7 @@ def test_http_request_tool_requires_one_request_body_encoding() -> None:
 
 
 def test_http_request_tool_requires_a_configured_base_url() -> None:
+    """Scenario: verify that http request tool requires a configured base url."""
     import httpx
 
     result = _execute(
@@ -317,6 +327,7 @@ def test_http_request_tool_requires_a_configured_base_url() -> None:
 
 
 def test_http_request_tool_returns_stable_timeout_error() -> None:
+    """Scenario: verify that http request tool returns stable timeout error."""
     import httpx
 
     def timeout(request: httpx.Request) -> httpx.Response:
@@ -335,6 +346,7 @@ def test_http_request_tool_returns_stable_timeout_error() -> None:
 
 
 def test_http_request_tool_returns_stable_network_error() -> None:
+    """Scenario: verify that http request tool returns stable network error."""
     import httpx
 
     def disconnect(request: httpx.Request) -> httpx.Response:
@@ -371,6 +383,7 @@ def test_http_request_tool_returns_stable_network_error() -> None:
     ],
 )
 def test_http_request_tool_rejects_unsafe_response_bodies(headers, content, expected_code) -> None:
+    """Scenario: verify that http request tool rejects unsafe response bodies."""
     import httpx
 
     result = _execute(
@@ -387,6 +400,7 @@ def test_http_request_tool_rejects_unsafe_response_bodies(headers, content, expe
 
 
 def test_http_request_tool_preserves_complete_text_response() -> None:
+    """Scenario: verify that http request tool preserves complete text response."""
     import httpx
 
     body = "prefix Bearer runtime-secret api_key=returned-secret suffix"
@@ -410,6 +424,7 @@ def test_http_request_tool_preserves_complete_text_response() -> None:
 
 
 def test_http_request_tool_preserves_sensitive_query_values_in_result_url() -> None:
+    """Scenario: verify that http request tool preserves sensitive query values in result url."""
     import httpx
 
     result = _execute(
@@ -433,6 +448,7 @@ def test_http_request_tool_preserves_sensitive_query_values_in_result_url() -> N
 
 
 def test_http_request_tool_only_redacts_registered_app_key() -> None:
+    """Scenario: verify that http request tool only redacts registered app key."""
     import httpx
 
     app_key = "configured-llm-key"
@@ -470,6 +486,7 @@ def test_http_request_tool_only_redacts_registered_app_key() -> None:
 
 
 def test_http_request_tool_rejects_binary_without_content_type() -> None:
+    """Scenario: verify that http request tool rejects binary without content type."""
     import httpx
 
     result = _execute(
@@ -485,6 +502,7 @@ def test_http_request_tool_rejects_binary_without_content_type() -> None:
 
 
 def test_http_request_tool_rejects_non_json_body_before_sending() -> None:
+    """Scenario: verify that http request tool rejects non json body before sending."""
     import httpx
 
     result = _execute(

@@ -1,3 +1,5 @@
+"""Regression scenarios for app tool context. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -44,6 +46,7 @@ def _request():
 
 
 def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tmp_path) -> None:
+    """Scenario: verify that app initializes once and reuses the same ir across runs."""
     from restscope.capabilities import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
@@ -98,6 +101,7 @@ def test_app_validates_and_forwards_supported_schema_sources(
     parser_input,
     tmp_path,
 ) -> None:
+    """Scenario: verify that app validates and forwards supported schema sources."""
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -112,6 +116,7 @@ def test_app_validates_and_forwards_supported_schema_sources(
 
 
 def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) -> None:
+    """Scenario: verify that app allows retry after initialization failure."""
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -136,6 +141,7 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) ->
 
 
 def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(tmp_path) -> None:
+    """Scenario: verify that app rejects an openapi schema without operations and remains retryable."""
     app = _app(tmp_path)
     empty = {
         "openapi": "3.0.3",
@@ -155,6 +161,7 @@ def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
 
 
 def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> None:
+    """Scenario: verify that app requires initialization and clears context on close."""
     from restscope.capabilities import ToolContextError
 
     app = _app(tmp_path)

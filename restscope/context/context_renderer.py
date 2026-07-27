@@ -6,6 +6,12 @@ from .schemas import ContextBuildRequest, ContextMessage, ContextPackage, Contex
 
 
 class PromptRenderer:
+    """
+    Coordinate prompt renderer behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     def render(
         self,
         *,
@@ -18,6 +24,12 @@ class PromptRenderer:
         token_budget: int,
         context_id: str,
     ) -> ContextPackage:
+        """
+        Handle render as part of bounded prompt-context construction.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         system_message = self._render_system_message(request.role, output_contract)
         user_message = self._render_user_message(request.role, sections)
         messages = [

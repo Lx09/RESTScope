@@ -10,6 +10,12 @@ from .models import SchemaRecord
 
 
 class SchemaRepository(Protocol):
+    """
+    Define the collaborator contract for schema repository.
+
+    Concrete implementations may vary while callers in schema-source catalog access
+    depend only on these declared operations.
+    """
     def add(self, *, id: str, file_path: str | None, raw_content: str | None) -> SchemaRecord: ...
 
     def get(self, schema_id: str) -> SchemaRecord | None: ...
@@ -26,6 +32,12 @@ class SchemaRepository(Protocol):
 
 
 class SchemaUnitOfWork(Protocol):
+    """
+    Define the collaborator contract for schema unit of work.
+
+    Concrete implementations may vary while callers in schema-source catalog access
+    depend only on these declared operations.
+    """
     schemas: SchemaRepository
 
     def __enter__(self) -> "SchemaUnitOfWork": ...

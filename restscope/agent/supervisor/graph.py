@@ -39,7 +39,14 @@ class RESTScopeMainState(TypedDict, total=False):
 
 
 class RESTScopeMainGraph:
-    """Discover operations and schedule one Smoke attempt per operation/round."""
+    """Discover operations and schedule one Smoke attempt per operation per round.
+
+    The graph is a runtime queue, not a persisted test plan.  Shallow routes run
+    first because they often discover identifiers consumed by deeper routes.
+    Failed-but-retryable operations move to the next round; successful and
+    unsupported operations leave the queue; a technical error stops the entire
+    run because shared infrastructure may be unavailable.
+    """
 
     def __init__(
         self,
@@ -55,6 +62,7 @@ class RESTScopeMainGraph:
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
+        """Execute the ephemeral scheduling graph and return its final report."""
         task_id = request.metadata.get("task_id")
         attributes = {"restscope.task_id": task_id} if task_id else {}
         with self.tracing_runtime.span(
@@ -85,12 +93,15 @@ class RESTScopeMainGraph:
             return report
 
     def _build_graph(self, *, request: RESTScopeRunRequest):
+        """Create the four-node LangGraph state machine for this invocation."""
         graph = StateGraph(RESTScopeMainState)
         graph.add_node("discover_operations", self._discover_operations)
         graph.add_node("run_next_operation", self._run_next_operation(request))
         graph.add_node("advance_round", self._advance_round)
         graph.add_node("finalize_report", self._finalize_report)
 
+        # Conditional edges make queue state, rather than a precomputed plan,
+        # decide whether to run another operation, advance a round, or finish.
         graph.add_edge(START, "discover_operations")
         graph.add_conditional_edges(
             "discover_operations",
@@ -118,6 +129,7 @@ class RESTScopeMainGraph:
         self,
         state: RESTScopeMainState,
     ) -> RESTScopeMainState:
+        """Snapshot current IR operations into a shallow-route-first FIFO queue."""
         del state
         try:
             indexed = list(enumerate(self.tool_context.ir.operations.values()))
@@ -145,7 +157,10 @@ class RESTScopeMainGraph:
             return self._technical_error(exc, stage="discover_operations")
 
     def _run_next_operation(self, request: RESTScopeRunRequest):
+        """Return a graph node that consumes one ready operation."""
         def execute(state: RESTScopeMainState) -> RESTScopeMainState:
+            # Copy list/dict values before mutation because LangGraph state may
+            # retain the prior objects for tracing and state reduction.
             ready = list(state.get("ready_queue", []))
             if not ready:
                 return {}
@@ -175,6 +190,9 @@ class RESTScopeMainGraph:
 
             updates: RESTScopeMainState = {}
             retry_queue = list(state.get("retry_queue", []))
+            # Disposition is the only scheduler decision derived from the rich
+            # Smoke result.  The full result is still retained in the attempt
+            # report for later diagnosis.
             disposition = _attempt_disposition(
                 smoke_result,
                 attempt_number=attempt_number,
@@ -287,6 +305,8 @@ class RESTScopeMainGraph:
         self,
         state: RESTScopeMainState,
     ) -> RESTScopeMainState:
+        """Promote deferred operations to the next round or mark the run done."""
+
         retry = list(state.get("retry_queue", []))
         if retry:
             return {
@@ -309,6 +329,13 @@ class RESTScopeMainGraph:
         self,
         state: RESTScopeMainState,
     ) -> RESTScopeMainState:
+        """
+        Handle finalize report as part of the dynamic top-level operation scheduling
+        loop.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         operations = [
             OperationReference.model_validate(item)
             for item in state.get("operations", [])

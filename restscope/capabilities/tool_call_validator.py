@@ -17,6 +17,12 @@ class ToolCallValidator:
         self.policy = policy
 
     def validate(self, *, tool_call: ToolCall, role: str, state: dict) -> list[dict[str, Any]]:
+        """
+        Handle validate as part of the policy-controlled model tool boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         errors: list[dict[str, Any]] = []
         try:
             spec = self.registry.get_spec(tool_call.name)

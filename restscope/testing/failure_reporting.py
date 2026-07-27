@@ -73,6 +73,13 @@ def failure_messages_for_evidence(
 
 
 def _case_messages(case: FailureCaseEvidence) -> list[str]:
+    """
+    Handle case messages as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if case.transport_error_code is not None:
         detail = _normalize_text(case.transport_error_message or "")
         base = f"TRANSPORT {case.transport_error_code}"

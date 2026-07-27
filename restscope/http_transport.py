@@ -69,7 +69,13 @@ _TARGET_OPERATION_IDENTITY: ContextVar[TargetOperationIdentity | None] = (
 def target_operation_scope(
     identity: TargetOperationIdentity,
 ) -> Iterator[None]:
-    """Bind an exact operation without adding it to model-visible arguments."""
+    """Bind an exact operation without adding it to model-visible arguments.
+
+    Operation Smoke enters this context immediately around an internal HTTP
+    probe. ``ContextVar`` keeps the identity local to the current execution
+    context, and the ``finally`` reset prevents it leaking into a later ordinary
+    tool call even when the request raises.
+    """
 
     token = _TARGET_OPERATION_IDENTITY.set(identity)
     try:
@@ -79,6 +85,7 @@ def target_operation_scope(
 
 
 def current_target_operation_identity() -> TargetOperationIdentity | None:
+    """Return the internal probe identity bound in the current execution context."""
     return _TARGET_OPERATION_IDENTITY.get()
 
 
@@ -115,6 +122,12 @@ class TargetResponseProcessorResult:
 
 
 class TargetResponseProcessor(Protocol):
+    """
+    Define the collaborator contract for target response processor.
+
+    Concrete implementations may vary while callers in the RESTScope application runtime
+    depend only on these declared operations.
+    """
     def process(
         self,
         observation: TargetResponseObservation,
@@ -149,7 +162,14 @@ class TargetHTTPTimeout(TimeoutError):
 
 
 class TargetHTTPTransport:
-    """Open isolated response streams against one App-bound target."""
+    """Validate and send isolated requests to the App-bound target API.
+
+    This is the shared network trust boundary for generated batches and HTTP
+    tools. It refuses absolute/cross-host paths, unsafe per-call headers,
+    redirects, oversized response reads, and raw provider exceptions. An
+    optional synchronous processor lets the Behavior Monitor observe the same
+    bounded response before it is returned to the caller.
+    """
 
     def __init__(
         self,
@@ -162,6 +182,7 @@ class TargetHTTPTransport:
 
     @property
     def has_response_processor(self) -> bool:
+        """Report whether responses will be offered to a Behavior Monitor."""
         return self.response_processor is not None
 
     def prepare(
@@ -205,6 +226,12 @@ class TargetHTTPTransport:
         timeout_seconds: float = 30,
         request_kwargs: Mapping[str, Any] | None = None,
     ) -> Iterator[httpx.Response]:
+        """
+        Handle stream as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         prepared = self.prepare(
             method=method,
             base_url=base_url,
@@ -261,7 +288,13 @@ class TargetHTTPTransport:
         buffer_success_body_only: bool = False,
         processor_context: TargetResponseOperationContext | None = None,
     ) -> BufferedTargetResponse:
-        """Execute, optionally buffer, and synchronously process one response."""
+        """Execute, optionally buffer, and synchronously process one response.
+
+        Body limits are selected by status because diagnostic failures may need
+        a smaller retained payload than successful responses used for behavior
+        learning. Processor failures become warnings and never replace the
+        original HTTP result.
+        """
 
         with self.stream_prepared(
             prepared,
@@ -271,6 +304,8 @@ class TargetHTTPTransport:
             body: bytes | None = None
             body_truncated = False
             successful = 200 <= response.status_code < 300
+            # Choose exactly one read limit before consuming the streaming body.
+            # `None` means metadata-only and avoids reading body bytes.
             selected_body_limit = (
                 failure_response_body_limit
                 if not successful and failure_response_body_limit is not None
@@ -305,6 +340,9 @@ class TargetHTTPTransport:
                     body_truncated=body_truncated,
                 )
                 try:
+                    # Monitoring is advisory to transport. A monitor defect is
+                    # returned as a structured warning so testing still receives
+                    # the target's real status and body.
                     raw_processor_result = self.response_processor.process(
                         observation,
                         processor_context,
@@ -378,6 +416,12 @@ def build_target_url(
     path: str,
     query_items: Sequence[QueryItem] = (),
 ) -> httpx.URL:
+    """Resolve one validated relative path against the configured target origin.
+
+    Credentials, query strings, and fragments are forbidden in ``base_url`` so
+    model-generated request parts cannot smuggle authority or hidden parameters
+    through configuration composition.
+    """
     if not base_url:
         raise TargetHTTPTransportError(
             "target_base_url_not_configured",
@@ -418,11 +462,14 @@ def _encode_query(query_items: Sequence[QueryItem]) -> bytes:
 
 
 def validate_relative_target_path(path: str) -> None:
+    """Reject cross-origin, query-bearing, or traversal-like target paths."""
     if not path.startswith("/") or path.startswith("//") or "?" in path or "#" in path or "\\" in path:
         raise TargetHTTPTransportError(
             "invalid_path",
             "HTTP request path must be a single-slash relative target path",
         )
+    # Decode repeatedly to catch dot segments hidden behind nested percent
+    # encoding without normalizing the path into a different request.
     decoded = path
     for _ in range(3):
         expanded = unquote(decoded)
@@ -440,6 +487,12 @@ def merge_target_headers(
     override_context_headers: bool,
     allowed_sensitive_request_headers: Collection[str] = (),
 ) -> dict[str, str]:
+    """Merge trusted App headers with restricted per-request generated headers.
+
+    Authentication normally comes only from ``context_headers``. Generated
+    requests cannot replace secrets or connection-management headers; Cookie is
+    the narrow exception when the caller explicitly permits it.
+    """
     merged = dict(context_headers)
     existing = {name.lower(): name for name in merged}
     allowed_sensitive = {
@@ -468,6 +521,11 @@ def merge_target_headers(
 
 
 def is_sensitive_header(name: str) -> bool:
+    """
+    Return whether sensitive header applies in the RESTScope application runtime.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return (
         "authorization" in normalized

@@ -19,6 +19,12 @@ from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
 class ResponseValueMonitorORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted response value monitor rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "response_value_monitors"
     __table_args__ = (
         UniqueConstraint(
@@ -38,6 +44,12 @@ class ResponseValueMonitorORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class ResponseValueSourceORM(CreatedAtMixin, Base):
+    """
+    Map persisted response value source rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "response_value_sources"
     __table_args__ = (
         UniqueConstraint(
@@ -64,6 +76,12 @@ class ResponseValueSourceORM(CreatedAtMixin, Base):
 
 
 class ResponseValueORM(Base):
+    """
+    Map persisted response value rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "response_values"
     __table_args__ = (
         UniqueConstraint(
@@ -87,6 +105,12 @@ class ResponseValueORM(Base):
 
 
 class ResponseObservationORM(Base):
+    """
+    Map persisted response observation rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "response_observations"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -100,6 +124,12 @@ class ResponseObservationORM(Base):
 
 
 class ResponseObservationScalarORM(Base):
+    """
+    Map persisted response observation scalar rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "response_observation_scalars"
     __table_args__ = (
         UniqueConstraint(

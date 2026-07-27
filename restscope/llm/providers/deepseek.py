@@ -40,6 +40,12 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         )
 
     def _request_kwargs(self, request: LLMRequest) -> dict[str, Any]:
+        """
+        Handle request kwargs as part of provider-independent language-model invocation.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         reasoning = self._effective_reasoning(request)
         self._validate_reasoning_history(request, reasoning=reasoning)
         thinking_enabled = reasoning.mode != "disabled"
@@ -90,6 +96,12 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         raw_response: Any,
         latency_ms: int,
     ) -> LLMResponse:
+        """
+        Normalize response for provider-independent language-model invocation.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         response = super()._normalize_response(request, raw_response, latency_ms)
         if not response.tool_calls:
             return response

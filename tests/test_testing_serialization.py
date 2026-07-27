@@ -1,3 +1,5 @@
+"""Regression scenarios for testing serialization. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 
@@ -9,6 +11,7 @@ def _snapshot(operation):
 
 
 def test_openapi_serializer_applies_parameter_styles_and_json_body() -> None:
+    """Scenario: verify that openapi serializer applies parameter styles and json body."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import GeneratedTestCase
     from restscope.testing.serialization import serialize_test_case
@@ -84,6 +87,7 @@ def test_openapi_serializer_applies_parameter_styles_and_json_body() -> None:
 
 
 def test_openapi_serializer_supports_text_form_and_swagger_collection_formats() -> None:
+    """Scenario: verify that openapi serializer supports text form and swagger collection formats."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import GeneratedTestCase
     from restscope.testing.serialization import serialize_test_case
@@ -182,6 +186,7 @@ def test_openapi_serializer_supports_text_form_and_swagger_collection_formats() 
 
 
 def test_allow_reserved_query_values_are_preserved_by_target_url_preparation() -> None:
+    """Scenario: verify that allow reserved query values are preserved by target url preparation."""
     from restscope.http_transport import build_target_url
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import GeneratedTestCase

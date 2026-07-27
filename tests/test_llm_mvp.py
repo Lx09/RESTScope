@@ -1,3 +1,5 @@
+"""Regression scenarios for llm mvp. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,6 +18,7 @@ class CampaignSpec(BaseModel):
 
 
 def test_llm_schema_serialization_and_import_smoke() -> None:
+    """Scenario: verify that llm schema serialization and import smoke."""
     from restscope.llm import LLMClient, LLMMessage, LLMRequest, ToolSpec
 
     request = LLMRequest(
@@ -37,6 +40,7 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
 
 
 def test_operation_smoke_phases_select_independent_models() -> None:
+    """Scenario: verify that operation smoke phases select independent models."""
     from restscope.llm import LLMModelConfig, ModelSelector
 
     selector = ModelSelector(
@@ -67,6 +71,7 @@ def test_operation_smoke_phases_select_independent_models() -> None:
 
 
 def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
+    """Scenario: verify that reasoning config and tool provider context round trip."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest, ToolCall
 
     request = LLMRequest(
@@ -94,6 +99,7 @@ def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
 
 
 def test_llm_client_invokes_provider_once_and_propagates_failure() -> None:
+    """Scenario: verify that llm client invokes provider once and propagates failure."""
     from restscope.llm import LLMClient, LLMMessage, LLMRequest, ProviderInvokeError
     from restscope.llm.providers.base import BaseLLMProvider
     from restscope.llm.registry import LLMProviderRegistry
@@ -126,6 +132,7 @@ def test_llm_client_invokes_provider_once_and_propagates_failure() -> None:
 
 
 def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
+    """Scenario: verify that llm public contract excludes removed legacy surface."""
     import inspect
 
     import restscope.llm as llm
@@ -149,6 +156,7 @@ def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
 
 
 def test_tool_call_does_not_retain_raw_provider_payload() -> None:
+    """Scenario: verify that tool call does not retain raw provider payload."""
     from restscope.llm import ToolCall
 
     tool_call = ToolCall(id="call_1", name="catalog.inspect")
@@ -198,6 +206,7 @@ class _FakeOpenAIClient:
 
 
 def test_openai_compatible_provider_converts_schema_and_tools_without_network() -> None:
+    """Scenario: verify that openai compatible provider converts schema and tools without network."""
     from restscope.llm import LLMMessage, LLMRequest, ToolSpec
     from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -236,6 +245,7 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
 
 
 def test_openai_compatible_provider_serializes_assistant_tool_call_history() -> None:
+    """Scenario: verify that openai compatible provider serializes assistant tool call history."""
     from restscope.llm import LLMMessage, LLMRequest, ToolCall
     from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -289,6 +299,7 @@ def test_openai_compatible_provider_serializes_assistant_tool_call_history() -> 
 
 
 def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None:
+    """Scenario: verify that openai compatible provider restores internal dotted tool name."""
     from restscope.llm import LLMMessage, LLMRequest, ToolSpec
     from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 
@@ -334,6 +345,7 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
 
 
 def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
+    """Scenario: verify that model selector uses thinking and fast configs."""
     from restscope.llm import ModelSelector
     from restscope.restscope_config import RESTScopeConfig
 
@@ -366,6 +378,7 @@ def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
 def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that deepseek config defaults reasoning by model slot and registers provider."""
     from restscope.llm import ModelSelector, build_llm_registry
     from restscope.llm.providers.deepseek import DeepSeekProvider
     from restscope.restscope_config import RESTScopeConfig
@@ -394,6 +407,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
 
 
 def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> None:
+    """Scenario: verify that deepseek config parses explicit reasoning effort."""
     from restscope.llm import ModelSelector
     from restscope.restscope_config import RESTScopeConfig
 
@@ -422,6 +436,7 @@ def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> Non
 
 
 def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
+    """Scenario: verify that output validator prefers parsed json and reports errors."""
     from restscope.llm import LLMResponse, OutputValidator
 
     validator = OutputValidator()
@@ -453,6 +468,7 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
 
 
 def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_context) -> None:
+    """Scenario: verify that tool runtime selects allows denies and executes read only tools."""
     from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry, ToolSelector
     from restscope.llm import ToolCall, ToolSpec
 
@@ -508,6 +524,7 @@ def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_co
 
 
 def test_redactor_only_removes_registered_secret_values() -> None:
+    """Scenario: verify that redactor only removes registered secret values."""
     from restscope.redaction import Redactor
 
     text = "Authorization: Bearer abc.def.ghi api_key=secret123 access_token: token-value"

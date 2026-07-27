@@ -52,6 +52,12 @@ _OutputT = TypeVar("_OutputT", bound=BaseModel)
 
 
 class HTTPProbe(Protocol):
+    """
+    Define the collaborator contract for httpprobe.
+
+    Concrete implementations may vary while callers in the run-local Operation Smoke
+    diagnosis and candidate workflow depend only on these declared operations.
+    """
     def tool_spec(self, config: OperationGeneratorConfig) -> ToolSpec: ...
 
     def validate(
@@ -78,7 +84,14 @@ class OperationSmokeOutputError(RuntimeError):
 
 
 class OperationSmokeDiagnoser:
-    """Investigate failures before any parameter patch is constructed."""
+    """Investigate failures and later judge candidate effects.
+
+    Diagnosis is a FIFO state machine over at most ten unique failure
+    signatures. A model may use existing F/C/O evidence directly or declare a
+    hypothesis and probe the current operation over HTTP. Deterministic code
+    owns reference validity, tool scope, budgets, and observation ownership;
+    the model owns the semantic judgment that evidence supports a root cause.
+    """
 
     def __init__(
         self,
@@ -107,6 +120,7 @@ class OperationSmokeDiagnoser:
         private_case_evidence: Mapping[str, Any] | None = None,
         max_diagnosis_outputs_per_failure: int = 20,
     ) -> PlanSolveDiagnosisResult:
+        """Investigate one failed batch and return findings, never a concrete patch."""
         if not 1 <= max_diagnosis_outputs_per_failure <= 20:
             raise ValueError(
                 "max_diagnosis_outputs_per_failure must be between 1 and 20"
@@ -253,6 +267,13 @@ class OperationSmokeDiagnoser:
         diagnosis: PlanSolveDiagnosisResult,
         groups: list[ValidatedPatchGroup],
     ) -> PatchValidationSummary:
+        """
+        Validate effect for the run-local Operation Smoke diagnosis and candidate
+        workflow.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         target_refs = [
             f"F{index}"
             for index, _ in enumerate(
@@ -464,6 +485,7 @@ class OperationSmokeDiagnoser:
         private_case_evidence: Mapping[str, Any] | None,
         max_outputs_per_failure: int,
     ) -> PlanSolveDiagnosisResult:
+        """Run the bounded FIFO of initial and probe-discovered failures."""
         if not self.planning_model.enabled:
             raise OperationSmokeOutputError(
                 "operation_smoke_planning_model_not_configured",
@@ -474,6 +496,9 @@ class OperationSmokeDiagnoser:
                 "operation_smoke_report_mismatch",
                 "Execution report and generator config identify different operations",
             )
+        # The journal assigns short stable aliases (F/C/O) and retains richer
+        # private evidence only in memory. Models cite aliases, not arbitrary
+        # copies of case or response text.
         journal = EvidenceJournal.from_batch(
             report=report,
             config=config,
@@ -491,6 +516,8 @@ class OperationSmokeDiagnoser:
         actionable: list[ActionableFailure] = []
         deferred: list[DeferredFailure] = []
 
+        # The queue may grow while consumed: probes can reveal another unique
+        # failure, appended only while the shared ten-item capacity remains.
         position = 0
         while position < len(queue):
             failure_ref = queue[position]
@@ -539,6 +566,8 @@ class OperationSmokeDiagnoser:
             else:
                 deferred.append(outcome)
 
+            # Only observations added by this investigation can introduce new
+            # queue items. Their provenance inherits all original root failures.
             new_observations = [
                 reference
                 for reference in journal.observation_aliases
@@ -614,12 +643,15 @@ class OperationSmokeDiagnoser:
         ActionableFailure | DeferredFailure,
         FailureInvestigationSummary,
     ]:
+        """Run the decision/probe loop for exactly one active failure."""
         state = FailureInvestigationState(
             failure_ref=failure_ref,
             root_failure_refs=root_failure_refs,
         )
 
         while state.valid_outputs < max_outputs:
+            # HTTP capability remains hidden until a hypothesis states which
+            # inputs change and what response change would confirm it.
             prompt = build_failure_investigation_prompt(
                 config=config,
                 journal=journal,
@@ -669,6 +701,8 @@ class OperationSmokeDiagnoser:
                 )
                 if progress_error is not None:
                     errors.append(progress_error)
+            # Invalid schema/tool output does not spend the valid-output budget,
+            # but three consecutive invalid replies defer this failure.
             while errors:
                 state.consecutive_invalid_outputs += 1
                 state.invalid_outputs += 1
@@ -730,6 +764,8 @@ class OperationSmokeDiagnoser:
             state.consecutive_invalid_outputs = 0
             state.valid_outputs += 1
             if response.tool_calls:
+                # Every call was atomically prevalidated by `_failure_response`;
+                # each result now becomes an Observation owned by this hypothesis.
                 assert self.http_probe is not None
                 for tool_call in response.tool_calls:
                     result = self.http_probe.execute(
@@ -746,6 +782,8 @@ class OperationSmokeDiagnoser:
 
             assert decision is not None
             if decision.action in {"ready", "confirmed"}:
+                # `ready` uses existing evidence; `confirmed` uses observations
+                # owned by the active hypothesis. Both produce the same handoff.
                 assert decision.cause is not None
                 affected_inputs = list(
                     dict.fromkeys(
@@ -777,6 +815,8 @@ class OperationSmokeDiagnoser:
                     http_tool_calls=state.http_tool_calls,
                 )
             if decision.action == "hypothesis":
+                # A replacement hypothesis inherits only observations it cites.
+                # New probes begin a fresh ownership set.
                 state.hypothesis_count += 1
                 assert decision.hypothesis is not None
                 assert decision.expected_outcome is not None
@@ -826,6 +866,13 @@ class OperationSmokeDiagnoser:
         hypothesis_observation_refs: set[str],
         tools_allowed: bool,
     ) -> tuple[FailureDecision | None, list[str]]:
+        """
+        Handle failure response as part of the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         tool_errors = _tool_response_errors(
             response,
             tools_allowed=tools_allowed,
@@ -941,6 +988,13 @@ class OperationSmokeDiagnoser:
         tools: list[ToolSpec] | None = None,
         tool_choice: str = "none",
     ) -> LLMResponse:
+        """
+        Handle repair as part of the run-local Operation Smoke diagnosis and candidate
+        workflow.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         return self.client.invoke(
             self._request(
                 model=model,
@@ -980,6 +1034,13 @@ def _hypothesis_progress_error(
     *,
     state: FailureInvestigationState,
 ) -> tuple[str | None, bool]:
+    """
+    Handle hypothesis progress error as part of the run-local Operation Smoke diagnosis
+    and candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if decision is None or decision.action != "hypothesis":
         return None, False
     assert decision.expected_outcome is not None
@@ -1030,6 +1091,13 @@ def _deferred_outcome(
     hypothesis_count: int,
     http_tool_calls: int,
 ) -> tuple[DeferredFailure, FailureInvestigationSummary]:
+    """
+    Handle deferred outcome as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     return (
         DeferredFailure(
             failure_ref=failure_ref,
@@ -1116,6 +1184,13 @@ def _effect_decision_errors(
 
 
 def _effect_case_evidence(case) -> dict[str, Any]:
+    """
+    Handle effect case evidence as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     generated = case.generated_test_case
     return {
         "case_ref": case.case_id,

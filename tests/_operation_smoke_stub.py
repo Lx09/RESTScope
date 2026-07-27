@@ -1,3 +1,5 @@
+"""Reusable test support for operation smoke stub scenarios; this module is not production runtime code."""
+
 from __future__ import annotations
 
 from typing import Any

@@ -40,6 +40,12 @@ class ResourceCatalogConflict(ValueError):
 
 
 class SqlAlchemyResourceCatalogRepository:
+    """
+    Define the collaborator contract for sql alchemy resource catalog repository.
+
+    Concrete implementations may vary while callers in the repository and database
+    persistence boundary depend only on these declared operations.
+    """
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -50,6 +56,12 @@ class SqlAlchemyResourceCatalogRepository:
         groups: list[DetectedResourceGroup],
         observed_at: datetime,
     ) -> None:
+        """
+        Record groups for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         for group in groups:
             if not group.has_resource:
                 self._upsert_rule(
@@ -92,6 +104,12 @@ class SqlAlchemyResourceCatalogRepository:
         self.session.flush()
 
     def list_rules(self, operation_key: str) -> list[LearnedResourceRule]:
+        """
+        Return rules for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         rows = self.session.scalars(
             select(OperationResourceRuleORM)
             .where(OperationResourceRuleORM.operation_key == operation_key)
@@ -105,6 +123,12 @@ class SqlAlchemyResourceCatalogRepository:
         limit: int | None = None,
         aliases_per_resource: int | None = None,
     ) -> list[ResourceNameSummary]:
+        """
+        Return resources for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         from restscope.agent.api_behavior_monitor.resource_schemas import (
             ResourceNameSummary,
         )
@@ -174,6 +198,12 @@ class SqlAlchemyResourceCatalogRepository:
         warning: ResourceMonitorWarning,
         observed_at: datetime,
     ) -> None:
+        """
+        Record error for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         rule = self.session.scalar(
             select(OperationResourceRuleORM).where(
                 OperationResourceRuleORM.operation_key == operation.operation_key,
@@ -218,6 +248,12 @@ class SqlAlchemyResourceCatalogRepository:
         warning: ResourceMonitorWarning,
         observed_at: datetime,
     ) -> None:
+        """
+        Record operation error for the repository and database persistence boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         group_paths = self.session.scalars(
             select(OperationResourceRuleORM.group_path).where(
                 OperationResourceRuleORM.operation_key == operation.operation_key
@@ -232,6 +268,13 @@ class SqlAlchemyResourceCatalogRepository:
             )
 
     def clear_operation_errors(self, operation_key: str) -> None:
+        """
+        Handle clear operation errors as part of the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         self.session.execute(
             delete(ResourceMonitorErrorORM).where(
                 ResourceMonitorErrorORM.operation_key == operation_key
@@ -240,6 +283,13 @@ class SqlAlchemyResourceCatalogRepository:
         self.session.flush()
 
     def lookup(self, request: ResourceLookupRequest) -> ResourceLookupResult:
+        """
+        Look up bounded evidence used by the repository and database persistence
+        boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         from restscope.agent.api_behavior_monitor.resource_schemas import (
             ResourceIdentifierSummary,
             ResourceLookupResult,
@@ -324,6 +374,12 @@ class SqlAlchemyResourceCatalogRepository:
         )
 
     def _resolve_resource(self, group: DetectedResourceGroup) -> ResourceORM:
+        """
+        Resolve resource for the repository and database persistence boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         assert group.resource_name is not None
         normalized_aliases = {
             _normalize_name(value)
@@ -361,6 +417,12 @@ class SqlAlchemyResourceCatalogRepository:
         return resource
 
     def _add_aliases(self, resource: ResourceORM, aliases: list[str]) -> None:
+        """
+        Handle add aliases as part of the repository and database persistence boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         seen: set[str] = set()
         for alias in aliases:
             normalized = _normalize_name(alias)
@@ -395,6 +457,12 @@ class SqlAlchemyResourceCatalogRepository:
         operation: MonitoredOperation,
         group: DetectedResourceGroup,
     ) -> OperationResourceRuleORM:
+        """
+        Handle upsert rule as part of the repository and database persistence boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         rule = self.session.scalar(
             select(OperationResourceRuleORM).where(
                 OperationResourceRuleORM.operation_key == operation.operation_key,
@@ -452,6 +520,13 @@ class SqlAlchemyResourceCatalogRepository:
         value: str | int,
         observed_at: datetime,
     ) -> ResourceIdentifierORM:
+        """
+        Handle upsert identifier as part of the repository and database persistence
+        boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         value_type, value_text = _encode_identifier(value)
         row = self.session.scalar(
             select(ResourceIdentifierORM).where(
@@ -481,6 +556,12 @@ class SqlAlchemyResourceCatalogRepository:
         rule: OperationResourceRuleORM,
         observed_at: datetime,
     ) -> None:
+        """
+        Handle upsert usage as part of the repository and database persistence boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         row = self.session.scalar(
             select(ResourceOperationUsageORM).where(
                 ResourceOperationUsageORM.identifier_id == identifier.id,
@@ -501,6 +582,12 @@ class SqlAlchemyResourceCatalogRepository:
             row.latest_seen_at = observed_at
 
     def _to_rule(self, row: OperationResourceRuleORM) -> LearnedResourceRule:
+        """
+        Handle to rule as part of the repository and database persistence boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         from restscope.agent.api_behavior_monitor.resource_schemas import (
             LearnedResourceRule,
             MonitoredOperation,
@@ -536,6 +623,13 @@ class SqlAlchemyResourceCatalogRepository:
         resource_id: str,
         identifier_ids: list[str] | None,
     ) -> list[ResourceOperationSummary]:
+        """
+        Handle operation summaries as part of the repository and database persistence
+        boundary.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         from restscope.agent.api_behavior_monitor.resource_schemas import (
             ResourceOperationSummary,
         )

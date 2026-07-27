@@ -48,6 +48,13 @@ class GeneratorConfigError(ValueError):
 
 
 class GeneratorConfigRevisionConflict(GeneratorConfigError):
+    """
+    Coordinate generator config revision conflict behavior for deterministic request
+    generation, constraint solving, and execution.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     def __init__(self, *, expected: int, actual: int | None) -> None:
         actual_text = str(actual) if actual is not None else "changed concurrently"
         super().__init__(
@@ -63,16 +70,37 @@ class GeneratorConfigCatalog:
         self.unit_of_work_factory = unit_of_work_factory
 
     def get_operation(self, operation_key: str) -> OperationGeneratorConfig | None:
+        """
+        Return operation for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.generator_configs.get(operation_key)
 
     def inspect_operation(self, operation_key: str) -> OperationGeneratorConfig:
+        """
+        Handle inspect operation as part of deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self._require_existing(operation_key)
 
     def list_revisions(
         self,
         operation_key: str,
     ) -> list[GeneratorConfigRevision]:
+        """
+        Return revisions for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.generator_configs.list_revisions(operation_key)
 
@@ -81,6 +109,13 @@ class GeneratorConfigCatalog:
         operation_key: str,
         revision: int,
     ) -> GeneratorConfigRevision | None:
+        """
+        Return revision for deterministic request generation, constraint solving, and
+        execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             return uow.generator_configs.get_revision(operation_key, revision)
 
@@ -110,6 +145,13 @@ class GeneratorConfigCatalog:
         active_media_type: str | None,
         configs: Sequence[InputGeneratorConfig],
     ) -> OperationGeneratorConfig:
+        """
+        Handle replace operation as part of deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         current = self._require_existing(operation_key)
         normalized = [
             InputGeneratorConfig.model_validate(config)
@@ -137,6 +179,13 @@ class GeneratorConfigCatalog:
         expected_revision: int,
         updates: Sequence[InputGeneratorPatch],
     ) -> OperationGeneratorConfig:
+        """
+        Handle patch operation as part of deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         current = self._require_existing(operation_key)
         updated, patched_node_ids = _apply_patches(current, updates)
         _validate_configs(
@@ -182,6 +231,13 @@ class GeneratorConfigCatalog:
         updates: Sequence[InputGeneratorPatch],
         hypothesis: dict,
     ) -> OperationGeneratorConfig:
+        """
+        Handle stage candidate as part of deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         current = self._require_existing(operation_key)
         updated, patched_node_ids = _apply_patches(current, updates)
         _validate_configs(
@@ -208,6 +264,13 @@ class GeneratorConfigCatalog:
         candidate_revision: int,
         evaluation: dict,
     ) -> GeneratorConfigRevision:
+        """
+        Handle accept candidate as part of deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             current = uow.generator_configs.get(operation_key)
             if current is None or current.revision != candidate_revision:
@@ -336,6 +399,13 @@ class GeneratorConfigCatalog:
         candidate_revision: int,
         evaluation: dict,
     ) -> OperationGeneratorConfig:
+        """
+        Handle reject candidate and rollback as part of deterministic request
+        generation, constraint solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         with self.unit_of_work_factory() as uow:
             current = uow.generator_configs.get(operation_key)
             if current is None or current.revision != candidate_revision:
@@ -402,6 +472,13 @@ class GeneratorConfigCatalog:
         self,
         operation_key: str,
     ) -> OperationGeneratorConfig:
+        """
+        Handle recover interrupted candidate as part of deterministic request
+        generation, constraint solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         current = self._require_existing(operation_key)
         with self.unit_of_work_factory() as uow:
             revision = uow.generator_configs.get_revision(
@@ -417,6 +494,13 @@ class GeneratorConfigCatalog:
         )
 
     def require_operation(self, operation_key: str) -> OperationGeneratorConfig:
+        """
+        Handle require operation as part of deterministic request generation, constraint
+        solving, and execution.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         current = self._require_existing(operation_key)
         if not current.enabled:
             reasons = [reason.code for reason in current.disabled_reasons]
@@ -447,6 +531,13 @@ class GeneratorConfigCatalog:
         lifecycle: str = "accepted",
         hypothesis: dict | None = None,
     ) -> OperationGeneratorConfig:
+        """
+        Handle replace as part of deterministic request generation, constraint solving,
+        and execution.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         if current.revision != expected_revision:
             raise GeneratorConfigRevisionConflict(
                 expected=expected_revision,
@@ -512,6 +603,13 @@ def _apply_patches(
     current: OperationGeneratorConfig,
     updates: Sequence[InputGeneratorPatch],
 ) -> tuple[list[InputGeneratorConfig], set[str]]:
+    """
+    Apply patches for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     patches = [InputGeneratorPatch.model_validate(update) for update in updates]
     if not patches:
         raise GeneratorConfigError(
@@ -585,6 +683,13 @@ def _merge_candidate_subset(
     *,
     accepted_node_ids: set[str],
 ) -> OperationGeneratorConfig:
+    """
+    Merge candidate subset for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     candidate_by_id = {
         item.input_node_id: item for item in candidate.configs
     }
@@ -643,6 +748,13 @@ def _normalize_media_type(
 def _validate_initial_record(
     record: OperationGeneratorConfig,
 ) -> OperationGeneratorConfig:
+    """
+    Validate initial record for deterministic request generation, constraint solving,
+    and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     try:
         _validate_configs(
             record,
@@ -693,6 +805,13 @@ def _validate_configs(
     configs: list[InputGeneratorConfig],
     enforce_schema: bool,
 ) -> None:
+    """
+    Validate configs for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     nodes = {
         node.input_node_id: node
         for node in current.snapshot.input_nodes
@@ -785,6 +904,13 @@ def _strategy_can_build_node(
     node: InputNodeSnapshot,
     config: InputGeneratorConfig,
 ) -> bool:
+    """
+    Handle strategy can build node as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     strategy = config.strategy
     if node.node_kind == "request_body":
         return isinstance(strategy, RequestBodyGenerator)
@@ -821,6 +947,13 @@ def _media_body_strategy_errors(
     media_type: str | None,
     configs: dict[str, InputGeneratorConfig],
 ) -> set[str]:
+    """
+    Handle media body strategy errors as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if media_type is None:
         return set()
     media_node_id = current.snapshot.media_type_node_ids.get(media_type)
@@ -861,6 +994,13 @@ def _container_configuration_errors(
     configs: dict[str, InputGeneratorConfig],
     selected_node_ids: set[str],
 ) -> set[str]:
+    """
+    Handle container configuration errors as part of deterministic request generation,
+    constraint solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     invalid: set[str] = set()
     for node in nodes.values():
         if node.input_node_id not in selected_node_ids:
@@ -906,6 +1046,13 @@ def _selected_node_ids(
     current: OperationGeneratorConfig,
     active_media_type: str | None,
 ) -> set[str]:
+    """
+    Handle selected node ids as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     snapshot = current.snapshot
     active_root_id = (
         snapshot.media_type_node_ids.get(active_media_type)
@@ -964,6 +1111,13 @@ def _strategy_matches_node(
     node: InputNodeSnapshot,
     config: InputGeneratorConfig,
 ) -> bool:
+    """
+    Handle strategy matches node as part of deterministic request generation, constraint
+    solving, and execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     strategy = config.strategy
     if node.node_kind == "request_body":
         return isinstance(strategy, RequestBodyGenerator)

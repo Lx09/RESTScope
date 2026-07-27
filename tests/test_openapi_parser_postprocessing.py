@@ -1,3 +1,5 @@
+"""Regression scenarios for openapi parser postprocessing. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from dataclasses import fields
@@ -33,6 +35,7 @@ def _spec_with_duplicate_operation_id() -> dict:
 
 
 def test_parser_builds_only_operation_lookup_indexes() -> None:
+    """Scenario: verify that parser builds only operation lookup indexes."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.openapi_parser.ir import SpecIndexesIR
 
@@ -59,6 +62,7 @@ def test_parser_builds_only_operation_lookup_indexes() -> None:
 
 
 def test_duplicate_operation_id_warning_is_preserved() -> None:
+    """Scenario: verify that duplicate operation id warning is preserved."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser().parse(_spec_with_duplicate_operation_id())
@@ -73,6 +77,7 @@ def test_duplicate_operation_id_warning_is_preserved() -> None:
 
 
 def test_postprocess_facade_only_exports_schema_sync_utilities() -> None:
+    """Scenario: verify that postprocess facade only exports schema sync utilities."""
     from restscope.openapi_parser import postprocess
 
     assert postprocess.__all__ == [
@@ -83,6 +88,7 @@ def test_postprocess_facade_only_exports_schema_sync_utilities() -> None:
 
 
 def test_removed_postprocessing_ir_types_are_not_available() -> None:
+    """Scenario: verify that removed postprocessing ir types are not available."""
     from restscope.openapi_parser import ir
 
     for removed_name in (

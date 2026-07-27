@@ -6,7 +6,12 @@ from restscope.llm.schemas import LLMModelConfig, LLMReasoningConfig
 
 
 class ModelSelector:
-    """Map context roles to thinking or fast model settings."""
+    """Map semantic Agent roles to one of the two configured model profiles.
+
+    Callers request a role rather than a provider/model name. This keeps model
+    choice centralized and applies deterministic temperature zero to structured
+    diagnosis, patch, and effect-validation protocols.
+    """
 
     THINKING_ROLES = {
         "planner",
@@ -33,11 +38,13 @@ class ModelSelector:
 
     @classmethod
     def from_config(cls, llm_config) -> "ModelSelector":
+        """Translate application settings into thinking and fast runtime profiles."""
         thinking = cls._from_model_config("thinking", llm_config.thinking)
         fast = cls._from_model_config("fast", llm_config.fast)
         return cls(thinking=thinking, fast=fast)
 
     def select(self, role: str) -> LLMModelConfig:
+        """Return a copied profile labeled and adjusted for the requested role."""
         if role in self.FAST_ROLES:
             selected = self.fast
         elif role in self.THINKING_ROLES:

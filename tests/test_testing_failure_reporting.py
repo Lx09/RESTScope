@@ -1,7 +1,10 @@
+"""Regression scenarios for testing failure reporting. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 
 def test_json_failure_messages_follow_priority_and_keep_case_associations() -> None:
+    """Scenario: verify that json failure messages follow priority and keep case associations."""
     from restscope.testing.failure_reporting import (
         FailureCaseEvidence,
         build_batch_failure_report,
@@ -76,6 +79,7 @@ def test_json_failure_messages_follow_priority_and_keep_case_associations() -> N
 
 
 def test_nested_error_text_transport_and_fallback_messages_are_deterministic() -> None:
+    """Scenario: verify that nested error text transport and fallback messages are deterministic."""
     from restscope.testing.failure_reporting import (
         FailureCaseEvidence,
         build_batch_failure_report,
@@ -138,6 +142,7 @@ def test_nested_error_text_transport_and_fallback_messages_are_deterministic() -
 
 
 def test_failure_report_ignores_2xx_and_bounds_messages_and_unique_count() -> None:
+    """Scenario: verify that failure report ignores successful 2xx  and bounds messages and unique count."""
     from restscope.testing.failure_reporting import (
         MAX_FAILURE_MESSAGE_BYTES,
         MAX_UNIQUE_FAILURE_MESSAGES,
@@ -182,6 +187,7 @@ def test_failure_report_ignores_2xx_and_bounds_messages_and_unique_count() -> No
 
 
 def test_empty_failure_report_is_part_of_the_public_execution_contract() -> None:
+    """Scenario: verify that empty failure report is part of the public execution contract."""
     from restscope.testing import BatchFailureReport, OperationExecutionReport
 
     report = OperationExecutionReport(

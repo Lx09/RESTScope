@@ -6,7 +6,19 @@ from .schemas import ContextSection, estimate_tokens
 
 
 class ContextBudgetManager:
+    """
+    Coordinate context budget manager behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     def fit(self, sections: list[ContextSection], token_budget: int) -> list[ContextSection]:
+        """
+        Handle fit as part of bounded prompt-context construction.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         required = [section for section in sections if section.required]
         optional = sorted(
             [section for section in sections if not section.required],

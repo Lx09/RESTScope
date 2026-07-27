@@ -33,6 +33,12 @@ MessageRole = Literal["system", "user", "assistant"]
 
 
 class SourceRef(BaseModel):
+    """
+    Coordinate source ref behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     source_table: str
     source_id: str
     field: str | None = None
@@ -41,6 +47,12 @@ class SourceRef(BaseModel):
 
 
 class ContextSection(BaseModel):
+    """
+    Coordinate context section behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     kind: ContextSectionKind
     title: str
     content: str
@@ -51,16 +63,34 @@ class ContextSection(BaseModel):
     source_refs: list[SourceRef] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
+        """
+        Handle model post init as part of bounded prompt-context construction.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.estimated_tokens <= 0:
             object.__setattr__(self, "estimated_tokens", estimate_tokens(self.title, self.content))
 
 
 class ContextMessage(BaseModel):
+    """
+    Coordinate context message behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     role: MessageRole
     content: str
 
 
 class OutputContract(BaseModel):
+    """
+    Coordinate output contract behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     name: str
     description: str
     json_schema: dict[str, Any]
@@ -69,6 +99,12 @@ class OutputContract(BaseModel):
 
 
 class ContextPackage(BaseModel):
+    """
+    Coordinate context package behavior for bounded prompt-context construction.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     id: str
     task_id: str
     schema_id: str
@@ -88,6 +124,13 @@ class ContextPackage(BaseModel):
 
 
 class ContextBuildRequest(BaseModel):
+    """
+    Carry validated context build request data across bounded prompt-context
+    construction.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     task_id: str
     schema_id: str
     role: ContextRole
@@ -102,5 +145,10 @@ class ContextBuildRequest(BaseModel):
 
 
 def estimate_tokens(*parts: str) -> int:
+    """
+    Estimate tokens for bounded prompt-context construction.
+
+    The annotated arguments and return type define the data boundary used by callers.
+    """
     text = " ".join(part for part in parts if part)
     return max(1, len(text.split()))

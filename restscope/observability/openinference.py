@@ -82,6 +82,12 @@ def _message_attribute_group(
     direction: str,
     index: int,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """
+    Handle message attribute group as part of bounded, redacted tracing and telemetry.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     value = message if isinstance(message, dict) else {}
     prefix = f"llm.{direction}_messages.{index}.message"
     identities = [(f"{prefix}.role", str(value.get("role", "")))]

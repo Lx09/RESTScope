@@ -1,3 +1,5 @@
+"""Regression scenarios for smoke tracking. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -60,6 +62,7 @@ def _supervisor_context():
 
 
 def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
+    """Scenario: verify that supervisor records each smoke attempt as graph child."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
     from restscope.agent.operation_smoke import OperationSmokeResult
 
@@ -195,6 +198,7 @@ def _smoke_runtime(tmp_path: Path):
 def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that smoke batch case and behavior tracking form one hierarchy."""
     from restscope.agent.operation_smoke import OperationSmokeRequest
     from restscope.capabilities import ToolContext
 
@@ -255,6 +259,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
 def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that smoke diagnosis groups plan llm calls under agent span."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
     from restscope.llm import (
         LLMClient,

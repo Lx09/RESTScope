@@ -1,7 +1,10 @@
+"""Regression scenarios for memory mvp. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 
 def test_memory_schema_defaults_and_source_refs() -> None:
+    """Scenario: verify that memory schema defaults and source refs."""
     from restscope.memory import MemoryItem, MemoryPackage
 
     item = MemoryItem(
@@ -26,6 +29,7 @@ def test_memory_schema_defaults_and_source_refs() -> None:
 
 
 def test_ranker_and_compressor_prioritize_and_budget_items() -> None:
+    """Scenario: verify that ranker and compressor prioritize and budget items."""
     from restscope.memory import MemoryCompressor, MemoryItem, MemoryQuery, MemoryRanker
 
     high = MemoryItem(

@@ -40,6 +40,12 @@ from .schemas import (
 
 
 class OperationBatchRunner(Protocol):
+    """
+    Define the collaborator contract for operation batch runner.
+
+    Concrete implementations may vary while callers in the run-local Operation Smoke
+    diagnosis and candidate workflow depend only on these declared operations.
+    """
     def run_operation(
         self,
         context,
@@ -52,7 +58,15 @@ class OperationBatchRunner(Protocol):
 
 
 class OperationSmokeAgent:
-    """Improve generators using whole-batch evidence and whole-batch validation."""
+    """Run the feedback loop that tests and conditionally improves one operation.
+
+    The Agent first executes a real baseline batch.  If it fails, the diagnoser
+    investigates root causes; deterministic grouping converts actionable
+    findings into isolated tasks; a fresh Parameter Patch Agent proposes and
+    locally samples each group; and one merged candidate batch measures the real
+    HTTP effect.  Generator changes are durable only after effect validation,
+    while accepted Constraints remain local to this ``run`` call.
+    """
 
     def __init__(
         self,
@@ -78,6 +92,7 @@ class OperationSmokeAgent:
         context,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
+        """Run one traced Smoke lifecycle and summarize it for the Supervisor."""
         with self.tracing_runtime.span(
             "OperationSmokeAgent.run",
             kind="AGENT",
@@ -148,6 +163,10 @@ class OperationSmokeAgent:
         context,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
+        """Execute baseline → diagnosis → patch → candidate rounds."""
+
+        # Recovering an interrupted candidate ensures a previous crashed run
+        # cannot accidentally become the new baseline.
         current = self.config_catalog.get_operation(request.operation_key)
         if current is None:
             return OperationSmokeResult(
@@ -178,6 +197,9 @@ class OperationSmokeAgent:
                 diagnoses=[],
                 failure_kind="unsupported_operation",
             )
+        # These lists form the final audit report.  Constraints are deliberately
+        # kept in memory because they are hypotheses for this Smoke run, not
+        # durable facts about the API.
         reports: list[OperationExecutionReport] = []
         diagnoses: list[PlanSolveDiagnosisResult] = []
         success_rate = 0.0
@@ -188,11 +210,15 @@ class OperationSmokeAgent:
 
         try:
             while True:
+                # Reference-backed generators must point to value pools that
+                # still exist before any request is generated.
                 _assert_reference_invariants(
                     current,
                     self.reference_values,
                 )
 
+                # Phase 1: execute a baseline using the same seed on every
+                # feedback round so changes are compared against like cases.
                 report, private_case_evidence = _run_smoke_batch(
                     self.batch_runner,
                     context=context,
@@ -234,6 +260,9 @@ class OperationSmokeAgent:
                         failure_kind="threshold_exhausted",
                     )
 
+                # Phase 2: explain failures before changing any generator.
+                # Private evidence contains richer case data than the public
+                # report and never becomes persistent Agent memory.
                 diagnosis = self.diagnoser.diagnose(
                     report=report,
                     config=current,
@@ -266,6 +295,9 @@ class OperationSmokeAgent:
                         "Operation Smoke patch-phase dependencies are not "
                         "configured"
                     )
+                # Phase 3: connect solutions that touch the same inputs (or
+                # explicitly interacting inputs).  This grouping is
+                # deterministic and does not ask another model to invent JSON.
                 grouping = self.group_planner.group(
                     actionable_failures=diagnosis.actionable_failures,
                     config=current,
@@ -295,6 +327,9 @@ class OperationSmokeAgent:
                 provisional_config = current
                 provisional_constraints = list(active_constraints.values())
                 semantic = build_semantic_input_map(current)
+                # Each group receives a brand-new Agent instance.  Successful
+                # groups are applied provisionally so later groups must remain
+                # compatible; failed groups contribute nothing.
                 for task in grouping.tasks:
                     input_node_ids = {
                         semantic.node_by_handle[input_handle]
@@ -369,6 +404,9 @@ class OperationSmokeAgent:
                         failure_kind="diagnosis_inconclusive",
                     )
 
+                # Merge only locally validated groups into one candidate.  A
+                # single real batch is important: separate batches would miss
+                # cross-group interactions.
                 updates = [
                     update
                     for group in successful_groups
@@ -404,6 +442,8 @@ class OperationSmokeAgent:
                         },
                     )
 
+                # Phase 4: run the candidate with the baseline case count and
+                # seed.  The ten local patch samples above are never HTTP cases.
                 candidate_report, _ = _run_smoke_batch(
                     self.batch_runner,
                     context=context,
@@ -427,6 +467,9 @@ class OperationSmokeAgent:
                     threshold=request.success_rate_threshold,
                 )
                 success_rate = float(candidate_evaluation["success_rate"])
+                # The effect validator sees failures and observed outcomes, not
+                # generator/constraint syntax.  Syntax was already checked by
+                # the Parameter Patch Agent's deterministic validators.
                 validation = self.diagnoser.validate_effect(
                     baseline_report=report,
                     candidate_report=candidate_report,
@@ -445,6 +488,9 @@ class OperationSmokeAgent:
                     update={"patch_validation": validation}
                 )
                 diagnoses[-1] = diagnosis
+                # Acceptance is atomic by group.  Only generator inputs from
+                # accepted groups are finalized, and only their constraints
+                # continue into the next in-memory feedback round.
                 accepted_group_ids = set(validation.accepted_group_ids)
                 accepted_groups = [
                     group
@@ -540,6 +586,13 @@ class OperationSmokeAgent:
         threshold: float,
         candidate_change_count: int,
     ) -> OperationGeneratorConfig:
+        """
+        Handle discard pending candidate as part of the run-local Operation Smoke
+        diagnosis and candidate workflow.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         history = self.config_catalog.get_revision(
             current.operation_key,
             current.revision,
@@ -592,6 +645,13 @@ def _defer_actionable_items(
     diagnosis: PlanSolveDiagnosisResult,
     reasons_by_item_id: dict[str, str],
 ) -> PlanSolveDiagnosisResult:
+    """
+    Handle defer actionable items as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if not reasons_by_item_id:
         return diagnosis
     remaining = [
@@ -654,6 +714,13 @@ def _candidate_evaluation(
     change_count: int,
     success_override: bool,
 ) -> dict:
+    """
+    Handle candidate evaluation as part of the run-local Operation Smoke diagnosis and
+    candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     accepted_count = (
         change_count
         if success_override
@@ -756,6 +823,13 @@ def _prepare_reference_updates(
     updates,
     selected_reference_options,
 ):
+    """
+    Handle prepare reference updates as part of the run-local Operation Smoke diagnosis
+    and candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     prepare = getattr(reference_values, "prepare_updates", None)
     if not callable(prepare):
         prepared = updates
@@ -804,6 +878,12 @@ def _run_smoke_batch(
     seed: int,
     constraints: ConstraintSet | None,
 ) -> tuple[OperationExecutionReport, dict[str, object]]:
+    """
+    Run smoke batch for the run-local Operation Smoke diagnosis and candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     run_for_smoke = getattr(runner, "run_operation_for_smoke", None)
     if not callable(run_for_smoke):
         if constraints is not None:

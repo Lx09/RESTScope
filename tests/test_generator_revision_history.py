@@ -1,3 +1,5 @@
+"""Regression scenarios for generator revision history. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -54,6 +56,7 @@ def _catalog(tmp_path: Path):
 def test_candidate_preview_validates_patch_without_writing_revision(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that candidate preview validates patch without writing revision."""
     catalog, operation = _catalog(tmp_path)
     baseline = catalog.inspect_operation(operation.operation_key)
     node_id = baseline.configs[0].input_node_id
@@ -84,6 +87,7 @@ def test_candidate_preview_validates_patch_without_writing_revision(
 def test_candidate_revision_can_be_accepted_with_batch_evaluation(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that candidate revision can be accepted with batch evaluation."""
     catalog, operation = _catalog(tmp_path)
     current = catalog.inspect_operation(operation.operation_key)
     node_id = current.configs[0].input_node_id
@@ -127,6 +131,7 @@ def test_candidate_revision_can_be_accepted_with_batch_evaluation(
 def test_rejected_candidate_creates_compensating_rollback_revision(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that rejected candidate creates compensating rollback revision."""
     catalog, operation = _catalog(tmp_path)
     baseline = catalog.inspect_operation(operation.operation_key)
     node_id = baseline.configs[0].input_node_id
@@ -172,6 +177,7 @@ def test_rejected_candidate_creates_compensating_rollback_revision(
 def test_interrupted_candidate_is_automatically_rolled_back(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that interrupted candidate is automatically rolled back."""
     catalog, operation = _catalog(tmp_path)
     current = catalog.inspect_operation(operation.operation_key)
     node_id = current.configs[0].input_node_id
@@ -201,6 +207,7 @@ def test_interrupted_candidate_is_automatically_rolled_back(
 def test_direct_catalog_patch_is_recorded_as_an_accepted_revision(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that direct catalog patch is recorded as an accepted revision."""
     catalog, operation = _catalog(tmp_path)
     current = catalog.inspect_operation(operation.operation_key)
 
@@ -222,6 +229,7 @@ def test_direct_catalog_patch_is_recorded_as_an_accepted_revision(
 def test_candidate_finalization_accepts_only_validated_changes_atomically(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that candidate finalization accepts only validated changes atomically."""
     catalog, operation = _catalog(tmp_path)
     baseline = catalog.inspect_operation(operation.operation_key)
     path_node_id = baseline.configs[0].input_node_id
@@ -270,6 +278,7 @@ def test_candidate_finalization_accepts_only_validated_changes_atomically(
 def test_candidate_finalization_with_no_accepted_changes_restores_parent_without_rollback(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that candidate finalization with no accepted changes restores parent without rollback."""
     catalog, operation = _catalog(tmp_path)
     baseline = catalog.inspect_operation(operation.operation_key)
     node_id = baseline.configs[0].input_node_id
@@ -311,6 +320,7 @@ def test_candidate_finalization_with_no_accepted_changes_restores_parent_without
 def test_candidate_finalization_rejects_nodes_not_changed_by_candidate(
     tmp_path: Path,
 ) -> None:
+    """Scenario: verify that candidate finalization rejects nodes not changed by candidate."""
     from restscope.testing import GeneratorConfigError
 
     catalog, operation = _catalog(tmp_path)
@@ -350,6 +360,7 @@ def test_candidate_partial_finalization_rolls_back_the_whole_transaction_on_writ
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Scenario: verify that candidate partial finalization rolls back the whole transaction on write error."""
     from restscope.db.repositories import SqlAlchemyGeneratorConfigRepository
 
     catalog, operation = _catalog(tmp_path)

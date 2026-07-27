@@ -1,3 +1,5 @@
+"""Regression scenarios for phoenix tracing contract. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import json
@@ -71,6 +73,7 @@ def _wait_for_traces(
 
 @pytest.mark.phoenix_contract
 def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path) -> None:
+    """Scenario: verify that local phoenix accepts restscope trace hierarchy."""
     if "phoenix_contract" not in request.config.option.markexpr:
         pytest.skip("select -m phoenix_contract to run the local Phoenix contract")
 

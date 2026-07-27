@@ -9,6 +9,12 @@ from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
 class SchemaORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """
+    Map persisted schema rows to a database table.
+
+    Repository classes use this mapping; runtime and Agent code should not manipulate
+    these rows directly.
+    """
     __tablename__ = "schemas"
     __table_args__ = (
         CheckConstraint(

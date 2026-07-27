@@ -20,6 +20,13 @@ class _PromptModel(BaseModel):
 
 
 class PatchItemValidationDecision(_PromptModel):
+    """
+    Carry validated patch item validation decision data across the run-local Operation
+    Smoke diagnosis and candidate workflow.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     item_id: str = Field(min_length=1, max_length=20)
     status: Literal["resolved", "persisting", "unknown"]
     current_failure_refs: list[str] = Field(default_factory=list, max_length=100)
@@ -28,6 +35,13 @@ class PatchItemValidationDecision(_PromptModel):
 
 
 class PatchValidationDecision(_PromptModel):
+    """
+    Carry validated patch validation decision data across the run-local Operation Smoke
+    diagnosis and candidate workflow.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     items: list[PatchItemValidationDecision] = Field(
         min_length=1,
         max_length=100,
@@ -123,6 +137,13 @@ def build_patch_validation_decision_protocol(
 
 @dataclass(slots=True, frozen=True)
 class FailureInvestigationPrompt:
+    """
+    Carry validated failure investigation prompt data across the run-local Operation
+    Smoke diagnosis and candidate workflow.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     system: str
     user: str
     repair_guidance: str

@@ -35,6 +35,13 @@ class BehaviorMonitorReferenceValues:
         self,
         strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
     ) -> list[object]:
+        """
+        Handle values for as part of the run-local Operation Smoke diagnosis and
+        candidate workflow.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if isinstance(strategy, ResponseValueGenerator):
             return self.agent.response_values_for(strategy.value_name)
         result = self.agent.lookup(

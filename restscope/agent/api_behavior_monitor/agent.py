@@ -46,13 +46,25 @@ from .schemas import APIBehaviorMonitorResult, APIBehaviorWarning
 
 
 class APIBehaviorMonitorError(RuntimeError):
+    """
+    Signal the apibehavior monitor failure.
+
+    Callers translate this exception at the boundary of API response monitoring and its
+    narrowly approved evidence catalog instead of treating it as ordinary evidence.
+    """
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
 
 
 class APIBehaviorMonitorAgent:
-    """Update response IR first, then collect successful reusable evidence."""
+    """Update response contracts, then collect narrowly approved reusable evidence.
+
+    Contract observation always runs first because an exact success schema may
+    be materialized from a wildcard response during this call. Only successful,
+    usable JSON evidence then reaches identifier and response-value trackers.
+    Raw bodies and model reasoning are never persisted.
+    """
 
     def __init__(
         self,
@@ -73,18 +85,22 @@ class APIBehaviorMonitorAgent:
 
     @property
     def catalog(self):
+        """Expose the identifier catalog through the Agent's compatibility facade."""
         return self.resource_identifier_tracker.catalog
 
     @property
     def client(self):
+        """Expose the identifier tracker's model client for compatibility/tests."""
         return self.resource_identifier_tracker.client
 
     @property
     def tracing_runtime(self):
+        """Return the tracing runtime shared with child trackers."""
         return self._tracing_runtime
 
     @tracing_runtime.setter
     def tracing_runtime(self, value) -> None:
+        """Replace tracing consistently on the coordinator and child tracker."""
         self._tracing_runtime = value
         if hasattr(self.resource_identifier_tracker, "tracing_runtime"):
             self.resource_identifier_tracker.tracing_runtime = value
@@ -94,6 +110,7 @@ class APIBehaviorMonitorAgent:
         observation: TargetResponseObservation,
         context: TargetResponseOperationContext,
     ) -> APIBehaviorMonitorResult:
+        """Process one bounded target response and emit a trace-safe summary."""
         media_type = normalize_media_type(
             observation.headers.get("content-type")
         )
@@ -159,12 +176,15 @@ class APIBehaviorMonitorAgent:
         observation: TargetResponseObservation,
         context: TargetResponseOperationContext,
     ) -> APIBehaviorMonitorResult:
+        """Resolve operation identity, evolve its contract, then learn evidence."""
         if not isinstance(context.ir, OpenAPISpecIR):
             raise APIBehaviorMonitorError(
                 "api_behavior_context_invalid",
                 "API behavior monitoring requires an initialized OpenAPI IR",
             )
         try:
+            # A caller-supplied operation key wins for scoped probes. Ordinary
+            # requests fall back to method/path matching inside `_resolve_operation`.
             operation, operation_ir = _resolve_operation(
                 observation,
                 context=context,
@@ -177,6 +197,8 @@ class APIBehaviorMonitorAgent:
             observation.headers.get("content-type")
         )
         try:
+            # Contract tracking precedes all success-only trackers so a newly
+            # materialized exact response schema is available immediately.
             contract = self.contract_tracker.observe(
                 ir=context.ir,
                 operation_key=operation.operation_key,
@@ -283,6 +305,13 @@ class APIBehaviorMonitorAgent:
         )
 
     def lookup(self, request: ResourceLookupRequest) -> ResourceLookupResult:
+        """
+        Look up bounded evidence used by API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.resource_identifier_tracker.lookup(request)
 
     def register_response_value(
@@ -294,6 +323,13 @@ class APIBehaviorMonitorAgent:
         parameter_name: str,
         expected_type: str | None,
     ) -> ResponseValueRegistrationResult:
+        """
+        Handle register response value as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.response_value_tracker.register(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -303,6 +339,13 @@ class APIBehaviorMonitorAgent:
         )
 
     def response_values_for(self, value_name: str) -> list[object]:
+        """
+        Handle response values for as part of API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.response_value_tracker.catalog.values_for(value_name)
 
     def available_response_value_sources(
@@ -314,6 +357,13 @@ class APIBehaviorMonitorAgent:
         parameter_name: str,
         expected_type: str | None,
     ) -> list[ResponseValueSourceOption]:
+        """
+        Handle available response value sources as part of API response monitoring and
+        its narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.response_value_tracker.available_source_options(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -331,6 +381,13 @@ class APIBehaviorMonitorAgent:
         expected_type: str | None,
         sources: list[ResponseValueSource],
     ) -> ResponseValueRegistrationResult:
+        """
+        Handle register response value sources as part of API response monitoring and
+        its narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.response_value_tracker.register_selected_sources(
             consumer_operation_key=consumer_operation_key,
             consumer_input_node_id=consumer_input_node_id,
@@ -348,6 +405,13 @@ class APIBehaviorMonitorAgent:
         parameter_name: str,
         expected_type: str | None,
     ) -> ResponseValuePreview | None:
+        """
+        Handle preview response value as part of API response monitoring and its
+        narrowly approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return self.response_value_tracker.preview(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -363,6 +427,13 @@ def _resolve_operation(
     context: TargetResponseOperationContext,
     ir: OpenAPISpecIR,
 ) -> tuple[MonitoredOperation, OperationIR]:
+    """
+    Resolve operation for API response monitoring and its narrowly approved evidence
+    catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if context.operation_key is not None:
         operation_ir = ir.operations.get(context.operation_key)
         if operation_ir is None:
@@ -434,6 +505,13 @@ def _schema_fields(
     resource_name: str | None = None,
     visited: set[int] | None = None,
 ) -> list[dict[str, Any]]:
+    """
+    Handle schema fields as part of API response monitoring and its narrowly approved
+    evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []
@@ -487,6 +565,13 @@ def _is_json_media_type(media_type: str | None) -> bool:
 def _monitor_trace_summary(
     result: APIBehaviorMonitorResult,
 ) -> dict[str, Any]:
+    """
+    Handle monitor trace summary as part of API response monitoring and its narrowly
+    approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     resource = result.resource_identifier
     response_values = result.response_values
     return {

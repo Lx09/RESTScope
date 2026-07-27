@@ -53,7 +53,14 @@ def generate_strategy_value(
     seed: int,
     reference_values: ReferenceValueProvider | None = None,
 ) -> Any:
-    """Generate one deterministic scalar value from a configured strategy."""
+    """Generate one deterministic scalar value from a configured strategy.
+
+    A new pseudo-random generator is created from ``seed`` for every call.
+    Consequently, the same strategy and seed produce the same value without
+    sharing mutable global random state.  Reference-backed strategies are the
+    exception in source, not determinism: they choose from values learned by
+    the behavior monitor through ``reference_values``.
+    """
 
     generator = random.Random(seed)
     if isinstance(strategy, ConstantGenerator):
@@ -97,13 +104,22 @@ def generate_test_case(
     reference_values: ReferenceValueProvider | None = None,
     constraints: ConstraintSet | None = None,
 ) -> GeneratedTestCase:
-    """Generate one complete request from the persisted snapshot and configuration."""
+    """Generate one complete request from a snapshot and generator configuration.
+
+    Generation happens twice when constraints are present.  First, a baseline
+    request gives the solver concrete values to preserve where possible.  The
+    solver then returns the smallest set of input overrides, and a second pass
+    rebuilds the request with those overrides.  A final evaluation guards
+    against projection or solver bugs before the request can reach the network.
+    """
 
     if operation.operation_key != config.operation_key:
         raise GenerationError("Generator configuration belongs to a different operation")
     if case_index < 0:
         raise GenerationError("case_index cannot be negative")
 
+    # The unconstrained case is both the final result for ordinary generation
+    # and the starting point for constraint solving.
     baseline = _TestCaseGenerator(
         operation=operation,
         config=config,
@@ -121,6 +137,8 @@ def generate_test_case(
         solve_input_overrides,
     )
 
+    # The solver works in semantic input-node space; the generator below
+    # projects its chosen values back into path/query/header/cookie/body form.
     overrides = solve_input_overrides(
         operation=operation,
         config=config,
@@ -145,6 +163,9 @@ def generate_test_case(
             for node_id, override in overrides.items()
         }
     )
+    # Never trust a solver result merely because the solver returned normally.
+    # Reconstruct the assignments from the actual generated request and verify
+    # the complete constraint expression again.
     if not evaluate_constraint_set(constraints, assignments):
         raise ConstraintSolveError(
             "constraint_recheck_failed",
@@ -160,7 +181,15 @@ def project_generated_input_value(
     *,
     input_node_id: str,
 ) -> Any:
-    """Project one present input node from the request-shaped generated case."""
+    """Read one semantic input node back from a generated HTTP request.
+
+    Input nodes form a tree, but :class:`GeneratedTestCase` stores values in
+    wire-oriented containers such as ``query_parameters`` and ``request_body``.
+    This function walks from the requested node to its root, selects the
+    matching wire container, then descends through object properties or array
+    items.  Patch sampling uses it to show the model the value of each target
+    input rather than the entire internal tree.
+    """
 
     nodes = {node.input_node_id: node for node in operation.input_nodes}
     try:
@@ -168,6 +197,8 @@ def project_generated_input_value(
     except KeyError as exc:
         raise KeyError(f"Unknown generated input node: {input_node_id}") from exc
 
+    # Build root-to-leaf ancestry once so parameter and request-body inputs can
+    # share the same descent logic later in the function.
     ancestors = [target]
     while ancestors[-1].parent_node_id is not None:
         ancestors.append(nodes[ancestors[-1].parent_node_id])
@@ -180,6 +211,9 @@ def project_generated_input_value(
     }
     parameter = parameters.get(root.input_node_id)
     if parameter is not None:
+        # Parameter roots map directly to one of the four OpenAPI parameter
+        # locations.  A missing key means the generator intentionally omitted
+        # the parameter, so callers cannot project a value from it.
         by_location = {
             "path": generated.path_parameters,
             "query": generated.query_parameters,
@@ -191,6 +225,9 @@ def project_generated_input_value(
             raise KeyError(f"Generated parameter is absent: {parameter.name}")
         value: Any = deepcopy(values[parameter.name])
     else:
+        # Request bodies contain control nodes (request body and media type)
+        # that do not appear in the JSON value.  Start descent at the active
+        # media-type schema root rather than treating those controls as data.
         active_media_node_id = operation.media_type_node_ids.get(
             (generated.media_type or "").strip().lower()
         )
@@ -243,6 +280,14 @@ def _project_child_value(value: Any, *, suffix: str) -> Any:
 
 
 class _TestCaseGenerator:
+    """Build one wire-shaped request by recursively visiting semantic input nodes.
+
+    The constructor indexes the immutable operation snapshot for fast traversal.
+    ``generate`` owns one case's mutable output lists, while ``_build_value`` and
+    its helpers decide inclusion, strategy selection, and nested object/array
+    construction.  A new instance is used for every case, so state never leaks
+    between seeds or constraint-solving passes.
+    """
     def __init__(
         self,
         *,
@@ -253,6 +298,8 @@ class _TestCaseGenerator:
         reference_values: ReferenceValueProvider | None,
         overrides: Mapping[str, InputNodeOverride] | None,
     ) -> None:
+        """Index the operation tree and initialize empty per-case output state."""
+
         self.operation = operation
         self.config = config
         self.run_seed = run_seed
@@ -266,6 +313,8 @@ class _TestCaseGenerator:
             node.input_node_id: node for node in operation.input_nodes
         }
         self.configs = {item.input_node_id: item for item in config.configs}
+        # Store children in canonical-path order.  Stable traversal is required
+        # because node-specific seeds depend on a reproducible visit sequence.
         self.children: dict[str, list[InputNodeSnapshot]] = {}
         for node in operation.input_nodes:
             if node.parent_node_id is not None:
@@ -276,6 +325,11 @@ class _TestCaseGenerator:
         self.omitted: list[str] = []
 
     def generate(self) -> GeneratedTestCase:
+        """Generate all parameters and the selected request body for this case."""
+
+        # Parameters are emitted into the same containers the HTTP transport
+        # expects, while `_build_value` records semantic values for later
+        # constraint evaluation and trace evidence.
         locations: dict[str, dict[str, Any]] = {
             "path": {},
             "query": {},
@@ -291,6 +345,8 @@ class _TestCaseGenerator:
             if included:
                 locations[parameter.location][parameter.name] = value
 
+        # Body generation is separate because OpenAPI permits multiple media
+        # types but a concrete HTTP request can choose only one.
         body_value: Any | None = None
         body_present = False
         media_type = self.config.active_media_type
@@ -333,6 +389,13 @@ class _TestCaseGenerator:
         return tuple(self.operation.parameters)
 
     def _build_value(self, node: InputNodeSnapshot, *, instance_path: str) -> tuple[bool, Any]:
+        """
+        Build value for deterministic request generation, constraint solving, and
+        execution.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         if not self._included(node, instance_path):
             return False, None
         schema = node.schema_contract
@@ -427,6 +490,13 @@ class _TestCaseGenerator:
         schema: SchemaSnapshot,
         instance_path: str,
     ) -> Any:
+        """
+        Build variant for deterministic request generation, constraint solving, and
+        execution.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         from .models import VariantGenerator
 
         strategy = self._config(node).strategy
@@ -513,6 +583,13 @@ def _format_value(format_name: str, generator: random.Random) -> str:
 
 
 def _validate_scalar(schema: SchemaSnapshot, value: Any, *, path: str) -> None:
+    """
+    Validate scalar for deterministic request generation, constraint solving, and
+    execution.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if value is None:
         if schema.nullable or _has_type(schema, "null"):
             return

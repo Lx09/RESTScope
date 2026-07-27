@@ -17,6 +17,7 @@ class _Model(BaseModel):
 
 
 class PatchGroupingResult(_Model):
+    """Result of deterministic grouping, including any deferred solution items."""
     status: Literal["grouped", "inconclusive"]
     tasks: list[PatchGroupTask] = Field(default_factory=list)
     deferred_item_ids: list[str] = Field(default_factory=list)
@@ -24,7 +25,13 @@ class PatchGroupingResult(_Model):
 
 
 class PatchGroupPlanner:
-    """Build stable Patch Groups from immutable actionable solutions."""
+    """Build stable Patch Groups from immutable actionable solutions.
+
+    Inputs are vertices in a small undirected graph. Two inputs are connected
+    when a confirmed solution says their values interact through a same-request
+    Constraint. Connected components become Patch Groups, guaranteeing that one
+    input belongs to only one group without another LLM call.
+    """
 
     def group(
         self,
@@ -32,6 +39,7 @@ class PatchGroupPlanner:
         actionable_failures: list[ActionableFailure],
         config: OperationGeneratorConfig,
     ) -> PatchGroupingResult:
+        """Group first-seen inputs with union-find and emit stable ``G1…Gn`` IDs."""
         del config
         if not actionable_failures:
             return PatchGroupingResult(
@@ -46,6 +54,8 @@ class PatchGroupPlanner:
                 for input_handle in item.affected_inputs
             )
         )
+        # `parent` implements union-find. Path compression in `find` keeps
+        # repeated lookups cheap and preserves the first-seen component root.
         parent = {input_handle: input_handle for input_handle in input_order}
 
         def find(input_handle: str) -> str:
@@ -64,6 +74,8 @@ class PatchGroupPlanner:
             if left_root != right_root:
                 parent[right_root] = left_root
 
+        # Multiple affected inputs are not automatically coupled. Only an
+        # explicit interaction note authorizes a Constraint relationship.
         for item in actionable_failures:
             if not item.interaction_notes or len(item.affected_inputs) < 2:
                 continue
@@ -75,6 +87,8 @@ class PatchGroupPlanner:
         for input_handle in input_order:
             components.setdefault(find(input_handle), []).append(input_handle)
 
+        # Dictionaries preserve insertion order, so groups follow first
+        # appearance in the actionable diagnosis.
         tasks: list[PatchGroupTask] = []
         for index, inputs in enumerate(components.values(), start=1):
             item_ids = [
@@ -102,6 +116,12 @@ def _build_task(
     item_ids: list[str],
     by_item: dict[str, ActionableFailure],
 ) -> PatchGroupTask:
+    """
+    Build task for the run-local Operation Smoke diagnosis and candidate workflow.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     items = [by_item[item_id] for item_id in item_ids]
     requirements: list[str] = []
     hints: list[object] = []

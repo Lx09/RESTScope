@@ -1,3 +1,5 @@
+"""Regression scenarios for agent package boundaries. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import ast
@@ -9,6 +11,7 @@ AGENT_ROOT = Path(__file__).resolve().parents[1] / "restscope" / "agent"
 
 
 def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
+    """Scenario: verify that agent root is facade and each agent is a package."""
     assert {path.name for path in AGENT_ROOT.glob("*.py")} == {"__init__.py"}
 
     for package_name in (
@@ -25,6 +28,7 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 
 
 def test_agent_package_and_public_facade_export_same_contracts() -> None:
+    """Scenario: verify that agent package and public facade export same contracts."""
     from restscope.agent import (
         OperationSmokeAgent,
         ParameterPatchAgent,
@@ -68,6 +72,7 @@ def test_agent_package_and_public_facade_export_same_contracts() -> None:
 
 
 def test_cross_agent_imports_use_package_facades() -> None:
+    """Scenario: verify that cross agent imports use package facades."""
     package_names = {
         "operation_smoke",
         "parameter_patch",
@@ -90,10 +95,12 @@ def test_cross_agent_imports_use_package_facades() -> None:
 
     assert violations == []
 def test_retired_operation_test_agent_package_is_absent() -> None:
+    """Scenario: verify that retired operation test agent package is absent."""
     assert not list((AGENT_ROOT / "operation_test").rglob("*.py"))
 
 
 def test_retired_operation_test_contracts_are_not_public_or_in_app_builders() -> None:
+    """Scenario: verify that retired operation test contracts are not public or in app builders."""
     import restscope
     import restscope.agent as agents
     from restscope import RESTScopeApp
@@ -121,6 +128,7 @@ def test_retired_operation_test_contracts_are_not_public_or_in_app_builders() ->
 
 
 def test_retired_openapi_retrieval_agent_is_absent_and_not_public() -> None:
+    """Scenario: verify that retired openapi retrieval agent is absent and not public."""
     import restscope
     import restscope.agent as agents
 

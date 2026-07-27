@@ -15,6 +15,12 @@ class ToolSelector:
         self.policy = policy or ToolPolicy()
 
     def select_for_role(self, *, role: str, state: dict) -> list[ToolSpec]:
+        """
+        Select for role for the policy-controlled model tool boundary.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return [
             tool
             for tool in self.registry.list_specs()

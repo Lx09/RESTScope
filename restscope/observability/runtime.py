@@ -30,6 +30,12 @@ class TraceSpan:
         self._has_error = False
 
     def set_output(self, value: Any) -> None:
+        """
+        Handle set output as part of bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         self._set_content("output", value)
 
     def set_llm_input_messages(self, messages: Any) -> None:
@@ -72,6 +78,12 @@ class TraceSpan:
         )
 
     def set_attribute(self, name: str, value: Any) -> None:
+        """
+        Handle set attribute as part of bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -83,9 +95,21 @@ class TraceSpan:
             return
 
     def set_input(self, value: Any) -> None:
+        """
+        Handle set input as part of bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         self._set_content("input", value)
 
     def record_error(self, exc: BaseException) -> None:
+        """
+        Record error for bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -102,6 +126,12 @@ class TraceSpan:
             return
 
     def mark_error(self, message: str) -> None:
+        """
+        Handle mark error as part of bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -114,6 +144,12 @@ class TraceSpan:
             return
 
     def mark_ok(self) -> None:
+        """
+        Handle mark ok as part of bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self._span is None or self._has_error:
             return
         try:
@@ -141,6 +177,12 @@ class TraceSpan:
         *,
         summary: Any,
     ) -> None:
+        """
+        Handle set llm messages as part of bounded, redacted tracing and telemetry.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -218,7 +260,12 @@ def _compact_json_bytes(value: Any) -> bytes:
 
 
 class TracingRuntime:
-    """App-owned tracing facade; disabled instances are dependency-free no-ops."""
+    """App-owned tracing facade; disabled instances are dependency-free no-ops.
+
+    Business code always uses this facade, never OpenTelemetry directly. Values
+    are redacted and size-bounded before export, and exporter failures are
+    swallowed with warnings so tracing cannot change API testing behavior.
+    """
 
     def __init__(
         self,
@@ -237,14 +284,17 @@ class TracingRuntime:
 
     @classmethod
     def disabled(cls, *, redactor: Redactor | None = None) -> "TracingRuntime":
+        """Create a no-export runtime that preserves the same context-manager API."""
         return cls(redactor=redactor)
 
     @property
     def enabled(self) -> bool:
+        """Return true only while a backend exists and has not been closed."""
         return self._backend is not None and not self._closed
 
     @property
     def redactor(self) -> Redactor:
+        """Expose the same redactor used for every trace input and output."""
         return self._redactor
 
     @contextmanager
@@ -256,6 +306,11 @@ class TracingRuntime:
         input_value: Any | None = None,
         attributes: Mapping[str, Any] | None = None,
     ) -> Iterator[TraceSpan]:
+        """Open a best-effort span and always yield a safe local handle.
+
+        Creation/finalization failures degrade to a no-op span. Exceptions from
+        business code are recorded and re-raised unchanged.
+        """
         if not self.enabled:
             yield TraceSpan()
             return
@@ -292,6 +347,12 @@ class TracingRuntime:
                 self._warn("Tracing span finalization failed", exc)
 
     def close(self) -> None:
+        """
+        Release resources owned by bounded, redacted tracing and telemetry.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self._closed:
             return
         self._closed = True

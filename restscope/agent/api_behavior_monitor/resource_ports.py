@@ -19,6 +19,12 @@ from .resource_schemas import (
 
 
 class ResourceCatalogRepository(Protocol):
+    """
+    Define the collaborator contract for resource catalog repository.
+
+    Concrete implementations may vary while callers in API response monitoring and its
+    narrowly approved evidence catalog depend only on these declared operations.
+    """
     def record_groups(
         self,
         *,
@@ -59,6 +65,12 @@ class ResourceCatalogRepository(Protocol):
 
 
 class ResourceCatalogUnitOfWork(Protocol):
+    """
+    Define the collaborator contract for resource catalog unit of work.
+
+    Concrete implementations may vary while callers in API response monitoring and its
+    narrowly approved evidence catalog depend only on these declared operations.
+    """
     resources: ResourceCatalogRepository
 
     def __enter__(self) -> "ResourceCatalogUnitOfWork": ...

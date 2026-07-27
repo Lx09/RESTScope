@@ -15,6 +15,13 @@ class _Model(BaseModel):
 
 
 class AvailableReferenceOption(_Model):
+    """
+    Carry validated available reference option data across one isolated Generator and
+    Constraint Patch Group.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     option_id: str = Field(min_length=1, max_length=100)
     input_node_id: str = Field(min_length=1, max_length=1000)
     kind: Literal["resource_identifier", "response_value"]
@@ -33,6 +40,12 @@ class AvailableReferenceOption(_Model):
 
     @model_validator(mode="after")
     def validate_source(self) -> "AvailableReferenceOption":
+        """
+        Validate source for one isolated Generator and Constraint Patch Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.kind == "resource_identifier":
             if not self.canonical_resource or self.value_name is not None:
                 raise ValueError(
@@ -54,6 +67,13 @@ class AvailableReferenceOption(_Model):
 
 
 class PatchGroupTask(_Model):
+    """
+    Coordinate patch group task behavior for one isolated Generator and Constraint Patch
+    Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     group_id: str = Field(min_length=1, max_length=20)
     item_ids: list[str] = Field(min_length=1, max_length=100)
     root_failure_refs: list[str] = Field(min_length=1, max_length=10)
@@ -65,6 +85,12 @@ class PatchGroupTask(_Model):
 
     @model_validator(mode="after")
     def validate_unique_lists(self) -> "PatchGroupTask":
+        """
+        Validate unique lists for one isolated Generator and Constraint Patch Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         for name in ("item_ids", "root_failure_refs", "inputs"):
             values = getattr(self, name)
             if len(set(values)) != len(values):
@@ -73,6 +99,13 @@ class PatchGroupTask(_Model):
 
 
 class SemanticGeneratorChange(_Model):
+    """
+    Coordinate semantic generator change behavior for one isolated Generator and
+    Constraint Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     input: str = Field(min_length=1, max_length=1000)
     inclusion_probability: float | None = Field(default=None, ge=0, le=1)
     strategy: GeneratorStrategy | None = None
@@ -80,6 +113,13 @@ class SemanticGeneratorChange(_Model):
 
     @model_validator(mode="after")
     def require_change(self) -> "SemanticGeneratorChange":
+        """
+        Handle require change as part of one isolated Generator and Constraint Patch
+        Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.strategy is not None and self.reference is not None:
             raise ValueError("strategy and reference are mutually exclusive")
         if (
@@ -92,10 +132,24 @@ class SemanticGeneratorChange(_Model):
 
 
 class SemanticConstraintChange(_Model):
+    """
+    Coordinate semantic constraint change behavior for one isolated Generator and
+    Constraint Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     expression: dict[str, Any]
 
 
 class ParameterPatchProposal(_Model):
+    """
+    Coordinate parameter patch proposal behavior for one isolated Generator and
+    Constraint Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     changes: list[SemanticGeneratorChange] = Field(
         default_factory=list,
         max_length=100,
@@ -107,17 +161,37 @@ class ParameterPatchProposal(_Model):
 
     @model_validator(mode="after")
     def require_patch(self) -> "ParameterPatchProposal":
+        """
+        Handle require patch as part of one isolated Generator and Constraint Patch
+        Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if not self.changes and not self.constraints:
             raise ValueError("a patch must contain a generator or constraint")
         return self
 
 
 class ParameterPatchDecision(_Model):
+    """
+    Carry validated parameter patch decision data across one isolated Generator and
+    Constraint Patch Group.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     action: Literal["propose", "accept"]
     patch: ParameterPatchProposal | None = None
 
     @model_validator(mode="after")
     def validate_action(self) -> "ParameterPatchDecision":
+        """
+        Validate action for one isolated Generator and Constraint Patch Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if self.action == "propose" and self.patch is None:
             raise ValueError("propose requires a complete patch")
         if self.action == "accept" and self.patch is not None:
@@ -126,6 +200,13 @@ class ParameterPatchDecision(_Model):
 
 
 class GeneratorPatchAttribution(_Model):
+    """
+    Coordinate generator patch attribution behavior for one isolated Generator and
+    Constraint Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     input_node_id: str = Field(min_length=1, max_length=1000)
     group_ids: list[str] = Field(min_length=1, max_length=100)
     item_ids: list[str] = Field(min_length=1, max_length=100)
@@ -133,6 +214,13 @@ class GeneratorPatchAttribution(_Model):
 
 
 class CompiledConstraintPatch(_Model):
+    """
+    Coordinate compiled constraint patch behavior for one isolated Generator and
+    Constraint Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     constraint_id: str = Field(min_length=1, max_length=100)
     group_ids: list[str] = Field(min_length=1, max_length=100)
     item_ids: list[str] = Field(min_length=1, max_length=100)
@@ -142,6 +230,13 @@ class CompiledConstraintPatch(_Model):
 
 
 class GeneratorPatchDraft(_Model):
+    """
+    Carry validated generator patch draft data across one isolated Generator and
+    Constraint Patch Group.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     updates: list[InputGeneratorPatch] = Field(
         default_factory=list,
         max_length=100,
@@ -161,6 +256,12 @@ class GeneratorPatchDraft(_Model):
 
     @model_validator(mode="after")
     def validate_patch(self) -> "GeneratorPatchDraft":
+        """
+        Validate patch for one isolated Generator and Constraint Patch Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         if not self.updates and not self.constraints:
             raise ValueError("a compiled patch cannot be empty")
         changed = [item.input_node_id for item in self.updates]
@@ -184,6 +285,13 @@ class GeneratorPatchDraft(_Model):
 
 
 class ValidatedPatchGroup(_Model):
+    """
+    Coordinate validated patch group behavior for one isolated Generator and Constraint
+    Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     status: Literal["validated"] = "validated"
     group_id: str = Field(min_length=1, max_length=20)
     item_ids: list[str] = Field(min_length=1, max_length=100)
@@ -194,6 +302,13 @@ class ValidatedPatchGroup(_Model):
 
 
 class PatchGroupFailure(_Model):
+    """
+    Coordinate patch group failure behavior for one isolated Generator and Constraint
+    Patch Group.
+
+    Read the public methods as the supported lifecycle and treat underscore-prefixed
+    helpers as internal implementation details.
+    """
     status: Literal["failed"] = "failed"
     group_id: str = Field(min_length=1, max_length=20)
     item_ids: list[str] = Field(min_length=1, max_length=100)

@@ -37,6 +37,13 @@ _MAX_AVAILABLE_SOURCE_OPTIONS = 10
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueRegistrationResult:
+    """
+    Carry validated response value registration result data across API response
+    monitoring and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     status: str
     monitor_id: str
     value_name: str
@@ -45,6 +52,13 @@ class ResponseValueRegistrationResult:
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueObservationResult:
+    """
+    Carry validated response value observation result data across API response
+    monitoring and its narrowly approved evidence catalog.
+
+    The annotated fields form the contract; validation rejects missing, extra, or
+    incorrectly typed values at the boundary.
+    """
     sources_processed: int = 0
     values_recorded: int = 0
 
@@ -107,6 +121,13 @@ class ResponseValueTracker:
         parameter_name: str,
         expected_type: str | None,
     ) -> ResponseValueRegistrationResult:
+        """
+        Handle register as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         preview = self.preview(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -275,6 +296,13 @@ class ResponseValueTracker:
         ir: OpenAPISpecIR,
         producer_operation_key: str,
     ) -> int:
+        """
+        Handle refresh sources as part of API response monitoring and its narrowly
+        approved evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         selected_count = 0
         for monitor in self.catalog.list_active_monitors():
             sources = self._select_sources(
@@ -321,6 +349,13 @@ class ResponseValueTracker:
         expected_type: str | None,
         candidates: list[_SourceCandidate],
     ) -> list[ResponseValueSource]:
+        """
+        Handle semantic sources as part of API response monitoring and its narrowly
+        approved evidence catalog.
+
+        This private helper keeps one transformation or policy decision explicit so the
+        surrounding orchestration remains readable.
+        """
         if (
             not candidates
             or self.client is None
@@ -391,6 +426,13 @@ class ResponseValueTracker:
         media_type: str | None,
         body: Any,
     ) -> ResponseValueObservationResult:
+        """
+        Handle observe as part of API response monitoring and its narrowly approved
+        evidence catalog.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         normalized_media = normalize_media_type(media_type)
         if (
             normalized_media is None
@@ -430,6 +472,13 @@ def _source_candidates(
     expected_type: str | None,
     producer_operation_key: str | None = None,
 ) -> list[_SourceCandidate]:
+    """
+    Handle source candidates as part of API response monitoring and its narrowly
+    approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     output: list[_SourceCandidate] = []
     for operation_key, operation in ir.operations.items():
         if (
@@ -484,6 +533,13 @@ def _schema_leaves(
         str | None,
     ]
 ]:
+    """
+    Handle schema leaves as part of API response monitoring and its narrowly approved
+    evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []
@@ -554,6 +610,13 @@ def _flatten_observed_scalars(
     *,
     selector: str = "$",
 ) -> list[tuple[str, object]]:
+    """
+    Handle flatten observed scalars as part of API response monitoring and its narrowly
+    approved evidence catalog.
+
+    This private helper keeps one transformation or policy decision explicit so the
+    surrounding orchestration remains readable.
+    """
     if isinstance(value, dict):
         output: list[tuple[str, object]] = []
         for name, child in value.items():

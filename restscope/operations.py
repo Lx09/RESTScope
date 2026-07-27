@@ -16,10 +16,22 @@ class OperationReference(BaseModel):
 
     @model_validator(mode="after")
     def normalize(self) -> "OperationReference":
+        """
+        Handle normalize as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         object.__setattr__(self, "method", self.method.upper())
         if not self.path.startswith("/"):
             raise ValueError("operation path must start with '/'")
         return self
 
     def identity(self) -> tuple[str, str, str | None]:
+        """
+        Handle identity as part of the RESTScope application runtime.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return (self.method, self.path, self.operation_id)

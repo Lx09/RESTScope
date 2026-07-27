@@ -1,3 +1,5 @@
+"""Regression scenarios for restart cleanup. Each test documents one observable contract or failure boundary."""
+
 from __future__ import annotations
 
 import importlib
@@ -5,6 +7,7 @@ from pathlib import Path
 
 
 def test_top_level_package_exports_parser_only_runtime() -> None:
+    """Scenario: verify that top level package exports parser only runtime."""
     restscope = importlib.import_module("restscope")
 
     assert hasattr(restscope, "OpenAPIParser")
@@ -14,6 +17,7 @@ def test_top_level_package_exports_parser_only_runtime() -> None:
 
 
 def test_flat_environment_names_configure_logging(monkeypatch) -> None:
+    """Scenario: verify that flat environment names configure logging."""
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("DATA_DIR", "/tmp/restscope-data")
     monkeypatch.delenv("RESTSCOPE_LOGGING__LEVEL", raising=False)
@@ -27,6 +31,7 @@ def test_flat_environment_names_configure_logging(monkeypatch) -> None:
 
 
 def test_short_environment_names_configure_dual_llm_models(monkeypatch, tmp_path: Path) -> None:
+    """Scenario: verify that short environment names configure dual llm models."""
     monkeypatch.setenv("THINK_MODEL", "glm-4.5-air")
     monkeypatch.setenv("THINK_API_KEY", "think-key")
     monkeypatch.setenv("THINK_BASE_URL", "https://think.example/v1")
@@ -52,6 +57,7 @@ def test_short_environment_names_configure_dual_llm_models(monkeypatch, tmp_path
 
 
 def test_short_environment_name_configures_mcp_servers_file(monkeypatch, tmp_path) -> None:
+    """Scenario: verify that short environment name configures mcp servers file."""
     servers_file = tmp_path / "mcp.servers.json"
     monkeypatch.setenv("MCP_SERVERS_FILE", str(servers_file))
 
@@ -62,6 +68,7 @@ def test_short_environment_name_configures_mcp_servers_file(monkeypatch, tmp_pat
 
 
 def test_parser_loads_bundled_petstore_spec() -> None:
+    """Scenario: verify that parser loads bundled petstore spec."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser().parse("assets/openapi/petstore-v3.json")

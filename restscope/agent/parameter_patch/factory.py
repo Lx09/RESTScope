@@ -23,6 +23,12 @@ class ParameterPatchAgentFactory:
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def create(self) -> ParameterPatchAgent:
+        """
+        Handle create as part of one isolated Generator and Constraint Patch Group.
+
+        The class owns any required collaborators or state; arguments supply only the
+        data needed for this call.
+        """
         return ParameterPatchAgent(
             client=self.client,
             model=self.model,
