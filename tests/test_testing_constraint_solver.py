@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 
@@ -274,6 +276,56 @@ def test_candidate_domains_follow_generators_and_put_baseline_first() -> None:
     assert all(
         sum(item.has_value for item in domain) <= 8
         for domain in domains.values()
+    )
+
+
+def test_candidate_domain_samples_regex_generator_values() -> None:
+    """Scenario: constraints can choose deterministic values from a regex domain."""
+    from restscope.testing import InputGeneratorConfig
+    from restscope.testing.constraint_solver import build_candidate_domains
+
+    config = _solver_config()
+    configs = [
+        (
+            InputGeneratorConfig(
+                input_node_id=item.input_node_id,
+                inclusion_probability=item.inclusion_probability,
+                strategy={
+                    "type": "regex",
+                    "pattern": "^[A-Z]{4}$",
+                    "min_length": 4,
+                    "max_length": 4,
+                },
+            )
+            if item.input_node_id == "query/mode"
+            else item
+        )
+        for item in config.configs
+    ]
+    config = config.model_copy(update={"configs": configs})
+    constraints = _constraint_set(
+        {"type": "present", "input_node_id": "query/mode"},
+    )
+
+    domains = build_candidate_domains(
+        operation=config.snapshot,
+        config=config,
+        constraints=constraints,
+        baseline=_baseline(),
+        run_seed=31,
+        case_index=0,
+        reference_values=_ReferenceValues(["ref-a"]),
+    )
+
+    generated = [
+        item.value
+        for item in domains["query/mode"]
+        if item.present and item.has_value and item.value != "fast"
+    ]
+    assert generated
+    assert all(
+        isinstance(value, str) and re.fullmatch(r"[A-Z]{4}", value)
+        for value in generated
     )
 
 

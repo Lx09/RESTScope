@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -134,6 +135,37 @@ class RandomStringGenerator(_Strategy):
         return self
 
 
+class RegexGenerator(_Strategy):
+    """Generate a bounded string that contains a Python regular-expression match.
+
+    ``pattern`` uses the same ``re.search`` meaning as frozen OpenAPI patterns:
+    an unanchored expression may match only part of the returned string.
+    ``min_length`` and ``max_length`` bound the whole returned string so a
+    configured expression cannot create unbounded request data.
+    """
+
+    type: Literal["regex"]
+    pattern: str = Field(max_length=2000)
+    min_length: int = Field(default=0, ge=0, le=10_000)
+    max_length: int = Field(default=100, ge=0, le=10_000)
+
+    @model_validator(mode="after")
+    def validate_regex_options(self) -> "RegexGenerator":
+        """Return this contract after validating its cross-field boundaries.
+
+        The method changes no state. It raises a validation error when the
+        length interval is reversed or Python cannot compile ``pattern``.
+        """
+
+        if self.min_length > self.max_length:
+            raise ValueError("min_length cannot exceed max_length")
+        try:
+            re.compile(self.pattern)
+        except re.error as exc:
+            raise ValueError("pattern must be a valid regular expression") from exc
+        return self
+
+
 class BooleanGenerator(_Strategy):
     """
     Represent the boolean generator expression used by deterministic request generation,
@@ -253,6 +285,7 @@ GeneratorStrategy = Annotated[
     | IntegerRangeGenerator
     | NumberRangeGenerator
     | RandomStringGenerator
+    | RegexGenerator
     | BooleanGenerator
     | FormatGenerator
     | ObjectGenerator

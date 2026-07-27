@@ -380,6 +380,21 @@ def _default_strategy(
         return _explicit_default(node, schema.default)
     if schema.has_example:
         return _explicit_default(node, schema.example)
+    if schema.pattern is not None and (
+        _has_type(schema, "string") or schema.type is None
+    ):
+        minimum = schema.min_length if schema.min_length is not None else 0
+        maximum = (
+            schema.max_length
+            if schema.max_length is not None
+            else max(100, minimum)
+        )
+        return {
+            "type": "regex",
+            "pattern": schema.pattern,
+            "min_length": minimum,
+            "max_length": maximum,
+        }, None
     if schema.one_of or schema.any_of:
         branches = schema.one_of or schema.any_of
         return {"type": "variant", "branch_weights": [1.0] * len(branches)}, None
@@ -556,13 +571,20 @@ def _schema_unsupported_reasons(
                 input_node_id=node.input_node_id,
             )
         )
-    if schema.pattern and not (
-        schema.has_const or schema.has_default or schema.has_example or schema.enum
+    if (
+        schema.pattern is not None
+        and not (_has_type(schema, "string") or schema.type is None)
+        and not (
+            schema.has_const
+            or schema.has_default
+            or schema.has_example
+            or schema.enum
+        )
     ):
         reasons.append(
             GeneratorDisabledReason(
                 code="default_generator_unavailable",
-                message=f"Pattern requires an explicit generator at {node.canonical_path}",
+                message=f"Pattern requires a string schema at {node.canonical_path}",
                 recoverable=True,
                 input_node_id=node.input_node_id,
             )

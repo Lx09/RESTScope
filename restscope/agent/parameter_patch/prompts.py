@@ -53,6 +53,10 @@ Generator directory: exact fields, variants, and limits
 - random_string fields: type, min_length, max_length, alphabet. Length bounds
   are non-negative and min_length <= max_length. alphabet must be non-empty
   whenever max_length > 0.
+- regex fields: type, pattern, min_length, max_length. pattern is a valid Python
+  regular expression no longer than 2000 characters. Length bounds are between
+  0 and 10000 inclusive, and min_length <= max_length. Matching uses search
+  semantics, so use ^ and $ when the whole value must match.
 - boolean fields: type, true_probability. true_probability is between 0 and 1.
 - format fields: type, format. format is exactly one of uuid, date, date-time,
   or email.
@@ -118,6 +122,10 @@ Range and inclusion:
 {"action":"propose","patch":{"changes":[{"input":"query.limit",
 "inclusion_probability":1,"strategy":{"type":"integer_range","minimum":1,
 "maximum":100}}],"constraints":[]}}
+Regex text:
+{"action":"propose","patch":{"changes":[{"input":"query.code","strategy":
+{"type":"regex","pattern":"^[A-Z]{3}$","min_length":3,"max_length":3}}],
+"constraints":[]}}
 Observed identifier:
 {"action":"propose","patch":{"changes":[{"input":"path.projectId",
 "reference":"R1"}],"constraints":[]}}

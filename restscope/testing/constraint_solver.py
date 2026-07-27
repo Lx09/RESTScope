@@ -30,6 +30,7 @@ from .models import (
     OperationGeneratorConfig,
     OperationTestSnapshot,
     RandomStringGenerator,
+    RegexGenerator,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
@@ -478,7 +479,10 @@ def _value_candidates(
             reference_values=reference_values,
             max_domain_size=max_domain_size,
         )
-    elif isinstance(strategy, RandomStringGenerator | FormatGenerator):
+    elif isinstance(
+        strategy,
+        RandomStringGenerator | RegexGenerator | FormatGenerator,
+    ):
         _append_generated_samples(
             result,
             config=config,
@@ -619,6 +623,7 @@ def _config_generates_scalar(config: InputGeneratorConfig) -> bool:
         | IntegerRangeGenerator
         | NumberRangeGenerator
         | RandomStringGenerator
+        | RegexGenerator
         | FormatGenerator
         | ResourceIdentifierGenerator
         | ResponseValueGenerator,

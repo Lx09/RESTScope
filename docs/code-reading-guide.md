@@ -87,8 +87,10 @@ request uses `/projects/123`.
 ### Generator
 
 A rule that produces values for one input. Examples include a constant, a
-choice list, an integer range, a formatted date, or an observed resource
-identifier.
+choice list, an integer range, text matching a regular expression, a formatted
+date, or an observed resource identifier. A regular-expression Generator uses
+Python search semantics and explicit whole-string length bounds so matching
+text is generated deterministically without allowing unbounded output.
 
 ### Constraint
 
@@ -174,7 +176,8 @@ Owns deterministic request generation and execution.
 
 - `snapshot.py` freezes the operation inputs used by one Generator config.
 - `models.py` describes available value strategies and generated-case records.
-- `generation.py` produces one generated case from strategies and constraints.
+- `generation.py` produces one generated case from strategies and constraints,
+  including bounded strings generated from regular expressions.
 - `constraints.py` defines the expression language.
 - `constraint_solver.py` finds assignments that satisfy those expressions.
 - `serialization.py` turns generated values into an HTTP-shaped request.

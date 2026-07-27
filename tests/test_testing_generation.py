@@ -53,6 +53,283 @@ def test_builtin_scalar_generators_are_deterministic_and_typed(strategy, asserti
     assert assertion(first)
 
 
+def test_regex_generator_accepts_empty_pattern_and_uses_bounded_defaults() -> None:
+    """Scenario: an empty regex remains valid and receives safe default lengths."""
+    from restscope.testing.models import InputGeneratorConfig
+
+    config = InputGeneratorConfig(
+        input_node_id="input_regex",
+        inclusion_probability=1,
+        strategy={"type": "regex", "pattern": ""},
+    )
+
+    assert config.strategy.type == "regex"
+    assert config.strategy.pattern == ""
+    assert config.strategy.min_length == 0
+    assert config.strategy.max_length == 100
+
+
+def test_regex_generator_accepts_declared_upper_boundaries() -> None:
+    """Scenario: the documented pattern and length maxima remain usable values."""
+    from restscope.testing.models import InputGeneratorConfig
+
+    config = InputGeneratorConfig(
+        input_node_id="input_regex",
+        inclusion_probability=1,
+        strategy={
+            "type": "regex",
+            "pattern": "a" * 2000,
+            "min_length": 10_000,
+            "max_length": 10_000,
+        },
+    )
+
+    assert len(config.strategy.pattern) == 2000
+    assert config.strategy.min_length == config.strategy.max_length == 10_000
+
+
+@pytest.mark.parametrize(
+    ("strategy", "message"),
+    [
+        (
+            {"type": "regex", "pattern": "["},
+            "valid regular expression",
+        ),
+        (
+            {
+                "type": "regex",
+                "pattern": "a",
+                "min_length": 2,
+                "max_length": 1,
+            },
+            "min_length cannot exceed max_length",
+        ),
+        (
+            {"type": "regex", "pattern": "a" * 2001},
+            "at most 2000 characters",
+        ),
+        (
+            {"type": "regex", "pattern": "a", "max_length": 10001},
+            "less than or equal to 10000",
+        ),
+    ],
+)
+def test_regex_generator_rejects_invalid_contracts(
+    strategy: dict,
+    message: str,
+) -> None:
+    """Scenario: malformed or unbounded regex contracts fail before generation."""
+    from pydantic import ValidationError
+
+    from restscope.testing.models import InputGeneratorConfig
+
+    with pytest.raises(ValidationError, match=message):
+        InputGeneratorConfig(
+            input_node_id="input_regex",
+            inclusion_probability=1,
+            strategy=strategy,
+        )
+
+
+def test_regex_generator_is_seeded_and_produces_matching_values() -> None:
+    """Scenario: one regex and seed always produce the same matching string."""
+    from restscope.testing.generation import generate_strategy_value
+    from restscope.testing.models import InputGeneratorConfig
+
+    config = InputGeneratorConfig(
+        input_node_id="input_regex",
+        inclusion_probability=1,
+        strategy={
+            "type": "regex",
+            "pattern": r"^[A-Z]{12}$",
+            "min_length": 12,
+            "max_length": 12,
+        },
+    )
+
+    first = generate_strategy_value(config.strategy, seed=9182)
+    repeated = generate_strategy_value(config.strategy, seed=9182)
+    another = generate_strategy_value(config.strategy, seed=9183)
+
+    assert first == repeated
+    assert first != another
+    assert re.search(config.strategy.pattern, first) is not None
+    assert len(first) == 12
+
+
+def test_regex_generator_seed_is_stable_across_hash_randomization() -> None:
+    """Scenario: a negated character class produces the same value in new processes."""
+    import os
+    import subprocess
+    import sys
+
+    script = """
+from restscope.testing.generation import generate_strategy_value
+from restscope.testing.models import RegexGenerator
+
+strategy = RegexGenerator(
+    type="regex",
+    pattern=r"^[^AB]{20}$",
+    min_length=20,
+    max_length=20,
+)
+print(generate_strategy_value(strategy, seed=9182).encode().hex())
+"""
+
+    def value_for_hash_seed(hash_seed: str) -> str:
+        """Run generation in a fresh interpreter with one Python hash seed."""
+
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        return completed.stdout.splitlines()[-1]
+
+    assert value_for_hash_seed("1") == value_for_hash_seed("2")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "ABC",
+        "^ABC",
+        "ABC$",
+    ],
+)
+def test_regex_generator_pads_short_search_matches(
+    pattern: str,
+) -> None:
+    """Scenario: padding before or after a short match preserves search semantics."""
+    from restscope.testing.generation import generate_strategy_value
+    from restscope.testing.models import InputGeneratorConfig
+
+    config = InputGeneratorConfig(
+        input_node_id="input_regex",
+        inclusion_probability=1,
+        strategy={
+            "type": "regex",
+            "pattern": pattern,
+            "min_length": 5,
+            "max_length": 5,
+        },
+    )
+
+    value = generate_strategy_value(config.strategy, seed=7)
+
+    assert len(value) == 5
+    assert re.search(pattern, value) is not None
+
+
+@pytest.mark.parametrize(
+    ("pattern", "min_length", "max_length"),
+    [
+        (r"^ABC$", 4, 4),
+        (r"(?>ABC)", 3, 3),
+        (r"a{101,}", 0, 200),
+        (r"((a{100}){100}){100}", 0, 10),
+    ],
+)
+def test_regex_generator_fails_closed_for_unsatisfied_or_unsupported_patterns(
+    pattern: str,
+    min_length: int,
+    max_length: int,
+) -> None:
+    """Scenario: generation errors replace invalid, unsupported, or oversized output."""
+    from restscope.testing.generation import GenerationError, generate_strategy_value
+    from restscope.testing.models import InputGeneratorConfig
+
+    config = InputGeneratorConfig(
+        input_node_id="input_regex",
+        inclusion_probability=1,
+        strategy={
+            "type": "regex",
+            "pattern": pattern,
+            "min_length": min_length,
+            "max_length": max_length,
+        },
+    )
+
+    with pytest.raises(GenerationError, match="Regex generator"):
+        generate_strategy_value(config.strategy, seed=7)
+
+
+def test_regex_generator_limits_work_for_large_empty_repetitions() -> None:
+    """Scenario: empty repeated items still consume the finite generation budget."""
+    from restscope.testing.generation import GenerationError, generate_strategy_value
+    from restscope.testing.models import InputGeneratorConfig
+
+    config = InputGeneratorConfig(
+        input_node_id="input_regex",
+        inclusion_probability=1,
+        strategy={
+            "type": "regex",
+            "pattern": r"(?:){20001}",
+            "max_length": 0,
+        },
+    )
+
+    with pytest.raises(GenerationError, match="Regex generator"):
+        generate_strategy_value(config.strategy, seed=7)
+
+
+def test_patterned_text_body_uses_its_default_regex_generator() -> None:
+    """Scenario: a text request body derives and executes one regex strategy."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.generation import generate_test_case
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Regex text body", "version": "1"},
+            "paths": {
+                "/codes": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "text/plain": {
+                                    "schema": {
+                                        "type": "string",
+                                        "pattern": "^ID-[0-9]{3}$",
+                                        "minLength": 6,
+                                        "maxLength": 6,
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {"204": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /codes"]
+    config = build_initial_operation_config(operation)
+    media_node_id = config.snapshot.media_type_node_ids["text/plain"]
+    media_config = next(
+        item
+        for item in config.configs
+        if item.input_node_id == media_node_id
+    )
+
+    generated = generate_test_case(
+        config.snapshot,
+        config,
+        run_seed=9,
+        case_index=0,
+    )
+
+    assert config.enabled is True
+    assert media_config.strategy.type == "regex"
+    assert generated.media_type == "text/plain"
+    assert re.fullmatch(r"ID-[0-9]{3}", generated.body) is not None
+
+
 def test_enum_default_choice_generates_values_despite_conflicting_schema_constraints() -> None:
     """Scenario: verify that enum default choice generates values despite conflicting schema constraints."""
     from restscope.openapi_parser import OpenAPIParser

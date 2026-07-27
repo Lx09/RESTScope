@@ -23,6 +23,7 @@ from .models import (
     ObjectGenerator,
     OperationGeneratorConfig,
     RandomStringGenerator,
+    RegexGenerator,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
     RequestBodyGenerator,
@@ -972,7 +973,10 @@ def _media_body_strategy_errors(
             )
         return (
             set()
-            if isinstance(strategy, RandomStringGenerator | FormatGenerator)
+            if isinstance(
+                strategy,
+                RandomStringGenerator | RegexGenerator | FormatGenerator,
+            )
             else {media_node_id}
         )
     if normalized == "application/x-www-form-urlencoded":
@@ -1186,7 +1190,12 @@ def _strategy_matches_node(
             candidates.append(False)
         return all(schema_matches(schema, value) for value in candidates)
     if isinstance(strategy, RandomStringGenerator):
-        if schema.pattern or schema.format or schema.has_const or schema.enum:
+        if (
+            schema.pattern is not None
+            or schema.format
+            or schema.has_const
+            or schema.enum
+        ):
             return False
         return all(
             schema_matches(schema, value)
@@ -1195,8 +1204,36 @@ def _strategy_matches_node(
                 strategy.alphabet[:1] * strategy.max_length,
             )
         )
+    if isinstance(strategy, RegexGenerator):
+        if (
+            schema.pattern is None
+            or schema.pattern != strategy.pattern
+            or schema.format is not None
+            or schema.has_const
+            or schema.enum
+            or not (_has_type(schema, "string") or schema.type is None)
+            or (
+                schema.min_length is not None
+                and strategy.min_length < schema.min_length
+            )
+            or (
+                schema.max_length is not None
+                and strategy.max_length > schema.max_length
+            )
+        ):
+            return False
+        try:
+            return all(
+                schema_matches(
+                    schema,
+                    generate_strategy_value(strategy, seed=seed),
+                )
+                for seed in (0, 1)
+            )
+        except ValueError:
+            return False
     if isinstance(strategy, FormatGenerator):
-        if schema.pattern or schema.has_const or schema.enum:
+        if schema.pattern is not None or schema.has_const or schema.enum:
             return False
         if schema.format not in {None, strategy.format}:
             return False

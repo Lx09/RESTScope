@@ -7,9 +7,12 @@ from datetime import date, datetime, timedelta, timezone
 import hashlib
 import random
 import re
-from collections.abc import Mapping
+import string
+from collections.abc import Iterable, Mapping
 from typing import Any
 from uuid import UUID
+
+from rstr.xeger import Xeger
 
 from .models import (
     ArrayGenerator,
@@ -27,6 +30,7 @@ from .models import (
     OperationTestSnapshot,
     ParameterSnapshot,
     RandomStringGenerator,
+    RegexGenerator,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
     SchemaSnapshot,
@@ -45,6 +49,191 @@ class GenerationError(ValueError):
     """A configured strategy cannot produce the requested value."""
 
     code = "generation_failed"
+
+
+class _RegexCandidateLimit(ValueError):
+    """Stop one candidate when continuing would exceed output or work limits.
+
+    The exception is internal to the bounded retry loop. It never escapes as a
+    public error; exhaustion becomes :class:`GenerationError`.
+    """
+
+
+class _BoundedXeger(Xeger):
+    """Add hard output and work limits around ``rstr`` regular-expression generation.
+
+    ``rstr`` walks Python's parsed regular-expression tree, including nested
+    repetition. This adapter keeps that useful behavior but checks every group
+    and repetition while it is assembled, before an oversized intermediate
+    string can be returned to RESTScope.
+    """
+
+    def __init__(
+        self,
+        generator: random.Random,
+        *,
+        max_output_length: int,
+        repeat_limit: int,
+    ) -> None:
+        """Bind the seeded source and limits used to build one candidate.
+
+        ``generator`` makes choices deterministic. ``max_output_length`` bounds
+        the complete candidate and every intermediate group. ``repeat_limit``
+        replaces Python's effectively infinite upper bound for ``*`` and ``+``.
+        """
+
+        super().__init__(generator)
+        self.max_output_length = max_output_length
+        self.repeat_limit = repeat_limit
+        # The work budget also bounds expressions whose repeated branch is
+        # empty, where output length alone cannot stop excessive traversal.
+        self.max_work_steps = 20_000 + max_output_length * 10
+        self.remaining_work_steps = self.max_work_steps
+
+    def xeger(self, string_or_regex: str | re.Pattern[str]) -> str:
+        """Return one candidate after resetting its independent work budget.
+
+        Output-limit and unsupported-opcode failures propagate to the caller,
+        which decides whether to retry or return a public generation error.
+        """
+
+        self.remaining_work_steps = self.max_work_steps
+        try:
+            return super().xeger(string_or_regex)
+        finally:
+            # ``rstr`` normally clears capture groups only after success.
+            # Clear them after bounded failures too so no retry can observe
+            # stale group text from the preceding candidate.
+            self._cache.clear()
+
+    def _handle_state(self, state: Any) -> Any:
+        """Build one parsed state after charging it to the work budget.
+
+        Branches and positive lookaheads need local handling because ``rstr``
+        normally joins their children without checking intermediate length.
+        Other opcodes retain the dependency's behavior.
+        """
+
+        self._charge_work()
+        opcode, value = state
+        opcode_name = opcode.name.lower()
+        if opcode_name == "branch":
+            selected = self._random.choice(value[1])
+            return self._bounded_join(
+                self._handle_state(child) for child in selected
+            )
+        if opcode_name == "assert":
+            return self._bounded_join(
+                self._handle_state(child) for child in value[1]
+            )
+        return super()._handle_state(state)
+
+    def _charge_work(self) -> None:
+        """Consume one finite traversal step or stop the current candidate.
+
+        Both parsed states and assembled fragments call this helper. Counting
+        fragments matters for a large repeat whose item is empty: it performs
+        real iteration without adding characters that the output limit can see.
+        """
+
+        self.remaining_work_steps -= 1
+        if self.remaining_work_steps < 0:
+            raise _RegexCandidateLimit(
+                "regular expression exceeded its generation work budget"
+            )
+
+    def _build_string(self, parsed: Any) -> str:
+        """Return joined top-level states or stop at the output boundary."""
+
+        return self._bounded_join(self._handle_state(state) for state in parsed)
+
+    def _handle_group(self, value: Any) -> str:
+        """Return one bounded capture group and retain it for backreferences."""
+
+        result = self._bounded_join(
+            self._handle_state(state) for state in value[-1]
+        )
+        if value[0]:
+            self._cache[value[0]] = result
+        return result
+
+    def _handle_in(self, value: Any) -> str:
+        """Choose one character from a class with stable negation ordering.
+
+        ``rstr`` normally builds a Python set for a class such as ``[^AB]``.
+        Set iteration changes with Python's per-process hash seed, which would
+        violate RESTScope's promise that the same Generator seed is repeatable.
+        Filtering ``string.printable`` in its declared order preserves the
+        dependency's candidate alphabet while making the choice deterministic.
+        """
+
+        candidates: list[str | bool] = []
+        for state in value:
+            fragment = self._handle_state(state)
+            candidates.extend(fragment)
+        if not candidates:
+            raise ValueError("regular expression character class is empty")
+        if candidates[0] is False:
+            excluded = set(candidates[1:])
+            candidates = [
+                character
+                for character in string.printable
+                if character not in excluded
+            ]
+        if not candidates:
+            raise ValueError("regular expression character class has no candidates")
+        return str(self._random.choice(candidates))
+
+    def _handle_repeat(
+        self,
+        start_range: int,
+        end_range: int,
+        value: Any,
+    ) -> str:
+        """Generate a repeated branch while bounding open-ended quantifiers.
+
+        ``start_range`` and ``end_range`` come from Python's parsed quantifier;
+        ``value`` contains the states repeated as one unit. The returned string
+        never exceeds ``max_output_length``; excessive output or work raises
+        :class:`_RegexCandidateLimit`.
+
+        Python represents ``*`` and ``+`` with an implementation-specific very
+        large maximum. Finite quantifiers keep their declared upper bound,
+        while open-ended quantifiers use the strategy's explicit repeat limit.
+        Output and work checks still protect finite nested repetitions.
+        """
+
+        from re._constants import MAXREPEAT
+
+        if end_range == MAXREPEAT:
+            if start_range > self.repeat_limit:
+                raise _RegexCandidateLimit(
+                    "open-ended repetition exceeds its per-segment limit"
+                )
+            end_range = self.repeat_limit
+        times = self._random.randint(start_range, end_range)
+        return self._bounded_join(
+            self._bounded_join(
+                self._handle_state(state) for state in value
+            )
+            for _ in range(times)
+        )
+
+    def _bounded_join(self, parts: Iterable[Any]) -> str:
+        """Return joined fragments or raise before their total exceeds the contract."""
+
+        result: list[str] = []
+        length = 0
+        for part in parts:
+            self._charge_work()
+            text = str(part)
+            length += len(text)
+            if length > self.max_output_length:
+                raise _RegexCandidateLimit(
+                    "regular expression candidate exceeded max_length"
+                )
+            result.append(text)
+        return "".join(result)
 
 
 def generate_strategy_value(
@@ -74,6 +263,8 @@ def generate_strategy_value(
     if isinstance(strategy, RandomStringGenerator):
         length = generator.randint(strategy.min_length, strategy.max_length)
         return "".join(generator.choice(strategy.alphabet) for _ in range(length))
+    if isinstance(strategy, RegexGenerator):
+        return _generate_regex_value(strategy, generator)
     if isinstance(strategy, BooleanGenerator):
         return generator.random() < strategy.true_probability
     if isinstance(strategy, FormatGenerator):
@@ -93,6 +284,79 @@ def generate_strategy_value(
             )
         return deepcopy(generator.choice(values))
     raise GenerationError(f"Strategy {strategy.type} does not generate a scalar value")
+
+
+def _generate_regex_value(
+    strategy: RegexGenerator,
+    generator: random.Random,
+) -> str:
+    """Generate one bounded value that satisfies the regex strategy itself.
+
+    ``strategy`` supplies the expression and whole-value length bounds.
+    ``generator`` carries deterministic state derived from the public seed.
+    The return value satisfies both the configured bounds and ``re.search``.
+    Unsupported syntax or retry exhaustion raises :class:`GenerationError`.
+
+    Up to twenty candidates are tried because choices and optional branches can
+    yield different lengths. A valid Python regex that uses an opcode unsupported
+    by ``rstr`` fails immediately; ordinary length or match misses consume the
+    bounded retry allowance.
+    """
+
+    compiled = re.compile(strategy.pattern)
+    repeat_limit = min(strategy.max_length, 100)
+    for _attempt in range(20):
+        xeger = _BoundedXeger(
+            generator,
+            max_output_length=strategy.max_length,
+            repeat_limit=repeat_limit,
+        )
+        try:
+            raw = xeger.xeger(strategy.pattern)
+        except _RegexCandidateLimit:
+            continue
+        except (IndexError, KeyError, NotImplementedError, TypeError, ValueError) as exc:
+            raise GenerationError(
+                "Regex generator does not support the configured pattern"
+            ) from exc
+
+        for candidate in _regex_length_candidates(
+            raw,
+            strategy=strategy,
+            generator=generator,
+        ):
+            if compiled.search(candidate) is not None:
+                return candidate
+    raise GenerationError(
+        "Regex generator could not satisfy its pattern and length bounds"
+    )
+
+
+def _regex_length_candidates(
+    raw: str,
+    *,
+    strategy: RegexGenerator,
+    generator: random.Random,
+) -> tuple[str, ...]:
+    """Return candidates padded to ``min_length`` without exceeding ``max_length``.
+
+    ``raw`` is the dependency's matching fragment. The seeded ``generator``
+    creates filler only when needed. The caller evaluates both suffix- and
+    prefix-padded values because anchors determine which side remains valid.
+    """
+
+    if not strategy.min_length <= len(raw) <= strategy.max_length:
+        if len(raw) > strategy.max_length:
+            return ()
+        missing = strategy.min_length - len(raw)
+        filler = "".join(
+            generator.choice(string.ascii_letters + string.digits)
+            for _ in range(missing)
+        )
+        # Suffix padding preserves ``^`` expressions, while prefix padding
+        # preserves ``$`` expressions. The caller validates both with search.
+        return (f"{raw}{filler}", f"{filler}{raw}")
+    return (raw,)
 
 
 def generate_test_case(
@@ -410,6 +674,7 @@ class _TestCaseGenerator:
             | IntegerRangeGenerator
             | NumberRangeGenerator
             | RandomStringGenerator
+            | RegexGenerator
             | BooleanGenerator
             | FormatGenerator
             | ResourceIdentifierGenerator

@@ -109,6 +109,25 @@ def test_testing_tools_register_with_run_allowed_for_every_role_and_config_tools
         assert config_names.isdisjoint(selected)
 
 
+def test_generator_management_schema_exposes_regex_strategy(
+    tmp_path: Path,
+) -> None:
+    """Scenario: tool callers can discover every field in the regex strategy."""
+    import json
+
+    from restscope.capabilities.testing_tools import PATCH_GENERATORS_TOOL_NAME
+
+    runtime = _runtime(tmp_path)
+    schema = runtime.tool_registry.get_spec(
+        PATCH_GENERATORS_TOOL_NAME
+    ).input_schema
+    rendered = json.dumps(schema)
+
+    assert '"regex"' in rendered
+    for field in ("pattern", "min_length", "max_length"):
+        assert f'"{field}"' in rendered
+
+
 def test_run_operation_tool_returns_the_execution_report(tmp_path: Path) -> None:
     """Scenario: verify that run operation tool returns the execution report."""
     from restscope.capabilities.testing_tools import RUN_OPERATION_TOOL_NAME

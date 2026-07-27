@@ -161,6 +161,111 @@ def test_non_empty_enum_has_priority_over_const_default_example_and_other_constr
     assert strategy.weights is None
 
 
+def test_pattern_only_string_initializes_and_round_trips_as_regex(
+    tmp_path: Path,
+) -> None:
+    """Scenario: a frozen string pattern becomes an enabled persisted regex strategy."""
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Regex default", "version": "1"},
+            "paths": {
+                "/search": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "code",
+                                "in": "query",
+                                "required": True,
+                                "schema": {
+                                    "type": "string",
+                                    "pattern": "^[A-Z]{3}$",
+                                    "minLength": 3,
+                                    "maxLength": 3,
+                                },
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    catalog, _ = _catalog(tmp_path)
+
+    assert catalog.initialize_once(ir) is True
+
+    stored = catalog.inspect_operation("GET /search")
+    assert stored.enabled is True
+    assert stored.disabled_reasons == []
+    assert stored.configs[0].strategy.model_dump(mode="json") == {
+        "type": "regex",
+        "pattern": "^[A-Z]{3}$",
+        "min_length": 3,
+        "max_length": 3,
+    }
+    assert catalog.inspect_operation("GET /search") == stored
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "string", "pattern": "["},
+        {
+            "type": "string",
+            "pattern": "^[A-Z]+$",
+            "maxLength": 10_001,
+        },
+        {
+            "type": "string",
+            "pattern": "^[A-Z]+$",
+            "format": "custom-code",
+        },
+    ],
+)
+def test_invalid_or_combined_regex_defaults_remain_recoverably_disabled(
+    tmp_path: Path,
+    schema: dict,
+) -> None:
+    """Scenario: unsafe or multi-contract regex defaults remain visible but disabled."""
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Unavailable regex default", "version": "1"},
+            "paths": {
+                "/search": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "code",
+                                "in": "query",
+                                "required": True,
+                                "schema": schema,
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    catalog, _ = _catalog(tmp_path)
+
+    assert catalog.initialize_once(ir) is True
+
+    stored = catalog.inspect_operation("GET /search")
+    assert stored.enabled is False
+    assert stored.disabled_reasons
+    assert all(reason.recoverable for reason in stored.disabled_reasons)
+    assert {reason.input_node_id for reason in stored.disabled_reasons} == {
+        stored.configs[0].input_node_id
+    }
+
+
 def test_empty_enum_disables_operation_with_node_attributed_recoverable_reason(
     tmp_path: Path,
 ) -> None:
@@ -1132,6 +1237,7 @@ def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
                                 "schema": {
                                     "type": "string",
                                     "pattern": "^[A-Z]+$",
+                                    "format": "custom-code",
                                 },
                             }
                             for name in ("first", "second")
@@ -1206,6 +1312,7 @@ def test_patch_does_not_hide_an_unrelated_default_configuration_failure(
                                 "schema": {
                                     "type": "string",
                                     "pattern": "^[A-Z]+$",
+                                    "format": "custom-code",
                                 },
                             }
                         ],

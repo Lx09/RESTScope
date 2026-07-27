@@ -131,6 +131,28 @@ def constant_patch():
     }
 
 
+def regex_patch():
+    """Return one model-shaped regex proposal for the sample project path."""
+
+    return {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "strategy": {
+                        "type": "regex",
+                        "pattern": "^project-[0-9]{4}$",
+                        "min_length": 12,
+                        "max_length": 12,
+                    },
+                }
+            ],
+            "constraints": [],
+        },
+    }
+
+
 def test_agent_validates_samples_then_accepts_complete_patch() -> None:
     """Scenario: verify that agent validates samples then accepts complete patch."""
     from restscope.agent.parameter_patch import ParameterPatchAgent
@@ -167,6 +189,37 @@ def test_agent_validates_samples_then_accepts_complete_patch() -> None:
         client.requests[1].messages[-1].content
     )
     assert all(request.temperature == 0 for request in client.requests)
+
+
+def test_agent_can_review_and_accept_regex_generator_samples() -> None:
+    """Scenario: the patch Agent can propose regex and review ten matching samples."""
+    import re
+
+    from restscope.agent.parameter_patch import ParameterPatchAgent
+
+    client = StubClient(
+        [
+            llm_response(regex_patch()),
+            llm_response({"action": "accept"}),
+        ]
+    )
+
+    result = ParameterPatchAgent(client=client, model=patch_model()).run(
+        task=group_task(),
+        config=sampleable_config(),
+        active_constraints=[],
+    )
+
+    assert result.status == "validated"
+    assert result.patch.updates[0].strategy.type == "regex"
+    assert len(result.samples) == 10
+    assert all(
+        re.fullmatch(
+            r"project-[0-9]{4}",
+            sample["values"]["path.projectId"],
+        )
+        for sample in result.samples
+    )
 
 
 def request_body_date_config():
@@ -451,6 +504,7 @@ def test_expert_prompt_contains_complete_generator_and_constraint_catalogs() -> 
         "integer_range",
         "number_range",
         "random_string",
+        "regex",
         "boolean",
         "format",
         "object",
@@ -481,6 +535,7 @@ def test_expert_prompt_contains_complete_generator_and_constraint_catalogs() -> 
         "integer_range fields: type, minimum, maximum.",
         "number_range fields: type, minimum, maximum.",
         "random_string fields: type, min_length, max_length, alphabet.",
+        "regex fields: type, pattern, min_length, max_length.",
         "boolean fields: type, true_probability.",
         "format fields: type, format.",
         "array fields: type, min_items, max_items.",
@@ -496,6 +551,7 @@ def test_expert_prompt_contains_complete_generator_and_constraint_catalogs() -> 
         "not fields: type, expression.",
         "inclusion_probability must be between 0 and 1",
         "Every propose output is a complete replacement",
+        "Regex text:",
     ):
         assert protocol in prompt
     assert "object and request_body are system-managed" in prompt
