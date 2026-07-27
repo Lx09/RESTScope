@@ -219,9 +219,9 @@ def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None
             parsed_json={
                 "items": [
                     {
-                        "item_id": "F1",
-                        "status": "persisting",
-                        "current_failure_refs": ["F1"],
+                            "item_id": "F1",
+                            "status": "persisting",
+                            "current_failure_refs": ["CF1"],
                         "reason": "The identifier failure remains.",
                         "confidence": 0.8,
                     }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -1196,13 +1198,38 @@ def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
             llm_response(valid_effect_decision),
         ]
     )
+    from restscope.observability import TracingRuntime
+    from restscope.redaction import Redactor
+
+    redactor = Redactor(["runtime-secret"])
 
     summary = OperationSmokeDiagnoser(
         client=client,
         planning_model=planning_model(),
+        tracing_runtime=TracingRuntime.disabled(redactor=redactor),
     ).validate_effect(
         baseline_report=baseline,
         candidate_report=candidate,
+        baseline_private_case_evidence={
+            "case_1": {
+                "response_body": (
+                    b'{"message":"projectId must be numeric",'
+                    b'"token":"runtime-secret"}'
+                ),
+                "response_body_truncated": False,
+                "response_encoding": "utf-8",
+            }
+        },
+        candidate_private_case_evidence={
+            "case_1": {
+                "response_body": (
+                    b'{"message":"region is required",'
+                    b'"token":"runtime-secret"}'
+                ),
+                "response_body_truncated": False,
+                "response_encoding": "utf-8",
+            }
+        },
         diagnosis=diagnosis,
         groups=[group],
     )
@@ -1218,7 +1245,27 @@ def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
     assert '"samples":' not in rendered_prompt
     assert "input_node_id" not in rendered_prompt
     assert "Authorization" not in rendered_prompt
+    assert "runtime-secret" not in rendered_prompt
+    assert "***REDACTED***" in rendered_prompt
     assert '"items":[' in rendered_prompt
+    payload = json.loads(client.requests[0].messages[1].content)
+    baseline_response = payload["baseline"]["cases"][0]["response"]
+    candidate_response = payload["candidate"]["cases"][0]["response"]
+    assert baseline_response["body"] == {
+        "message": "projectId must be numeric",
+        "token": "***REDACTED***",
+    }
+    assert candidate_response["body"] == {
+        "message": "region is required",
+        "token": "***REDACTED***",
+    }
+    assert baseline_response["body_truncated"] is False
+    assert candidate_response["body_truncated"] is False
+    assert baseline_response["body_original_size_bytes"] > 0
+    assert candidate_response["body_original_size_bytes"] > 0
+    system_prompt = client.requests[0].messages[0].content
+    assert "same HTTP status code alone" in system_prompt
+    assert "different parameter error" in system_prompt
     repair_prompt = client.requests[1].messages[-1].content
     assert "items: Field required" in repair_prompt
     assert "The only legal top-level shape" in repair_prompt
@@ -1226,3 +1273,287 @@ def test_effect_validation_accepts_group_from_initial_failure_only() -> None:
     assert client.requests[0].metadata["role"] == (
         "operation_smoke_effect_validation"
     )
+
+
+def test_effect_validation_omits_2xx_body_and_bounds_failure_evidence() -> None:
+    """Only bounded, redacted non-2xx bodies may enter effect evidence."""
+    from restscope.agent.operation_smoke import (
+        ActionableFailure,
+        OperationSmokeDiagnoser,
+        ParameterSolution,
+        PlanSolveDiagnosisResult,
+    )
+    from restscope.agent.parameter_patch import (
+        GeneratorPatchAttribution,
+        GeneratorPatchDraft,
+        ValidatedPatchGroup,
+    )
+    from restscope.observability import TracingRuntime
+    from restscope.redaction import Redactor
+    from restscope.testing import InputGeneratorPatch
+
+    baseline = smoke_report()
+    baseline_case = baseline.cases[0]
+    candidate_case = baseline_case.model_copy(
+        update={
+            "case_id": "case_2",
+            "response": baseline_case.response.model_copy(
+                update={
+                    "status_code": 200,
+                    "reason_phrase": "OK",
+                }
+            ),
+        }
+    )
+    candidate = baseline.model_copy(
+        update={
+            "run_id": "run_candidate",
+            "cases": [candidate_case],
+            "status_code_counts": {"200": 1},
+            "observed_2xx": True,
+            "failure_report": baseline.failure_report.model_copy(
+                update={"unique_failure_messages": []}
+            ),
+        }
+    )
+    actionable = ActionableFailure(
+        item_id="I1",
+        failure_ref="F1",
+        root_failure_refs=["F1"],
+        evidence_origin="initial",
+        cause="The generated project identifier is invalid.",
+        solutions=[
+            ParameterSolution(
+                input="path.projectId",
+                desired_behavior="Generate a numeric project identifier.",
+            )
+        ],
+        affected_inputs=["path.projectId"],
+        evidence_refs=["F1", "C1"],
+    )
+    diagnosis = PlanSolveDiagnosisResult(
+        status="actionable",
+        termination_reason="all_failures_processed",
+        actionable_failures=[actionable],
+    )
+    group = ValidatedPatchGroup(
+        group_id="G1",
+        item_ids=["I1"],
+        root_failure_refs=["F1"],
+        patch=GeneratorPatchDraft(
+            updates=[
+                InputGeneratorPatch(
+                    input_node_id="path/projectId",
+                    strategy={"type": "integer_range", "minimum": 1, "maximum": 9},
+                )
+            ],
+            attributions=[
+                GeneratorPatchAttribution(
+                    input_node_id="path/projectId",
+                    group_ids=["G1"],
+                    item_ids=["I1"],
+                    root_failure_refs=["F1"],
+                )
+            ],
+        ),
+        samples=[{"path.projectId": 1} for _ in range(10)],
+        attempts=2,
+    )
+    client = StubClient(
+        [
+            llm_response(
+                {
+                    "items": [
+                        {
+                            "item_id": "F1",
+                            "status": "resolved",
+                            "current_failure_refs": [],
+                            "reason": "The original parameter error is absent.",
+                            "confidence": 0.9,
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+    huge_failure_body = (
+        b'{"message":"' + (b"x" * 80_000) + b' runtime-secret"}'
+    )
+
+    OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+        tracing_runtime=TracingRuntime.disabled(
+            redactor=Redactor(["runtime-secret"])
+        ),
+    ).validate_effect(
+        baseline_report=baseline,
+        candidate_report=candidate,
+        baseline_private_case_evidence={
+            "case_1": {
+                "response_body": huge_failure_body,
+                "response_body_truncated": False,
+                "response_encoding": "utf-8",
+            }
+        },
+        candidate_private_case_evidence={
+            "case_2": {
+                "response_body": b"2xx-body-must-not-be-visible",
+                "response_body_truncated": False,
+                "response_encoding": "utf-8",
+            }
+        },
+        diagnosis=diagnosis,
+        groups=[group],
+    )
+
+    user_prompt = client.requests[0].messages[1].content
+    payload = json.loads(user_prompt)
+    baseline_response = payload["baseline"]["cases"][0]["response"]
+    candidate_response = payload["candidate"]["cases"][0]["response"]
+    assert len(user_prompt.encode("utf-8")) <= 64 * 1024
+    assert baseline_response["body_truncated"] is True
+    assert baseline_response["body_original_size_bytes"] == len(huge_failure_body)
+    assert baseline_response["body"]["truncated"] is True
+    assert "runtime-secret" not in user_prompt
+    assert "body" not in candidate_response
+    assert "body_truncated" not in candidate_response
+    assert "2xx-body-must-not-be-visible" not in user_prompt
+
+
+def test_effect_evidence_handles_text_empty_and_invalid_json_bodies() -> None:
+    """Failure evidence preserves useful bodies even when they are not valid JSON."""
+    from restscope.agent.operation_smoke.evidence import (
+        build_effect_validation_payload,
+    )
+    from restscope.redaction import Redactor
+
+    report = smoke_report()
+    original = report.cases[0]
+    cases = [
+        original.model_copy(
+            update={
+                "case_id": "case_text",
+                "response": original.response.model_copy(
+                    update={"media_type": "text/plain"}
+                ),
+            }
+        ),
+        original.model_copy(
+            update={
+                "case_id": "case_empty",
+                "response": original.response.model_copy(
+                    update={"status_code": 500}
+                ),
+            }
+        ),
+        original.model_copy(
+            update={
+                "case_id": "case_invalid_json",
+                "response": original.response.model_copy(
+                    update={"status_code": 422}
+                ),
+            }
+        ),
+    ]
+    report = report.model_copy(
+        update={
+            "cases": cases,
+            "status_code_counts": {"404": 1, "500": 1, "422": 1},
+        }
+    )
+    private = {
+        "case_text": {
+            "response_body": b"employeeId must be numeric",
+            "response_encoding": "utf-8",
+        },
+        "case_empty": {
+            "response_body": b"",
+            "response_encoding": "utf-8",
+        },
+        "case_invalid_json": {
+            "response_body": b'{"message":\xff}',
+            "response_encoding": "utf-8",
+        },
+    }
+
+    payload = build_effect_validation_payload(
+        baseline_report=report,
+        candidate_report=report,
+        baseline_private_case_evidence=private,
+        candidate_private_case_evidence=private,
+        baseline_failures=[],
+        candidate_failures=[],
+        confirmed_diagnoses=[],
+        group_failure_mapping=[],
+        redactor=Redactor(),
+    )
+
+    responses = {
+        case["case_ref"]: case["response"]
+        for case in payload["baseline"]["cases"]
+    }
+    assert responses["case_text"]["body"] == "employeeId must be numeric"
+    assert responses["case_empty"]["body_available"] is True
+    assert responses["case_empty"]["body"] == ""
+    assert responses["case_empty"]["body_original_size_bytes"] == 0
+    assert responses["case_invalid_json"]["body"] == '{"message":�}'
+
+
+def test_effect_evidence_keeps_every_failure_case_under_combined_limit() -> None:
+    """The shared budget shortens previews fairly without dropping cases."""
+    from restscope.agent.operation_smoke.evidence import (
+        build_effect_validation_payload,
+    )
+    from restscope.redaction import Redactor
+
+    report = smoke_report()
+    original = report.cases[0]
+    cases = [
+        original.model_copy(update={"case_id": f"case_{index}"})
+        for index in range(20)
+    ]
+    report = report.model_copy(update={"cases": cases})
+    private = {
+        case.case_id: {
+            "response_body": (
+                f'{{"case":{index},"message":"'.encode()
+                + (bytes([65 + index % 26]) * 20_000)
+                + b'"}'
+            ),
+            "response_encoding": "utf-8",
+        }
+        for index, case in enumerate(cases)
+    }
+
+    payload = build_effect_validation_payload(
+        baseline_report=report,
+        candidate_report=report.model_copy(
+            update={"run_id": "candidate_run"}
+        ),
+        baseline_private_case_evidence=private,
+        candidate_private_case_evidence=private,
+        baseline_failures=[],
+        candidate_failures=[],
+        confirmed_diagnoses=[],
+        group_failure_mapping=[],
+        redactor=Redactor(),
+    )
+
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    all_cases = [
+        *payload["baseline"]["cases"],
+        *payload["candidate"]["cases"],
+    ]
+    assert len(encoded) <= 64 * 1024
+    assert len(all_cases) == 40
+    assert {
+        case["case_ref"] for case in payload["baseline"]["cases"]
+    } == {f"case_{index}" for index in range(20)}
+    assert all("body" in case["response"] for case in all_cases)
+    assert all(case["response"]["body_truncated"] for case in all_cases)
+    assert all(case["response"]["body"]["preview"] for case in all_cases)

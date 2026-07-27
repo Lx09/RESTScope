@@ -26,7 +26,10 @@ from restscope.testing import (
     OperationGeneratorConfig,
 )
 
-from .evidence import EvidenceJournal
+from .evidence import (
+    EvidenceJournal,
+    build_effect_validation_payload,
+)
 from .planning import FailureDecision
 from .prompts import (
     PatchValidationDecision,
@@ -200,6 +203,8 @@ class OperationSmokeDiagnoser:
         *,
         baseline_report: OperationExecutionReport,
         candidate_report: OperationExecutionReport,
+        baseline_private_case_evidence: Mapping[str, Any] | None = None,
+        candidate_private_case_evidence: Mapping[str, Any] | None = None,
         diagnosis: PlanSolveDiagnosisResult,
         groups: list[ValidatedPatchGroup],
     ) -> PatchValidationSummary:
@@ -237,6 +242,12 @@ class OperationSmokeDiagnoser:
             result = self._validate_effect(
                 baseline_report=baseline_report,
                 candidate_report=candidate_report,
+                baseline_private_case_evidence=(
+                    baseline_private_case_evidence
+                ),
+                candidate_private_case_evidence=(
+                    candidate_private_case_evidence
+                ),
                 diagnosis=diagnosis,
                 groups=groups,
             )
@@ -264,6 +275,8 @@ class OperationSmokeDiagnoser:
         *,
         baseline_report: OperationExecutionReport,
         candidate_report: OperationExecutionReport,
+        baseline_private_case_evidence: Mapping[str, Any] | None,
+        candidate_private_case_evidence: Mapping[str, Any] | None,
         diagnosis: PlanSolveDiagnosisResult,
         groups: list[ValidatedPatchGroup],
     ) -> PatchValidationSummary:
@@ -332,38 +345,39 @@ class OperationSmokeDiagnoser:
             "For every supplied initial failure ref, return resolved, "
             "persisting, or unknown. Compare only baseline and candidate HTTP "
             "evidence. Do not evaluate Generator or Constraint syntax and do "
-            "not infer success from local samples.\n\n"
+            "not infer success from local samples. The same HTTP status code alone "
+            "does not prove that the same failure persists. Compare response "
+            "bodies, error fields, named parameters, and error causes. If the "
+            "original parameter error disappears but a different parameter error "
+            "appears, classify the original failure as resolved. Classify it as "
+            "persisting when the same parameter and cause remain, and as unknown "
+            "when a missing or heavily truncated body prevents a safe comparison."
+            "\n\n"
             + protocol.text
         )
+        effect_payload = build_effect_validation_payload(
+            baseline_report=baseline_report,
+            candidate_report=candidate_report,
+            baseline_private_case_evidence=(
+                baseline_private_case_evidence
+            ),
+            candidate_private_case_evidence=(
+                candidate_private_case_evidence
+            ),
+            baseline_failures=baseline_failures,
+            candidate_failures=candidate_failures,
+            confirmed_diagnoses=actionables,
+            group_failure_mapping=[
+                {
+                    "group_id": group.group_id,
+                    "root_failure_refs": group.root_failure_refs,
+                }
+                for group in groups
+            ],
+            redactor=self.tracing_runtime.redactor,
+        )
         user = json.dumps(
-            {
-                "baseline": {
-                    "status_code_counts": baseline_report.status_code_counts,
-                    "transport_error_count": baseline_report.error_count,
-                    "failures": baseline_failures,
-                    "cases": [
-                        _effect_case_evidence(case)
-                        for case in baseline_report.cases
-                    ],
-                },
-                "candidate": {
-                    "status_code_counts": candidate_report.status_code_counts,
-                    "transport_error_count": candidate_report.error_count,
-                    "failures": candidate_failures,
-                    "cases": [
-                        _effect_case_evidence(case)
-                        for case in candidate_report.cases
-                    ],
-                },
-                "confirmed_diagnoses": actionables,
-                "group_failure_mapping": [
-                    {
-                        "group_id": group.group_id,
-                        "root_failure_refs": group.root_failure_refs,
-                    }
-                    for group in groups
-                ],
-            },
+            effect_payload,
             ensure_ascii=False,
             separators=(",", ":"),
             default=str,
@@ -1181,48 +1195,6 @@ def _effect_decision_errors(
                     f"{reference} was not supplied as a candidate failure."
                 )
     return errors
-
-
-def _effect_case_evidence(case) -> dict[str, Any]:
-    """
-    Handle effect case evidence as part of the run-local Operation Smoke diagnosis and
-    candidate workflow.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
-    generated = case.generated_test_case
-    return {
-        "case_ref": case.case_id,
-        "request": {
-            "method": case.request.method,
-            "path": case.request.path,
-            "query": list(case.request.query_items),
-            "generated_parameters": {
-                "path": generated.path_parameters,
-                "query": generated.query_parameters,
-                "headers": generated.header_parameters,
-                "cookies": generated.cookie_parameters,
-            },
-            "body_present": generated.body_present,
-            "body": generated.body if generated.body_present else None,
-        },
-        "response": (
-            case.response.model_dump(mode="json")
-            if case.response is not None
-            else None
-        ),
-        "transport_error": (
-            case.transport_error.model_dump(mode="json")
-            if case.transport_error is not None
-            else None
-        ),
-        "response_validation": case.response_validation,
-        "behavior_monitor_warnings": [
-            warning.model_dump(mode="json")
-            for warning in case.behavior_monitor_warnings
-        ],
-    }
 
 
 def _response_json(response: LLMResponse) -> str:

@@ -444,7 +444,10 @@ class OperationSmokeAgent:
 
                 # Phase 4: run the candidate with the baseline case count and
                 # seed.  The ten local patch samples above are never HTTP cases.
-                candidate_report, _ = _run_smoke_batch(
+                (
+                    candidate_report,
+                    candidate_private_case_evidence,
+                ) = _run_smoke_batch(
                     self.batch_runner,
                     context=context,
                     operation_key=request.operation_key,
@@ -473,6 +476,10 @@ class OperationSmokeAgent:
                 validation = self.diagnoser.validate_effect(
                     baseline_report=report,
                     candidate_report=candidate_report,
+                    baseline_private_case_evidence=private_case_evidence,
+                    candidate_private_case_evidence=(
+                        candidate_private_case_evidence
+                    ),
                     diagnosis=diagnosis,
                     groups=successful_groups,
                 )

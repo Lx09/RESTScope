@@ -283,6 +283,309 @@ class EvidenceJournal:
         )
 
 
+def build_effect_validation_payload(
+    *,
+    baseline_report: OperationExecutionReport,
+    candidate_report: OperationExecutionReport,
+    baseline_private_case_evidence: Mapping[str, Any] | None,
+    candidate_private_case_evidence: Mapping[str, Any] | None,
+    baseline_failures: list[Mapping[str, Any]],
+    candidate_failures: list[Mapping[str, Any]],
+    confirmed_diagnoses: list[Mapping[str, Any]],
+    group_failure_mapping: list[Mapping[str, Any]],
+    redactor: Redactor,
+) -> dict[str, Any]:
+    """Build one redacted, size-bounded view for real-effect validation.
+
+    Public execution reports deliberately omit response bodies. Smoke execution
+    retains non-2xx bodies separately for the lifetime of one run, so this
+    projection must join each report case to its private evidence before the
+    model compares baseline and candidate failures.
+
+    One uniform value budget is chosen for the whole payload. Reducing every
+    preview together keeps all cases represented fairly instead of spending
+    the entire prompt budget on the first large response.
+    """
+
+    baseline_private = dict(baseline_private_case_evidence or {})
+    candidate_private = dict(candidate_private_case_evidence or {})
+
+    def render(max_value_bytes: int) -> dict[str, Any]:
+        payload = {
+            "baseline": _effect_batch_evidence(
+                report=baseline_report,
+                private_case_evidence=baseline_private,
+                failures=baseline_failures,
+                max_value_bytes=max_value_bytes,
+            ),
+            "candidate": _effect_batch_evidence(
+                report=candidate_report,
+                private_case_evidence=candidate_private,
+                failures=candidate_failures,
+                max_value_bytes=max_value_bytes,
+            ),
+            "confirmed_diagnoses": _effect_diagnosis_evidence(
+                confirmed_diagnoses,
+                max_value_bytes=max_value_bytes,
+            ),
+            "group_failure_mapping": [
+                {
+                    "group_id": item.get("group_id"),
+                    "root_failure_refs": list(
+                        item.get("root_failure_refs", [])
+                    ),
+                }
+                for item in group_failure_mapping
+            ],
+        }
+        return redactor.redact(payload)
+
+    # Most runs fit with the normal per-value 4 KiB ceiling. If the combined
+    # baseline/candidate view is larger, binary search finds the largest common
+    # preview size that stays within the 64 KiB model-input boundary.
+    maximum = EvidenceJournal.MAX_PROMPT_BODY_BYTES
+    candidate = render(maximum)
+    if _encoded_size(candidate) <= EvidenceJournal.MAX_PROMPT_BYTES:
+        return candidate
+
+    smallest = render(0)
+    if _encoded_size(smallest) > EvidenceJournal.MAX_PROMPT_BYTES:
+        raise RuntimeError(
+            "Effect validation evidence metadata exceeds the 64 KiB limit"
+        )
+
+    best = smallest
+    low = 1
+    high = maximum - 1
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = render(middle)
+        if _encoded_size(candidate) <= EvidenceJournal.MAX_PROMPT_BYTES:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
+def _effect_batch_evidence(
+    *,
+    report: OperationExecutionReport,
+    private_case_evidence: Mapping[str, Any],
+    failures: list[Mapping[str, Any]],
+    max_value_bytes: int,
+) -> dict[str, Any]:
+    """Project one public batch plus its run-local private response evidence."""
+
+    return {
+        "status_code_counts": report.status_code_counts,
+        "transport_error_count": report.error_count,
+        "failures": [
+            {
+                "ref": failure.get("ref"),
+                "message": _bounded_value(
+                    failure.get("message"),
+                    max_bytes=max_value_bytes,
+                ),
+                "case_refs": list(failure.get("case_refs", [])),
+            }
+            for failure in failures
+        ],
+        "cases": [
+            _effect_case_evidence(
+                case,
+                private=private_case_evidence.get(case.case_id),
+                max_value_bytes=max_value_bytes,
+            )
+            for case in report.cases
+        ],
+    }
+
+
+def _effect_diagnosis_evidence(
+    diagnoses: list[Mapping[str, Any]],
+    *,
+    max_value_bytes: int,
+) -> list[dict[str, Any]]:
+    """Keep diagnosis identity while bounding its natural-language fields."""
+
+    return [
+        {
+            "item_id": item.get("item_id"),
+            "failure_ref": item.get("failure_ref"),
+            "root_failure_refs": list(item.get("root_failure_refs", [])),
+            "cause": _bounded_value(
+                item.get("cause"),
+                max_bytes=max_value_bytes,
+            ),
+            "desired_behaviors": [
+                {
+                    "input": _bounded_value(
+                        behavior.get("input"),
+                        max_bytes=max_value_bytes,
+                    ),
+                    "desired_behavior": _bounded_value(
+                        behavior.get("desired_behavior"),
+                        max_bytes=max_value_bytes,
+                    ),
+                }
+                for behavior in item.get("desired_behaviors", [])
+            ],
+        }
+        for item in diagnoses
+    ]
+
+
+def _effect_case_evidence(
+    case: Any,
+    *,
+    private: Any,
+    max_value_bytes: int,
+) -> dict[str, Any]:
+    """Create one compact effect case, including only non-2xx response bodies."""
+
+    generated = case.generated_test_case
+    request = {
+        "method": case.request.method,
+        "path": _bounded_value(
+            case.request.path,
+            max_bytes=max_value_bytes,
+        ),
+        "query": _bounded_value(
+            list(case.request.query_items),
+            max_bytes=max_value_bytes,
+        ),
+        "generated_parameters": {
+            "path": _bounded_value(
+                generated.path_parameters,
+                max_bytes=max_value_bytes,
+            ),
+            "query": _bounded_value(
+                generated.query_parameters,
+                max_bytes=max_value_bytes,
+            ),
+            "headers": _bounded_value(
+                generated.header_parameters,
+                max_bytes=max_value_bytes,
+            ),
+            "cookies": _bounded_value(
+                generated.cookie_parameters,
+                max_bytes=max_value_bytes,
+            ),
+        },
+        "body_present": generated.body_present,
+        "body": (
+            _bounded_value(
+                generated.body,
+                max_bytes=max_value_bytes,
+            )
+            if generated.body_present
+            else None
+        ),
+    }
+    response = (
+        case.response.model_dump(mode="json")
+        if case.response is not None
+        else None
+    )
+    private_mapping = _private_evidence_mapping(private)
+    if (
+        response is not None
+        and not 200 <= int(response["status_code"]) < 300
+    ):
+        raw_body = private_mapping.get("response_body")
+        decoded_body = _decoded_response_body(
+            raw_body,
+            encoding=private_mapping.get("response_encoding"),
+            media_type=(
+                str(response["media_type"])
+                if response.get("media_type") is not None
+                else None
+            ),
+        )
+        prompt_body_size = (
+            _encoded_size(decoded_body)
+            if decoded_body is not None
+            else 0
+        )
+        response.update(
+            {
+                "body_available": raw_body is not None,
+                "body": (
+                    _bounded_value(
+                        decoded_body,
+                        max_bytes=max_value_bytes,
+                    )
+                    if decoded_body is not None
+                    else None
+                ),
+                "body_original_size_bytes": _response_body_size(
+                    raw_body,
+                    declared_size=response.get("content_length"),
+                ),
+                "body_truncated": bool(
+                    private_mapping.get("response_body_truncated")
+                )
+                or (
+                    decoded_body is not None
+                    and prompt_body_size > max_value_bytes
+                ),
+            }
+        )
+    return {
+        "case_ref": case.case_id,
+        "request": request,
+        "response": response,
+        "transport_error": (
+            _bounded_value(
+                case.transport_error.model_dump(mode="json"),
+                max_bytes=max_value_bytes,
+            )
+            if case.transport_error is not None
+            else None
+        ),
+        "response_validation": _bounded_value(
+            case.response_validation,
+            max_bytes=max_value_bytes,
+        ),
+        "behavior_monitor_warning_count": len(
+            case.behavior_monitor_warnings
+        ),
+    }
+
+
+def _private_evidence_mapping(value: Any) -> Mapping[str, Any]:
+    """Normalize the dataclass/model/mapping shapes used by batch runners."""
+
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        return dumped if isinstance(dumped, Mapping) else {}
+    if is_dataclass(value) and not isinstance(value, type):
+        dumped = asdict(value)
+        return dumped if isinstance(dumped, Mapping) else {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _response_body_size(
+    value: Any,
+    *,
+    declared_size: Any,
+) -> int | None:
+    """Return the best available pre-prompt body size."""
+
+    if isinstance(declared_size, int) and declared_size >= 0:
+        return declared_size
+    if value is None:
+        return None
+    if isinstance(value, bytes | bytearray):
+        return len(value)
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    return _encoded_size(value)
+
+
 def _case_evidence(
     case,
     *,

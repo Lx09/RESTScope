@@ -81,7 +81,18 @@ def test_groups_run_in_fresh_agents_then_one_candidate_batch_is_finalized(
         "path.itemId",
         "known-item",
     )
-    runner = _BatchRunner(catalog, [(0, 10), (5, 5)])
+    class EvidenceRunner(_BatchRunner):
+        def run_operation_for_smoke(self, *args, **kwargs):
+            outcome = super().run_operation_for_smoke(*args, **kwargs)
+            marker = f"private-evidence-{len(self.calls)}"
+            return SimpleNamespace(
+                report=outcome.report,
+                case_evidence=[
+                    SimpleNamespace(case_id=marker, response_body=marker.encode())
+                ],
+            )
+
+    runner = EvidenceRunner(catalog, [(0, 10), (5, 5)])
     diagnoser = _Diagnoser(
         [diagnosis],
         [
@@ -119,6 +130,13 @@ def test_groups_run_in_fresh_agents_then_one_candidate_batch_is_finalized(
     assert len(factory.instances) == 1
     assert factory.instances[0].calls[0]["config"].revision == 1
     assert len(diagnoser.effect_calls) == 1
+    effect_call = diagnoser.effect_calls[0]
+    assert set(effect_call["baseline_private_case_evidence"]) == {
+        "private-evidence-1"
+    }
+    assert set(effect_call["candidate_private_case_evidence"]) == {
+        "private-evidence-2"
+    }
     current = catalog.inspect_operation(operation_key)
     assert current.revision == 2
     assert current.configs[0].strategy.value == "known-item"
