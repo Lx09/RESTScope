@@ -151,10 +151,14 @@ class FailureInvestigationState(BaseModel):
     failure_ref: str = Field(min_length=1, max_length=20)
     root_failure_refs: list[str] = Field(min_length=1, max_length=10)
     active_hypothesis: FailureHypothesis | None = None
+    hypothesis_history: list[FailureHypothesis] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    hypothesis_signatures: set[str] = Field(default_factory=set)
     inherited_observation_refs: set[str] = Field(default_factory=set)
     probe_observation_refs: set[str] = Field(default_factory=set)
-    last_hypothesis_signature: str | None = None
-    repeated_hypothesis_outputs: int = Field(default=0, ge=0, le=3)
+    repeated_hypothesis_outputs: int = Field(default=0, ge=0, le=2)
     valid_outputs: int = Field(default=0, ge=0, le=20)
     consecutive_invalid_outputs: int = Field(default=0, ge=0, le=3)
     invalid_outputs: int = Field(default=0, ge=0)

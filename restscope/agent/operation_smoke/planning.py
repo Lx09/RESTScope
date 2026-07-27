@@ -16,7 +16,13 @@ class FailureDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["ready", "hypothesis", "confirmed", "deferred"]
+    action: Literal[
+        "ready",
+        "hypothesis",
+        "confirmed",
+        "replace",
+        "deferred",
+    ]
     cause: str | None = Field(default=None, min_length=1, max_length=4000)
     solutions: list[ParameterSolution] = Field(
         default_factory=list,
@@ -50,18 +56,18 @@ class FailureDecision(BaseModel):
             if not self.evidence_refs:
                 errors.append(f"{self.action} requires evidence_refs")
             return errors
-        if self.action == "hypothesis":
+        if self.action in {"hypothesis", "replace"}:
             errors = []
             if self.hypothesis is None:
-                errors.append("hypothesis requires hypothesis")
+                errors.append(f"{self.action} requires hypothesis")
             if not self.target_inputs:
-                errors.append("hypothesis requires target_inputs")
+                errors.append(f"{self.action} requires target_inputs")
             if not self.proposed_changes:
-                errors.append("hypothesis requires proposed_changes")
+                errors.append(f"{self.action} requires proposed_changes")
             if self.expected_outcome is None:
-                errors.append("hypothesis requires expected_outcome")
+                errors.append(f"{self.action} requires expected_outcome")
             if not self.evidence_refs:
-                errors.append("hypothesis requires evidence_refs")
+                errors.append(f"{self.action} requires evidence_refs")
             return errors
         return [] if self.reason is not None else ["deferred requires reason"]
 
@@ -80,10 +86,13 @@ def build_failure_decision_protocol(
     input_handle: str | None,
     failure_ref: str,
     observation_ref: str | None = None,
+    active: bool = False,
+    hypothesis_input_handle: str | None = None,
 ) -> FailureDecisionProtocol:
-    """Render compact action examples that are valid FailureDecision values."""
+    """Render the exact state-specific decision actions accepted by the DTO."""
 
     examples: dict[str, dict[str, Any]] = {}
+    hypothesis_handle = hypothesis_input_handle or input_handle
     if input_handle is not None:
         ready = {
             "action": "ready",
@@ -99,11 +108,19 @@ def build_failure_decision_protocol(
             "evidence_refs": [failure_ref],
             "interaction_notes": [],
         }
-        examples["ready"] = ready
-        examples["hypothesis"] = {
+        if not active:
+            examples["ready"] = ready
+        if active and observation_ref is not None:
+            examples["confirmed"] = {
+                **ready,
+                "action": "confirmed",
+                "evidence_refs": [failure_ref, observation_ref],
+            }
+    if hypothesis_handle is not None:
+        hypothesis = {
             "action": "hypothesis",
             "hypothesis": "One testable parameter explanation.",
-            "target_inputs": [input_handle],
+            "target_inputs": [hypothesis_handle],
             "proposed_changes": [
                 "Change the generated value while testing this explanation."
             ],
@@ -112,12 +129,14 @@ def build_failure_decision_protocol(
             ),
             "evidence_refs": [failure_ref],
         }
-        if observation_ref is not None:
-            examples["confirmed"] = {
-                **ready,
-                "action": "confirmed",
-                "evidence_refs": [failure_ref, observation_ref],
-            }
+        if active:
+            replacement = {**hypothesis, "action": "replace"}
+            replacement["hypothesis"] = (
+                "A materially different testable parameter explanation."
+            )
+            examples["replace"] = replacement
+        else:
+            examples["hypothesis"] = hypothesis
     examples["deferred"] = {
         "action": "deferred",
         "reason": "No safe parameter diagnosis is supported by the evidence.",
@@ -140,11 +159,21 @@ def build_failure_decision_protocol(
         + ".",
         "Return no other top-level keys and return only fields relevant to "
         "the selected action.",
+        (
+            "Active-state actions are confirmed, replace, or deferred; an "
+            "HTTP tool call is the separate probe action."
+            if active
+            else "Initial-state actions are ready, hypothesis, or deferred."
+        ),
         "Never return failure_ref, explanation, reasoning, or "
         "desired_parameter_behavior.",
         "proposed_changes must be a JSON array of strings.",
         "solutions must be a JSON array of objects with input and "
-        "desired_behavior; candidate_values and candidate_range are optional.",
+        "desired_behavior.",
+        "candidate_values must be a JSON array when supplied.",
+        "candidate_range must be omitted or contain exactly two numbers.",
+        'Never wrap a decision as {"confirmed":{...}}, '
+        '{"replace":{...}}, or any other action-named object.',
         "Complete minimal examples using names and references supplied in "
         "this task:",
         json.dumps(
@@ -155,10 +184,15 @@ def build_failure_decision_protocol(
     ]
     if input_handle is None:
         lines.append(
-            "action=ready, action=hypothesis, and action=confirmed are "
-            "unavailable because this operation has no configurable input."
+            "action=ready and action=confirmed are unavailable because this "
+            "operation has no patchable handoff input."
         )
-    elif observation_ref is None:
+    if hypothesis_handle is None:
+        lines.append(
+            "action=hypothesis and action=replace are unavailable because "
+            "this operation has no configurable input."
+        )
+    if active and input_handle is not None and observation_ref is None:
         lines.append(
             "action=confirmed is unavailable until Active hypothesis is "
             "non-null and its HTTP Observation is present in Evidence."

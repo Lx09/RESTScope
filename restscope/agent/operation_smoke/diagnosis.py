@@ -24,6 +24,8 @@ from restscope.observability import TracingRuntime
 from restscope.testing import (
     OperationExecutionReport,
     OperationGeneratorConfig,
+    patchable_descendant_handles,
+    patchable_semantic_input_handles,
 )
 
 from .evidence import (
@@ -672,6 +674,7 @@ class OperationSmokeDiagnoser:
                 failure_ref=failure_ref,
                 root_failure_refs=root_failure_refs,
                 active_hypothesis=state.active_hypothesis,
+                hypothesis_history=state.hypothesis_history,
                 inherited_observation_refs=(
                     state.inherited_observation_refs
                 ),
@@ -715,8 +718,14 @@ class OperationSmokeDiagnoser:
                 )
                 if progress_error is not None:
                     errors.append(progress_error)
-            # Invalid schema/tool output does not spend the valid-output budget,
-            # but three consecutive invalid replies defer this failure.
+            # Initial decisions allow the legacy three invalid replies. Once a
+            # hypothesis is active, one repair is the complete correction
+            # budget so stale state cannot burn two extra model calls.
+            invalid_output_limit = (
+                2
+                if state.active_hypothesis is not None
+                else MAX_CONSECUTIVE_INVALID_OUTPUTS
+            )
             while errors:
                 state.consecutive_invalid_outputs += 1
                 state.invalid_outputs += 1
@@ -732,7 +741,7 @@ class OperationSmokeDiagnoser:
                     )
                 if (
                     state.consecutive_invalid_outputs
-                    >= MAX_CONSECUTIVE_INVALID_OUTPUTS
+                    >= invalid_output_limit
                 ):
                     break
                 response = self._repair(
@@ -828,7 +837,7 @@ class OperationSmokeDiagnoser:
                     hypothesis_count=state.hypothesis_count,
                     http_tool_calls=state.http_tool_calls,
                 )
-            if decision.action == "hypothesis":
+            if decision.action in {"hypothesis", "replace"}:
                 # A replacement hypothesis inherits only observations it cites.
                 # New probes begin a fresh ownership set.
                 state.hypothesis_count += 1
@@ -842,6 +851,7 @@ class OperationSmokeDiagnoser:
                     expected_outcome=decision.expected_outcome,
                     evidence_refs=decision.evidence_refs,
                 )
+                state.hypothesis_history.append(state.active_hypothesis)
                 state.inherited_observation_refs = {
                     reference
                     for reference in decision.evidence_refs
@@ -909,7 +919,19 @@ class OperationSmokeDiagnoser:
         if decision is None:
             return None, errors
         errors.extend(decision.semantic_errors())
+        if active_hypothesis is None:
+            if decision.action not in {"ready", "hypothesis", "deferred"}:
+                errors.append(
+                    "Initial investigation allows only ready, hypothesis, or "
+                    "deferred."
+                )
+        elif decision.action not in {"confirmed", "replace", "deferred"}:
+            errors.append(
+                "An active hypothesis allows only an HTTP probe, confirmed, "
+                "replace, or deferred."
+            )
         known_inputs = set(journal.semantic_inputs.node_by_handle)
+        patchable_inputs = patchable_semantic_input_handles(config)
         known_evidence = journal.known_evidence_refs
         for handle in [
             *decision.target_inputs,
@@ -922,10 +944,24 @@ class OperationSmokeDiagnoser:
                 errors.append(
                     f"{evidence_ref} was not supplied as evidence."
                 )
-        if decision.action == "ready" and active_hypothesis is not None:
-            errors.append(
-                "An active hypothesis must be confirmed, replaced, or deferred."
-            )
+        if decision.action in {"ready", "confirmed"}:
+            for solution in decision.solutions:
+                if (
+                    solution.input not in known_inputs
+                    or solution.input in patchable_inputs
+                ):
+                    continue
+                descendants = patchable_descendant_handles(
+                    config,
+                    solution.input,
+                )
+                errors.append(
+                    f"{solution.input} is a system-managed container and "
+                    "cannot be handed to the Parameter Patch Agent. Use exact "
+                    f"patchable descendants: {descendants}. If multiple leaves "
+                    "must change together in one request, include an explicit "
+                    "interaction_notes entry."
+                )
         if decision.action == "confirmed":
             if active_hypothesis is None:
                 errors.append("confirmed requires an active hypothesis.")
@@ -1031,8 +1067,15 @@ class OperationSmokeDiagnoser:
                                 if guidance is not None
                                 else ""
                             )
-                            + "\nReturn one complete corrected JSON object "
-                            "using only the supplied names and references."
+                            + (
+                                "\nCall the supplied HTTP tool to probe, or "
+                                "return one complete corrected JSON object "
+                                "using only the supplied names and references."
+                                if tools
+                                else "\nReturn one complete corrected JSON "
+                                "object using only the supplied names and "
+                                "references."
+                            )
                         ),
                     ),
                 ],
@@ -1055,16 +1098,23 @@ def _hypothesis_progress_error(
     This private helper keeps one transformation or policy decision explicit so the
     surrounding orchestration remains readable.
     """
-    if decision is None or decision.action != "hypothesis":
+    if decision is None or decision.action not in {"hypothesis", "replace"}:
         return None, False
     assert decision.expected_outcome is not None
     signature = json.dumps(
         {
-            "target_inputs": list(dict.fromkeys(decision.target_inputs)),
-            "proposed_changes": [
-                _normalized_hypothesis_text(value)
-                for value in decision.proposed_changes
-            ],
+            "target_inputs": sorted(
+                {
+                    _normalized_hypothesis_text(value)
+                    for value in decision.target_inputs
+                }
+            ),
+            "proposed_changes": sorted(
+                {
+                    _normalized_hypothesis_text(value)
+                    for value in decision.proposed_changes
+                }
+            ),
             "expected_outcome": _normalized_hypothesis_text(
                 decision.expected_outcome
             ),
@@ -1073,21 +1123,22 @@ def _hypothesis_progress_error(
         sort_keys=True,
         separators=(",", ":"),
     )
-    if signature == state.last_hypothesis_signature:
+    if signature in state.hypothesis_signatures:
         state.repeated_hypothesis_outputs = min(
-            3,
+            2,
             state.repeated_hypothesis_outputs + 1,
         )
     else:
-        state.last_hypothesis_signature = signature
-        state.repeated_hypothesis_outputs = 1
-    if state.repeated_hypothesis_outputs < 2:
+        state.hypothesis_signatures.add(signature)
+        state.repeated_hypothesis_outputs = 0
+        return None, False
+    if state.repeated_hypothesis_outputs < 1:
         return None, False
     return (
-        "The hypothesis repeats the same target inputs, proposed changes, "
-        "and expected outcome. Probe it, confirm it, materially replace it, "
-        "or defer it.",
-        state.repeated_hypothesis_outputs >= 3,
+        "The replacement repeats a hypothesis already present in Hypothesis "
+        "history. Probe the active hypothesis, confirm it, materially replace "
+        "it, or defer it.",
+        state.repeated_hypothesis_outputs >= 2,
     )
 
 

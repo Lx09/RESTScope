@@ -1440,3 +1440,151 @@ def test_generator_catalog_has_no_delete_operation(tmp_path: Path) -> None:
     catalog, _ = _catalog(tmp_path)
 
     assert not hasattr(catalog, "delete_operation")
+
+
+def test_explicit_leaf_presence_patch_closes_all_request_body_ancestors() -> None:
+    """A leaf made mandatory by a Patch must not disappear with an optional parent."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import (
+        InputGeneratorConfig,
+        InputGeneratorPatch,
+        build_semantic_input_map,
+        expand_generator_patch_presence,
+    )
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Presence closure", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "project": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "startDate": {
+                                                        "type": "string"
+                                                    },
+                                                    "endDate": {
+                                                        "type": "string"
+                                                    },
+                                                },
+                                            }
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /projects"]
+    initial = build_initial_operation_config(operation)
+    optional = initial.model_copy(
+        update={
+            "configs": [
+                InputGeneratorConfig.model_validate(
+                    {
+                        **item.model_dump(mode="json"),
+                        "inclusion_probability": 0.5,
+                    }
+                )
+                for item in initial.configs
+            ]
+        }
+    )
+    semantic = build_semantic_input_map(optional)
+    leaf_id = semantic.node_by_handle["body.project.startDate"]
+
+    expanded = expand_generator_patch_presence(
+        optional,
+        [
+            InputGeneratorPatch(
+                input_node_id=leaf_id,
+                inclusion_probability=1,
+            )
+        ],
+    )
+
+    by_id = {item.input_node_id: item for item in expanded}
+    nodes = {item.input_node_id: item for item in optional.snapshot.input_nodes}
+    expected_ids = {leaf_id}
+    current_id = leaf_id
+    while nodes[current_id].parent_node_id is not None:
+        current_id = nodes[current_id].parent_node_id
+        expected_ids.add(current_id)
+    assert set(by_id) == expected_ids
+    assert all(item.inclusion_probability == 1 for item in expanded)
+
+
+def test_presence_closure_deduplicates_shared_ancestors_and_rejects_conflict() -> None:
+    """Shared ancestors are synthesized once; an explicit optional ancestor wins as an error."""
+    from tests.test_parameter_patch_agent import request_body_date_config
+
+    from restscope.testing import (
+        GeneratorConfigError,
+        InputGeneratorConfig,
+        InputGeneratorPatch,
+        build_semantic_input_map,
+        expand_generator_patch_presence,
+    )
+
+    initial = request_body_date_config()
+    optional = initial.model_copy(
+        update={
+            "configs": [
+                InputGeneratorConfig.model_validate(
+                    {
+                        **item.model_dump(mode="json"),
+                        "inclusion_probability": 0.5,
+                    }
+                )
+                for item in initial.configs
+            ]
+        }
+    )
+    semantic = build_semantic_input_map(optional)
+    start_id = semantic.node_by_handle["body.project.startDate"]
+    end_id = semantic.node_by_handle["body.project.endDate"]
+    project_id = semantic.node_by_handle["body.project"]
+
+    expanded = expand_generator_patch_presence(
+        optional,
+        [
+            InputGeneratorPatch(
+                input_node_id=start_id,
+                inclusion_probability=1,
+            ),
+            InputGeneratorPatch(
+                input_node_id=end_id,
+                inclusion_probability=1,
+            ),
+        ],
+    )
+
+    assert len({item.input_node_id for item in expanded}) == len(expanded)
+    assert sum(item.input_node_id == project_id for item in expanded) == 1
+    with pytest.raises(GeneratorConfigError) as caught:
+        expand_generator_patch_presence(
+            optional,
+            [
+                InputGeneratorPatch(
+                    input_node_id=start_id,
+                    inclusion_probability=1,
+                ),
+                InputGeneratorPatch(
+                    input_node_id=project_id,
+                    inclusion_probability=0.5,
+                ),
+            ],
+        )
+    assert caught.value.code == "presence_closure_conflict"

@@ -730,8 +730,22 @@ class _TestCaseGenerator:
             )
             if item_node is None:
                 raise GenerationError(f"Array node has no items node: {node.canonical_path}")
+            # Presence closure guarantees only that the array container exists.
+            # A solved Constraint may additionally require the abstract item
+            # node to be present. In that case the concrete array needs at
+            # least one occurrence for the solver assignment and generated
+            # request to describe the same result.
+            minimum_items = strategy.min_items
+            item_override = self.overrides.get(item_node.input_node_id)
+            if item_override is not None and item_override.present:
+                minimum_items = max(1, minimum_items)
+                if strategy.max_items < minimum_items:
+                    raise GenerationError(
+                        "Constraint requires an array item but the array "
+                        f"generator cannot create one: {node.canonical_path}"
+                    )
             length = random.Random(self._seed(node, instance_path, "length")).randint(
-                strategy.min_items,
+                minimum_items,
                 strategy.max_items,
             )
             result = []

@@ -73,6 +73,53 @@ def build_semantic_input_map(
     )
 
 
+def patchable_semantic_input_handles(
+    config: OperationGeneratorConfig,
+) -> set[str]:
+    """Return semantic handles that a Parameter Patch Agent may directly edit."""
+
+    semantic = build_semantic_input_map(config)
+    configs_by_id = {item.input_node_id: item for item in config.configs}
+    nodes_by_id = {
+        item.input_node_id: item for item in config.snapshot.input_nodes
+    }
+    return {
+        handle
+        for handle, node_id in semantic.node_by_handle.items()
+        if nodes_by_id[node_id].node_kind
+        not in {"object", "media_type", "request_body"}
+        and configs_by_id[node_id].strategy.type
+        not in {"object", "request_body"}
+    }
+
+
+def patchable_descendant_handles(
+    config: OperationGeneratorConfig,
+    container_handle: str,
+) -> list[str]:
+    """List first-seen patchable descendants of one semantic container."""
+
+    semantic = build_semantic_input_map(config)
+    container_id = semantic.node_by_handle.get(container_handle)
+    if container_id is None:
+        return []
+    nodes_by_id = {
+        item.input_node_id: item for item in config.snapshot.input_nodes
+    }
+    patchable = patchable_semantic_input_handles(config)
+    descendants: list[str] = []
+    for handle, node_id in semantic.node_by_handle.items():
+        if handle not in patchable:
+            continue
+        current = nodes_by_id.get(node_id)
+        while current is not None and current.parent_node_id is not None:
+            if current.parent_node_id == container_id:
+                descendants.append(handle)
+                break
+            current = nodes_by_id.get(current.parent_node_id)
+    return descendants
+
+
 def _parameter_handle(canonical_path: str) -> str:
     segments = [_unsegment(item) for item in canonical_path.split("/")]
     if len(segments) < 2:

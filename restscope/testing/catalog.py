@@ -611,7 +611,7 @@ def _apply_patches(
     This private helper keeps one transformation or policy decision explicit so the
     surrounding orchestration remains readable.
     """
-    patches = [InputGeneratorPatch.model_validate(update) for update in updates]
+    patches = expand_generator_patch_presence(current, updates)
     if not patches:
         raise GeneratorConfigError(
             "generator_patch_empty",
@@ -645,6 +645,100 @@ def _apply_patches(
         ],
         set(counts),
     )
+
+
+def expand_generator_patch_presence(
+    current: OperationGeneratorConfig,
+    updates: Sequence[InputGeneratorPatch],
+) -> list[InputGeneratorPatch]:
+    """Expand explicit mandatory descendants into mandatory ancestor updates.
+
+    Request generation samples every configured node independently.  Therefore
+    setting a nested leaf's inclusion probability to one cannot guarantee the
+    leaf is present unless every ancestor is also present.  This helper defines
+    that meaning only for an explicit Patch; it deliberately does not change
+    the baseline semantics of required children inside optional containers.
+    """
+
+    patches = [InputGeneratorPatch.model_validate(update) for update in updates]
+    if not patches:
+        raise GeneratorConfigError(
+            "generator_patch_empty",
+            "At least one generator patch is required",
+        )
+    counts = Counter(item.input_node_id for item in patches)
+    duplicates = sorted(
+        node_id for node_id, count in counts.items() if count > 1
+    )
+    current_by_id = {item.input_node_id: item for item in current.configs}
+    unknown = sorted(set(counts) - set(current_by_id))
+    if duplicates or unknown:
+        raise GeneratorConfigError(
+            "generator_patch_invalid_nodes",
+            f"Invalid generator patch nodes; unknown={unknown}, duplicates={duplicates}",
+        )
+
+    nodes_by_id = {
+        item.input_node_id: item for item in current.snapshot.input_nodes
+    }
+    explicit_by_id = {item.input_node_id: item for item in patches}
+    required_ancestor_ids: list[str] = []
+    for patch in patches:
+        if patch.inclusion_probability != 1:
+            continue
+        node = nodes_by_id.get(patch.input_node_id)
+        while node is not None and node.parent_node_id is not None:
+            ancestor_id = node.parent_node_id
+            explicit_ancestor = explicit_by_id.get(ancestor_id)
+            if (
+                explicit_ancestor is not None
+                and explicit_ancestor.inclusion_probability is not None
+                and explicit_ancestor.inclusion_probability < 1
+            ):
+                raise GeneratorConfigError(
+                    "presence_closure_conflict",
+                    "A descendant cannot be mandatory while an explicitly "
+                    f"patched ancestor is optional: {ancestor_id}",
+                    input_node_ids=(ancestor_id, patch.input_node_id),
+                )
+            if ancestor_id not in required_ancestor_ids:
+                required_ancestor_ids.append(ancestor_id)
+            node = nodes_by_id.get(ancestor_id)
+
+    expanded_by_id = dict(explicit_by_id)
+    for ancestor_id in required_ancestor_ids:
+        explicit = expanded_by_id.get(ancestor_id)
+        if explicit is not None:
+            if (
+                explicit.inclusion_probability == 1
+                or (
+                    explicit.inclusion_probability is None
+                    and current_by_id[ancestor_id].inclusion_probability == 1
+                )
+            ):
+                continue
+            expanded_by_id[ancestor_id] = explicit.model_copy(
+                update={"inclusion_probability": 1}
+            )
+            continue
+        if current_by_id[ancestor_id].inclusion_probability == 1:
+            continue
+        expanded_by_id[ancestor_id] = InputGeneratorPatch(
+            input_node_id=ancestor_id,
+            inclusion_probability=1,
+        )
+
+    original_ids = [item.input_node_id for item in patches]
+    synthetic_ids = [
+        node_id
+        for node_id in required_ancestor_ids
+        if node_id not in original_ids
+        and node_id in expanded_by_id
+    ]
+    return [
+        expanded_by_id[node_id]
+        for node_id in [*original_ids, *synthetic_ids]
+    ]
 
 
 def preview_generator_patch(

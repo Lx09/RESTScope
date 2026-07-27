@@ -24,6 +24,7 @@ from restscope.testing import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
     build_semantic_input_map,
+    expand_generator_patch_presence,
     preview_generator_patch,
 )
 
@@ -423,19 +424,25 @@ class OperationSmokeAgent:
                         for option in group.patch.selected_reference_options
                     ],
                 )
+                candidate_parent_config = current
+                expanded_updates = (
+                    expand_generator_patch_presence(current, updates)
+                    if updates
+                    else []
+                )
                 candidate_constraints = [
                     constraint
                     for group in successful_groups
                     for constraint in group.patch.constraints
                 ]
-                pending_change_count = len(updates) + len(
+                pending_change_count = len(expanded_updates) + len(
                     candidate_constraints
                 )
-                if updates:
+                if expanded_updates:
                     current = self.config_catalog.stage_candidate(
                         operation_key=request.operation_key,
                         expected_revision=current.revision,
-                        updates=updates,
+                        updates=expanded_updates,
                         hypothesis={
                             "kind": "operation_smoke_parameter_patch_groups",
                             "group_count": len(successful_groups),
@@ -491,6 +498,11 @@ class OperationSmokeAgent:
                         validation,
                         groups=successful_groups,
                     )
+                validation = _with_presence_closed_group_inputs(
+                    validation,
+                    groups=successful_groups,
+                    config=candidate_parent_config,
+                )
                 diagnosis = diagnosis.model_copy(
                     update={"patch_validation": validation}
                 )
@@ -509,12 +521,10 @@ class OperationSmokeAgent:
                         active_constraints[constraint.constraint_id] = (
                             constraint
                         )
-                accepted_input_ids = {
-                    update.input_node_id
-                    for group in accepted_groups
-                    for update in group.patch.updates
-                }
-                if updates:
+                accepted_input_ids = set(
+                    validation.accepted_input_node_ids
+                )
+                if expanded_updates:
                     current = self.config_catalog.finalize_candidate(
                         operation_key=request.operation_key,
                         candidate_revision=current.revision,
@@ -779,6 +789,56 @@ def _accept_all_groups(
                 )
             ),
             "rejected_constraint_ids": [],
+        }
+    )
+
+
+def _with_presence_closed_group_inputs(
+    validation: PatchValidationSummary,
+    *,
+    groups: list[ValidatedPatchGroup],
+    config: OperationGeneratorConfig,
+) -> PatchValidationSummary:
+    """Derive final input ownership from every Group's presence closure.
+
+    Groups are expanded independently against the candidate parent. This makes
+    a shared optional ancestor visible in each Group's derived set, after which
+    accepted ownership wins so rejecting another leaf cannot remove an
+    ancestor still required by an accepted leaf.
+    """
+
+    ids_by_group = {
+        group.group_id: [
+            update.input_node_id
+            for update in (
+                expand_generator_patch_presence(config, group.patch.updates)
+                if group.patch.updates
+                else []
+            )
+        ]
+        for group in groups
+    }
+    accepted_ids = list(
+        dict.fromkeys(
+            node_id
+            for group_id in validation.accepted_group_ids
+            for node_id in ids_by_group.get(group_id, [])
+        )
+    )
+    accepted_set = set(accepted_ids)
+    rejected_ids = [
+        node_id
+        for node_id in dict.fromkeys(
+            node_id
+            for group_id in validation.rejected_group_ids
+            for node_id in ids_by_group.get(group_id, [])
+        )
+        if node_id not in accepted_set
+    ]
+    return validation.model_copy(
+        update={
+            "accepted_input_node_ids": accepted_ids,
+            "rejected_input_node_ids": rejected_ids,
         }
     )
 

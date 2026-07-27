@@ -645,6 +645,22 @@ def _sample_patch(
                 "present": sample_presence,
             }
         )
+    explicitly_mandatory_handles = {
+        semantic.handle_by_node[update.input_node_id]
+        for update in patch.updates
+        if update.inclusion_probability == 1
+        and update.input_node_id in semantic.handle_by_node
+    }
+    missing_handles = sorted(
+        handle
+        for handle in explicitly_mandatory_handles
+        if any(not sample["present"].get(handle, False) for sample in samples)
+    )
+    if missing_handles:
+        raise ValueError(
+            "Explicit inclusion_probability=1 inputs were absent from local "
+            f"samples: {missing_handles}"
+        )
     return samples
 
 

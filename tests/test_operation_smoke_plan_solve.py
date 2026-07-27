@@ -45,6 +45,45 @@ def planning_model():
     )
 
 
+def assignment_save_config():
+    """Build the live-shaped request body used by container handoff regressions."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Assignments", "version": "1"},
+            "paths": {
+                "/app/api/assignments/save": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": [
+                                            "employeeId",
+                                            "projectId",
+                                        ],
+                                        "properties": {
+                                            "employeeId": {"type": "integer"},
+                                            "projectId": {"type": "integer"},
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /app/api/assignments/save"]
+    return build_initial_operation_config(operation)
+
+
 def test_model_selector_has_independent_smoke_phase_roles() -> None:
     """Scenario: verify that model selector has independent smoke phase roles."""
     from restscope.llm import LLMModelConfig, ModelSelector
@@ -121,13 +160,13 @@ def test_failure_decision_protocol_examples_match_the_dto() -> None:
         input_handle="path.projectId",
         failure_ref="F1",
         observation_ref="O1",
+        active=True,
     )
 
     assert protocol.allowed_fields == tuple(FailureDecision.model_fields)
     assert set(protocol.examples) == {
-        "ready",
-        "hypothesis",
         "confirmed",
+        "replace",
         "deferred",
     }
     for example in protocol.examples.values():
@@ -147,7 +186,59 @@ def test_failure_decision_protocol_hides_confirmed_without_observation() -> None
     )
 
     assert "confirmed" not in protocol.examples
-    assert "action=confirmed is unavailable" in protocol.text
+    assert "Initial-state actions are ready, hypothesis, or deferred" in (
+        protocol.text
+    )
+
+
+def test_active_failure_protocol_excludes_initial_actions_and_forbids_wrappers() -> None:
+    """An active investigation exposes only confirm, replace, defer, or an HTTP probe."""
+    from restscope.agent.operation_smoke.planning import (
+        build_failure_decision_protocol,
+    )
+
+    protocol = build_failure_decision_protocol(
+        input_handle="path.projectId",
+        failure_ref="F1",
+        observation_ref="O1",
+        active=True,
+    )
+
+    assert set(protocol.examples) == {"confirmed", "replace", "deferred"}
+    assert '"action":"hypothesis"' not in protocol.text
+    assert '"action":"ready"' not in protocol.text
+    assert "candidate_values must be a JSON array" in protocol.text
+    assert "candidate_range must be omitted or contain exactly two numbers" in (
+        protocol.text
+    )
+    assert '{"confirmed":' in protocol.text
+
+
+def test_hypothesis_history_keeps_newest_complete_records_within_eight_kib() -> None:
+    """The model sees bounded run-local history without a partially cut JSON record."""
+    from restscope.agent.operation_smoke import FailureHypothesis
+    from restscope.agent.operation_smoke.prompts import (
+        _bounded_hypothesis_history,
+    )
+
+    history = [
+        FailureHypothesis(
+            hypothesis_id=f"H{index}",
+            statement=f"Hypothesis {index} " + ("x" * 900),
+            target_inputs=["path.projectId"],
+            proposed_changes=[f"Try candidate {index} " + ("y" * 300)],
+            expected_outcome=f"Outcome {index} " + ("z" * 300),
+            evidence_refs=["F1", "C1"],
+        )
+        for index in range(1, 21)
+    ]
+
+    rendered = _bounded_hypothesis_history(history)
+
+    assert len(rendered.encode("utf-8")) <= 8 * 1024
+    parsed = json.loads(rendered)
+    assert parsed[-1]["hypothesis_id"] == "H20"
+    assert all(item["hypothesis_id"].startswith("H") for item in parsed)
 
 
 def test_effect_decision_protocol_matches_the_dto() -> None:
@@ -526,6 +617,7 @@ def test_disproved_hypothesis_is_replaced_before_confirmation() -> None:
     replacement["hypothesis"] = (
         "The identifier must come from the observed project pool."
     )
+    replacement["action"] = "replace"
     replacement["proposed_changes"] = [
         "Use an observed project pool value."
     ]
@@ -861,6 +953,8 @@ def test_valid_output_limit_is_per_failure() -> None:
     decisions = []
     for index in range(20):
         decision = hypothesis_decision()
+        if index:
+            decision["action"] = "replace"
         decision["proposed_changes"] = [f"Try candidate value {index}."]
         decision["expected_outcome"] = f"Candidate {index} changes the response."
         decisions.append(llm_response(decision))
@@ -884,8 +978,14 @@ def test_third_identical_material_hypothesis_defers_as_stalled() -> None:
     """Scenario: verify that third identical material hypothesis defers as stalled."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser
 
+    repeated = hypothesis_decision()
+    repeated["action"] = "replace"
     client = StubClient(
-        [llm_response(hypothesis_decision()) for _ in range(3)]
+        [
+            llm_response(hypothesis_decision()),
+            llm_response(repeated),
+            llm_response(repeated),
+        ]
     )
 
     result = OperationSmokeDiagnoser(
@@ -898,6 +998,98 @@ def test_third_identical_material_hypothesis_defers_as_stalled() -> None:
     assert result.invalid_outputs == 2
     assert result.investigations[0].hypothesis_count == 1
     assert result.deferred_failures[0].reason == "stalled_hypothesis"
+
+
+def test_active_prompt_contains_bounded_history_and_one_repair_only() -> None:
+    """A repeated active proposal gets one state-specific correction, then stalls."""
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    repeated = hypothesis_decision()
+    repeated["action"] = "replace"
+    client = StubClient(
+        [
+            llm_response(hypothesis_decision()),
+            llm_response(repeated),
+            llm_response(repeated),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert result.deferred_failures[0].reason == "stalled_hypothesis"
+    assert len(client.requests) == 3
+    active_prompt = client.requests[1].messages[1].content
+    assert "Hypothesis history" in active_prompt
+    assert '"hypothesis_id": "H1"' in active_prompt
+    repair = client.requests[2].messages[-1].content
+    assert '"action":"replace"' in repair
+    assert '"action":"ready"' not in repair
+    assert '"action":"hypothesis"' not in repair
+
+
+@pytest.mark.parametrize(
+    "invalid_active_output",
+    [
+        {"confirmed": ready_decision()},
+        {
+            "action": "replace",
+            "hypothesis": "Try numeric identifiers.",
+            "target_inputs": ["path.projectId"],
+            "proposed_changes": ["Use numeric identifiers."],
+            "expected_outcome": "The numeric error disappears.",
+            "evidence_refs": ["F1", "C1"],
+            "solutions": [
+                {
+                    "input": "path.projectId",
+                    "desired_behavior": "Use numeric identifiers.",
+                    "candidate_values": "not-an-array",
+                }
+            ],
+        },
+        {
+            "action": "confirmed",
+            "cause": "The identifier range was wrong.",
+            "solutions": [
+                {
+                    "input": "path.projectId",
+                    "desired_behavior": "Use the accepted range.",
+                    "candidate_range": [1, 2, 3],
+                }
+            ],
+            "evidence_refs": ["F1", "C1"],
+        },
+    ],
+)
+def test_active_structural_error_gets_only_one_repair(
+    invalid_active_output,
+) -> None:
+    """Wrappers and wrong candidate types stop after one active-state correction."""
+    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+
+    client = StubClient(
+        [
+            llm_response(hypothesis_decision()),
+            llm_response(invalid_active_output),
+            llm_response(invalid_active_output),
+        ]
+    )
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+    ).diagnose(report=smoke_report(), config=smoke_config())
+
+    assert len(client.requests) == 3
+    assert result.valid_outputs == 1
+    assert result.invalid_outputs == 2
+    assert result.deferred_failures[0].reason == "invalid_output_limit"
+    repair = client.requests[2].messages[-1].content
+    assert "confirmed, replace, or deferred" in repair
+    assert '"action":"ready"' not in repair
+    assert '"action":"hypothesis"' not in repair
 
 
 def test_three_consecutive_invalid_outputs_defer_without_using_valid_budget() -> None:
@@ -1080,6 +1272,129 @@ def test_patch_grouping_keeps_constraint_linked_inputs_in_one_group() -> None:
     assert result.tasks[0].inputs == [
         "path.projectId",
         "query.region",
+    ]
+
+
+def test_grouping_defers_system_managed_container_but_keeps_leaf_items() -> None:
+    """A container can never become Patch Agent scope, while unrelated leaves proceed."""
+    from tests.test_parameter_patch_agent import request_body_date_config
+
+    from restscope.agent.operation_smoke import (
+        ActionableFailure,
+        ParameterSolution,
+        PatchGroupPlanner,
+    )
+
+    container = ActionableFailure(
+        item_id="I1",
+        failure_ref="F1",
+        root_failure_refs=["F1"],
+        evidence_origin="initial",
+        cause="The body needs identifiers.",
+        solutions=[
+            ParameterSolution(
+                input="body",
+                desired_behavior="Always include the required identifiers.",
+            )
+        ],
+        affected_inputs=["body"],
+        evidence_refs=["F1", "C1"],
+    )
+    leaf = ActionableFailure(
+        item_id="I2",
+        failure_ref="F2",
+        root_failure_refs=["F2"],
+        evidence_origin="initial",
+        cause="The date format is rejected.",
+        solutions=[
+            ParameterSolution(
+                input="body.commitDate",
+                desired_behavior="Use an accepted date-time.",
+            )
+        ],
+        affected_inputs=["body.commitDate"],
+        evidence_refs=["F2", "C1"],
+    )
+
+    result = PatchGroupPlanner().group(
+        actionable_failures=[container, leaf],
+        config=request_body_date_config(),
+    )
+
+    assert result.status == "grouped"
+    assert result.deferred_item_ids == ["I1"]
+    assert [task.inputs for task in result.tasks] == [["body.commitDate"]]
+
+
+def test_diagnoser_repairs_container_solution_to_exact_linked_leaves() -> None:
+    """The handoff rejects body and tells the model which patchable leaves to name."""
+    from restscope.agent.operation_smoke import (
+        OperationSmokeDiagnoser,
+        PatchGroupPlanner,
+    )
+
+    invalid = {
+        "action": "ready",
+        "cause": "Both identifiers must be supplied.",
+        "solutions": [
+            {
+                "input": "body",
+                "desired_behavior": "Always include employeeId and projectId.",
+            }
+        ],
+        "evidence_refs": ["F1", "C1"],
+    }
+    corrected = {
+        "action": "ready",
+        "cause": "Both nested identifiers must be supplied together.",
+        "solutions": [
+            {
+                "input": "body.employeeId",
+                "desired_behavior": "Always include an accepted employee identifier.",
+            },
+            {
+                "input": "body.projectId",
+                "desired_behavior": "Always include an accepted project identifier.",
+            },
+        ],
+        "evidence_refs": ["F1", "C1"],
+        "interaction_notes": [
+            "The two body leaves must be generated in the same request."
+        ],
+    }
+    client = StubClient([llm_response(invalid), llm_response(corrected)])
+
+    result = OperationSmokeDiagnoser(
+        client=client,
+        planning_model=planning_model(),
+    ).diagnose(
+        report=smoke_report().model_copy(
+            update={"operation_key": "POST /app/api/assignments/save"}
+        ),
+        config=assignment_save_config(),
+    )
+
+    assert result.status == "actionable"
+    assert result.actionable_failures[0].affected_inputs == [
+        "body.employeeId",
+        "body.projectId",
+    ]
+    repair = client.requests[1].messages[-1].content
+    assert "body is a system-managed container" in repair
+    assert "body.employeeId" in repair
+    assert "body.projectId" in repair
+    assert "interaction_notes" in repair
+    initial_system = client.requests[0].messages[0].content
+    assert '"solutions":[{"input":"body.employeeId"' in initial_system
+    assert '"solutions":[{"input":"body","desired_behavior"' not in (
+        initial_system
+    )
+    grouping = PatchGroupPlanner().group(
+        actionable_failures=result.actionable_failures,
+        config=assignment_save_config(),
+    )
+    assert [task.inputs for task in grouping.tasks] == [
+        ["body.employeeId", "body.projectId"]
     ]
 
 

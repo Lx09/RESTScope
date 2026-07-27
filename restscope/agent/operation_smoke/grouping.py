@@ -7,7 +7,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from restscope.agent.parameter_patch import PatchGroupTask
-from restscope.testing import OperationGeneratorConfig
+from restscope.testing import (
+    OperationGeneratorConfig,
+    patchable_semantic_input_handles,
+)
 
 from .schemas import ActionableFailure
 
@@ -40,17 +43,40 @@ class PatchGroupPlanner:
         config: OperationGeneratorConfig,
     ) -> PatchGroupingResult:
         """Group first-seen inputs with union-find and emit stable ``G1…Gn`` IDs."""
-        del config
         if not actionable_failures:
             return PatchGroupingResult(
                 status="inconclusive",
                 errors=["No actionable failures were supplied"],
             )
 
+        patchable_handles = patchable_semantic_input_handles(config)
+        deferred_item_ids = [
+            item.item_id
+            for item in actionable_failures
+            if any(
+                handle not in patchable_handles
+                for handle in item.affected_inputs
+            )
+        ]
+        usable_failures = [
+            item
+            for item in actionable_failures
+            if item.item_id not in deferred_item_ids
+        ]
+        if not usable_failures:
+            return PatchGroupingResult(
+                status="inconclusive",
+                deferred_item_ids=deferred_item_ids,
+                errors=[
+                    "All actionable items contain a system-managed or unknown "
+                    "Patch input"
+                ],
+            )
+
         input_order = list(
             dict.fromkeys(
                 input_handle
-                for item in actionable_failures
+                for item in usable_failures
                 for input_handle in item.affected_inputs
             )
         )
@@ -76,7 +102,7 @@ class PatchGroupPlanner:
 
         # Multiple affected inputs are not automatically coupled. Only an
         # explicit interaction note authorizes a Constraint relationship.
-        for item in actionable_failures:
+        for item in usable_failures:
             if not item.interaction_notes or len(item.affected_inputs) < 2:
                 continue
             first = item.affected_inputs[0]
@@ -93,7 +119,7 @@ class PatchGroupPlanner:
         for index, inputs in enumerate(components.values(), start=1):
             item_ids = [
                 item.item_id
-                for item in actionable_failures
+                for item in usable_failures
                 if set(item.affected_inputs).intersection(inputs)
             ]
             tasks.append(
@@ -102,11 +128,15 @@ class PatchGroupPlanner:
                     inputs=inputs,
                     item_ids=item_ids,
                     by_item={
-                        item.item_id: item for item in actionable_failures
+                        item.item_id: item for item in usable_failures
                     },
                 )
             )
-        return PatchGroupingResult(status="grouped", tasks=tasks)
+        return PatchGroupingResult(
+            status="grouped",
+            tasks=tasks,
+            deferred_item_ids=deferred_item_ids,
+        )
 
 
 def _build_task(

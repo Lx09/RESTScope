@@ -594,6 +594,110 @@ def test_success_threshold_accepts_every_successful_group(
     assert final.configs[1].strategy.value == "eu"
 
 
+def test_accepted_presence_group_keeps_shared_ancestor_from_rejected_group() -> None:
+    """Accepted ownership wins when two leaf Groups synthesize the same ancestors."""
+    from tests.test_parameter_patch_agent import request_body_date_config
+
+    from restscope.agent.operation_smoke.agent import (
+        _with_presence_closed_group_inputs,
+    )
+    from restscope.agent.parameter_patch import (
+        GeneratorPatchAttribution,
+        GeneratorPatchDraft,
+        ValidatedPatchGroup,
+    )
+    from restscope.testing import (
+        InputGeneratorConfig,
+        InputGeneratorPatch,
+        build_semantic_input_map,
+    )
+
+    initial = request_body_date_config()
+    semantic = build_semantic_input_map(initial)
+    start_id = semantic.node_by_handle["body.project.startDate"]
+    end_id = semantic.node_by_handle["body.project.endDate"]
+    nodes_by_id = {
+        item.input_node_id: item for item in initial.snapshot.input_nodes
+    }
+    optional_ids = {start_id, end_id}
+    for leaf_id in (start_id, end_id):
+        current_id = leaf_id
+        while nodes_by_id[current_id].parent_node_id is not None:
+            current_id = nodes_by_id[current_id].parent_node_id
+            optional_ids.add(current_id)
+    config = initial.model_copy(
+        update={
+            "snapshot": initial.snapshot.model_copy(
+                update={
+                    "input_nodes": [
+                        node.model_copy(update={"required": False})
+                        if node.input_node_id in optional_ids
+                        else node
+                        for node in initial.snapshot.input_nodes
+                    ]
+                }
+            ),
+            "configs": [
+                InputGeneratorConfig.model_validate(
+                    {
+                        **item.model_dump(mode="json"),
+                        "inclusion_probability": 0.5,
+                    }
+                )
+                if item.input_node_id in optional_ids
+                else item
+                for item in initial.configs
+            ],
+        }
+    )
+
+    def group(group_id: str, node_id: str) -> ValidatedPatchGroup:
+        return ValidatedPatchGroup(
+            group_id=group_id,
+            item_ids=[f"I-{group_id}"],
+            root_failure_refs=[f"F-{group_id}"],
+            patch=GeneratorPatchDraft(
+                updates=[
+                    InputGeneratorPatch(
+                        input_node_id=node_id,
+                        inclusion_probability=1,
+                    )
+                ],
+                attributions=[
+                    GeneratorPatchAttribution(
+                        input_node_id=node_id,
+                        group_ids=[group_id],
+                        item_ids=[f"I-{group_id}"],
+                        root_failure_refs=[f"F-{group_id}"],
+                    )
+                ],
+            ),
+            samples=[{} for _ in range(10)],
+            attempts=2,
+        )
+
+    validation = _validation(
+        resolved=["F-G1"],
+        persisting=["F-G2"],
+        accepted_groups=["G1"],
+        rejected_groups=["G2"],
+    )
+    closed = _with_presence_closed_group_inputs(
+        validation,
+        groups=[group("G1", start_id), group("G2", end_id)],
+        config=config,
+    )
+
+    project_id = semantic.node_by_handle["body.project"]
+    assert start_id in closed.accepted_input_node_ids
+    assert project_id in closed.accepted_input_node_ids
+    assert end_id in closed.rejected_input_node_ids
+    assert project_id not in closed.rejected_input_node_ids
+    assert set(closed.accepted_input_node_ids).isdisjoint(
+        closed.rejected_input_node_ids
+    )
+
+
 def _catalog(tmp_path: Path):
     from restscope.db import (
         Base,

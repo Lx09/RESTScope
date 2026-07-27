@@ -4,6 +4,7 @@ from .catalog import (
     GeneratorConfigCatalog,
     GeneratorConfigError,
     GeneratorConfigRevisionConflict,
+    expand_generator_patch_presence,
     preview_generator_patch,
 )
 from .constraints import (
@@ -59,7 +60,12 @@ from .models import (
 )
 from .generation import generate_strategy_value, project_generated_input_value
 from .ports import ReferenceValueProvider
-from .semantics import SemanticInputMap, build_semantic_input_map
+from .semantics import (
+    SemanticInputMap,
+    build_semantic_input_map,
+    patchable_descendant_handles,
+    patchable_semantic_input_handles,
+)
 
 __all__ = [
     "AndConstraint",
@@ -106,11 +112,14 @@ __all__ = [
     "classify_constraint",
     "evaluate_constraint_set",
     "failure_messages_for_evidence",
+    "expand_generator_patch_presence",
     "build_semantic_input_map",
     "assignments_from_generated_case",
     "generate_strategy_value",
     "normalize_constraint_set",
     "preview_generator_patch",
+    "patchable_descendant_handles",
+    "patchable_semantic_input_handles",
     "project_generated_input_value",
     "referenced_input_node_ids",
     "solve_input_overrides",

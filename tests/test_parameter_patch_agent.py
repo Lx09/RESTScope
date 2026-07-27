@@ -368,6 +368,90 @@ def test_request_body_patch_projects_four_nested_dates_into_ten_samples() -> Non
     )
 
 
+def test_explicit_nested_leaf_presence_is_closed_before_all_ten_samples() -> None:
+    """A mandatory nested leaf also makes its optional object/media/body ancestors present."""
+    from restscope.agent.parameter_patch import ParameterPatchAgent, PatchGroupTask
+    from restscope.testing import (
+        InputGeneratorConfig,
+        build_semantic_input_map,
+    )
+
+    initial = request_body_date_config()
+    semantic = build_semantic_input_map(initial)
+    nodes_by_id = {
+        item.input_node_id: item for item in initial.snapshot.input_nodes
+    }
+    optional_chain = {
+        semantic.node_by_handle["body.project.startDate"]
+    }
+    current_id = next(iter(optional_chain))
+    while nodes_by_id[current_id].parent_node_id is not None:
+        current_id = nodes_by_id[current_id].parent_node_id
+        optional_chain.add(current_id)
+    optional = initial.model_copy(
+        update={
+            "snapshot": initial.snapshot.model_copy(
+                update={
+                    "input_nodes": [
+                        node.model_copy(update={"required": False})
+                        if node.input_node_id in optional_chain
+                        else node
+                        for node in initial.snapshot.input_nodes
+                    ]
+                }
+            ),
+            "configs": [
+                InputGeneratorConfig.model_validate(
+                    {
+                        **item.model_dump(mode="json"),
+                        "inclusion_probability": 0.5,
+                    }
+                )
+                if item.input_node_id in optional_chain
+                else item
+                for item in initial.configs
+            ]
+        }
+    )
+    task = PatchGroupTask(
+        group_id="G-presence",
+        item_ids=["I-presence"],
+        root_failure_refs=["F1"],
+        inputs=["body.project.startDate"],
+        objective="Always include the project start date.",
+        requirements=["body.project.startDate must always be present."],
+    )
+    proposal = {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "body.project.startDate",
+                    "inclusion_probability": 1,
+                    "strategy": {"type": "format", "format": "date"},
+                }
+            ],
+            "constraints": [],
+        },
+    }
+    client = StubClient(
+        [llm_response(proposal), llm_response({"action": "accept"})]
+    )
+
+    result = ParameterPatchAgent(client=client, model=patch_model()).run(
+        task=task,
+        config=optional,
+        active_constraints=[],
+    )
+
+    assert result.status == "validated"
+    assert len(result.samples) == 10
+    assert all(
+        sample["present"]["body.project.startDate"]
+        for sample in result.samples
+    )
+
+
 def test_local_samples_project_array_values_and_parameter_presence() -> None:
     """Scenario: verify that local samples project array values and parameter presence."""
     from restscope.agent.parameter_patch import (
@@ -478,6 +562,135 @@ def test_local_samples_project_array_values_and_parameter_presence() -> None:
         }
         for _ in range(10)
     ]
+
+
+def test_array_presence_closure_needs_cardinality_for_a_stable_item() -> None:
+    """Presence closes the array container but does not silently make it non-empty."""
+    from restscope.agent.parameter_patch import (
+        ParameterPatchAgent,
+        PatchGroupTask,
+    )
+    from restscope.testing import (
+        InputGeneratorConfig,
+        InputNodeSnapshot,
+        OperationGeneratorConfig,
+        OperationTestSnapshot,
+        ParameterSnapshot,
+        SchemaSnapshot,
+    )
+
+    config = OperationGeneratorConfig(
+        operation_key="GET /search",
+        revision=1,
+        snapshot=OperationTestSnapshot(
+            operation_key="GET /search",
+            method="GET",
+            path="/search",
+            parameters=[
+                ParameterSnapshot(
+                    input_node_id="query/tags",
+                    name="tags",
+                    location="query",
+                    required=False,
+                )
+            ],
+            input_nodes=[
+                InputNodeSnapshot(
+                    input_node_id="query/tags",
+                    node_kind="parameter",
+                    canonical_path="query/tags",
+                    required=False,
+                    schema_contract=SchemaSnapshot(
+                        type="array",
+                        items=SchemaSnapshot(type="string"),
+                    ),
+                ),
+                InputNodeSnapshot(
+                    input_node_id="query/tags/items",
+                    node_kind="array_item",
+                    canonical_path="query/tags/items",
+                    parent_node_id="query/tags",
+                    required=False,
+                    schema_contract=SchemaSnapshot(type="string"),
+                ),
+            ],
+        ),
+        configs=[
+            InputGeneratorConfig(
+                input_node_id="query/tags",
+                inclusion_probability=0.5,
+                strategy={"type": "array", "min_items": 0, "max_items": 1},
+            ),
+            InputGeneratorConfig(
+                input_node_id="query/tags/items",
+                inclusion_probability=0.5,
+                strategy={"type": "constant", "value": "tag"},
+            ),
+        ],
+    )
+    task = PatchGroupTask(
+        group_id="G-array-item",
+        item_ids=["I-array-item"],
+        root_failure_refs=["F1"],
+        inputs=["query.tags[]"],
+        objective="Always generate one tag item.",
+        requirements=["query.tags[] must always be present."],
+    )
+    without_cardinality = {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "query.tags[]",
+                    "inclusion_probability": 1,
+                }
+            ],
+            "constraints": [],
+        },
+    }
+    with_cardinality = {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "query.tags[]",
+                    "inclusion_probability": 1,
+                }
+            ],
+            "constraints": [
+                {
+                    "expression": {
+                        "type": "cardinality",
+                        "expressions": [
+                            {"type": "present", "input": "query.tags[]"}
+                        ],
+                        "minimum": 1,
+                        "maximum": 1,
+                    }
+                }
+            ],
+        },
+    }
+    client = StubClient(
+        [
+            llm_response(without_cardinality),
+            llm_response(with_cardinality),
+            llm_response({"action": "accept"}),
+        ]
+    )
+
+    result = ParameterPatchAgent(client=client, model=patch_model()).run(
+        task=task,
+        config=config,
+        active_constraints=[],
+    )
+
+    assert result.status == "validated"
+    assert all(sample["present"]["query.tags[]"] for sample in result.samples)
+    repair = client.requests[1].messages[-1].content
+    assert "Explicit inclusion_probability=1 inputs were absent" in repair
+    # Presence closure must not rewrite the array's own length strategy.
+    assert result.patch.updates[0].input_node_id == "query/tags/items"
 
 
 def test_expert_prompt_contains_complete_generator_and_constraint_catalogs() -> None:
