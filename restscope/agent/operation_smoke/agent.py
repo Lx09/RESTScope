@@ -1,19 +1,34 @@
-"""Bounded batch-feedback loop for one operation's smoke test."""
+"""Coordinate complete batches and independent LLM-led Smoke roles.
+
+``OperationSmokeAgent`` deliberately contains no deterministic root-cause,
+failure-grouping, ownership, or semantic effect rules. It runs complete
+same-seed batches, fixes each Plan round's todo order, protects candidate
+transactions, combines accepted runtime Constraints, and computes the final
+2xx rate used by Supervisor.
+"""
 
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 import secrets
 from typing import Protocol
 
+from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
+from restscope.agent.failure_solver import (
+    FailureSolveAgentFactory,
+    FailureSolveRequest,
+)
 from restscope.agent.parameter_patch import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
     ParameterPatchAgentFactory,
-    PatchGroupFailure,
-    ValidatedPatchGroup,
+    ParameterPatchFailure,
+    ParameterPatchTask,
 )
+from restscope.agent.smoke_effect import SmokeEffectAgent, SmokeEffectRequest
+from restscope.agent.smoke_plan import SmokePlanAgent, SmokePlanRequest
 from restscope.observability import TracingRuntime
 from restscope.testing import (
     ConstraintSet,
@@ -25,28 +40,22 @@ from restscope.testing import (
     ResponseValueGenerator,
     build_semantic_input_map,
     expand_generator_patch_presence,
-    preview_generator_patch,
 )
 
-from .diagnosis import OperationSmokeDiagnoser
-from .grouping import PatchGroupPlanner
+from .evidence import build_batch_evidence, build_plan_case_map
+from .history import OperationSmokeHistory
 from .schemas import (
-    DeferredFailure,
     OperationSmokeRequest,
     OperationSmokeResult,
-    PatchGroupRunSummary,
-    PatchValidationSummary,
-    PlanSolveDiagnosisResult,
+    PatchAttemptSummary,
+    SmokeRoundSummary,
+    TodoRunSummary,
 )
 
 
 class OperationBatchRunner(Protocol):
-    """
-    Define the collaborator contract for operation batch runner.
+    """Describe the complete-batch execution boundary used by Smoke."""
 
-    Concrete implementations may vary while callers in the run-local Operation Smoke
-    diagnosis and candidate workflow depend only on these declared operations.
-    """
     def run_operation(
         self,
         context,
@@ -59,33 +68,30 @@ class OperationBatchRunner(Protocol):
 
 
 class OperationSmokeAgent:
-    """Run the feedback loop that tests and conditionally improves one operation.
-
-    The Agent first executes a real baseline batch.  If it fails, the diagnoser
-    investigates root causes; deterministic grouping converts actionable
-    findings into isolated tasks; a fresh Parameter Patch Agent proposes and
-    locally samples each group; and one merged candidate batch measures the real
-    HTTP effect.  Generator changes are durable only after effect validation,
-    while accepted Constraints remain local to this ``run`` call.
-    """
+    """Run Plan → Solve → Patch → Effect until success or Plan stops."""
 
     def __init__(
         self,
         *,
         config_catalog: GeneratorConfigCatalog,
         batch_runner: OperationBatchRunner,
-        diagnoser: OperationSmokeDiagnoser,
+        plan_agent: SmokePlanAgent,
+        failure_solver_factory: FailureSolveAgentFactory,
+        patch_agent_factory: ParameterPatchAgentFactory,
+        effect_agent: SmokeEffectAgent,
         reference_values: ReferenceValueProvider,
-        group_planner: PatchGroupPlanner | None = None,
-        patch_agent_factory: ParameterPatchAgentFactory | None = None,
+        history: OperationSmokeHistory | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
+        """Store collaborators and the App-lifetime, operation-isolated ledger."""
         self.config_catalog = config_catalog
         self.batch_runner = batch_runner
-        self.diagnoser = diagnoser
-        self.group_planner = group_planner
+        self.plan_agent = plan_agent
+        self.failure_solver_factory = failure_solver_factory
         self.patch_agent_factory = patch_agent_factory
+        self.effect_agent = effect_agent
         self.reference_values = reference_values
+        self.history = history or OperationSmokeHistory()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(
@@ -93,7 +99,7 @@ class OperationSmokeAgent:
         context,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
-        """Run one traced Smoke lifecycle and summarize it for the Supervisor."""
+        """Run one traced lifecycle without exposing raw ledger evidence."""
         with self.tracing_runtime.span(
             "OperationSmokeAgent.run",
             kind="AGENT",
@@ -101,28 +107,18 @@ class OperationSmokeAgent:
                 "operation_key": request.operation_key,
                 "case_count": request.case_count,
                 "success_rate_threshold": request.success_rate_threshold,
-                "max_feedback_rounds": request.max_feedback_rounds,
-                "max_diagnosis_outputs_per_failure": (
-                    request.max_diagnosis_outputs_per_failure
+                "max_plan_outputs": request.max_plan_outputs,
+                "max_solve_outputs_per_todo": (
+                    request.max_solve_outputs_per_todo
                 ),
-                "max_patch_attempts": request.max_patch_attempts,
+                "max_patch_outputs": request.max_patch_outputs,
+                "max_effect_outputs": request.max_effect_outputs,
+                "continuation_interval": request.continuation_interval,
                 "seed": request.seed,
             },
             attributes={
                 "restscope.operation.key": request.operation_key,
                 "restscope.smoke.case_count": request.case_count,
-                "restscope.smoke.success_rate_threshold": (
-                    request.success_rate_threshold
-                ),
-                "restscope.smoke.max_feedback_rounds": (
-                    request.max_feedback_rounds
-                ),
-                "restscope.smoke.max_diagnosis_outputs_per_failure": (
-                    request.max_diagnosis_outputs_per_failure
-                ),
-                "restscope.smoke.max_patch_attempts": (
-                    request.max_patch_attempts
-                ),
             },
         ) as span:
             result = self._run(context, request)
@@ -130,45 +126,47 @@ class OperationSmokeAgent:
                 {
                     "status": result.status,
                     "success_rate": result.success_rate,
+                    "round_count": len(result.rounds),
                     "batch_run_ids": [
                         report.run_id for report in result.batch_reports
                     ],
-                    "diagnosis_count": len(result.diagnoses),
                     "failure_kind": result.failure_kind,
                 }
             )
-            span.set_attribute("restscope.smoke.status", result.status)
-            span.set_attribute(
-                "restscope.smoke.success_rate",
-                result.success_rate,
-            )
-            span.set_attribute(
-                "restscope.smoke.batch_count",
-                len(result.batch_reports),
-            )
-            span.set_attribute(
-                "restscope.smoke.diagnosis_count",
-                len(result.diagnoses),
-            )
-            if result.failure_kind is not None:
-                span.set_attribute(
-                    "restscope.smoke.failure_kind",
-                    result.failure_kind,
-                )
             if result.status == "errored":
                 span.mark_error("Operation Smoke returned an errored result")
             return result
+
+    def clear_app_state(self) -> None:
+        """Release raw evidence and runtime Constraints when the App closes."""
+        self.history.clear()
 
     def _run(
         self,
         context,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
-        """Execute baseline → diagnosis → patch → candidate rounds."""
-
-        # Recovering an interrupted candidate ensures a previous crashed run
-        # cannot accidentally become the new baseline.
-        current = self.config_catalog.get_operation(request.operation_key)
+        """Execute the thin coordination loop and protect candidate cleanup."""
+        try:
+            current = self.config_catalog.get_operation(request.operation_key)
+            if current is not None:
+                current = self.config_catalog.recover_interrupted_candidate(
+                    request.operation_key
+                )
+        except SQLAlchemyError:
+            # Catalog availability affects every operation, so Supervisor must
+            # stop the run instead of treating it as one endpoint's failure.
+            raise
+        except Exception as exc:
+            return OperationSmokeResult(
+                status="errored",
+                operation_key=request.operation_key,
+                success_rate=0,
+                required_success_rate=request.success_rate_threshold,
+                active_config_revision=1,
+                failure_kind="operation_error",
+                error={"type": type(exc).__name__, "message": str(exc)},
+            )
         if current is None:
             return OperationSmokeResult(
                 status="errored",
@@ -185,9 +183,6 @@ class OperationSmokeAgent:
                     ),
                 },
             )
-        current = self.config_catalog.recover_interrupted_candidate(
-            request.operation_key
-        )
         if not current.enabled:
             return self._result(
                 status="unsupported",
@@ -195,32 +190,24 @@ class OperationSmokeAgent:
                 current=current,
                 success_rate=0,
                 reports=[],
-                diagnoses=[],
+                rounds=[],
                 failure_kind="unsupported_operation",
             )
-        # These lists form the final audit report.  Constraints are deliberately
-        # kept in memory because they are hypotheses for this Smoke run, not
-        # durable facts about the API.
+
+        operation_state = self.history.state_for(request.operation_key)
+        active_constraints = operation_state.accepted_constraints
         reports: list[OperationExecutionReport] = []
-        diagnoses: list[PlanSolveDiagnosisResult] = []
+        rounds: list[SmokeRoundSummary] = []
         success_rate = 0.0
         seed = request.seed if request.seed is not None else secrets.randbits(63)
-        feedback_rounds = 0
-        active_constraints: dict[str, CompiledConstraintPatch] = {}
+        plan_outputs_used = 0
+        pending_candidate = False
         pending_change_count = 0
 
         try:
             while True:
-                # Reference-backed generators must point to value pools that
-                # still exist before any request is generated.
-                _assert_reference_invariants(
-                    current,
-                    self.reference_values,
-                )
-
-                # Phase 1: execute a baseline using the same seed on every
-                # feedback round so changes are compared against like cases.
-                report, private_case_evidence = _run_smoke_batch(
+                _assert_reference_invariants(current, self.reference_values)
+                report, private = _run_smoke_batch(
                     self.batch_runner,
                     context=context,
                     operation_key=request.operation_key,
@@ -235,11 +222,8 @@ class OperationSmokeAgent:
                     raise RuntimeError(
                         "Batch report revision does not match the tested config"
                     )
-                evaluation = _batch_evaluation(
-                    report,
-                    threshold=request.success_rate_threshold,
-                )
-                success_rate = float(evaluation["success_rate"])
+                latest_batch = build_batch_evidence(report, private)
+                success_rate = _success_rate(report)
                 if success_rate >= request.success_rate_threshold:
                     return self._result(
                         status="passed",
@@ -247,391 +231,389 @@ class OperationSmokeAgent:
                         current=current,
                         success_rate=success_rate,
                         reports=reports,
-                        diagnoses=diagnoses,
+                        rounds=rounds,
                     )
-
-                if feedback_rounds >= request.max_feedback_rounds:
+                # A valid final Plan output may still complete its fixed todo
+                # snapshot. Once that round ends, no 51st Plan call is allowed.
+                if plan_outputs_used >= request.max_plan_outputs:
                     return self._result(
                         status="retry",
                         request=request,
                         current=current,
                         success_rate=success_rate,
                         reports=reports,
-                        diagnoses=diagnoses,
-                        failure_kind="threshold_exhausted",
+                        rounds=rounds,
+                        failure_kind="plan_budget_exhausted",
                     )
 
-                # Phase 2: explain failures before changing any generator.
-                # Private evidence contains richer case data than the public
-                # report and never becomes persistent Agent memory.
-                diagnosis = self.diagnoser.diagnose(
-                    report=report,
-                    config=current,
-                    private_case_evidence=private_case_evidence,
-                    max_diagnosis_outputs_per_failure=(
-                        request.max_diagnosis_outputs_per_failure
-                    ),
-                )
-                diagnoses.append(diagnosis)
-                if diagnosis.status != "actionable":
-                    return self._result(
-                        status="retry",
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        diagnoses=diagnoses,
-                        failure_kind=(
-                            "no_parameter_issue"
-                            if diagnosis.status == "no_parameter_issue"
-                            else "diagnosis_inconclusive"
-                        ),
-                    )
-
-                if (
-                    self.group_planner is None
-                    or self.patch_agent_factory is None
-                ):
-                    raise RuntimeError(
-                        "Operation Smoke patch-phase dependencies are not "
-                        "configured"
-                    )
-                # Phase 3: connect solutions that touch the same inputs (or
-                # explicitly interacting inputs).  This grouping is
-                # deterministic and does not ask another model to invent JSON.
-                grouping = self.group_planner.group(
-                    actionable_failures=diagnosis.actionable_failures,
-                    config=current,
-                )
-                diagnosis = _defer_actionable_items(
-                    diagnosis,
+                round_number = len(rounds) + 1
+                self.history.record(
+                    request.operation_key,
                     {
-                        item_id: "patch_grouping_deferred"
-                        for item_id in grouping.deferred_item_ids
+                        "kind": "round_batch",
+                        "round_number": round_number,
+                        "batch": latest_batch,
                     },
                 )
-                diagnoses[-1] = diagnosis
-                if grouping.status != "grouped":
+                coded_cases, failed_codes = build_plan_case_map(latest_batch)
+                remaining = request.max_plan_outputs - plan_outputs_used
+                plan = self.plan_agent.plan(
+                    SmokePlanRequest(
+                        operation_key=request.operation_key,
+                        batch=latest_batch,
+                        coded_cases=coded_cases,
+                        failed_case_codes=failed_codes,
+                        history=self.history.snapshot(request.operation_key),
+                    ),
+                    max_outputs=remaining,
+                )
+                plan_outputs_used += plan.outputs_used
+                self.history.record(
+                    request.operation_key,
+                    {
+                        "kind": "plan_output",
+                        "round_number": round_number,
+                        "plan": plan.model_dump(mode="json"),
+                    },
+                )
+                todo_summaries: list[TodoRunSummary] = []
+                if plan.status != "planned":
+                    rounds.append(
+                        SmokeRoundSummary(
+                            round_number=round_number,
+                            baseline_run_id=report.run_id,
+                            plan_status=plan.status,
+                            plan_outputs=plan.outputs_used,
+                            todos=[],
+                        )
+                    )
                     return self._result(
                         status="retry",
                         request=request,
                         current=current,
                         success_rate=success_rate,
                         reports=reports,
-                        diagnoses=diagnoses,
-                        failure_kind="diagnosis_inconclusive",
+                        rounds=rounds,
+                        failure_kind=plan.status,
                     )
 
-                successful_groups: list[ValidatedPatchGroup] = []
-                patch_group_runs: list[PatchGroupRunSummary] = []
-                failed_item_reasons: dict[str, str] = {}
-                provisional_config = current
-                provisional_constraints = list(active_constraints.values())
-                semantic = build_semantic_input_map(current)
-                # Each group receives a brand-new Agent instance.  Successful
-                # groups are applied provisionally so later groups must remain
-                # compatible; failed groups contribute nothing.
-                for task in grouping.tasks:
-                    input_node_ids = {
-                        semantic.node_by_handle[input_handle]
-                        for input_handle in task.inputs
-                    }
+                # ``plan.todos`` is a fixed snapshot. New failures from accepted
+                # candidates are intentionally deferred to the next outer round.
+                for todo in plan.todos:
                     reference_options = _available_reference_options(
                         self.reference_values,
                         context=context,
-                        config=provisional_config,
-                        input_node_ids=input_node_ids,
-                    )
-                    outcome = self.patch_agent_factory.create().run(
-                        task=task,
-                        config=provisional_config,
-                        active_constraints=provisional_constraints,
-                        reference_values=self.reference_values,
-                        reference_options=reference_options,
-                        max_attempts=request.max_patch_attempts,
-                    )
-                    if isinstance(outcome, PatchGroupFailure):
-                        failed_item_reasons.update(
-                            {
-                                item_id: f"patch_group_{outcome.reason}"
-                                for item_id in outcome.item_ids
-                            }
-                        )
-                        patch_group_runs.append(
-                            PatchGroupRunSummary(
-                                group_id=outcome.group_id,
-                                item_ids=outcome.item_ids,
-                                root_failure_refs=outcome.root_failure_refs,
-                                status="failed",
-                                attempts=outcome.attempts,
-                                failure_reason=outcome.reason,
-                            )
-                        )
-                        continue
-                    patch_group_runs.append(
-                        PatchGroupRunSummary(
-                            group_id=outcome.group_id,
-                            item_ids=outcome.item_ids,
-                            root_failure_refs=outcome.root_failure_refs,
-                            status="validated",
-                            attempts=outcome.attempts,
-                        )
-                    )
-                    successful_groups.append(outcome)
-                    provisional_config = preview_generator_patch(
-                        provisional_config,
-                        outcome.patch.updates,
-                    )
-                    provisional_constraints.extend(
-                        outcome.patch.constraints
-                    )
-
-                diagnosis = diagnosis.model_copy(
-                    update={"patch_group_runs": patch_group_runs}
-                )
-                diagnosis = _defer_actionable_items(
-                    diagnosis,
-                    failed_item_reasons,
-                )
-                diagnoses[-1] = diagnosis
-                if not successful_groups:
-                    return self._result(
-                        status="retry",
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        diagnoses=diagnoses,
-                        failure_kind="diagnosis_inconclusive",
-                    )
-
-                # Merge only locally validated groups into one candidate.  A
-                # single real batch is important: separate batches would miss
-                # cross-group interactions.
-                updates = [
-                    update
-                    for group in successful_groups
-                    for update in group.patch.updates
-                ]
-                updates = _prepare_reference_updates(
-                    self.reference_values,
-                    context=context,
-                    config=current,
-                    updates=updates,
-                    selected_reference_options=[
-                        option
-                        for group in successful_groups
-                        for option in group.patch.selected_reference_options
-                    ],
-                )
-                candidate_parent_config = current
-                expanded_updates = (
-                    expand_generator_patch_presence(current, updates)
-                    if updates
-                    else []
-                )
-                candidate_constraints = [
-                    constraint
-                    for group in successful_groups
-                    for constraint in group.patch.constraints
-                ]
-                pending_change_count = len(expanded_updates) + len(
-                    candidate_constraints
-                )
-                if expanded_updates:
-                    current = self.config_catalog.stage_candidate(
-                        operation_key=request.operation_key,
-                        expected_revision=current.revision,
-                        updates=expanded_updates,
-                        hypothesis={
-                            "kind": "operation_smoke_parameter_patch_groups",
-                            "group_count": len(successful_groups),
+                        config=current,
+                        input_node_ids={
+                            item.input_node_id for item in current.configs
                         },
                     )
-
-                # Phase 4: run the candidate with the baseline case count and
-                # seed.  The ten local patch samples above are never HTTP cases.
-                (
-                    candidate_report,
-                    candidate_private_case_evidence,
-                ) = _run_smoke_batch(
-                    self.batch_runner,
-                    context=context,
-                    operation_key=request.operation_key,
-                    case_count=request.case_count,
-                    seed=seed,
-                    constraints=_combined_constraints(
-                        [
-                            *active_constraints.values(),
-                            *candidate_constraints,
-                        ]
-                    ),
-                )
-                reports.append(candidate_report)
-                if candidate_report.config_revision != current.revision:
-                    raise RuntimeError(
-                        "Candidate report revision does not match tested config"
+                    solve_request = FailureSolveRequest(
+                        operation_key=request.operation_key,
+                        todo=todo,
+                        operation=_operation_context(
+                            context,
+                            config=current,
+                        ),
+                        generator_config=current.model_dump(mode="json"),
+                        current_batch=latest_batch,
+                        reference_options=[
+                            option.model_dump(mode="json")
+                            for option in reference_options
+                        ],
+                        history=self.history.snapshot(request.operation_key),
                     )
-                candidate_evaluation = _batch_evaluation(
-                    candidate_report,
-                    threshold=request.success_rate_threshold,
-                )
-                success_rate = float(candidate_evaluation["success_rate"])
-                # The effect validator sees failures and observed outcomes, not
-                # generator/constraint syntax.  Syntax was already checked by
-                # the Parameter Patch Agent's deterministic validators.
-                validation = self.diagnoser.validate_effect(
-                    baseline_report=report,
-                    candidate_report=candidate_report,
-                    baseline_private_case_evidence=private_case_evidence,
-                    candidate_private_case_evidence=(
-                        candidate_private_case_evidence
-                    ),
-                    diagnosis=diagnosis,
-                    groups=successful_groups,
-                )
-                success_override = (
-                    success_rate >= request.success_rate_threshold
-                )
-                if success_override:
-                    validation = _accept_all_groups(
-                        validation,
-                        groups=successful_groups,
+                    session = self.failure_solver_factory.create().start(
+                        solve_request,
+                        config=current,
+                        max_outputs=request.max_solve_outputs_per_todo,
+                        continuation_interval=request.continuation_interval,
                     )
-                validation = _with_presence_closed_group_inputs(
-                    validation,
-                    groups=successful_groups,
-                    config=candidate_parent_config,
-                )
-                diagnosis = diagnosis.model_copy(
-                    update={"patch_validation": validation}
-                )
-                diagnoses[-1] = diagnosis
-                # Acceptance is atomic by group.  Only generator inputs from
-                # accepted groups are finalized, and only their constraints
-                # continue into the next in-memory feedback round.
-                accepted_group_ids = set(validation.accepted_group_ids)
-                accepted_groups = [
-                    group
-                    for group in successful_groups
-                    if group.group_id in accepted_group_ids
-                ]
-                for group in accepted_groups:
-                    for constraint in group.patch.constraints:
-                        active_constraints[constraint.constraint_id] = (
-                            constraint
+                    patch_attempts: list[PatchAttemptSummary] = []
+                    feedback: dict | None = None
+                    while True:
+                        solve = session.advance(feedback=feedback)
+                        feedback = None
+                        self.history.record(
+                            request.operation_key,
+                            {
+                                "kind": "solve_output",
+                                "round_number": round_number,
+                                "todo": todo.model_dump(mode="json"),
+                                "outcome": solve.model_dump(mode="json"),
+                            },
                         )
-                accepted_input_ids = set(
-                    validation.accepted_input_node_ids
+                        if solve.status != "patch_ready":
+                            todo_summaries.append(
+                                TodoRunSummary(
+                                    todo_id=todo.todo_id,
+                                    failure=todo.failure,
+                                    status=solve.status,
+                                    solve_outputs=solve.outputs_used,
+                                    patch_attempts=patch_attempts,
+                                )
+                            )
+                            break
+
+                        assert solve.patch_requirement is not None
+                        requirement = solve.patch_requirement
+                        task = ParameterPatchTask(
+                            todo_id=todo.todo_id,
+                            failure=todo.failure,
+                            **requirement.model_dump(mode="json"),
+                            prior_attempts=self.history.snapshot(
+                                request.operation_key
+                            ),
+                        )
+                        semantic = build_semantic_input_map(current)
+                        affected_node_ids = {
+                            semantic.node_by_handle[handle]
+                            for handle in requirement.affected_inputs
+                            if handle in semantic.node_by_handle
+                        }
+                        patch_options = [
+                            option
+                            for option in reference_options
+                            if option.input_node_id in affected_node_ids
+                        ]
+                        patch = self.patch_agent_factory.create().run(
+                            task=task,
+                            config=current,
+                            active_constraints=list(
+                                active_constraints.values()
+                            ),
+                            case_count=request.case_count,
+                            reference_values=self.reference_values,
+                            reference_options=patch_options,
+                            max_outputs=request.max_patch_outputs,
+                        )
+                        self.history.record(
+                            request.operation_key,
+                            {
+                                "kind": "patch_output",
+                                "round_number": round_number,
+                                "todo": todo.model_dump(mode="json"),
+                                "requirement": requirement.model_dump(
+                                    mode="json"
+                                ),
+                                "patch": patch.model_dump(mode="json"),
+                            },
+                        )
+                        if isinstance(patch, ParameterPatchFailure):
+                            patch_attempts.append(
+                                PatchAttemptSummary(
+                                    patch_outputs=patch.outputs_used,
+                                    patch_status="failed",
+                                )
+                            )
+                            feedback = {
+                                "patch_requirement": requirement.model_dump(
+                                    mode="json"
+                                ),
+                                "patch_failure": patch.model_dump(mode="json"),
+                            }
+                            continue
+
+                        updates = _prepare_reference_updates(
+                            self.reference_values,
+                            context=context,
+                            config=current,
+                            updates=patch.patch.updates,
+                            selected_reference_options=(
+                                patch.patch.selected_reference_options
+                            ),
+                        )
+                        expanded_updates = (
+                            expand_generator_patch_presence(current, updates)
+                            if updates
+                            else []
+                        )
+                        candidate_constraints = patch.patch.constraints
+                        before_batch = latest_batch
+                        if expanded_updates:
+                            current = self.config_catalog.stage_candidate(
+                                operation_key=request.operation_key,
+                                expected_revision=current.revision,
+                                updates=expanded_updates,
+                                hypothesis={
+                                    "kind": "operation_smoke_todo_patch",
+                                    "todo_id": todo.todo_id,
+                                },
+                            )
+                            pending_candidate = True
+                        pending_change_count = len(expanded_updates) + len(
+                            candidate_constraints
+                        )
+                        candidate_report, candidate_private = _run_smoke_batch(
+                            self.batch_runner,
+                            context=context,
+                            operation_key=request.operation_key,
+                            case_count=request.case_count,
+                            seed=seed,
+                            constraints=_combined_constraints(
+                                [
+                                    *active_constraints.values(),
+                                    *candidate_constraints,
+                                ]
+                            ),
+                        )
+                        reports.append(candidate_report)
+                        if candidate_report.config_revision != current.revision:
+                            raise RuntimeError(
+                                "Candidate report revision does not match "
+                                "tested config"
+                            )
+                        candidate_batch = build_batch_evidence(
+                            candidate_report,
+                            candidate_private,
+                        )
+                        effect = self.effect_agent.validate(
+                            SmokeEffectRequest(
+                                operation_key=request.operation_key,
+                                todo=todo,
+                                patch_requirement=requirement,
+                                patch=patch.patch.model_dump(mode="json"),
+                                before_batch=before_batch,
+                                candidate_batch=candidate_batch,
+                                history=self.history.snapshot(
+                                    request.operation_key
+                                ),
+                            ),
+                            max_outputs=request.max_effect_outputs,
+                        )
+                        accepted = (
+                            effect.outcome
+                            == "resolved_without_regression"
+                        )
+                        patch_attempts.append(
+                            PatchAttemptSummary(
+                                patch_outputs=patch.outputs_used,
+                                patch_status="validated",
+                                effect_outcome=effect.outcome,
+                                effect_outputs=effect.outputs_used,
+                                accepted=accepted,
+                            )
+                        )
+                        self.history.record(
+                            request.operation_key,
+                            {
+                                "kind": "candidate_effect",
+                                "round_number": round_number,
+                                "todo": todo.model_dump(mode="json"),
+                                "requirement": requirement.model_dump(
+                                    mode="json"
+                                ),
+                                "patch": patch.model_dump(mode="json"),
+                                "before_batch": before_batch,
+                                "candidate_batch": candidate_batch,
+                                "effect": effect.model_dump(mode="json"),
+                                "accepted": accepted,
+                            },
+                        )
+                        if accepted:
+                            if pending_candidate:
+                                current = self.config_catalog.finalize_candidate(
+                                    operation_key=request.operation_key,
+                                    candidate_revision=current.revision,
+                                    accepted_input_node_ids={
+                                        item.input_node_id
+                                        for item in expanded_updates
+                                    },
+                                    evaluation=_candidate_evaluation(
+                                        candidate_report,
+                                        request=request,
+                                        status="accepted",
+                                        change_count=pending_change_count,
+                                    ),
+                                )
+                                pending_candidate = False
+                            for constraint in candidate_constraints:
+                                active_constraints[
+                                    constraint.constraint_id
+                                ] = constraint
+                            latest_batch = candidate_batch
+                            success_rate = _success_rate(candidate_report)
+                            todo_summaries.append(
+                                TodoRunSummary(
+                                    todo_id=todo.todo_id,
+                                    failure=todo.failure,
+                                    status="resolved",
+                                    solve_outputs=solve.outputs_used,
+                                    patch_attempts=patch_attempts,
+                                )
+                            )
+                            pending_change_count = 0
+                            break
+
+                        if pending_candidate:
+                            current = (
+                                self.config_catalog.reject_candidate_and_rollback(
+                                    operation_key=request.operation_key,
+                                    candidate_revision=current.revision,
+                                    evaluation=_candidate_evaluation(
+                                        candidate_report,
+                                        request=request,
+                                        status="rejected",
+                                        change_count=pending_change_count,
+                                    ),
+                                )
+                            )
+                            pending_candidate = False
+                        pending_change_count = 0
+                        feedback = {
+                            "patch_requirement": requirement.model_dump(
+                                mode="json"
+                            ),
+                            "patch": patch.model_dump(mode="json"),
+                            "candidate_batch": candidate_batch,
+                            "effect": effect.model_dump(mode="json"),
+                        }
+
+                rounds.append(
+                    SmokeRoundSummary(
+                        round_number=round_number,
+                        baseline_run_id=report.run_id,
+                        plan_status=plan.status,
+                        plan_outputs=plan.outputs_used,
+                        todos=todo_summaries,
+                    )
                 )
-                if expanded_updates:
-                    current = self.config_catalog.finalize_candidate(
+        except SQLAlchemyError:
+            if pending_candidate:
+                try:
+                    self.config_catalog.reject_candidate_and_rollback(
                         operation_key=request.operation_key,
                         candidate_revision=current.revision,
-                        accepted_input_node_ids=accepted_input_ids,
-                        evaluation=_candidate_evaluation(
-                            candidate_evaluation,
-                            validation=validation,
-                            change_count=pending_change_count,
-                            success_override=success_override,
-                        ),
+                        evaluation={
+                            "validation_status": "technical_error",
+                            "accepted_change_count": 0,
+                            "rejected_change_count": pending_change_count,
+                        },
                     )
-                pending_change_count = 0
-                feedback_rounds += 1
-                if success_override:
-                    return self._result(
-                        status="passed",
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        diagnoses=diagnoses,
-                    )
-                if feedback_rounds >= request.max_feedback_rounds:
-                    return self._result(
-                        status="retry",
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        diagnoses=diagnoses,
-                        failure_kind="threshold_exhausted",
-                    )
-        except SQLAlchemyError:
-            # Database availability is a shared-run invariant. Let Supervisor
-            # stop the run as a global technical error instead of retrying one
-            # operation against the same unavailable catalog. Best-effort
-            # rollback keeps an already-staged candidate from becoming a later
-            # run's baseline; run startup also recovers any rollback that could
-            # not be written while the database was unavailable.
-            try:
-                current = self._discard_pending_candidate(
-                    current,
-                    reports=reports,
-                    threshold=request.success_rate_threshold,
-                    candidate_change_count=pending_change_count,
-                )
-            except Exception:
-                pass
+                except Exception:
+                    pass
             raise
         except Exception as exc:
-            current = self._discard_pending_candidate(
-                current,
-                reports=reports,
-                threshold=request.success_rate_threshold,
-                candidate_change_count=pending_change_count,
-            )
+            if pending_candidate:
+                current = self.config_catalog.reject_candidate_and_rollback(
+                    operation_key=request.operation_key,
+                    candidate_revision=current.revision,
+                    evaluation={
+                        "validation_status": "technical_error",
+                        "accepted_change_count": 0,
+                        "rejected_change_count": pending_change_count,
+                    },
+                )
             return self._result(
                 status="errored",
                 request=request,
                 current=current,
                 success_rate=success_rate,
                 reports=reports,
-                diagnoses=diagnoses,
+                rounds=rounds,
                 failure_kind="operation_error",
-                error={
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                },
+                error={"type": type(exc).__name__, "message": str(exc)},
             )
-
-    def _discard_pending_candidate(
-        self,
-        current: OperationGeneratorConfig,
-        *,
-        reports: list[OperationExecutionReport],
-        threshold: float,
-        candidate_change_count: int,
-    ) -> OperationGeneratorConfig:
-        """
-        Handle discard pending candidate as part of the run-local Operation Smoke
-        diagnosis and candidate workflow.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
-        history = self.config_catalog.get_revision(
-            current.operation_key,
-            current.revision,
-        )
-        if history is None or history.lifecycle != "candidate":
-            return current
-        evaluation = (
-            _batch_evaluation(reports[-1], threshold=threshold)
-            if reports and reports[-1].config_revision == current.revision
-            else {"stop_reason": "technical_error"}
-        )
-        evaluation = {
-            **evaluation,
-            "validation_status": "technical_error",
-            "accepted_change_count": 0,
-            "rejected_change_count": candidate_change_count,
-        }
-        return self.config_catalog.reject_candidate_and_rollback(
-            operation_key=current.operation_key,
-            candidate_revision=current.revision,
-            evaluation=evaluation,
-        )
 
     @staticmethod
     def _result(
@@ -641,10 +623,11 @@ class OperationSmokeAgent:
         current: OperationGeneratorConfig,
         success_rate: float,
         reports: list[OperationExecutionReport],
-        diagnoses: list[PlanSolveDiagnosisResult],
+        rounds: list[SmokeRoundSummary],
         failure_kind: str | None = None,
         error: dict[str, str] | None = None,
     ) -> OperationSmokeResult:
+        """Build the public summary without copying App-only raw evidence."""
         return OperationSmokeResult(
             status=status,
             operation_key=request.operation_key,
@@ -652,214 +635,86 @@ class OperationSmokeAgent:
             required_success_rate=request.success_rate_threshold,
             active_config_revision=current.revision,
             batch_reports=reports,
-            diagnoses=diagnoses,
+            rounds=rounds,
             failure_kind=failure_kind,
             error=error,
         )
 
 
-def _defer_actionable_items(
-    diagnosis: PlanSolveDiagnosisResult,
-    reasons_by_item_id: dict[str, str],
-) -> PlanSolveDiagnosisResult:
-    """
-    Handle defer actionable items as part of the run-local Operation Smoke diagnosis and
-    candidate workflow.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
-    if not reasons_by_item_id:
-        return diagnosis
-    remaining = [
-        item
-        for item in diagnosis.actionable_failures
-        if item.item_id not in reasons_by_item_id
-    ]
-    moved = [
-        DeferredFailure(
-            failure_ref=item.failure_ref,
-            root_failure_refs=item.root_failure_refs,
-            reason=reasons_by_item_id[item.item_id],
-        )
-        for item in diagnosis.actionable_failures
-        if item.item_id in reasons_by_item_id
-    ]
-    if not moved:
-        return diagnosis
-    payload = diagnosis.model_dump(mode="json")
-    payload.update(
-        {
-            "status": "actionable" if remaining else "inconclusive",
-            "actionable_failures": [
-                item.model_dump(mode="json") for item in remaining
-            ],
-            "deferred_failures": [
-                item.model_dump(mode="json")
-                for item in [*diagnosis.deferred_failures, *moved]
-            ],
-        }
-    )
-    return PlanSolveDiagnosisResult.model_validate(payload)
-
-
-def _batch_evaluation(
-    report: OperationExecutionReport,
-    *,
-    threshold: float,
-) -> dict:
-    success_count = sum(
+def _success_rate(report: OperationExecutionReport) -> float:
+    """Compute the sole pass metric from all complete-batch outcomes."""
+    successes = sum(
         count
         for status, count in report.status_code_counts.items()
         if status.isdigit() and 200 <= int(status) < 300
     )
-    case_count = sum(report.status_code_counts.values()) + report.error_count
-    success_rate = success_count / case_count if case_count else 0.0
+    total = sum(report.status_code_counts.values()) + report.error_count
+    return successes / total if total else 0.0
+
+
+def _operation_context(
+    context,
+    *,
+    config: OperationGeneratorConfig,
+) -> dict:
+    """Return the complete current Operation IR plus its frozen test snapshot.
+
+    ``ToolContext.ir`` is available in the real App. Small offline callers may
+    omit it, in which case the complete frozen testing snapshot still provides
+    the current method, path, input schemas, media types, and support limits.
+    """
+    ir = getattr(context, "ir", None)
+    operation = getattr(ir, "operations", {}).get(config.operation_key)
+    if isinstance(operation, BaseModel):
+        operation_value = operation.model_dump(mode="json")
+    elif operation is not None and is_dataclass(operation):
+        operation_value = asdict(operation)
+    elif isinstance(operation, dict):
+        operation_value = dict(operation)
+    else:
+        operation_value = None
     return {
-        "case_count": case_count,
-        "success_2xx_count": success_count,
-        "success_rate": success_rate,
-        "required_threshold": threshold,
-        "run_id": report.run_id,
+        "openapi_operation_ir": operation_value,
+        "testing_snapshot": config.snapshot.model_dump(mode="json"),
     }
 
 
 def _candidate_evaluation(
-    evaluation: dict,
+    report: OperationExecutionReport,
     *,
-    validation: PatchValidationSummary,
+    request: OperationSmokeRequest,
+    status: str,
     change_count: int,
-    success_override: bool,
 ) -> dict:
-    """
-    Handle candidate evaluation as part of the run-local Operation Smoke diagnosis and
-    candidate workflow.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
-    accepted_count = (
-        change_count
-        if success_override
-        else (
-            len(validation.accepted_input_node_ids)
-            + len(validation.accepted_constraint_ids)
-        )
-    )
-    if success_override:
-        validation_status = "success_threshold_override"
-    elif accepted_count == change_count:
-        validation_status = "accepted"
-    elif accepted_count:
-        validation_status = "partial"
-    else:
-        validation_status = "rejected"
+    """Describe all-or-nothing candidate disposition for the Catalog audit."""
+    accepted = change_count if status == "accepted" else 0
     return {
-        **evaluation,
-        "validation_status": validation_status,
-        "accepted_change_count": accepted_count,
-        "rejected_change_count": change_count - accepted_count,
+        "run_id": report.run_id,
+        "success_rate": _success_rate(report),
+        "required_threshold": request.success_rate_threshold,
+        "validation_status": status,
+        "accepted_change_count": accepted,
+        "rejected_change_count": change_count - accepted,
     }
-
-
-def _accept_all_groups(
-    validation: PatchValidationSummary,
-    *,
-    groups: list[ValidatedPatchGroup],
-) -> PatchValidationSummary:
-    """Apply the existing global success-threshold acceptance override."""
-
-    return validation.model_copy(
-        update={
-            "accepted_group_ids": [group.group_id for group in groups],
-            "rejected_group_ids": [],
-            "accepted_input_node_ids": list(
-                dict.fromkeys(
-                    update.input_node_id
-                    for group in groups
-                    for update in group.patch.updates
-                )
-            ),
-            "rejected_input_node_ids": [],
-            "accepted_constraint_ids": list(
-                dict.fromkeys(
-                    constraint.constraint_id
-                    for group in groups
-                    for constraint in group.patch.constraints
-                )
-            ),
-            "rejected_constraint_ids": [],
-        }
-    )
-
-
-def _with_presence_closed_group_inputs(
-    validation: PatchValidationSummary,
-    *,
-    groups: list[ValidatedPatchGroup],
-    config: OperationGeneratorConfig,
-) -> PatchValidationSummary:
-    """Derive final input ownership from every Group's presence closure.
-
-    Groups are expanded independently against the candidate parent. This makes
-    a shared optional ancestor visible in each Group's derived set, after which
-    accepted ownership wins so rejecting another leaf cannot remove an
-    ancestor still required by an accepted leaf.
-    """
-
-    ids_by_group = {
-        group.group_id: [
-            update.input_node_id
-            for update in (
-                expand_generator_patch_presence(config, group.patch.updates)
-                if group.patch.updates
-                else []
-            )
-        ]
-        for group in groups
-    }
-    accepted_ids = list(
-        dict.fromkeys(
-            node_id
-            for group_id in validation.accepted_group_ids
-            for node_id in ids_by_group.get(group_id, [])
-        )
-    )
-    accepted_set = set(accepted_ids)
-    rejected_ids = [
-        node_id
-        for node_id in dict.fromkeys(
-            node_id
-            for group_id in validation.rejected_group_ids
-            for node_id in ids_by_group.get(group_id, [])
-        )
-        if node_id not in accepted_set
-    ]
-    return validation.model_copy(
-        update={
-            "accepted_input_node_ids": accepted_ids,
-            "rejected_input_node_ids": rejected_ids,
-        }
-    )
 
 
 def _assert_reference_invariants(
     config: OperationGeneratorConfig,
     reference_values: ReferenceValueProvider,
 ) -> None:
+    """Fail before generation when a configured reference pool is empty."""
     for item in config.configs:
         strategy = item.strategy
-        if isinstance(strategy, ResourceIdentifierGenerator):
-            name = strategy.resource
-        elif isinstance(strategy, ResponseValueGenerator):
-            name = strategy.value_name
-        else:
+        if not isinstance(
+            strategy,
+            (ResourceIdentifierGenerator, ResponseValueGenerator),
+        ):
             continue
         if reference_values.values_for(strategy):
             continue
         raise RuntimeError(
             "Reference generator invariant violated: "
-            f"{item.input_node_id} uses empty {strategy.type} pool {name!r}"
+            f"{item.input_node_id} uses an empty {strategy.type} pool"
         )
 
 
@@ -870,6 +725,7 @@ def _available_reference_options(
     config: OperationGeneratorConfig,
     input_node_ids: set[str],
 ) -> list[AvailableReferenceOption]:
+    """Return Behavior Monitor reference options when the provider supports it."""
     available = getattr(reference_values, "available_options", None)
     if not callable(available):
         return []
@@ -890,31 +746,24 @@ def _prepare_reference_updates(
     updates,
     selected_reference_options,
 ):
-    """
-    Handle prepare reference updates as part of the run-local Operation Smoke diagnosis
-    and candidate workflow.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Resolve selected reference metadata and verify its pool before staging."""
     prepare = getattr(reference_values, "prepare_updates", None)
-    if not callable(prepare):
-        prepared = updates
-    else:
-        prepared = prepare(
+    prepared = (
+        prepare(
             ir=getattr(context, "ir", None),
             config=config,
             updates=updates,
             selected_reference_options=selected_reference_options,
         )
+        if callable(prepare)
+        else updates
+    )
     for update in prepared:
         strategy = update.strategy
-        if not isinstance(
+        if isinstance(
             strategy,
             (ResourceIdentifierGenerator, ResponseValueGenerator),
-        ):
-            continue
-        if not reference_values.values_for(strategy):
+        ) and not reference_values.values_for(strategy):
             raise RuntimeError(
                 "Selected reference generator pool is empty for "
                 f"{update.input_node_id}"
@@ -925,15 +774,14 @@ def _prepare_reference_updates(
 def _combined_constraints(
     patches: list[CompiledConstraintPatch],
 ) -> ConstraintSet | None:
-    unique_patches = {patch.constraint_id: patch for patch in patches}
+    """Combine accepted and candidate Constraints by stable ID."""
+    unique = {patch.constraint_id: patch for patch in patches}
     expressions = [
         expression
-        for patch in unique_patches.values()
+        for patch in unique.values()
         for expression in patch.constraint.constraints
     ]
-    if not expressions:
-        return None
-    return ConstraintSet(constraints=expressions)
+    return ConstraintSet(constraints=expressions) if expressions else None
 
 
 def _run_smoke_batch(
@@ -945,12 +793,7 @@ def _run_smoke_batch(
     seed: int,
     constraints: ConstraintSet | None,
 ) -> tuple[OperationExecutionReport, dict[str, object]]:
-    """
-    Run smoke batch for the run-local Operation Smoke diagnosis and candidate workflow.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Run one complete batch and retain private evidence when supported."""
     run_for_smoke = getattr(runner, "run_operation_for_smoke", None)
     if not callable(run_for_smoke):
         if constraints is not None:

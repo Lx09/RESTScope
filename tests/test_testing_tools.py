@@ -97,7 +97,7 @@ def test_testing_tools_register_with_run_allowed_for_every_role_and_config_tools
     for role in (
         "planner",
         "result_analyst",
-        "operation_smoke_root_cause_diagnosis",
+        "operation_smoke_failure_solve",
         "decision_maker",
         "future_agent",
     ):

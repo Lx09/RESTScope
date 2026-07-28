@@ -50,7 +50,11 @@ class _SmokeAgent:
         del context
         self.requests.append(request)
         status = self.statuses.pop(0)
-        result_status = "retry" if status == "diagnosis_inconclusive" else status
+        result_status = (
+            "retry"
+            if status in {"no_new_failure_work", "plan_budget_exhausted"}
+            else status
+        )
         reports = []
         if result_status == "passed":
             reports.append(
@@ -74,9 +78,12 @@ class _SmokeAgent:
             active_config_revision=1,
             batch_reports=reports,
             failure_kind=(
-                "diagnosis_inconclusive"
-                if status == "diagnosis_inconclusive"
-                else "threshold_exhausted"
+                status
+                if status in {
+                    "no_new_failure_work",
+                    "plan_budget_exhausted",
+                }
+                else "no_new_failure_work"
                 if result_status == "retry"
                 else "unsupported_operation"
                 if result_status == "unsupported"
@@ -200,15 +207,15 @@ def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> 
         2,
         3,
     ]
-    assert report.attempts[-1].failure_kind == "threshold_exhausted"
+    assert report.attempts[-1].failure_kind == "no_new_failure_work"
     assert report.unattempted_operations == []
 
 
-def test_inconclusive_diagnosis_does_not_interrupt_other_operations() -> None:
-    """Scenario: verify that inconclusive diagnosis does not interrupt other operations."""
+def test_no_new_failure_work_does_not_interrupt_other_operations() -> None:
+    """A Plan no-work result remains one operation's retry outcome."""
     from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["diagnosis_inconclusive", "passed"])
+    smoke = _SmokeAgent(["no_new_failure_work", "passed"])
 
     report = RESTScopeMainGraph(
         operation_smoke_agent=smoke,
@@ -227,7 +234,7 @@ def test_inconclusive_diagnosis_does_not_interrupt_other_operations() -> None:
         "failed",
         "satisfied",
     ]
-    assert report.attempts[0].failure_kind == "diagnosis_inconclusive"
+    assert report.attempts[0].failure_kind == "no_new_failure_work"
     assert report.unattempted_operations == []
 
 

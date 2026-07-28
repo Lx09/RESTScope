@@ -1528,7 +1528,9 @@ def test_explicit_leaf_presence_patch_closes_all_request_body_ancestors() -> Non
 
 def test_presence_closure_deduplicates_shared_ancestors_and_rejects_conflict() -> None:
     """Shared ancestors are synthesized once; an explicit optional ancestor wins as an error."""
-    from tests.test_parameter_patch_agent import request_body_date_config
+    from tests._operation_smoke_plan_solve_fixtures import (
+        request_body_date_config,
+    )
 
     from restscope.testing import (
         GeneratorConfigError,

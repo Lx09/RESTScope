@@ -59,7 +59,8 @@ def test_operation_smoke_phases_select_independent_models() -> None:
     )
 
     for role, expected_model in (
-        ("operation_smoke_root_cause_diagnosis", "thinking-model"),
+        ("operation_smoke_plan", "thinking-model"),
+        ("operation_smoke_failure_solve", "thinking-model"),
         ("operation_smoke_effect_validation", "thinking-model"),
         ("parameter_patch_agent", "fast-model"),
     ):
@@ -68,6 +69,29 @@ def test_operation_smoke_phases_select_independent_models() -> None:
         assert selected.temperature == 0
     with pytest.raises(ValueError, match="Unsupported LLM role"):
         selector.select("operation_smoke_patch_grouping")
+
+
+def test_llm_model_config_uses_large_context_defaults() -> None:
+    """Direct role configs share the application model window defaults."""
+    from restscope.llm import LLMModelConfig
+
+    model = LLMModelConfig(
+        role="operation_smoke_plan",
+        provider="stub",
+        model="think",
+    )
+
+    assert model.max_tokens == 8192
+    assert model.context_window_tokens == 131072
+
+    with pytest.raises(ValueError, match="smaller than context_window_tokens"):
+        LLMModelConfig(
+            role="invalid",
+            provider="stub",
+            model="think",
+            max_tokens=4096,
+            context_window_tokens=4096,
+        )
 
 
 def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
@@ -373,6 +397,58 @@ def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
     assert selector.select("intelligence_updater").model == "strong-model"
     assert selector.select("decision_maker").model == "fast-model"
     assert selector.select("decision_maker").provider == "fake"
+
+
+def test_model_config_exposes_separate_context_and_output_limits(
+    tmp_path: Path,
+) -> None:
+    """Scenario: context capacity and completion capacity remain distinct."""
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "THINK_MODEL=think-model",
+                "FAST_MODEL=fast-model",
+                "THINK_CONTEXT_WINDOW_TOKENS=200000",
+                "THINK_MAX_TOKENS=12000",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    config = RESTScopeConfig.from_environment(env_file)
+
+    assert config.llm.thinking.context_window_tokens == 200000
+    assert config.llm.thinking.max_tokens == 12000
+    assert config.llm.fast.context_window_tokens == 131072
+    assert config.llm.fast.max_tokens == 8192
+
+
+def test_model_config_rejects_output_limit_that_fills_context(
+    tmp_path: Path,
+) -> None:
+    """Scenario: a model must retain room for prompt evidence."""
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "THINK_MODEL=think-model",
+                "THINK_CONTEXT_WINDOW_TOKENS=4096",
+                "THINK_MAX_TOKENS=4096",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="THINK_MAX_TOKENS must be smaller",
+    ):
+        RESTScopeConfig.from_environment(env_file)
 
 
 def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider(

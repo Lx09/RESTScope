@@ -98,23 +98,21 @@ A relationship that generated inputs must satisfy together. Examples include
 “end is present only if start is present”, “minimum is no greater than
 maximum”, or “exactly one of these fields is included”.
 
-### F/C/O evidence references
+### Plan case codes
 
-Short aliases used only during one diagnosis:
+`C1`, `C2`, … are temporary references used only while Smoke Plan associates
+failed cases with todos. Code validates that every failed case is covered and
+then immediately expands each todo back into complete case evidence. Solve,
+Patch, and Effect do not rely on failure/case/observation aliases.
 
-- `F1`, `F2`, … identify unique failure signatures.
-- `C1`, `C2`, … identify baseline Smoke cases.
-- `O1`, `O2`, … identify observations returned by diagnostic HTTP probes.
+### Failure Todo and Patch Requirement
 
-The aliases keep prompts smaller and make it possible to validate that a model
-only cites evidence it was actually shown.
-
-### Patch Group
-
-A set of parameter changes that must be constructed and accepted atomically.
-Inputs that overlap or require one same-request Constraint belong in the same
-group. Each group receives a fresh Parameter Patch Agent with no history from
-other groups.
+A Failure Todo is one semantically distinct failure selected by Smoke Plan.
+Its fresh, continuous Failure Solve conversation investigates why it happens.
+When the cause is parameter-related and supported by evidence, Solve emits one
+Patch Requirement: root cause, affected semantic inputs, desired behavior, and
+acceptance criteria. Parameter Patch converts only that requirement into an
+executable atomic candidate.
 
 ### DTO
 
@@ -131,12 +129,14 @@ Read these files in order:
 3. `restscope/agent/supervisor/graph.py` — the top-level dynamic operation loop.
 4. `restscope/testing/execution.py` — turns generated cases into real HTTP
    results.
-5. `restscope/agent/operation_smoke/agent.py` — baseline Smoke, feedback rounds,
-   candidate revisions, and effect acceptance.
-6. `restscope/agent/operation_smoke/diagnosis.py` — root-cause investigation
-   state machine and effect validation.
-7. `restscope/agent/parameter_patch/agent.py` — Generator/Constraint proposal,
-   deterministic validation, ten-sample review, and retry limits.
+5. `restscope/agent/operation_smoke/agent.py` — complete-batch rounds, todo
+   dispatch, candidate transactions, and final success calculation.
+6. `restscope/agent/smoke_plan/agent.py` and
+   `restscope/agent/failure_solver/agent.py` — failure todo management and one
+   continuous investigation.
+7. `restscope/agent/parameter_patch/agent.py` and
+   `restscope/agent/smoke_effect/agent.py` — executable Patch construction,
+   dynamic sample review, and atomic Effect acceptance.
 8. `restscope/agent/api_behavior_monitor/agent.py` — response observation and
    the narrow persistent evidence catalog.
 
@@ -191,26 +191,42 @@ evidence; it does not load a persisted static plan.
 
 ### `restscope/agent/operation_smoke/`
 
-Runs a baseline batch, investigates failures, groups actionable inputs, invokes
-Parameter Patch Agents, runs one combined candidate batch, and accepts only
-groups whose original failures are resolved.
+Owns thin coordination, full in-memory evidence, App-lifetime history, public
+round summaries, reference adaptation, and Catalog candidate transactions.
 
 Important files:
 
-- `agent.py`: feedback-loop orchestration.
-- `diagnosis.py`: one-failure-at-a-time investigation.
-- `evidence.py`: bounded and redacted F/C/O evidence journal.
-- `grouping.py`: deterministic connected-component grouping.
-- `probe.py`: HTTP tool limited to the current operation.
-- `prompts.py` and `planning.py`: DTO-derived model protocols.
-- `schemas.py`: runtime state and report contracts.
+- `agent.py`: complete-batch and fixed-todo orchestration.
+- `evidence.py`: complete App-only case evidence and Plan-only code mapping.
+- `history.py`: operation-isolated, non-persistent records and Constraints.
+- `schemas.py`: public request and bounded result summaries.
 - `references.py`: observed-value options exposed as model-safe `R` aliases.
+
+### `restscope/agent/smoke_plan/`
+
+Creates an ordered fixed-round todo snapshot from a complete batch and
+App-lifetime history. It does not diagnose causes or Patch requirements.
+
+### `restscope/agent/failure_solver/`
+
+Owns one continuous THINK investigation per todo and the scoped HTTP Probe.
+It alone decides root cause, Patch requirements, and terminal todo outcomes.
 
 ### `restscope/agent/parameter_patch/`
 
-Constructs one complete Patch Group. It compiles model output into testing
-types, validates Generator schemas and Constraints, generates exactly ten local
-samples, and requires the same Agent to review them before acceptance.
+Constructs one complete Solve-owned Patch. It compiles model output into
+testing types, validates Generator schemas and Constraints, generates
+`case_count` local samples, and requires the same Agent to review them.
+
+### `restscope/agent/smoke_effect/`
+
+Compares the latest accepted and candidate complete batches. Only
+`resolved_without_regression` accepts the entire candidate.
+
+### `restscope/agent/prompt_context/`
+
+Applies the shared model-window reserve, current-evidence priority, recent
+history loading, older-history summaries, and marked head/tail clipping.
 
 ### `restscope/agent/api_behavior_monitor/`
 
@@ -288,16 +304,17 @@ For a failed batch that receives a candidate Patch:
 
 ```text
 OperationExecutionReport
-  -> EvidenceJournal (F/C refs)
-  -> Failure investigation
-  -> optional scoped HTTP Probe (O refs)
-  -> ActionableFailure
-  -> deterministic Patch Groups
-  -> fresh ParameterPatchAgent per Group
-  -> compile + solve + 10 local samples
-  -> one combined candidate HTTP batch
-  -> Effect Validator
-  -> accept or reject whole Groups
+  -> SmokePlanAgent (Plan-only case codes)
+  -> expanded FailureTodo
+  -> fresh continuous FailureSolveAgent
+  -> optional current-operation HTTP probes
+  -> PatchRequirement
+  -> fresh ParameterPatchAgent
+  -> compile + solve + case_count local samples
+  -> complete same-seed candidate batch
+  -> SmokeEffectAgent
+  -> accept or roll back the whole Patch
+  -> next todo, then next complete-batch round
 ```
 
 ## 7. Where optimization is safe

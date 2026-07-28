@@ -1,6 +1,11 @@
 # Operation Smoke Root-Cause and Parameter Patch Design
 
-Status: User-approved; implemented in `codex/operation-smoke-root-cause-patch-agent`
+Status: Superseded on 2026-07-27 by
+`2026-07-27-llm-led-operation-smoke-design.md`
+
+This file remains historical evidence for the per-failure/Group implementation.
+The current approved design removes deterministic grouping, partial acceptance,
+fixed ten-sample review, and the old diagnosis budgets.
 
 ## Problem
 

@@ -16,6 +16,9 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 
     for package_name in (
         "operation_smoke",
+        "smoke_plan",
+        "failure_solver",
+        "smoke_effect",
         "parameter_patch",
         "api_behavior_monitor",
         "supervisor",
@@ -30,43 +33,46 @@ def test_agent_root_is_facade_and_each_agent_is_a_package() -> None:
 def test_agent_package_and_public_facade_export_same_contracts() -> None:
     """Scenario: verify that agent package and public facade export same contracts."""
     from restscope.agent import (
+        FailureSolveAgent,
+        FailureSolveAgentFactory,
         OperationSmokeAgent,
         ParameterPatchAgent,
         ParameterPatchAgentFactory,
-        PatchGroupTask,
-        ValidatedPatchGroup,
-        PatchGroupFailure,
-        PatchValidationSummary,
-        PlanSolveDiagnosisResult,
+        ParameterPatchTask,
+        ValidatedParameterPatch,
+        ParameterPatchFailure,
+        SmokeEffectAgent,
+        SmokePlanAgent,
         APIBehaviorMonitorAgent,
         RESTScopeMainGraph,
     )
     from restscope.agent.operation_smoke import OperationSmokeAgent as PackagedOperationSmokeAgent
-    from restscope.agent.operation_smoke import (
-        GeneratorPatchDraft as SmokeGeneratorPatchDraft,
-        PatchValidationSummary as PackagedPatchValidationSummary,
-        PlanSolveDiagnosisResult as PackagedPlanSolveDiagnosisResult,
+    from restscope.agent.failure_solver import (
+        FailureSolveAgent as PackagedFailureSolveAgent,
+        FailureSolveAgentFactory as PackagedFailureSolveAgentFactory,
     )
     from restscope.agent.parameter_patch import (
-        GeneratorPatchDraft,
         ParameterPatchAgent as PackagedParameterPatchAgent,
         ParameterPatchAgentFactory as PackagedParameterPatchAgentFactory,
-        PatchGroupFailure as PackagedPatchGroupFailure,
-        PatchGroupTask as PackagedPatchGroupTask,
-        ValidatedPatchGroup as PackagedValidatedPatchGroup,
+        ParameterPatchFailure as PackagedParameterPatchFailure,
+        ParameterPatchTask as PackagedParameterPatchTask,
+        ValidatedParameterPatch as PackagedValidatedParameterPatch,
     )
+    from restscope.agent.smoke_effect import SmokeEffectAgent as PackagedSmokeEffectAgent
+    from restscope.agent.smoke_plan import SmokePlanAgent as PackagedSmokePlanAgent
     from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent as PackagedAPIBehaviorMonitorAgent
     from restscope.agent.supervisor import RESTScopeMainGraph as PackagedMainGraph
 
     assert OperationSmokeAgent is PackagedOperationSmokeAgent
     assert ParameterPatchAgent is PackagedParameterPatchAgent
     assert ParameterPatchAgentFactory is PackagedParameterPatchAgentFactory
-    assert PatchGroupTask is PackagedPatchGroupTask
-    assert ValidatedPatchGroup is PackagedValidatedPatchGroup
-    assert PatchGroupFailure is PackagedPatchGroupFailure
-    assert SmokeGeneratorPatchDraft is GeneratorPatchDraft
-    assert PlanSolveDiagnosisResult is PackagedPlanSolveDiagnosisResult
-    assert PatchValidationSummary is PackagedPatchValidationSummary
+    assert ParameterPatchTask is PackagedParameterPatchTask
+    assert ValidatedParameterPatch is PackagedValidatedParameterPatch
+    assert ParameterPatchFailure is PackagedParameterPatchFailure
+    assert FailureSolveAgent is PackagedFailureSolveAgent
+    assert FailureSolveAgentFactory is PackagedFailureSolveAgentFactory
+    assert SmokePlanAgent is PackagedSmokePlanAgent
+    assert SmokeEffectAgent is PackagedSmokeEffectAgent
     assert APIBehaviorMonitorAgent is PackagedAPIBehaviorMonitorAgent
     assert RESTScopeMainGraph is PackagedMainGraph
 
@@ -75,6 +81,9 @@ def test_cross_agent_imports_use_package_facades() -> None:
     """Scenario: verify that cross agent imports use package facades."""
     package_names = {
         "operation_smoke",
+        "smoke_plan",
+        "failure_solver",
+        "smoke_effect",
         "parameter_patch",
         "api_behavior_monitor",
         "supervisor",

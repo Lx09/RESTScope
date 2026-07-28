@@ -6,15 +6,18 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from restscope.agent.prompt_context import fit_prompt_context
+from restscope.llm import LLMModelConfig
 from restscope.testing import OperationGeneratorConfig, build_semantic_input_map
 
-from .schemas import AvailableReferenceOption, PatchGroupTask
+from .schemas import AvailableReferenceOption, ParameterPatchTask
 
 
 EXPERT_SYSTEM_PROMPT = """
 Purpose
 You are the Generator and Constraint construction expert for one confirmed
-Operation Smoke Patch Group. Translate the supplied requirements into one
+Operation Smoke failure requirement. Translate the supplied root cause and
+desired behavior into one
 complete, locally valid parameter patch. Do not diagnose a new root cause and
 do not change the supplied target inputs or requirements.
 
@@ -34,7 +37,7 @@ strategy, and optional reference. inclusion_probability must be between 0 and 1.
 Use at most one of strategy and reference, and change at least one field. input
 must be one supplied semantic input. reference must be one supplied R alias.
 Each constraints entry has exactly one expression field. Return
-{"action":"accept"} only after the runtime has returned 10 samples for the
+{"action":"accept"} only after the runtime has returned local samples for the
 latest proposal. The sample object contains request-shaped values and an
 explicit present map; review both, plus every supplied reference_pool_values
 entry. Never include a patch with accept.
@@ -104,12 +107,12 @@ input_node_id. Arithmetic and ordered comparisons must use compatible numeric
 types; matches must use a string-compatible value.
 
 Construction steps
-1. Read the immutable Patch Group task.
+1. Read the immutable Failure Solve Patch requirement.
 2. Select the smallest Generator, Constraint, or combined change satisfying
    every requirement.
 3. Return action=propose with the entire patch, never an incremental edit.
 4. The runtime validates input scope, schemas, constraints, provisional
-   compatibility, and generates exactly 10 parameter value groups.
+   compatibility, and generates the requested number of parameter value groups.
 5. Review values, present flags, and reference pool values supplied by the
    runtime. Return action=accept only after they satisfy every task requirement.
    Otherwise return a complete replacement patch.
@@ -155,8 +158,7 @@ write the catalog, persist state, or emit prose.
 @dataclass(slots=True, frozen=True)
 class ParameterPatchPrompt:
     """
-    Carry validated parameter patch prompt data across one isolated Generator and
-    Constraint Patch Group.
+    Carry validated prompt data across one isolated Solve-owned Patch attempt.
 
     The annotated fields form the contract; validation rejects missing, extra, or
     incorrectly typed values at the boundary.
@@ -168,12 +170,13 @@ class ParameterPatchPrompt:
 
 def build_parameter_patch_prompt(
     *,
-    task: PatchGroupTask,
+    task: ParameterPatchTask,
     config: OperationGeneratorConfig,
     reference_options: list[AvailableReferenceOption],
+    model: LLMModelConfig,
 ) -> ParameterPatchPrompt:
     """
-    Build parameter patch prompt for one isolated Generator and Constraint Patch Group.
+    Build the complete prompt for one Solve-owned Patch requirement.
 
     The annotated arguments and return type define the data boundary used by callers.
     """
@@ -187,7 +190,7 @@ def build_parameter_patch_prompt(
             "strategy": configs[node_id].strategy.model_dump(mode="json"),
         }
         for handle, node_id in semantic.node_by_handle.items()
-        if handle in task.inputs
+        if handle in task.affected_inputs
     }
     references = {
         f"R{index}": option
@@ -198,7 +201,7 @@ def build_parameter_patch_prompt(
                 if option.input_node_id
                 in {
                     semantic.node_by_handle[handle]
-                    for handle in task.inputs
+                    for handle in task.affected_inputs
                 }
             ],
             start=1,
@@ -214,12 +217,25 @@ def build_parameter_patch_prompt(
         for alias, option in references.items()
     ]
     task_card: dict[str, Any] = {
-        "task": task.model_dump(mode="json"),
+        "task": task.model_dump(
+            mode="json",
+            exclude={"prior_attempts"},
+        ),
         "current_generation": current,
         "reference_sources": reference_view,
     }
+    fitted = fit_prompt_context(
+        required=task_card,
+        history=task.prior_attempts,
+        model=model,
+    )
     return ParameterPatchPrompt(
         system=EXPERT_SYSTEM_PROMPT,
-        user=json.dumps(task_card, ensure_ascii=False, indent=2, default=str),
+        user=json.dumps(
+            fitted.payload,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         reference_by_alias=references,
     )

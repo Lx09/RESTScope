@@ -1,4 +1,4 @@
-"""Fresh Parameter Patch Agent construction per Patch Group."""
+"""Fresh Parameter Patch Agent construction per Solve requirement."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from .agent import ParameterPatchAgent
 
 
 class ParameterPatchAgentFactory:
-    """Create isolated Agent instances sharing only immutable dependencies."""
+    """Create isolated Patch Agents sharing only immutable dependencies."""
 
     def __init__(
         self,
@@ -23,12 +23,7 @@ class ParameterPatchAgentFactory:
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def create(self) -> ParameterPatchAgent:
-        """
-        Handle create as part of one isolated Generator and Constraint Patch Group.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Return a fresh Agent with no proposal or sample conversation."""
         return ParameterPatchAgent(
             client=self.client,
             model=self.model,

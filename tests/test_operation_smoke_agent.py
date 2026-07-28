@@ -1,1030 +1,798 @@
-"""Integrated three-stage Operation Smoke feedback-loop contracts."""
+"""End-to-end contracts for the thin LLM-led Operation Smoke coordinator."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
-
-def test_request_rejects_removed_successful_operation_keys() -> None:
-    """Scenario: verify that request rejects removed successful operation keys."""
-    from pydantic import ValidationError
-
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-
-    try:
-        OperationSmokeRequest(
-            operation_key="GET /items/{itemId}",
-            successful_operation_keys=["POST /items"],
-        )
-    except ValidationError as exc:
-        assert exc.errors()[0]["type"] == "extra_forbidden"
-        assert exc.errors()[0]["loc"] == ("successful_operation_keys",)
-    else:
-        raise AssertionError("removed successful_operation_keys field was accepted")
-
-
-def test_successful_batch_does_not_require_patch_phase_dependencies(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that successful batch does not require patch phase dependencies."""
-    from restscope.agent.operation_smoke import (
-        OperationSmokeAgent,
-        OperationSmokeRequest,
-    )
-
-    catalog, operation_key = _catalog(tmp_path)
-
-    class UnexpectedDiagnoser:
-        def diagnose(self, **kwargs):
-            del kwargs
-            raise AssertionError("a successful batch must not invoke diagnosis")
-
-    smoke = OperationSmokeAgent(
-        config_catalog=catalog,
-        batch_runner=_BatchRunner(catalog, [(10, 0)]),
-        diagnoser=UnexpectedDiagnoser(),
-        reference_values=_ReferenceValues(),
-    )
-
-    result = smoke.run(
-        object(),
-        OperationSmokeRequest(
-            operation_key=operation_key,
-            case_count=10,
-            seed=13,
-        ),
-    )
-
-    assert result.status == "passed"
-    assert result.success_rate == 1
-
-
-def test_groups_run_in_fresh_agents_then_one_candidate_batch_is_finalized(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that groups run in fresh agents then one candidate batch is finalized."""
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-
-    catalog, operation_key = _catalog(tmp_path)
-    node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
-    diagnosis = _diagnosis([_actionable("I1", "F1", "path.itemId")])
-    task = _task("G1", "I1", "F1", "path.itemId")
-    validated = _validated_update(
-        "G1",
-        "I1",
-        "F1",
-        node_id,
-        "path.itemId",
-        "known-item",
-    )
-    class EvidenceRunner(_BatchRunner):
-        def run_operation_for_smoke(self, *args, **kwargs):
-            outcome = super().run_operation_for_smoke(*args, **kwargs)
-            marker = f"private-evidence-{len(self.calls)}"
-            return SimpleNamespace(
-                report=outcome.report,
-                case_evidence=[
-                    SimpleNamespace(case_id=marker, response_body=marker.encode())
-                ],
-            )
-
-    runner = EvidenceRunner(catalog, [(0, 10), (5, 5)])
-    diagnoser = _Diagnoser(
-        [diagnosis],
-        [
-            _validation(
-                resolved=["F1"],
-                accepted_groups=["G1"],
-                accepted_inputs=[node_id],
-            )
-        ],
-    )
-    factory = _PatchFactory([validated])
-    smoke = _smoke(
-        catalog=catalog,
-        runner=runner,
-        diagnoser=diagnoser,
-        grouper=_Grouper([[task]]),
-        factory=factory,
-    )
-
-    result = smoke.run(
-        object(),
-        OperationSmokeRequest(
-            operation_key=operation_key,
-            case_count=10,
-            success_rate_threshold=0.8,
-            max_feedback_rounds=1,
-            seed=17,
-        ),
-    )
-
-    assert result.status == "retry"
-    assert [call["revision"] for call in runner.calls] == [1, 2]
-    assert [call["seed"] for call in runner.calls] == [17, 17]
-    assert [call["case_count"] for call in runner.calls] == [10, 10]
-    assert len(factory.instances) == 1
-    assert factory.instances[0].calls[0]["config"].revision == 1
-    assert len(diagnoser.effect_calls) == 1
-    effect_call = diagnoser.effect_calls[0]
-    assert set(effect_call["baseline_private_case_evidence"]) == {
-        "private-evidence-1"
-    }
-    assert set(effect_call["candidate_private_case_evidence"]) == {
-        "private-evidence-2"
-    }
-    current = catalog.inspect_operation(operation_key)
-    assert current.revision == 2
-    assert current.configs[0].strategy.value == "known-item"
-    group_run = result.diagnoses[0].patch_group_runs[0]
-    assert (group_run.group_id, group_run.status, group_run.attempts) == (
-        "G1",
-        "validated",
-        2,
-    )
-    assert result.diagnoses[0].patch_validation.accepted_group_ids == ["G1"]
-
-
-def test_candidate_is_rolled_back_before_database_error_propagates(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that candidate is rolled back before database error propagates."""
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-
-    catalog, operation_key = _catalog(tmp_path)
-    node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
-    diagnosis = _diagnosis([_actionable("I1", "F1", "path.itemId")])
-    task = _task("G1", "I1", "F1", "path.itemId")
-    validated = _validated_update(
-        "G1",
-        "I1",
-        "F1",
-        node_id,
-        "path.itemId",
-        "known-item",
-    )
-
-    class CandidateDatabaseFailureRunner(_BatchRunner):
-        def run_operation_for_smoke(self, *args, **kwargs):
-            if self.calls:
-                raise SQLAlchemyError("candidate database failure")
-            return super().run_operation_for_smoke(*args, **kwargs)
-
-    smoke = _smoke(
-        catalog=catalog,
-        runner=CandidateDatabaseFailureRunner(catalog, [(0, 10)]),
-        diagnoser=_Diagnoser([diagnosis], []),
-        grouper=_Grouper([[task]]),
-        factory=_PatchFactory([validated]),
-    )
-
-    with pytest.raises(SQLAlchemyError, match="candidate database failure"):
-        smoke.run(
-            object(),
-            OperationSmokeRequest(
-                operation_key=operation_key,
-                max_feedback_rounds=1,
-                seed=19,
-            ),
-        )
-
-    history = catalog.list_revisions(operation_key)
-    assert [revision.lifecycle for revision in history] == [
-        "accepted",
-        "rejected",
-        "rollback",
-    ]
-    assert catalog.inspect_operation(operation_key).revision == 3
-
-
-def test_generator_groups_finalize_atomically_by_resolved_initial_failure(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that generator groups finalize atomically by resolved initial failure."""
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-
-    catalog, operation_key = _catalog(tmp_path)
-    current = catalog.inspect_operation(operation_key)
-    path_node = current.configs[0].input_node_id
-    query_node = current.configs[1].input_node_id
-    actionables = [
-        _actionable("I1", "F1", "path.itemId"),
-        _actionable("I2", "F2", "query.region"),
-    ]
-    groups = [
-        _task("G1", "I1", "F1", "path.itemId"),
-        _task("G2", "I2", "F2", "query.region"),
-    ]
-    outcomes = [
-        _validated_update(
-            "G1",
-            "I1",
-            "F1",
-            path_node,
-            "path.itemId",
-            "known-item",
-        ),
-        _validated_update(
-            "G2",
-            "I2",
-            "F2",
-            query_node,
-            "query.region",
-            "eu",
-        ),
-    ]
-    runner = _BatchRunner(catalog, [(0, 10), (5, 5)])
-    smoke = _smoke(
-        catalog=catalog,
-        runner=runner,
-        diagnoser=_Diagnoser(
-            [_diagnosis(actionables)],
-            [
-                _validation(
-                    resolved=["F1"],
-                    persisting=["F2"],
-                    accepted_groups=["G1"],
-                    rejected_groups=["G2"],
-                    accepted_inputs=[path_node],
-                    rejected_inputs=[query_node],
-                )
-            ],
-        ),
-        grouper=_Grouper([groups]),
-        factory=_PatchFactory(outcomes),
-    )
-
-    result = smoke.run(
-        object(),
-        OperationSmokeRequest(
-            operation_key=operation_key,
-            max_feedback_rounds=1,
-            seed=23,
-        ),
-    )
-
-    assert result.status == "retry"
-    final = catalog.inspect_operation(operation_key)
-    assert final.revision == 3
-    assert final.configs[0].strategy.value == "known-item"
-    assert getattr(final.configs[1].strategy, "value", None) != "eu"
-    validation = result.diagnoses[0].patch_validation
-    assert validation.accepted_group_ids == ["G1"]
-    assert validation.rejected_group_ids == ["G2"]
-
-
-def test_failed_group_does_not_accumulate_into_later_provisional_group(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that failed group does not accumulate into later provisional group."""
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-    from restscope.agent.parameter_patch import PatchGroupFailure
-
-    catalog, operation_key = _catalog(tmp_path)
-    current = catalog.inspect_operation(operation_key)
-    path_node = current.configs[0].input_node_id
-    query_node = current.configs[1].input_node_id
-    task1 = _task("G1", "I1", "F1", "path.itemId")
-    task2 = _task("G2", "I2", "F2", "query.region")
-    failure = PatchGroupFailure(
-        group_id="G1",
-        item_ids=["I1"],
-        root_failure_refs=["F1"],
-        reason="attempt_limit",
-        attempts=20,
-    )
-    success = _validated_update(
-        "G2",
-        "I2",
-        "F2",
-        query_node,
-        "query.region",
-        "eu",
-    )
-    factory = _PatchFactory([failure, success])
-    runner = _BatchRunner(catalog, [(0, 10), (5, 5)])
-    smoke = _smoke(
-        catalog=catalog,
-        runner=runner,
-        diagnoser=_Diagnoser(
-            [
-                _diagnosis(
-                    [
-                        _actionable("I1", "F1", "path.itemId"),
-                        _actionable("I2", "F2", "query.region"),
-                    ]
-                )
-            ],
-            [
-                _validation(
-                    resolved=["F2"],
-                    accepted_groups=["G2"],
-                    accepted_inputs=[query_node],
-                )
-            ],
-        ),
-        grouper=_Grouper([[task1, task2]]),
-        factory=factory,
-    )
-
-    result = smoke.run(
-        object(),
-        OperationSmokeRequest(
-            operation_key=operation_key,
-            max_feedback_rounds=1,
-            seed=29,
-        ),
-    )
-
-    assert result.status == "retry"
-    assert len(factory.instances) == 2
-    assert factory.instances[1].calls[0]["config"].revision == 1
-    final = catalog.inspect_operation(operation_key)
-    assert getattr(final.configs[0].strategy, "value", None) != "known-item"
-    assert final.configs[1].strategy.value == "eu"
-    assert [
-        (item.group_id, item.status)
-        for item in result.diagnoses[0].patch_group_runs
-    ] == [("G1", "failed"), ("G2", "validated")]
-    assert [
-        item.item_id for item in result.diagnoses[0].actionable_failures
-    ] == ["I2"]
-    assert [
-        (item.failure_ref, item.reason)
-        for item in result.diagnoses[0].deferred_failures
-    ] == [("F1", "patch_group_attempt_limit")]
-    assert path_node not in result.diagnoses[
-        0
-    ].patch_validation.accepted_input_node_ids
-
-
-def test_grouping_deferred_item_is_removed_from_actionable_routing(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that grouping deferred item is removed from actionable routing."""
-    from restscope.agent.operation_smoke import (
-        OperationSmokeRequest,
-        PatchGroupingResult,
-    )
-
-    catalog, operation_key = _catalog(tmp_path)
-    current = catalog.inspect_operation(operation_key)
-    path_node = current.configs[0].input_node_id
-    task = _task("G1", "I1", "F1", "path.itemId")
-
-    class GroupingWithDeferred:
-        def group(self, **kwargs):
-            del kwargs
-            return PatchGroupingResult(
-                status="grouped",
-                tasks=[task],
-                deferred_item_ids=["I2"],
-            )
-
-    smoke = _smoke(
-        catalog=catalog,
-        runner=_BatchRunner(catalog, [(0, 10), (5, 5)]),
-        diagnoser=_Diagnoser(
-            [
-                _diagnosis(
-                    [
-                        _actionable("I1", "F1", "path.itemId"),
-                        _actionable("I2", "F2", "query.region"),
-                    ]
-                )
-            ],
-            [
-                _validation(
-                    resolved=["F1"],
-                    accepted_groups=["G1"],
-                    accepted_inputs=[path_node],
-                )
-            ],
-        ),
-        grouper=GroupingWithDeferred(),
-        factory=_PatchFactory(
-            [
-                _validated_update(
-                    "G1",
-                    "I1",
-                    "F1",
-                    path_node,
-                    "path.itemId",
-                    "known-item",
-                )
-            ]
-        ),
-    )
-
-    result = smoke.run(
-        object(),
-        OperationSmokeRequest(
-            operation_key=operation_key,
-            max_feedback_rounds=1,
-            seed=31,
-        ),
-    )
-
-    final_diagnosis = result.diagnoses[0]
-    assert [
-        item.item_id for item in final_diagnosis.actionable_failures
-    ] == ["I1"]
-    assert [
-        (item.failure_ref, item.reason)
-        for item in final_diagnosis.deferred_failures
-    ] == [("F2", "patch_grouping_deferred")]
-
-
-def test_constraint_only_group_is_run_local_and_does_not_create_revision(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that constraint only group is run local and does not create revision."""
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-    from restscope.agent.parameter_patch import (
-        CompiledConstraintPatch,
-        GeneratorPatchDraft,
-        ValidatedPatchGroup,
-    )
-    from restscope.testing import ConstraintSet
-
-    catalog, operation_key = _catalog(tmp_path)
-    node_id = catalog.inspect_operation(operation_key).configs[0].input_node_id
-    constraint = CompiledConstraintPatch(
-        constraint_id="constraint_presence",
-        group_ids=["G1"],
-        item_ids=["I1"],
-        root_failure_refs=["F1"],
-        kind="Complex",
-        constraint=ConstraintSet(
-            constraints=[
-                {
-                    "type": "present",
-                    "input_node_id": node_id,
-                }
-            ]
-        ),
-    )
-    outcome = ValidatedPatchGroup(
-        group_id="G1",
-        item_ids=["I1"],
-        root_failure_refs=["F1"],
-        patch=GeneratorPatchDraft(constraints=[constraint]),
-        samples=[{"path.itemId": "generated"} for _ in range(10)],
-        attempts=2,
-    )
-    runner = _BatchRunner(catalog, [(0, 10), (5, 5), (0, 10)])
-    diagnoser = _Diagnoser(
-        [_diagnosis([_actionable("I1", "F1", "path.itemId")])],
-        [
-            _validation(
-                resolved=["F1"],
-                accepted_groups=["G1"],
-                accepted_constraints=["constraint_presence"],
-            )
-        ],
-    )
-    smoke = _smoke(
-        catalog=catalog,
-        runner=runner,
-        diagnoser=diagnoser,
-        grouper=_Grouper(
-            [[_task("G1", "I1", "F1", "path.itemId")]]
-        ),
-        factory=_PatchFactory([outcome]),
-    )
-    request = OperationSmokeRequest(
-        operation_key=operation_key,
-        max_feedback_rounds=1,
-        seed=31,
-    )
-
-    first = smoke.run(object(), request)
-    second = smoke.run(
-        object(),
-        request.model_copy(update={"max_feedback_rounds": 0}),
-    )
-
-    assert first.status == "retry"
-    assert second.status == "retry"
-    assert catalog.inspect_operation(operation_key).revision == 1
-    assert runner.calls[0]["constraints"] is None
-    assert runner.calls[1]["constraints"] is not None
-    assert runner.calls[2]["constraints"] is None
-
-
-def test_success_threshold_accepts_every_successful_group(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that success threshold accepts every successful group."""
-    from restscope.agent.operation_smoke import OperationSmokeRequest
-
-    catalog, operation_key = _catalog(tmp_path)
-    current = catalog.inspect_operation(operation_key)
-    path_node = current.configs[0].input_node_id
-    query_node = current.configs[1].input_node_id
-    groups = [
-        _task("G1", "I1", "F1", "path.itemId"),
-        _task("G2", "I2", "F2", "query.region"),
-    ]
-    outcomes = [
-        _validated_update(
-            "G1",
-            "I1",
-            "F1",
-            path_node,
-            "path.itemId",
-            "known-item",
-        ),
-        _validated_update(
-            "G2",
-            "I2",
-            "F2",
-            query_node,
-            "query.region",
-            "eu",
-        ),
-    ]
-    smoke = _smoke(
-        catalog=catalog,
-        runner=_BatchRunner(catalog, [(0, 10), (10, 0)]),
-        diagnoser=_Diagnoser(
-            [
-                _diagnosis(
-                    [
-                        _actionable("I1", "F1", "path.itemId"),
-                        _actionable("I2", "F2", "query.region"),
-                    ]
-                )
-            ],
-            [
-                _validation(
-                    unknown=["F1", "F2"],
-                    rejected_groups=["G1", "G2"],
-                    rejected_inputs=[path_node, query_node],
-                )
-            ],
-        ),
-        grouper=_Grouper([groups]),
-        factory=_PatchFactory(outcomes),
-    )
-
-    result = smoke.run(
-        object(),
-        OperationSmokeRequest(
-            operation_key=operation_key,
-            success_rate_threshold=0.8,
-            max_feedback_rounds=1,
-            seed=37,
-        ),
-    )
-
-    assert result.status == "passed"
-    assert result.diagnoses[0].patch_validation.accepted_group_ids == [
-        "G1",
-        "G2",
-    ]
-    final = catalog.inspect_operation(operation_key)
-    assert final.configs[0].strategy.value == "known-item"
-    assert final.configs[1].strategy.value == "eu"
-
-
-def test_accepted_presence_group_keeps_shared_ancestor_from_rejected_group() -> None:
-    """Accepted ownership wins when two leaf Groups synthesize the same ancestors."""
-    from tests.test_parameter_patch_agent import request_body_date_config
-
-    from restscope.agent.operation_smoke.agent import (
-        _with_presence_closed_group_inputs,
-    )
-    from restscope.agent.parameter_patch import (
-        GeneratorPatchAttribution,
-        GeneratorPatchDraft,
-        ValidatedPatchGroup,
-    )
-    from restscope.testing import (
-        InputGeneratorConfig,
-        InputGeneratorPatch,
-        build_semantic_input_map,
-    )
-
-    initial = request_body_date_config()
-    semantic = build_semantic_input_map(initial)
-    start_id = semantic.node_by_handle["body.project.startDate"]
-    end_id = semantic.node_by_handle["body.project.endDate"]
-    nodes_by_id = {
-        item.input_node_id: item for item in initial.snapshot.input_nodes
-    }
-    optional_ids = {start_id, end_id}
-    for leaf_id in (start_id, end_id):
-        current_id = leaf_id
-        while nodes_by_id[current_id].parent_node_id is not None:
-            current_id = nodes_by_id[current_id].parent_node_id
-            optional_ids.add(current_id)
-    config = initial.model_copy(
-        update={
-            "snapshot": initial.snapshot.model_copy(
-                update={
-                    "input_nodes": [
-                        node.model_copy(update={"required": False})
-                        if node.input_node_id in optional_ids
-                        else node
-                        for node in initial.snapshot.input_nodes
-                    ]
-                }
-            ),
-            "configs": [
-                InputGeneratorConfig.model_validate(
-                    {
-                        **item.model_dump(mode="json"),
-                        "inclusion_probability": 0.5,
-                    }
-                )
-                if item.input_node_id in optional_ids
-                else item
-                for item in initial.configs
-            ],
-        }
-    )
-
-    def group(group_id: str, node_id: str) -> ValidatedPatchGroup:
-        return ValidatedPatchGroup(
-            group_id=group_id,
-            item_ids=[f"I-{group_id}"],
-            root_failure_refs=[f"F-{group_id}"],
-            patch=GeneratorPatchDraft(
-                updates=[
-                    InputGeneratorPatch(
-                        input_node_id=node_id,
-                        inclusion_probability=1,
-                    )
-                ],
-                attributions=[
-                    GeneratorPatchAttribution(
-                        input_node_id=node_id,
-                        group_ids=[group_id],
-                        item_ids=[f"I-{group_id}"],
-                        root_failure_refs=[f"F-{group_id}"],
-                    )
-                ],
-            ),
-            samples=[{} for _ in range(10)],
-            attempts=2,
-        )
-
-    validation = _validation(
-        resolved=["F-G1"],
-        persisting=["F-G2"],
-        accepted_groups=["G1"],
-        rejected_groups=["G2"],
-    )
-    closed = _with_presence_closed_group_inputs(
-        validation,
-        groups=[group("G1", start_id), group("G2", end_id)],
-        config=config,
-    )
-
-    project_id = semantic.node_by_handle["body.project"]
-    assert start_id in closed.accepted_input_node_ids
-    assert project_id in closed.accepted_input_node_ids
-    assert end_id in closed.rejected_input_node_ids
-    assert project_id not in closed.rejected_input_node_ids
-    assert set(closed.accepted_input_node_ids).isdisjoint(
-        closed.rejected_input_node_ids
-    )
-
-
-def _catalog(tmp_path: Path):
-    from restscope.db import (
-        Base,
-        SqlAlchemyGeneratorConfigUnitOfWork,
-        create_engine_from_url,
-        make_session_factory,
-    )
-    from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import GeneratorConfigCatalog
-
-    ir = OpenAPIParser.parse(
-        {
-            "openapi": "3.0.3",
-            "info": {"title": "Smoke", "version": "1"},
-            "paths": {
-                "/items/{itemId}": {
-                    "get": {
-                        "parameters": [
-                            {
-                                "name": "itemId",
-                                "in": "path",
-                                "required": True,
-                                "schema": {"type": "string"},
-                            },
-                            {
-                                "name": "region",
-                                "in": "query",
-                                "required": False,
-                                "schema": {"type": "string"},
-                            },
-                        ],
-                        "responses": {"200": {"description": "ok"}},
-                    }
-                }
-            },
-        }
-    )
-    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'smoke.sqlite'}")
-    Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
-        lambda: SqlAlchemyGeneratorConfigUnitOfWork(
-            make_session_factory(engine)
-        )
-    )
-    assert catalog.initialize_once(ir) is True
-    return catalog, "GET /items/{itemId}"
+from restscope.agent.failure_solver import (
+    FailureSolveOutcome,
+    PatchRequirement,
+)
+from restscope.agent.operation_smoke import (
+    OperationSmokeAgent,
+    OperationSmokeRequest,
+)
+from restscope.agent.operation_smoke.history import OperationSmokeHistory
+from restscope.agent.parameter_patch import (
+    GeneratorPatchDraft,
+    ParameterPatchFailure,
+    ValidatedParameterPatch,
+)
+from restscope.agent.smoke_effect import SmokeEffectOutcome
+from restscope.agent.smoke_plan import FailureTodo, SmokeRoundPlan
+from restscope.testing import (
+    BatchFailureReport,
+    InputGeneratorPatch,
+    preview_generator_patch,
+)
+from tests._operation_smoke_plan_solve_fixtures import smoke_config, smoke_report
 
 
 def _report(
+    run_id: str,
     *,
-    operation_key: str,
+    status_code: int,
     revision: int,
-    run_number: int,
-    seed: int,
-    passed: int,
-    failed: int,
 ):
-    from restscope.testing import OperationExecutionReport
-
-    counts: dict[str, int] = {}
-    if passed:
-        counts["200"] = passed
-    if failed:
-        counts["400"] = failed
-    return OperationExecutionReport(
-        run_id=f"run_{run_number}",
-        operation_key=operation_key,
-        seed=seed,
-        config_revision=revision,
-        status="completed",
-        cases=[],
-        status_code_counts=counts,
-        error_count=0,
-        observed_2xx=passed > 0,
+    """Build one aligned complete-batch report."""
+    base = smoke_report()
+    response = base.cases[0].response.model_copy(
+        update={"status_code": status_code}
+    )
+    case = base.cases[0].model_copy(update={"response": response})
+    failure_report = (
+        base.failure_report
+        if status_code >= 300
+        else BatchFailureReport()
+    )
+    return base.model_copy(
+        update={
+            "run_id": run_id,
+            "config_revision": revision,
+            "cases": [case],
+            "status_code_counts": {str(status_code): 1},
+            "observed_2xx": 200 <= status_code < 300,
+            "failure_report": failure_report,
+        }
     )
 
 
-class _BatchRunner:
-    def __init__(self, catalog, outcomes: list[tuple[int, int]]) -> None:
-        self.catalog = catalog
-        self.outcomes = list(outcomes)
-        self.calls: list[dict[str, Any]] = []
+class StubCatalog:
+    """Model candidate stage/finalize/rollback without a database."""
 
-    def run_operation_for_smoke(
+    def __init__(self) -> None:
+        self.current = smoke_config()
+        self.parent = self.current
+        self.lifecycle = "accepted"
+        self.finalized: list[set[str]] = []
+        self.rolled_back = 0
+
+    def get_operation(self, operation_key):
+        """Return the current frozen config."""
+        assert operation_key == self.current.operation_key
+        return self.current
+
+    def recover_interrupted_candidate(self, operation_key):
+        """No prior interrupted candidate exists in this test."""
+        assert operation_key == self.current.operation_key
+        return self.current
+
+    def stage_candidate(
         self,
-        context,
-        /,
         *,
-        operation_key: str,
-        case_count: int,
-        seed: int,
-        constraints=None,
+        operation_key,
+        expected_revision,
+        updates,
+        hypothesis,
     ):
+        """Apply the whole generator Patch as one candidate revision."""
+        assert operation_key == self.current.operation_key
+        assert expected_revision == self.current.revision
+        assert hypothesis["kind"] == "operation_smoke_todo_patch"
+        self.parent = self.current
+        self.current = preview_generator_patch(self.current, updates).model_copy(
+            update={"revision": expected_revision + 1}
+        )
+        self.lifecycle = "candidate"
+        return self.current
+
+    def finalize_candidate(
+        self,
+        *,
+        operation_key,
+        candidate_revision,
+        accepted_input_node_ids,
+        evaluation,
+    ):
+        """Accept every staged input; partial acceptance is forbidden by tests."""
+        assert operation_key == self.current.operation_key
+        assert candidate_revision == self.current.revision
+        assert evaluation["validation_status"] == "accepted"
+        self.finalized.append(set(accepted_input_node_ids))
+        self.lifecycle = "accepted"
+        return self.current
+
+    def reject_candidate_and_rollback(
+        self,
+        *,
+        operation_key,
+        candidate_revision,
+        evaluation,
+    ):
+        """Reject the whole staged Patch and create a rollback revision."""
+        assert operation_key == self.current.operation_key
+        assert candidate_revision == self.current.revision
+        assert evaluation["validation_status"] in {
+            "rejected",
+            "technical_error",
+        }
+        self.rolled_back += 1
+        self.current = self.parent.model_copy(
+            update={"revision": candidate_revision + 1}
+        )
+        self.lifecycle = "accepted"
+        return self.current
+
+    def get_revision(self, operation_key, revision):
+        """Expose candidate lifecycle to technical-error cleanup."""
+        if operation_key != self.current.operation_key:
+            return None
+        return SimpleNamespace(lifecycle=self.lifecycle)
+
+
+class StubRunner:
+    """Return prepared complete batches and retain seed/Constraint arguments."""
+
+    def __init__(self, reports) -> None:
+        self.reports = list(reports)
+        self.calls = []
+
+    def run_operation_for_smoke(self, context, **arguments):
+        """Return the next full report with App-only body evidence."""
         del context
-        config = self.catalog.inspect_operation(operation_key)
-        passed, failed = self.outcomes.pop(0)
-        self.calls.append(
-            {
-                "operation_key": operation_key,
-                "case_count": case_count,
-                "seed": seed,
-                "revision": config.revision,
-                "constraints": constraints,
-            }
-        )
+        self.calls.append(arguments)
+        report = self.reports.pop(0)
         return SimpleNamespace(
-            report=_report(
-                operation_key=operation_key,
-                revision=config.revision,
-                run_number=len(self.calls),
-                seed=seed,
-                passed=passed,
-                failed=failed,
+            report=report,
+            case_evidence=(
+                SimpleNamespace(
+                    case_id="case_1",
+                    response_body=b'{"error":"project missing"}',
+                    response_body_truncated=False,
+                    response_encoding="utf-8",
+                ),
             ),
-            case_evidence=[],
         )
 
 
-class _Diagnoser:
-    def __init__(self, diagnoses, validations) -> None:
-        self.diagnoses = list(diagnoses)
-        self.validations = list(validations)
-        self.calls: list[dict[str, Any]] = []
-        self.effect_calls: list[dict[str, Any]] = []
+class StubPlanAgent:
+    """Return prepared round plans and retain complete batch requests."""
 
-    def diagnose(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.diagnoses.pop(0)
+    def __init__(self, plans) -> None:
+        self.plans = list(plans)
+        self.requests = []
 
-    def validate_effect(self, **kwargs):
-        self.effect_calls.append(kwargs)
-        return self.validations.pop(0)
+    def plan(self, request, *, max_outputs):
+        """Return the next Plan decision."""
+        self.requests.append((request, max_outputs))
+        return self.plans.pop(0)
 
 
-class _Grouper:
-    def __init__(self, task_batches) -> None:
-        self.task_batches = list(task_batches)
+class StubSolveSession:
+    """Return prepared outcomes while proving feedback stays in one session."""
 
-    def group(self, **kwargs):
-        from restscope.agent.operation_smoke import PatchGroupingResult
-
-        del kwargs
-        return PatchGroupingResult(
-            status="grouped",
-            tasks=self.task_batches.pop(0),
-        )
-
-
-class _PatchAgent:
-    def __init__(self, outcome) -> None:
-        self.outcome = outcome
-        self.calls: list[dict[str, Any]] = []
-
-    def run(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.outcome
-
-
-class _PatchFactory:
     def __init__(self, outcomes) -> None:
         self.outcomes = list(outcomes)
-        self.instances: list[_PatchAgent] = []
+        self.feedback = []
+
+    def advance(self, *, feedback=None):
+        """Continue the same todo conversation."""
+        self.feedback.append(feedback)
+        return self.outcomes.pop(0)
+
+
+class StubSolveFactory:
+    """Create one isolated session per todo."""
+
+    def __init__(self, outcome_lists) -> None:
+        self.outcome_lists = list(outcome_lists)
+        self.requests = []
+        self.sessions = []
 
     def create(self):
-        instance = _PatchAgent(self.outcomes.pop(0))
-        self.instances.append(instance)
-        return instance
+        """Return a fresh Agent-like object."""
+        factory = self
+
+        class _Agent:
+            def start(self, request, **settings):
+                factory.requests.append((request, settings))
+                session = StubSolveSession(factory.outcome_lists.pop(0))
+                factory.sessions.append(session)
+                return session
+
+        return _Agent()
 
 
-class _ReferenceValues:
+class StubPatchFactory:
+    """Create fresh Patch Agents and return prepared outcomes."""
+
+    def __init__(self, outcomes) -> None:
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    def create(self):
+        """Return a new Agent-like object for one PatchRequirement."""
+        factory = self
+
+        class _Agent:
+            def run(self, **arguments):
+                factory.calls.append(arguments)
+                return factory.outcomes.pop(0)
+
+        return _Agent()
+
+
+class StubEffectAgent:
+    """Return prepared atomic candidate decisions."""
+
+    def __init__(self, outcomes) -> None:
+        self.outcomes = list(outcomes)
+        self.requests = []
+
+    def validate(self, request, *, max_outputs):
+        """Return the next semantic Effect result."""
+        self.requests.append((request, max_outputs))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class EmptyReferences:
+    """Provide no optional reference generators."""
+
     def values_for(self, strategy):
+        """No current config in these tests uses a reference strategy."""
         del strategy
         return []
 
-    def available_options(self, *, ir, config, input_node_ids):
-        del ir, config, input_node_ids
-        return []
 
-    def prepare_updates(
-        self,
-        *,
-        ir,
-        config,
-        updates,
-        selected_reference_options,
-    ):
-        del ir, config, selected_reference_options
-        return updates
-
-
-def _smoke(*, catalog, runner, diagnoser, grouper, factory):
-    from restscope.agent.operation_smoke import OperationSmokeAgent
-
-    return OperationSmokeAgent(
-        config_catalog=catalog,
-        batch_runner=runner,
-        diagnoser=diagnoser,
-        group_planner=grouper,
-        patch_agent_factory=factory,
-        reference_values=_ReferenceValues(),
-    )
-
-
-def _actionable(item_id: str, failure_ref: str, input_handle: str):
-    from restscope.agent.operation_smoke import (
-        ActionableFailure,
-        ParameterSolution,
-    )
-
-    return ActionableFailure(
-        item_id=item_id,
-        failure_ref=failure_ref,
-        root_failure_refs=[failure_ref],
-        evidence_origin="initial",
-        cause=f"{input_handle} has an invalid generated value.",
-        solutions=[
-            ParameterSolution(
-                input=input_handle,
-                desired_behavior=f"Generate an accepted {input_handle}.",
-            )
+def _todo(todo_id: str = "T1") -> FailureTodo:
+    """Build one expanded todo without Plan codes."""
+    return FailureTodo(
+        todo_id=todo_id,
+        failure="Project lookup returns not found.",
+        cases=[
+            {
+                "case_id": "case_1",
+                "request": {"path": "/projects/random-123"},
+                "response": {"status_code": 404},
+            }
         ],
-        affected_inputs=[input_handle],
-        evidence_refs=[failure_ref],
     )
 
 
-def _diagnosis(actionables):
-    from restscope.agent.operation_smoke import PlanSolveDiagnosisResult
-
-    return PlanSolveDiagnosisResult(
-        status="actionable",
-        termination_reason="all_failures_processed",
-        actionable_failures=actionables,
+def _requirement() -> PatchRequirement:
+    """Build one parameter root cause owned by Failure Solve."""
+    return PatchRequirement(
+        root_cause="The generated project identifier does not exist.",
+        affected_inputs=["path.projectId"],
+        desired_behavior="Generate an observed existing identifier.",
+        acceptance_criteria="The aligned case returns 2xx.",
     )
 
 
-def _task(
-    group_id: str,
-    item_id: str,
-    failure_ref: str,
-    input_handle: str,
-):
-    from restscope.agent.parameter_patch import PatchGroupTask
-
-    return PatchGroupTask(
-        group_id=group_id,
-        item_ids=[item_id],
-        root_failure_refs=[failure_ref],
-        inputs=[input_handle],
-        objective=f"Repair {failure_ref}.",
-        requirements=[f"Generate an accepted {input_handle}."],
-    )
-
-
-def _validated_update(
-    group_id: str,
-    item_id: str,
-    failure_ref: str,
-    node_id: str,
-    input_handle: str,
-    value: str,
-):
-    from restscope.agent.parameter_patch import (
-        GeneratorPatchAttribution,
-        GeneratorPatchDraft,
-        ValidatedPatchGroup,
-    )
-
-    return ValidatedPatchGroup(
-        group_id=group_id,
-        item_ids=[item_id],
-        root_failure_refs=[failure_ref],
+def _validated_patch(*, outputs: int = 2) -> ValidatedParameterPatch:
+    """Build one locally compiled and reviewed Generator Patch."""
+    return ValidatedParameterPatch(
+        todo_id="T1",
         patch=GeneratorPatchDraft(
             updates=[
-                {
-                    "input_node_id": node_id,
-                    "strategy": {"type": "constant", "value": value},
-                }
-            ],
-            attributions=[
-                GeneratorPatchAttribution(
-                    input_node_id=node_id,
-                    group_ids=[group_id],
-                    item_ids=[item_id],
-                    root_failure_refs=[failure_ref],
+                InputGeneratorPatch(
+                    input_node_id="path/projectId",
+                    strategy={"type": "constant", "value": "known-project"},
+                )
+            ]
+        ),
+        samples=[{"path": {"projectId": "known-project"}}],
+        outputs_used=outputs,
+    )
+
+
+def _validated_constraint_patch() -> ValidatedParameterPatch:
+    """Build one locally validated runtime-only presence Constraint."""
+    from restscope.agent.parameter_patch import CompiledConstraintPatch
+    from restscope.testing import ConstraintSet
+
+    return ValidatedParameterPatch(
+        todo_id="T1",
+        patch=GeneratorPatchDraft(
+            constraints=[
+                CompiledConstraintPatch(
+                    constraint_id="constraint-region-present",
+                    kind="presence",
+                    constraint=ConstraintSet(
+                        constraints=[
+                            {
+                                "type": "present",
+                                "input_node_id": "query/region",
+                            }
+                        ]
+                    ),
+                )
+            ]
+        ),
+        samples=[{"query": {"region": "us-east"}}],
+        outputs_used=2,
+    )
+
+
+def _agent(
+    *,
+    reports,
+    plans,
+    solve_outcomes=(),
+    patch_outcomes=(),
+    effects=(),
+    history=None,
+):
+    """Assemble the coordinator entirely from offline stubs."""
+    catalog = StubCatalog()
+    runner = StubRunner(reports)
+    plan = StubPlanAgent(plans)
+    solve = StubSolveFactory(solve_outcomes)
+    patch = StubPatchFactory(patch_outcomes)
+    effect = StubEffectAgent(effects)
+    agent = OperationSmokeAgent(
+        config_catalog=catalog,
+        batch_runner=runner,
+        plan_agent=plan,
+        failure_solver_factory=solve,
+        patch_agent_factory=patch,
+        effect_agent=effect,
+        reference_values=EmptyReferences(),
+        history=history,
+    )
+    return agent, catalog, runner, plan, solve, patch, effect
+
+
+def test_complete_baseline_can_pass_without_any_plan_output() -> None:
+    """A passing latest batch is the sole success gate."""
+    agent, _, runner, plan, *_ = _agent(
+        reports=[_report("baseline", status_code=200, revision=3)],
+        plans=[],
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=7),
+    )
+
+    assert result.status == "passed"
+    assert result.rounds == []
+    assert plan.requests == []
+    assert runner.calls[0]["seed"] == 7
+
+
+def test_patch_is_atomically_accepted_then_next_round_uses_same_seed() -> None:
+    """Resolved Effect accepts the whole Patch and reruns a fresh full batch."""
+    requirement = _requirement()
+    agent, catalog, runner, _, solve, patch, effect = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("candidate", status_code=200, revision=4),
+            _report("next-round", status_code=200, revision=4),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo()],
+                reason="One distinct failure.",
+                outputs_used=1,
+            )
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="patch_ready",
+                    outputs_used=1,
+                    patch_requirement=requirement,
+                )
+            ]
+        ],
+        patch_outcomes=[_validated_patch()],
+        effects=[
+            SmokeEffectOutcome(
+                outcome="resolved_without_regression",
+                reason="The aligned failure is gone.",
+                outputs_used=1,
+            )
+        ],
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=9),
+    )
+
+    assert result.status == "passed"
+    assert [call["seed"] for call in runner.calls] == [9, 9, 9]
+    assert catalog.finalized == [{"path/projectId"}]
+    assert catalog.rolled_back == 0
+    assert result.rounds[0].todos[0].status == "resolved"
+    assert result.rounds[0].todos[0].patch_attempts[0].accepted is True
+    assert solve.requests[0][1]["max_outputs"] == 50
+    assert patch.calls[0]["case_count"] == 10
+    assert effect.requests[0][0].before_batch["run"]["run_id"] == "before"
+    assert effect.requests[0][0].candidate_batch["run"]["run_id"] == "candidate"
+
+
+def test_unresolved_candidate_rolls_back_and_returns_to_same_solve_session() -> None:
+    """Rejected Effect feedback resumes the todo rather than creating a new Solve."""
+    requirement = _requirement()
+    agent, catalog, _, _, solve, _, _ = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("candidate", status_code=404, revision=4),
+            _report("after-round", status_code=404, revision=5),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo()],
+                reason="Investigate.",
+                outputs_used=1,
+            ),
+            SmokeRoundPlan(
+                status="no_new_failure_work",
+                reason="The recorded attempt has no new direction.",
+                outputs_used=1,
+            ),
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="patch_ready",
+                    outputs_used=1,
+                    patch_requirement=requirement,
+                ),
+                FailureSolveOutcome(
+                    status="no_new_attempt",
+                    outputs_used=2,
+                    reason="No distinct next attempt remains.",
+                ),
+            ]
+        ],
+        patch_outcomes=[_validated_patch()],
+        effects=[
+            SmokeEffectOutcome(
+                outcome="unresolved",
+                reason="The same 404 remains.",
+                outputs_used=1,
+            )
+        ],
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=4),
+    )
+
+    assert result.status == "retry"
+    assert result.failure_kind == "no_new_failure_work"
+    assert catalog.finalized == []
+    assert catalog.rolled_back == 1
+    assert len(solve.sessions) == 1
+    feedback = solve.sessions[0].feedback[1]
+    assert feedback["effect"]["outcome"] == "unresolved"
+    assert feedback["candidate_batch"]["run"]["run_id"] == "candidate"
+
+
+def test_remaining_todo_receives_latest_accepted_candidate_batch() -> None:
+    """A round snapshot is fixed, but later todos see earlier accepted effects."""
+    requirement = _requirement()
+    second = _todo("T2").model_copy(
+        update={"failure": "A second planned failure."}
+    )
+    agent, _, _, _, solve, _, _ = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("candidate", status_code=200, revision=4),
+            _report("next-round", status_code=200, revision=4),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo(), second],
+                reason="Two fixed todos.",
+                outputs_used=1,
+            )
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="patch_ready",
+                    outputs_used=1,
+                    patch_requirement=requirement,
                 )
             ],
-        ),
-        samples=[{input_handle: value} for _ in range(10)],
-        attempts=2,
+            [
+                FailureSolveOutcome(
+                    status="already_absent",
+                    outputs_used=1,
+                    reason="The latest batch no longer contains it.",
+                )
+            ],
+        ],
+        patch_outcomes=[_validated_patch()],
+        effects=[
+            SmokeEffectOutcome(
+                outcome="resolved_without_regression",
+                reason="Resolved.",
+                outputs_used=1,
+            )
+        ],
     )
 
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=2),
+    )
 
-def _validation(
-    *,
-    resolved=(),
-    persisting=(),
-    unknown=(),
-    accepted_groups=(),
-    rejected_groups=(),
-    accepted_inputs=(),
-    rejected_inputs=(),
-    accepted_constraints=(),
-):
-    from restscope.agent.operation_smoke import PatchValidationSummary
+    assert result.status == "passed"
+    assert solve.requests[1][0].current_batch["run"]["run_id"] == "candidate"
+    assert result.rounds[0].todos[1].status == "already_absent"
 
-    items = [
-        {
-            "item_id": failure_ref,
-            "status": status,
-            "current_failure_refs": [],
-            "reason": f"{failure_ref} is {status}.",
-            "confidence": 0.9,
-        }
-        for status, refs in (
-            ("resolved", resolved),
-            ("persisting", persisting),
-            ("unknown", unknown),
+
+def test_plan_budget_exhaustion_is_the_only_other_retry_stop_reason() -> None:
+    """Invalid Plan outputs consume the global Plan budget and stop cleanly."""
+    agent, *_ = _agent(
+        reports=[_report("before", status_code=404, revision=3)],
+        plans=[
+            SmokeRoundPlan(
+                status="plan_budget_exhausted",
+                reason="All outputs were invalid.",
+                outputs_used=50,
+            )
+        ],
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
+    )
+
+    assert result.status == "retry"
+    assert result.failure_kind == "plan_budget_exhausted"
+    assert result.rounds[0].plan_outputs == 50
+
+
+def test_planned_output_that_consumes_last_plan_turn_stops_before_another_call() -> None:
+    """A valid 50th Plan output may finish its todos but cannot start Plan 51."""
+    agent, _, _, plan, *_ = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("after-round", status_code=404, revision=3),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo()],
+                reason="Use the last available Plan output.",
+                outputs_used=50,
+            )
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="no_new_attempt",
+                    outputs_used=1,
+                    reason="No distinct parameter attempt remains.",
+                )
+            ]
+        ],
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
+    )
+
+    assert result.status == "retry"
+    assert result.failure_kind == "plan_budget_exhausted"
+    assert len(plan.requests) == 1
+
+
+def test_accepted_constraints_survive_a_later_smoke_retry_in_same_app() -> None:
+    """App-lifetime Constraints are reused but never added to public result data."""
+    from restscope.agent.parameter_patch import CompiledConstraintPatch
+    from restscope.testing import ConstraintSet
+
+    history = OperationSmokeHistory()
+    history.state_for("GET /projects/{projectId}").accepted_constraints["c1"] = (
+        CompiledConstraintPatch(
+            constraint_id="c1",
+            kind="presence",
+            constraint=ConstraintSet(
+                constraints=[
+                    {
+                        "type": "present",
+                        "input_node_id": "query/region",
+                    }
+                ]
+            ),
         )
-        for failure_ref in refs
-    ]
-    return PatchValidationSummary(
-        items=items,
-        accepted_item_ids=list(resolved),
-        accepted_group_ids=list(accepted_groups),
-        rejected_group_ids=list(rejected_groups),
-        accepted_input_node_ids=list(accepted_inputs),
-        rejected_input_node_ids=list(rejected_inputs),
-        accepted_constraint_ids=list(accepted_constraints),
     )
+    agent, _, runner, *_ = _agent(
+        reports=[_report("passing", status_code=200, revision=3)],
+        plans=[],
+        history=history,
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
+    )
+
+    assert result.status == "passed"
+    assert runner.calls[0]["constraints"] is not None
+    assert "accepted_constraints" not in result.model_dump(mode="json")
+
+
+def test_flow_accepted_constraint_is_applied_on_next_supervisor_retry() -> None:
+    """A real accepted Constraint remains active across separate ``run`` calls."""
+    agent, _, runner, _, _, _, _ = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("candidate", status_code=404, revision=3),
+            _report("after-round", status_code=404, revision=3),
+            _report("supervisor-retry", status_code=200, revision=3),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo()],
+                reason="Investigate a relationship.",
+                outputs_used=1,
+            ),
+            SmokeRoundPlan(
+                status="no_new_failure_work",
+                reason="Only a different failure remains.",
+                outputs_used=1,
+            ),
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="patch_ready",
+                    outputs_used=1,
+                    patch_requirement=_requirement(),
+                )
+            ]
+        ],
+        patch_outcomes=[_validated_constraint_patch()],
+        effects=[
+            SmokeEffectOutcome(
+                outcome="resolved_without_regression",
+                reason="The target relationship failure is gone.",
+                outputs_used=1,
+            )
+        ],
+    )
+    request = OperationSmokeRequest(
+        operation_key="GET /projects/{projectId}",
+        seed=15,
+    )
+
+    first = agent.run(object(), request)
+    second = agent.run(object(), request)
+
+    assert first.status == "retry"
+    assert second.status == "passed"
+    assert runner.calls[0].get("constraints") is None
+    assert all(
+        call.get("constraints") is not None
+        for call in runner.calls[1:]
+    )
+
+
+def test_technical_error_rolls_back_a_staged_candidate() -> None:
+    """An Effect infrastructure failure cannot leave a candidate revision active."""
+    agent, catalog, *_ = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("candidate", status_code=404, revision=4),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo()],
+                reason="Investigate.",
+                outputs_used=1,
+            )
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="patch_ready",
+                    outputs_used=1,
+                    patch_requirement=_requirement(),
+                )
+            ]
+        ],
+        patch_outcomes=[_validated_patch()],
+        effects=[RuntimeError("effect runtime unavailable")],
+    )
+
+    result = agent.run(
+        object(),
+        OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
+    )
+
+    assert result.status == "errored"
+    assert result.failure_kind == "operation_error"
+    assert catalog.rolled_back == 1
+    assert catalog.lifecycle == "accepted"
+
+
+def test_database_error_rolls_back_candidate_then_propagates_to_supervisor() -> None:
+    """Database-class failures remain global technical errors after cleanup."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    agent, catalog, *_ = _agent(
+        reports=[
+            _report("before", status_code=404, revision=3),
+            _report("candidate", status_code=404, revision=4),
+        ],
+        plans=[
+            SmokeRoundPlan(
+                status="planned",
+                todos=[_todo()],
+                reason="Investigate.",
+                outputs_used=1,
+            )
+        ],
+        solve_outcomes=[
+            [
+                FailureSolveOutcome(
+                    status="patch_ready",
+                    outputs_used=1,
+                    patch_requirement=_requirement(),
+                )
+            ]
+        ],
+        patch_outcomes=[_validated_patch()],
+        effects=[SQLAlchemyError("database unavailable")],
+    )
+
+    with pytest.raises(SQLAlchemyError):
+        agent.run(
+            object(),
+            OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
+        )
+
+    assert catalog.rolled_back == 1
+    assert catalog.lifecycle == "accepted"
+
+
+def test_app_state_clear_releases_raw_history_and_constraints() -> None:
+    """App shutdown removes all non-persistent Smoke memory."""
+    history = OperationSmokeHistory()
+    history.record(
+        "GET /projects/{projectId}",
+        {"response": {"body": "sensitive-target-data"}},
+    )
+    agent, *_ = _agent(
+        reports=[],
+        plans=[],
+        history=history,
+    )
+
+    agent.clear_app_state()
+
+    assert history.snapshot("GET /projects/{projectId}") == []
+    assert history.state_for(
+        "GET /projects/{projectId}"
+    ).accepted_constraints == {}

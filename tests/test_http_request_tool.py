@@ -90,7 +90,7 @@ def test_capability_runtime_registers_http_request_tool_for_every_role() -> None
     for role in (
         "planner",
         "result_analyst",
-        "operation_smoke_root_cause_diagnosis",
+        "operation_smoke_failure_solve",
         "decision_maker",
         "future_agent",
     ):

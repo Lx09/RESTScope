@@ -1,8 +1,14 @@
-"""Configured construction for the Operation Smoke Agent."""
+"""Configured construction for the four-role Operation Smoke lifecycle."""
 
 from __future__ import annotations
 
+from restscope.agent.failure_solver import (
+    CurrentOperationHTTPProbe,
+    FailureSolveAgentFactory,
+)
 from restscope.agent.parameter_patch import ParameterPatchAgentFactory
+from restscope.agent.smoke_effect import SmokeEffectAgent
+from restscope.agent.smoke_plan import SmokePlanAgent
 from restscope.capabilities import ToolExecutor
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
@@ -10,9 +16,6 @@ from restscope.restscope_config import RESTScopeConfig
 from restscope.testing import GeneratorConfigCatalog, ReferenceValueProvider
 
 from .agent import OperationBatchRunner, OperationSmokeAgent
-from .diagnosis import OperationSmokeDiagnoser
-from .grouping import PatchGroupPlanner
-from .probe import CurrentOperationHTTPProbe
 
 
 def build_operation_smoke_agent(
@@ -25,8 +28,11 @@ def build_operation_smoke_agent(
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> OperationSmokeAgent:
-    """Build the smoke loop with Thinking analysis and Fast patch compilation."""
-
+    """Build THINK Plan/Solve/Effect and FAST Patch roles for one App."""
+    if tool_executor is None:
+        raise ValueError(
+            "Operation Smoke Failure Solve requires the scoped HTTP tool executor"
+        )
     runtime = tracing_runtime or TracingRuntime.disabled()
     client = llm_client or build_llm_client(
         config.llm,
@@ -36,26 +42,23 @@ def build_operation_smoke_agent(
     return OperationSmokeAgent(
         config_catalog=config_catalog,
         batch_runner=batch_runner,
-        diagnoser=OperationSmokeDiagnoser(
+        plan_agent=SmokePlanAgent(
             client=client,
-            planning_model=selector.select(
-                "operation_smoke_root_cause_diagnosis"
-            ),
-            effect_model=selector.select(
-                "operation_smoke_effect_validation"
-            ),
-            http_probe=(
-                CurrentOperationHTTPProbe(tool_executor)
-                if tool_executor is not None
-                else None
-            ),
-            tracing_runtime=runtime,
+            model=selector.select("operation_smoke_plan"),
         ),
-        group_planner=PatchGroupPlanner(),
+        failure_solver_factory=FailureSolveAgentFactory(
+            client=client,
+            model=selector.select("operation_smoke_failure_solve"),
+            http_probe=CurrentOperationHTTPProbe(tool_executor),
+        ),
         patch_agent_factory=ParameterPatchAgentFactory(
             client=client,
             model=selector.select("parameter_patch_agent"),
             tracing_runtime=runtime,
+        ),
+        effect_agent=SmokeEffectAgent(
+            client=client,
+            model=selector.select("operation_smoke_effect_validation"),
         ),
         reference_values=reference_values,
         tracing_runtime=runtime,

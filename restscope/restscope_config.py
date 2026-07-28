@@ -61,7 +61,13 @@ class LoggingConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Configuration for one LLM endpoint."""
+    """Configuration for one LLM endpoint.
+
+    ``context_window_tokens`` is the model's total request capacity, while
+    ``max_tokens`` is reserved for one response. Keeping them separate lets
+    prompt builders use the remaining space for evidence without relying on a
+    provider-specific model registry.
+    """
 
     provider: str = "openai_compatible"
     model: str = ""
@@ -69,9 +75,17 @@ class ModelConfig:
     base_url: str = ""
     timeout: int = 60
     temperature: float = 0.7
-    max_tokens: int = 128000
+    max_tokens: int = 8192
+    context_window_tokens: int = 131072
     reasoning_mode: str = "default"
     reasoning_effort: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject a response reservation that leaves no prompt capacity."""
+        if self.max_tokens >= self.context_window_tokens:
+            raise ValueError(
+                "max_tokens must be smaller than context_window_tokens"
+            )
 
 
 @dataclass(frozen=True)
@@ -206,6 +220,19 @@ def _load_model_config(
     fallback: ModelConfig | None = None,
     default_reasoning_mode: str = "default",
 ) -> ModelConfig:
+    max_tokens = _int_value(
+        values.get(f"{prefix}_MAX_TOKENS"),
+        8192,
+    )
+    context_window_tokens = _int_value(
+        values.get(f"{prefix}_CONTEXT_WINDOW_TOKENS"),
+        131072,
+    )
+    if max_tokens >= context_window_tokens:
+        raise ValueError(
+            f"{prefix}_MAX_TOKENS must be smaller than "
+            f"{prefix}_CONTEXT_WINDOW_TOKENS"
+        )
     return ModelConfig(
         provider=values.get(f"{prefix}_PROVIDER", fallback.provider if fallback else "openai_compatible"),
         model=values.get(f"{prefix}_MODEL", fallback.model if fallback else ""),
@@ -216,10 +243,8 @@ def _load_model_config(
             values.get(f"{prefix}_TEMPERATURE"),
             fallback.temperature if fallback else 0.7,
         ),
-        max_tokens=_int_value(
-            values.get(f"{prefix}_MAX_TOKENS"),
-            fallback.max_tokens if fallback else 128000,
-        ),
+        max_tokens=max_tokens,
+        context_window_tokens=context_window_tokens,
         reasoning_mode=values.get(f"{prefix}_REASONING_MODE", default_reasoning_mode),
         reasoning_effort=values.get(f"{prefix}_REASONING_EFFORT") or None,
     )
