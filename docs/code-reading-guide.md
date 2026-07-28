@@ -28,14 +28,15 @@ The core loop is:
    target API.
 7. **Observe responses.** The API Behavior Monitor checks response contracts
    and learns narrowly approved identifier and response-value evidence.
-8. **Diagnose failures.** Operation Smoke investigates failed cases, optionally
-   using HTTP probes limited to the current operation.
-9. **Patch parameters.** Confirmed parameter problems are grouped
-   deterministically. A fresh Parameter Patch Agent proposes Generator or
-   Constraint changes and reviews ten local samples.
-10. **Validate effects.** All successful groups are applied to one candidate
-    batch. Only real HTTP evidence decides whether the original failures were
-    resolved.
+8. **Plan failure work.** Smoke Plan reads the complete batch and creates a
+   fixed ordered list of distinct Failure Todos for that round.
+9. **Investigate and patch one todo.** A continuous Failure Solve conversation
+   may use HTTP probes limited to the current operation. When evidence supports
+   a parameter cause, a fresh Parameter Patch Agent compiles one Patch
+   Requirement and reviews `case_count` local samples.
+10. **Validate one complete candidate.** A complete same-seed batch and the
+    Effect Agent decide whether the todo was resolved without regression. The
+    whole candidate is accepted or rolled back before the next todo.
 
 Most state used in steps 4–10 is deliberately temporary. RESTScope does not
 persist plans, Agent conversations, hypotheses, queues, or evolved OpenAPI
@@ -257,11 +258,6 @@ Provider-independent language-model contracts and clients.
 - `output_validator.py` parses and validates structured output.
 - `providers/` translates the common request into provider-specific calls.
 
-### `restscope/context/`
-
-Builds bounded prompt context. Policies decide which sections a role may see,
-the budget manager limits size, and the renderer produces model messages.
-
 ### `restscope/db/`
 
 Owns database setup, ORM records, migrations, and repositories. Repositories
@@ -272,11 +268,6 @@ are narrow storage APIs; callers should not manipulate ORM rows directly.
 Creates Phoenix/OpenTelemetry spans while applying redaction and size limits.
 Tracing is optional: the disabled runtime preserves behavior without exporting
 data.
-
-### `restscope/memory/`
-
-Contains bounded in-process conversation history helpers. It is not durable
-Agent memory and must not become one without a new architecture decision.
 
 ### `tests/`
 

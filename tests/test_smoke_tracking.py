@@ -235,7 +235,9 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     spans = list(exporter.get_finished_spans())
     smoke_span = next(span for span in spans if span.name == "OperationSmokeAgent.run")
     batch_span = next(
-        span for span in spans if span.name == "OperationTestingService.run_operation"
+        span
+        for span in spans
+        if span.name == "OperationTestingService.run_smoke_batch"
     )
     cases = [span for span in spans if span.name == "RESTScopeTestCase.execute"]
     monitors = [

@@ -174,149 +174,6 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert reasoning not in rendered
 
 
-@pytest.mark.skip(reason="Superseded by Plan/Solve/Patch/Effect trace contracts")
-def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
-    """Scenario: verify that operation smoke trace contains task cards not internal models."""
-    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
-    from restscope.agent.operation_smoke import PlanSolveDiagnosisResult
-    from restscope.agent.parameter_patch import (
-        GeneratorPatchAttribution,
-        GeneratorPatchDraft,
-        ValidatedPatchGroup,
-    )
-    from restscope.llm import (
-        LLMClient,
-        LLMModelConfig,
-        LLMProviderRegistry,
-        LLMResponse,
-    )
-    from restscope.llm.providers.base import BaseLLMProvider
-    from tests._operation_smoke_plan_solve_fixtures import (
-        smoke_config,
-        smoke_report,
-    )
-
-    runtime, exporter = _recording_runtime()
-    responses = [
-        LLMResponse(
-            provider="stub",
-            model="think-model",
-            parsed_json={
-                "action": "ready",
-                "cause": "The generated identifier was rejected.",
-                "solutions": [
-                    {
-                        "input": "path.projectId",
-                        "desired_behavior": "Use a known project ID.",
-                    }
-                ],
-                "evidence_refs": ["F1", "C1"],
-                "interaction_notes": [],
-            },
-        ),
-        LLMResponse(
-            provider="stub",
-            model="think-model",
-            parsed_json={
-                "items": [
-                    {
-                            "item_id": "F1",
-                            "status": "persisting",
-                            "current_failure_refs": ["CF1"],
-                        "reason": "The identifier failure remains.",
-                        "confidence": 0.8,
-                    }
-                ]
-            },
-        ),
-    ]
-
-    class PromptProvider(BaseLLMProvider):
-        name = "stub"
-
-        def invoke(self, request):
-            return responses.pop(0)
-
-    registry = LLMProviderRegistry()
-    registry.register(PromptProvider())
-    client = LLMClient(registry, tracing_runtime=runtime)
-
-    diagnoser = OperationSmokeDiagnoser(
-        client=client,
-        planning_model=LLMModelConfig(
-            role="operation_smoke_root_cause_diagnosis",
-            provider="stub",
-            model="think-model",
-        ),
-        effect_model=LLMModelConfig(
-            role="operation_smoke_effect_validation",
-            provider="stub",
-            model="think-model",
-        ),
-        tracing_runtime=runtime,
-    )
-    diagnosis = diagnoser.diagnose(
-        report=smoke_report(),
-        config=smoke_config(),
-    )
-    group = ValidatedPatchGroup(
-        group_id="G1",
-        item_ids=["I1"],
-        root_failure_refs=["F1"],
-        patch=GeneratorPatchDraft(
-            updates=[
-                {
-                    "input_node_id": "path/projectId",
-                    "strategy": {
-                        "type": "constant",
-                        "value": "known-project",
-                    },
-                }
-            ],
-            attributions=[
-                GeneratorPatchAttribution(
-                    input_node_id="path/projectId",
-                    group_ids=["G1"],
-                    item_ids=["I1"],
-                    root_failure_refs=["F1"],
-                )
-            ],
-        ),
-        samples=[{"path.projectId": "known-project"} for _ in range(10)],
-        attempts=2,
-    )
-    assert isinstance(diagnosis, PlanSolveDiagnosisResult)
-    diagnoser.validate_effect(
-        baseline_report=smoke_report(),
-        candidate_report=smoke_report().model_copy(
-            update={"run_id": "candidate_run"}
-        ),
-        diagnosis=diagnosis,
-        groups=[group],
-    )
-    runtime.close()
-
-    span_names = [span.name for span in exporter.get_finished_spans()]
-    assert "OperationSmokeDiagnoser.validate_effect" in span_names
-    assert span_names.count("LLMClient.invoke") == 2
-    rendered = json.dumps(
-        [dict(span.attributes) for span in exporter.get_finished_spans()],
-        default=str,
-    )
-    assert "path.projectId" in rendered
-    assert "random-123" in rendered
-    for forbidden in (
-        "$defs",
-        "input_node_id",
-        "reference_option_id",
-        "config_revision",
-        "Authorization",
-        "PreparedRequestSummary",
-        "RandomStringGenerator",
-    ):
-        assert forbidden not in rendered
-
-
 def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
     """Scenario: verify that tool executor uses actual tool name and sanitizes trace payload."""
     from opentelemetry.trace.status import StatusCode
@@ -549,7 +406,6 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
     )
     capabilities = build_capabilities(
         tracing_runtime=old_runtime,
-        generator_config_catalog=object(),
         operation_testing_service=testing_service,
     )
     app = RESTScopeApp.from_config(
@@ -629,12 +485,11 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     assert "runtime-secret" not in span.attributes["output.value"]
 
 
-def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> None:
-    """Scenario: verify that generated operation tool emits sanitized batch and case spans."""
+def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> None:
+    """Scenario: Smoke's internal batch runner emits sanitized batch and case spans."""
     import httpx
 
-    from restscope.capabilities import RUN_OPERATION_TOOL_NAME, ToolContext, build_capabilities
-    from restscope.capabilities.testing_tools import REPLACE_GENERATORS_TOOL_NAME
+    from restscope.capabilities import ToolContext
     from restscope.db import (
         Base,
         SqlAlchemyGeneratorConfigUnitOfWork,
@@ -642,11 +497,9 @@ def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path:
         make_session_factory,
     )
     from restscope.http_transport import TargetHTTPTransport
-    from restscope.llm import ToolCall
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import (
         GeneratorConfigCatalog,
-        InputGeneratorConfig,
         OperationTestingService,
     )
 
@@ -678,7 +531,7 @@ def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path:
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    catalog.patch_operation(
+    candidate = catalog.stage_candidate(
         operation_key=operation.operation_key,
         expected_revision=1,
         updates=[
@@ -688,6 +541,12 @@ def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path:
                 "strategy": {"type": "constant", "value": "generated-secret"},
             }
         ],
+        hypothesis={"kind": "test_setup"},
+    )
+    catalog.accept_candidate(
+        operation_key=operation.operation_key,
+        candidate_revision=candidate.revision,
+        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
@@ -706,76 +565,42 @@ def test_generated_operation_tool_emits_sanitized_batch_and_case_spans(tmp_path:
             )
         ),
     )
-    capabilities = build_capabilities(
-        tracing_runtime=runtime,
-        generator_config_catalog=catalog,
-        operation_testing_service=service,
-    )
-    capabilities.tool_executor.bind_context(
-        ToolContext(
-            ir=ir,
-            baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
-            base_url="https://api.example.test",
-            headers={
-                "Authorization": "Bearer runtime-secret",
-                "X-Configured-Key": "llm-api-key",
-            },
-        )
+    context = ToolContext(
+        ir=ir,
+        baseline_schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": "{}",
+        },
+        base_url="https://api.example.test",
+        headers={
+            "Authorization": "Bearer runtime-secret",
+            "X-Configured-Key": "llm-api-key",
+        },
     )
 
-    denied_config_result = capabilities.tool_executor.execute(
-        tool_call=ToolCall(
-            id="config-trace",
-            name=REPLACE_GENERATORS_TOOL_NAME,
-            arguments={
-                "operation_key": operation.operation_key,
-                "expected_revision": 2,
-                "active_media_type": None,
-                "configs": [
-                    {
-                        "input_node_id": node.input_node_id,
-                        "inclusion_probability": 1,
-                        "strategy": {
-                            "type": "constant",
-                            "value": "visible-config-value",
-                        },
-                    }
-                ],
-            },
-        ),
-        role="planner",
-        state={},
-    )
-    result = capabilities.tool_executor.execute(
-        tool_call=ToolCall(
-            id="generated-trace",
-            name=RUN_OPERATION_TOOL_NAME,
-            arguments={"operation_key": operation.operation_key, "case_count": 2, "seed": 4},
-        ),
-        role="planner",
-        state={},
+    result = service.run_smoke_batch(
+        context,
+        operation_key=operation.operation_key,
+        case_count=2,
+        seed=4,
     )
     runtime.close()
 
-    assert denied_config_result.status == "denied"
-    assert result.status == "succeeded"
-    rendered_result = result.model_dump_json()
+    rendered_result = result.report.model_dump_json()
     assert "runtime-secret" in rendered_result
     assert "generated-secret" in rendered_result
     spans = list(exporter.get_finished_spans())
-    wrapper = next(span for span in spans if span.name == RUN_OPERATION_TOOL_NAME)
     batch = next(
         span
         for span in spans
-        if span.name == "OperationTestingService.run_operation"
+        if span.name == "OperationTestingService.run_smoke_batch"
     )
     cases = [span for span in spans if span.name == "RESTScopeTestCase.execute"]
     assert len(cases) == 2
-    assert batch.parent.span_id == wrapper.context.span_id
     assert all(span.parent.span_id == batch.context.span_id for span in cases)
     rendered_spans = json.dumps([dict(span.attributes) for span in spans], default=str)
     assert "runtime-secret" in rendered_spans
     assert "generated-secret" in rendered_spans
-    assert "visible-config-value" in rendered_spans
     assert "llm-api-key" not in rendered_result
     assert "llm-api-key" not in rendered_spans

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 
 from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
 from restscope.capabilities.http_request import register_http_request_tool
-from restscope.capabilities.testing_tools import register_testing_tools
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_call_validator import ToolCallValidator
 from restscope.capabilities.tool_executor import ToolExecutor
@@ -21,7 +20,7 @@ from restscope.http_transport import TargetHTTPTransport
 from restscope.observability import TracingRuntime
 
 if TYPE_CHECKING:
-    from restscope.testing.catalog import GeneratorConfigCatalog
+    from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent
     from restscope.testing.execution import OperationTestingService
 
 
@@ -37,7 +36,7 @@ class CapabilityRuntime:
     skill_policy: SkillPolicy
     mcp_host: MCPHost | None = None
     operation_testing_service: OperationTestingService | None = None
-    api_behavior_monitor_agent: Any | None = None
+    api_behavior_monitor_agent: APIBehaviorMonitorAgent | None = None
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
         """Bind one tracing/redaction runtime to every built-in trace consumer."""
@@ -47,12 +46,8 @@ class CapabilityRuntime:
             self.operation_testing_service.tracing_runtime = tracing_runtime
         if self.api_behavior_monitor_agent is not None:
             self.api_behavior_monitor_agent.tracing_runtime = tracing_runtime
-            self.api_behavior_monitor_agent.resource_identifier_tracker.tracing_runtime = (
-                tracing_runtime
-            )
-            client = getattr(self.api_behavior_monitor_agent, "client", None)
-            if client is not None and hasattr(client, "tracing_runtime"):
-                client.tracing_runtime = tracing_runtime
+            tracker = self.api_behavior_monitor_agent.resource_identifier_tracker
+            tracker.client.tracing_runtime = tracing_runtime
 
 
 def build_capabilities(
@@ -60,10 +55,9 @@ def build_capabilities(
     sources: Mapping[str, Mapping[str, Any]] | None = None,
     skills: Iterable[SkillManifest] = (),
     tracing_runtime: TracingRuntime | None = None,
-    generator_config_catalog: GeneratorConfigCatalog | None = None,
     operation_testing_service: OperationTestingService | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    api_behavior_monitor_agent: Any | None = None,
+    api_behavior_monitor_agent: APIBehaviorMonitorAgent | None = None,
 ) -> CapabilityRuntime:
     """Build a complete capability runtime from external sources and skills."""
 
@@ -87,17 +81,6 @@ def build_capabilities(
         from restscope.agent.api_behavior_monitor import register_resource_lookup_tool
 
         register_resource_lookup_tool(tool_registry, api_behavior_monitor_agent)
-    if (generator_config_catalog is None) != (operation_testing_service is None):
-        raise ValueError(
-            "generator_config_catalog and operation_testing_service must be supplied together"
-        )
-    if generator_config_catalog is not None and operation_testing_service is not None:
-        register_testing_tools(
-            tool_registry,
-            generator_config_catalog=generator_config_catalog,
-            operation_testing_service=operation_testing_service,
-        )
-
     for skill in skills:
         skill_registry.register(skill)
 
@@ -127,10 +110,9 @@ def build_capabilities_with_mcp_host(
     server_names: Iterable[str] | None = None,
     skills: Iterable[SkillManifest] = (),
     tracing_runtime: TracingRuntime | None = None,
-    generator_config_catalog: GeneratorConfigCatalog | None = None,
     operation_testing_service: OperationTestingService | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    api_behavior_monitor_agent: Any | None = None,
+    api_behavior_monitor_agent: APIBehaviorMonitorAgent | None = None,
 ) -> CapabilityRuntime:
     """Build capabilities after discovering tools through RESTScope's MCP host."""
 
@@ -147,7 +129,6 @@ def build_capabilities_with_mcp_host(
             sources=sources,
             skills=skills,
             tracing_runtime=tracing_runtime,
-            generator_config_catalog=generator_config_catalog,
             operation_testing_service=operation_testing_service,
             target_http_transport=target_http_transport,
             api_behavior_monitor_agent=api_behavior_monitor_agent,

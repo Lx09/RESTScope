@@ -7,8 +7,11 @@ from pathlib import Path
 
 class StubLLMClient:
     def __init__(self, *parsed_responses: dict) -> None:
+        from restscope.observability import TracingRuntime
+
         self.parsed_responses = list(parsed_responses)
         self.requests = []
+        self.tracing_runtime = TracingRuntime.disabled()
 
     def invoke(self, request):
         from restscope.llm import LLMResponse
@@ -836,7 +839,7 @@ def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
         llm_client=client,
     )
 
-    assert agent.client is client
+    assert agent.resource_identifier_tracker.client is client
     assert agent.resource_identifier_tracker.model.role == "api_behavior_monitor"
     assert agent.resource_identifier_tracker.model.model == "fast-model"
 

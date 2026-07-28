@@ -93,13 +93,13 @@ def _iter_schema_path_items_json(
     visited = set(visited)
     visited.add(schema_id)
 
-    items: list[dict[str, Any]] = []
+    path_items: list[dict[str, Any]] = []
 
     if schema.type == "object" and schema.properties:
         for prop_name, prop_schema in schema.properties.items():
             child_path = f"{parent_path}.{prop_name}" if parent_path else prop_name
             child_required = prop_name in (schema.required or [])
-            items.extend(
+            path_items.extend(
                 _iter_schema_path_items_json(
                     prop_schema,
                     parent_path=child_path,
@@ -107,7 +107,7 @@ def _iter_schema_path_items_json(
                     visited=visited,
                 )
             )
-        return items
+        return path_items
 
     if schema.type == "array" and schema.items is not None:
         item_path = f"{parent_path}[]" if parent_path else "[]"

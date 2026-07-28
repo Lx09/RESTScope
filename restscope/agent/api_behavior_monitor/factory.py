@@ -34,7 +34,7 @@ def build_api_behavior_monitor_agent(
     """
     runtime = tracing_runtime
     if runtime is None and llm_client is not None:
-        runtime = getattr(llm_client, "tracing_runtime", None)
+        runtime = llm_client.tracing_runtime
     runtime = runtime or TracingRuntime.disabled()
     runtime.redactor.register_secrets(
         (
@@ -46,8 +46,7 @@ def build_api_behavior_monitor_agent(
         config.llm,
         tracing_runtime=runtime,
     )
-    if hasattr(client, "tracing_runtime"):
-        client.tracing_runtime = runtime
+    client.tracing_runtime = runtime
     engine = create_engine_from_config(config.db)
     session_factory = make_session_factory(engine)
     resource_catalog = ResourceCatalog(

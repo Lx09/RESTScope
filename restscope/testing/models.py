@@ -454,6 +454,12 @@ GeneratorRevisionLifecycle = Literal[
     "rejected",
     "rollback",
 ]
+ResponseValidationStatus = Literal[
+    "evaluated",
+    "partial",
+    "not_evaluated",
+]
+OperationExecutionStatus = Literal["completed", "partial", "errored"]
 
 
 class GeneratorConfigRevision(BaseModel):
@@ -607,11 +613,7 @@ class TestCaseExecutionReport(BaseModel):
     behavior_monitor_warnings: list[BehaviorMonitorWarningSummary] = Field(
         default_factory=list
     )
-    response_validation: Literal[
-        "evaluated",
-        "partial",
-        "not_evaluated",
-    ] = "not_evaluated"
+    response_validation: ResponseValidationStatus = "not_evaluated"
 
 
 class OperationExecutionReport(BaseModel):
@@ -623,12 +625,8 @@ class OperationExecutionReport(BaseModel):
     operation_key: str
     seed: int
     config_revision: int
-    status: Literal["completed", "partial", "errored"]
-    response_validation: Literal[
-        "evaluated",
-        "partial",
-        "not_evaluated",
-    ] = "not_evaluated"
+    status: OperationExecutionStatus
+    response_validation: ResponseValidationStatus = "not_evaluated"
     cases: list[TestCaseExecutionReport]
     status_code_counts: dict[str, int]
     error_count: int

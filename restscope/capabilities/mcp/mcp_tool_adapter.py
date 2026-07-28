@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from restscope.llm.schemas import ToolSpec
+from restscope.llm.schemas import ToolRiskLevel, ToolSpec
 
 
 class MCPToolAdapter:
@@ -34,7 +34,10 @@ class MCPToolAdapter:
             },
         )
 
-    def _classify(self, annotations: dict[str, Any]) -> tuple[bool, bool, str]:
+    def _classify(
+        self,
+        annotations: dict[str, Any],
+    ) -> tuple[bool, bool, ToolRiskLevel]:
         if not annotations:
             return False, True, "medium"
 

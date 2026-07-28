@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -265,7 +265,8 @@ def validate_constraint_set(
     """
 
     nodes = {node.input_node_id: node for node in operation.input_nodes}
-    for expression in constraints.constraints:
+    expressions = cast(list[BooleanExpression], constraints.constraints)
+    for expression in expressions:
         _validate_boolean(expression, nodes)
     return constraints
 
@@ -273,7 +274,8 @@ def validate_constraint_set(
 def normalize_constraint_set(constraints: ConstraintSet) -> ConstraintSet:
     """Canonicalize equivalent expression trees for comparison and stable IDs."""
 
-    normalized = [_normalize_boolean(item) for item in constraints.constraints]
+    expressions = cast(list[BooleanExpression], constraints.constraints)
+    normalized = [_normalize_boolean(item) for item in expressions]
     normalized.sort(key=_canonical_key)
     return ConstraintSet(constraints=normalized)
 
@@ -308,7 +310,8 @@ def evaluate_constraint_set(
 ) -> bool:
     """Evaluate all constraints without leaking operand runtime errors."""
 
-    return all(_evaluate_boolean(item, assignments) for item in constraints.constraints)
+    expressions = cast(list[BooleanExpression], constraints.constraints)
+    return all(_evaluate_boolean(item, assignments) for item in expressions)
 
 
 def evaluate_constraint_set_partial(
@@ -322,9 +325,10 @@ def evaluate_constraint_set_partial(
     still change the result.
     """
 
+    expressions = cast(list[BooleanExpression], constraints.constraints)
     results = [
         _evaluate_boolean_partial(item, assignments)
-        for item in constraints.constraints
+        for item in expressions
     ]
     if any(result is False for result in results):
         return False

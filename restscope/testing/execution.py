@@ -30,11 +30,13 @@ from .failure_reporting import (
 from .generation import generate_test_case
 from .models import (
     GeneratedTestCase,
+    OperationExecutionStatus,
     OperationExecutionReport,
     PreparedRequestSummary,
     PreparedTestRequest,
     BehaviorMonitorWarningSummary,
     ResponseSummary,
+    ResponseValidationStatus,
     TestCaseExecutionReport,
     TransportErrorSummary,
 )
@@ -94,25 +96,7 @@ class OperationTestingService:
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.reference_values = reference_values
 
-    def run_operation(
-        self,
-        context: ToolContext,
-        /,
-        *,
-        operation_key: str,
-        case_count: int = 1,
-        seed: int | None = None,
-    ) -> OperationExecutionReport:
-        """Run a public batch and return only its bounded serializable report."""
-        return self._run_operation_traced(
-            context,
-            operation_key=operation_key,
-            case_count=case_count,
-            seed=seed,
-            constraints=None,
-        ).report
-
-    def run_operation_for_smoke(
+    def run_smoke_batch(
         self,
         context: ToolContext,
         /,
@@ -122,9 +106,18 @@ class OperationTestingService:
         seed: int | None = None,
         constraints: ConstraintSet | None = None,
     ) -> SmokeExecutionOutcome:
-        """Execute once while retaining bounded evidence outside the report."""
+        """Execute one complete Smoke batch and retain its private evidence.
 
-        return self._run_operation_traced(
+        ``operation_key`` selects the frozen operation snapshot. ``case_count`` and
+        ``seed`` control deterministic generation, while optional runtime
+        ``constraints`` express relationships learned during the current App
+        lifetime. The returned outcome contains both the public-shaped execution
+        report and bounded response evidence needed by Smoke's planning and effect
+        checks. Generation or serialization failures abort before any request is
+        sent; transport failures are recorded per case.
+        """
+
+        return self._run_smoke_batch_traced(
             context,
             operation_key=operation_key,
             case_count=case_count,
@@ -132,7 +125,7 @@ class OperationTestingService:
             constraints=constraints,
         )
 
-    def _run_operation_traced(
+    def _run_smoke_batch_traced(
         self,
         context: ToolContext,
         /,
@@ -143,14 +136,13 @@ class OperationTestingService:
         constraints: ConstraintSet | None,
     ) -> SmokeExecutionOutcome:
         """
-        Run operation traced for deterministic request generation, constraint solving,
-        and execution.
+        Trace deterministic request generation, constraint solving, and execution.
 
         This private helper keeps one transformation or policy decision explicit so the
         surrounding orchestration remains readable.
         """
         with self.tracing_runtime.span(
-            "OperationTestingService.run_operation",
+            "OperationTestingService.run_smoke_batch",
             kind="CHAIN",
             input_value={
                 "operation_key": operation_key,
@@ -172,7 +164,7 @@ class OperationTestingService:
                 ),
             },
         ) as span:
-            outcome = self._run_operation(
+            outcome = self._execute_smoke_batch(
                 context,
                 operation_key=operation_key,
                 case_count=case_count,
@@ -213,7 +205,7 @@ class OperationTestingService:
             )
             return outcome
 
-    def _run_operation(
+    def _execute_smoke_batch(
         self,
         context: ToolContext,
         /,
@@ -294,7 +286,7 @@ class OperationTestingService:
             len(case.behavior_monitor_warnings) for case in reports
         )
         response_validation = _response_validation(reports)
-        status = (
+        status: OperationExecutionStatus = (
             "completed"
             if error_count == 0
             else "errored"
@@ -355,7 +347,7 @@ class OperationTestingService:
         response_summary: ResponseSummary | None = None
         error_summary: TransportErrorSummary | None = None
         monitor_warnings: list[BehaviorMonitorWarningSummary] = []
-        response_validation = "not_evaluated"
+        response_validation: ResponseValidationStatus = "not_evaluated"
         failure_evidence = FailureCaseEvidence(case_id=case_id)
         smoke_evidence = SmokeCaseExecutionEvidence(case_id=case_id)
         with self.tracing_runtime.span(
@@ -505,7 +497,7 @@ def _request_summary(
 
 def _response_validation(
     cases: list[TestCaseExecutionReport],
-) -> str:
+) -> ResponseValidationStatus:
     statuses = [
         case.response_validation
         for case in cases

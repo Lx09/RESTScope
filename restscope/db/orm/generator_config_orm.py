@@ -9,6 +9,8 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from restscope.testing.models import GeneratorRevisionLifecycle
+
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
@@ -76,7 +78,10 @@ class GeneratorConfigRevisionORM(CreatedAtMixin, Base):
     )
     revision: Mapped[int] = mapped_column(Integer, primary_key=True)
     parent_revision: Mapped[int | None] = mapped_column(Integer)
-    lifecycle: Mapped[str] = mapped_column(String(20), nullable=False)
+    lifecycle: Mapped[GeneratorRevisionLifecycle] = mapped_column(
+        String(20),
+        nullable=False,
+    )
     rollback_of_revision: Mapped[int | None] = mapped_column(Integer)
     restored_from_revision: Mapped[int | None] = mapped_column(Integer)
     hypothesis: Mapped[dict[str, Any] | None] = mapped_column(JSON)

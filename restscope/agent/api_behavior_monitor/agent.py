@@ -79,19 +79,9 @@ class APIBehaviorMonitorAgent:
         self.response_value_tracker = response_value_tracker
         self._tracing_runtime = (
             tracing_runtime
-            or getattr(resource_identifier_tracker, "tracing_runtime", None)
+            or resource_identifier_tracker.tracing_runtime
             or TracingRuntime.disabled()
         )
-
-    @property
-    def catalog(self):
-        """Expose the identifier catalog through the Agent's compatibility facade."""
-        return self.resource_identifier_tracker.catalog
-
-    @property
-    def client(self):
-        """Expose the identifier tracker's model client for compatibility/tests."""
-        return self.resource_identifier_tracker.client
 
     @property
     def tracing_runtime(self):
@@ -102,8 +92,7 @@ class APIBehaviorMonitorAgent:
     def tracing_runtime(self, value) -> None:
         """Replace tracing consistently on the coordinator and child tracker."""
         self._tracing_runtime = value
-        if hasattr(self.resource_identifier_tracker, "tracing_runtime"):
-            self.resource_identifier_tracker.tracing_runtime = value
+        self.resource_identifier_tracker.tracing_runtime = value
 
     def observe_response(
         self,
@@ -158,11 +147,7 @@ class APIBehaviorMonitorAgent:
                 )
                 span.set_attribute(
                     "restscope.resource_monitor.identifiers_recorded",
-                    getattr(
-                        result.resource_identifier,
-                        "identifiers_recorded",
-                        0,
-                    ),
+                    result.resource_identifier.identifiers_recorded,
                 )
             if result.response_values is not None:
                 span.set_attribute(
@@ -581,18 +566,10 @@ def _monitor_trace_summary(
         "contract_status": result.contract.status,
         "contract_changes": list(result.contract.changes),
         "resource_identifier": (
-                {
-                    "status": resource.status,
-                    "groups_processed": getattr(
-                        resource,
-                        "groups_processed",
-                        0,
-                    ),
-                    "identifiers_recorded": getattr(
-                        resource,
-                        "identifiers_recorded",
-                        0,
-                    ),
+            {
+                "status": resource.status,
+                "groups_processed": resource.groups_processed,
+                "identifiers_recorded": resource.identifiers_recorded,
                 "warning_code": (
                     resource.warning.code
                     if resource.warning is not None

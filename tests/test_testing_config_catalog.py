@@ -79,6 +79,39 @@ def _catalog(tmp_path: Path):
     )
 
 
+def _accept_candidate_patch(catalog, operation_key: str, updates):
+    """Apply setup through the complete candidate transaction used by Smoke."""
+    current = catalog.get_operation(operation_key)
+    assert current is not None
+    candidate = catalog.stage_candidate(
+        operation_key=operation_key,
+        expected_revision=current.revision,
+        updates=updates,
+        hypothesis={"kind": "test_setup"},
+    )
+    return catalog.accept_candidate(
+        operation_key=operation_key,
+        candidate_revision=candidate.revision,
+        evaluation={"validation_status": "accepted", "kind": "test_setup"},
+    )
+
+
+def _accept_candidate_configs(catalog, current, configs):
+    """Translate changed full configs into the candidate Patch input boundary."""
+    previous = {item.input_node_id: item for item in current.configs}
+    updates = []
+    for item in configs:
+        before = previous[item.input_node_id]
+        update = {"input_node_id": item.input_node_id}
+        if item.inclusion_probability != before.inclusion_probability:
+            update["inclusion_probability"] = item.inclusion_probability
+        if item.strategy != before.strategy:
+            update["strategy"] = item.strategy
+        if len(update) > 1:
+            updates.append(update)
+    return _accept_candidate_patch(catalog, current.operation_key, updates)
+
+
 def test_first_initialization_creates_every_operation_and_default_generator(tmp_path: Path) -> None:
     """Scenario: verify that first initialization creates every operation and default generator."""
     catalog, _ = _catalog(tmp_path)
@@ -86,8 +119,10 @@ def test_first_initialization_creates_every_operation_and_default_generator(tmp_
 
     assert catalog.initialize_once(ir) is True
 
-    order = catalog.inspect_operation("POST /orders/{orderId}")
-    status = catalog.inspect_operation("GET /status")
+    order = catalog.get_operation("POST /orders/{orderId}")
+    status = catalog.get_operation("GET /status")
+    assert order is not None
+    assert status is not None
     assert order.revision == status.revision == 1
     assert order.active_media_type == "application/json"
     assert order.snapshot.available_media_types == [
@@ -151,7 +186,8 @@ def test_non_empty_enum_has_priority_over_const_default_example_and_other_constr
 
     assert catalog.initialize_once(ir) is True
 
-    operation = catalog.inspect_operation("GET /search")
+    operation = catalog.get_operation("GET /search")
+    assert operation is not None
     assert operation.enabled is True
     assert operation.disabled_reasons == []
     assert len(operation.configs) == 1
@@ -197,7 +233,8 @@ def test_pattern_only_string_initializes_and_round_trips_as_regex(
 
     assert catalog.initialize_once(ir) is True
 
-    stored = catalog.inspect_operation("GET /search")
+    stored = catalog.get_operation("GET /search")
+    assert stored is not None
     assert stored.enabled is True
     assert stored.disabled_reasons == []
     assert stored.configs[0].strategy.model_dump(mode="json") == {
@@ -206,7 +243,7 @@ def test_pattern_only_string_initializes_and_round_trips_as_regex(
         "min_length": 3,
         "max_length": 3,
     }
-    assert catalog.inspect_operation("GET /search") == stored
+    assert catalog.get_operation("GET /search") == stored
 
 
 @pytest.mark.parametrize(
@@ -257,7 +294,8 @@ def test_invalid_or_combined_regex_defaults_remain_recoverably_disabled(
 
     assert catalog.initialize_once(ir) is True
 
-    stored = catalog.inspect_operation("GET /search")
+    stored = catalog.get_operation("GET /search")
+    assert stored is not None
     assert stored.enabled is False
     assert stored.disabled_reasons
     assert all(reason.recoverable for reason in stored.disabled_reasons)
@@ -296,7 +334,8 @@ def test_empty_enum_disables_operation_with_node_attributed_recoverable_reason(
 
     assert catalog.initialize_once(ir) is True
 
-    operation = catalog.inspect_operation("GET /search")
+    operation = catalog.get_operation("GET /search")
+    assert operation is not None
     node_id = operation.snapshot.parameters[0].input_node_id
     assert operation.enabled is False
     assert [
@@ -350,7 +389,8 @@ def test_body_media_priority_and_encoding_contract_are_frozen(tmp_path: Path) ->
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    stored = catalog.inspect_operation("POST /submit")
+    stored = catalog.get_operation("POST /submit")
+    assert stored is not None
 
     assert stored.snapshot.available_media_types == [
         "application/json",
@@ -367,63 +407,6 @@ def test_body_media_priority_and_encoding_contract_are_frozen(tmp_path: Path) ->
         )
         for node in stored.snapshot.input_nodes
     )
-
-
-def test_full_replace_can_activate_media_with_feedback_generator_constraints(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that full replace can activate media with feedback generator constraints."""
-    from restscope.openapi_parser import OpenAPIParser
-
-    ir = OpenAPIParser.parse(
-        {
-            "openapi": "3.0.3",
-            "info": {"title": "Inactive media", "version": "1"},
-            "paths": {
-                "/submit": {
-                    "post": {
-                        "requestBody": {
-                            "content": {
-                                "application/json": {
-                                    "schema": {"type": "object"}
-                                },
-                                "text/plain": {
-                                    "schema": {
-                                        "type": "string",
-                                        "not": {"const": "forbidden"},
-                                    }
-                                },
-                            }
-                        },
-                        "responses": {"204": {"description": "ok"}},
-                    }
-                }
-            },
-        }
-    )
-    catalog, _ = _catalog(tmp_path)
-    catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("POST /submit")
-
-    assert initial.enabled is True
-    assert initial.active_media_type == "application/json"
-
-    switched = catalog.replace_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
-        active_media_type="text/plain",
-        configs=initial.configs,
-    )
-    assert switched.enabled is True
-    assert switched.disabled_reasons == []
-    restored = catalog.replace_operation(
-        operation_key=switched.operation_key,
-        expected_revision=2,
-        active_media_type="application/json",
-        configs=switched.configs,
-    )
-    assert restored.enabled is True
-    assert restored.disabled_reasons == []
 
 
 @pytest.mark.parametrize(
@@ -459,7 +442,8 @@ def test_media_schema_incompatible_with_serializer_is_disabled(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    stored = catalog.inspect_operation("POST /submit")
+    stored = catalog.get_operation("POST /submit")
+    assert stored is not None
 
     assert stored.enabled is False
     assert stored.snapshot.available_media_types == []
@@ -502,7 +486,8 @@ def test_wildcard_request_media_type_is_not_frozen_as_executable(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    stored = catalog.inspect_operation("POST /submit")
+    stored = catalog.get_operation("POST /submit")
+    assert stored is not None
 
     assert stored.enabled is False
     assert stored.snapshot.available_media_types == []
@@ -548,7 +533,8 @@ def test_unserializable_deep_object_parameter_disables_operation(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    stored = catalog.inspect_operation("GET /search")
+    stored = catalog.get_operation("GET /search")
+    assert stored is not None
 
     assert stored.enabled is False
     assert {
@@ -596,7 +582,8 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    stored = catalog.inspect_operation("POST /users")
+    stored = catalog.get_operation("POST /users")
+    assert stored is not None
     paths = {node.canonical_path for node in stored.snapshot.input_nodes}
     media_node = next(
         node
@@ -630,12 +617,7 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
         else item
         for item in stored.configs
     ]
-    replaced = catalog.replace_operation(
-        operation_key=stored.operation_key,
-        expected_revision=1,
-        active_media_type="application/json",
-        configs=invalid,
-    )
+    replaced = _accept_candidate_configs(catalog, stored, invalid)
     assert replaced.enabled is True
     replaced_media_config = next(
         item
@@ -648,107 +630,18 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
     }
 
 
-def test_replace_and_patch_use_revision_lock_and_preserve_snapshot(tmp_path: Path) -> None:
-    """Scenario: verify that replace and patch use revision lock and preserve snapshot."""
-    from restscope.testing import GeneratorConfigRevisionConflict
-
-    catalog, _ = _catalog(tmp_path)
-    catalog.initialize_once(_ir())
-    original = catalog.inspect_operation("POST /orders/{orderId}")
-    trace = next(
-        item
-        for item in original.configs
-        if next(
-            node
-            for node in original.snapshot.input_nodes
-            if node.input_node_id == item.input_node_id
-        ).canonical_path
-        == "query/trace"
-    )
-
-    patched = catalog.patch_operation(
-        operation_key=original.operation_key,
-        expected_revision=1,
-        updates=[
-            {
-                "input_node_id": trace.input_node_id,
-                "inclusion_probability": 1,
-                "strategy": {"type": "constant", "value": "trace-value"},
-            }
-        ],
-    )
-    assert patched.revision == 2
-    assert patched.snapshot == original.snapshot
-    assert next(
-        item for item in patched.configs if item.input_node_id == trace.input_node_id
-    ).strategy.value == "trace-value"
-
-    replaced = catalog.replace_operation(
-        operation_key=original.operation_key,
-        expected_revision=2,
-        active_media_type="text/plain",
-        configs=patched.configs,
-    )
-    assert replaced.revision == 3
-    assert replaced.active_media_type == "text/plain"
-    with pytest.raises(GeneratorConfigRevisionConflict):
-        catalog.replace_operation(
-            operation_key=original.operation_key,
-            expected_revision=2,
-            active_media_type="application/json",
-            configs=replaced.configs,
-        )
-
-
-def test_replace_requires_complete_frozen_node_set_and_required_inclusion(tmp_path: Path) -> None:
-    """Scenario: verify that replace requires complete frozen node set and required inclusion."""
-    from restscope.testing import GeneratorConfigError
-
-    catalog, _ = _catalog(tmp_path)
-    catalog.initialize_once(_ir())
-    current = catalog.inspect_operation("POST /orders/{orderId}")
-
-    with pytest.raises(GeneratorConfigError) as missing:
-        catalog.replace_operation(
-            operation_key=current.operation_key,
-            expected_revision=1,
-            active_media_type=current.active_media_type,
-            configs=current.configs[:-1],
-        )
-    assert missing.value.code == "generator_config_incomplete"
-
-    required_id = next(
-        node.input_node_id
-        for node in current.snapshot.input_nodes
-        if node.canonical_path == "path/orderId"
-    )
-    invalid = [
-        item.model_copy(update={"inclusion_probability": 0.5})
-        if item.input_node_id == required_id
-        else item
-        for item in current.configs
-    ]
-    with pytest.raises(GeneratorConfigError) as inclusion:
-        catalog.replace_operation(
-            operation_key=current.operation_key,
-            expected_revision=1,
-            active_media_type=current.active_media_type,
-            configs=invalid,
-        )
-    assert inclusion.value.code == "generator_config_invalid_inclusion"
-
-
 def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) -> None:
     """Scenario: verify that structural generator strategy must match frozen node."""
     from restscope.testing import GeneratorConfigError
 
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(_ir())
-    current = catalog.inspect_operation("POST /orders/{orderId}")
+    current = catalog.get_operation("POST /orders/{orderId}")
+    assert current is not None
     body_id = current.snapshot.request_body_node_id
 
     with pytest.raises(GeneratorConfigError) as raised:
-        catalog.patch_operation(
+        catalog.stage_candidate(
             operation_key=current.operation_key,
             expected_revision=1,
             updates=[
@@ -757,6 +650,7 @@ def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) ->
                     "strategy": {"type": "constant", "value": "invalid"},
                 }
             ],
+            hypothesis={"kind": "test_validation"},
         )
     assert raised.value.code == "generator_config_incompatible_strategy"
 
@@ -770,20 +664,32 @@ def test_unsupported_operation_is_saved_disabled_without_blocking_other_operatio
     catalog, _ = _catalog(tmp_path)
     assert catalog.initialize_once(_ir(unsupported=True)) is True
 
-    disabled = catalog.inspect_operation("POST /orders/{orderId}")
+    disabled = catalog.get_operation("POST /orders/{orderId}")
+    assert disabled is not None
     assert disabled.enabled is False
     assert {reason.code for reason in disabled.disabled_reasons} == {
         "request_schema_unsupported"
     }
-    assert catalog.inspect_operation("GET /status").enabled is True
+    status = catalog.get_operation("GET /status")
+    assert status is not None
+    assert status.enabled is True
     with pytest.raises(GeneratorConfigError) as raised:
         catalog.require_operation(disabled.operation_key)
     assert raised.value.code == "generator_operation_unsupported"
-    replaced = catalog.replace_operation(
-        operation_key=disabled.operation_key,
-        expected_revision=1,
-        active_media_type=disabled.active_media_type,
-        configs=disabled.configs,
+    disabled_node_id = next(
+        reason.input_node_id
+        for reason in disabled.disabled_reasons
+        if reason.input_node_id is not None
+    )
+    replaced = _accept_candidate_patch(
+        catalog,
+        disabled.operation_key,
+        updates=[
+            {
+                "input_node_id": disabled_node_id,
+                "strategy": {"type": "constant", "value": "supported"},
+            }
+        ],
     )
     assert replaced.enabled is True
     assert replaced.disabled_reasons == []
@@ -826,8 +732,12 @@ def test_default_derivation_failure_disables_only_that_operation(
     catalog, _ = _catalog(tmp_path)
 
     assert catalog.initialize_once(ir) is True
-    assert catalog.inspect_operation("GET /bad").enabled is False
-    assert catalog.inspect_operation("GET /good").enabled is True
+    bad = catalog.get_operation("GET /bad")
+    good = catalog.get_operation("GET /good")
+    assert bad is not None
+    assert good is not None
+    assert bad.enabled is False
+    assert good.enabled is True
 
 
 def test_json_schema_nullable_type_array_builds_a_valid_default(
@@ -859,7 +769,8 @@ def test_json_schema_nullable_type_array_builds_a_valid_default(
     catalog, _ = _catalog(tmp_path)
 
     assert catalog.initialize_once(ir) is True
-    stored = catalog.inspect_operation("GET /search")
+    stored = catalog.get_operation("GET /search")
+    assert stored is not None
     assert stored.enabled is True
     assert stored.configs[0].strategy.type == "random_string"
 
@@ -902,7 +813,8 @@ def test_combiner_with_sibling_constraints_is_saved_as_unsupported(
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
 
-    stored = catalog.inspect_operation("POST /mixed")
+    stored = catalog.get_operation("POST /mixed")
+    assert stored is not None
 
     assert stored.enabled is False
     assert "request_schema_unsupported" in {
@@ -945,7 +857,8 @@ def test_object_cardinality_requires_a_generator_set_that_always_conforms(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("POST /objects")
+    initial = catalog.get_operation("POST /objects")
+    assert initial is not None
     assert initial.enabled is False
     parent_id = initial.snapshot.media_type_node_ids["application/json"]
     assert {
@@ -970,19 +883,14 @@ def test_object_cardinality_requires_a_generator_set_that_always_conforms(
         else item
         for item in initial.configs
     ]
-    replaced = catalog.replace_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
-        active_media_type="application/json",
-        configs=configs,
-    )
+    replaced = _accept_candidate_configs(catalog, initial, configs)
     assert replaced.enabled is True
 
 
-def test_constant_object_replace_ignores_unused_child_inclusion_probabilities(
+def test_constant_object_candidate_ignores_unused_child_inclusion_probabilities(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that constant object replace ignores unused child inclusion probabilities."""
+    """A constant-object candidate need not rewrite unused child probabilities."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import InputGeneratorConfig
 
@@ -1014,7 +922,8 @@ def test_constant_object_replace_ignores_unused_child_inclusion_probabilities(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("POST /objects")
+    initial = catalog.get_operation("POST /objects")
+    assert initial is not None
     parent_id = initial.snapshot.media_type_node_ids["application/json"]
     configs = [
         InputGeneratorConfig.model_validate(
@@ -1031,12 +940,7 @@ def test_constant_object_replace_ignores_unused_child_inclusion_probabilities(
         for item in initial.configs
     ]
 
-    replaced = catalog.replace_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
-        active_media_type="application/json",
-        configs=configs,
-    )
+    replaced = _accept_candidate_configs(catalog, initial, configs)
 
     assert replaced.enabled is True
 
@@ -1072,7 +976,8 @@ def test_nullable_text_body_rejects_a_null_generator_before_execution(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("POST /text")
+    initial = catalog.get_operation("POST /text")
+    assert initial is not None
     media_id = initial.snapshot.media_type_node_ids["text/plain"]
     configs = [
         InputGeneratorConfig.model_validate(
@@ -1087,12 +992,7 @@ def test_nullable_text_body_rejects_a_null_generator_before_execution(
     ]
 
     with pytest.raises(GeneratorConfigError) as raised:
-        catalog.replace_operation(
-            operation_key=initial.operation_key,
-            expected_revision=1,
-            active_media_type="text/plain",
-            configs=configs,
-        )
+        _accept_candidate_configs(catalog, initial, configs)
 
     assert raised.value.code == "generator_config_incompatible_strategy"
 
@@ -1138,7 +1038,8 @@ def test_manual_range_generator_can_override_a_discrete_enum(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("GET /search")
+    initial = catalog.get_operation("GET /search")
+    assert initial is not None
     configs = [
         InputGeneratorConfig.model_validate(
             {
@@ -1149,21 +1050,16 @@ def test_manual_range_generator_can_override_a_discrete_enum(
         for item in initial.configs
     ]
 
-    replaced = catalog.replace_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
-        active_media_type=None,
-        configs=configs,
-    )
+    replaced = _accept_candidate_configs(catalog, initial, configs)
 
     assert replaced.enabled is True
     assert replaced.configs[0].strategy.type == strategy["type"]
 
 
-def test_patch_with_feedback_generator_clears_its_recoverable_reason(
+def test_candidate_with_feedback_generator_clears_its_recoverable_reason(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that patch with feedback generator clears its recoverable reason."""
+    """A candidate clears the recoverable reason for the input it repairs."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1192,7 +1088,8 @@ def test_patch_with_feedback_generator_clears_its_recoverable_reason(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("GET /search")
+    initial = catalog.get_operation("GET /search")
+    assert initial is not None
     assert initial.enabled is False
     assert {reason.code for reason in initial.disabled_reasons} == {
         "default_generator_unavailable"
@@ -1202,9 +1099,9 @@ def test_patch_with_feedback_generator_clears_its_recoverable_reason(
         node_id
     }
 
-    patched = catalog.patch_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
+    patched = _accept_candidate_patch(
+        catalog,
+        initial.operation_key,
         updates=[
             {
                 "input_node_id": node_id,
@@ -1217,10 +1114,10 @@ def test_patch_with_feedback_generator_clears_its_recoverable_reason(
     assert patched.configs[0].strategy.value == "lowercase"
 
 
-def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
+def test_candidate_clears_only_recoverable_reasons_for_updated_nodes(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that patch clears only recoverable reasons for updated nodes."""
+    """A candidate preserves recoverable reasons owned by untouched inputs."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1250,7 +1147,8 @@ def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("GET /search")
+    initial = catalog.get_operation("GET /search")
+    assert initial is not None
     node_ids = {
         parameter.name: parameter.input_node_id
         for parameter in initial.snapshot.parameters
@@ -1261,9 +1159,9 @@ def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
         if reason.recoverable
     } == set(node_ids.values())
 
-    first = catalog.patch_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
+    first = _accept_candidate_patch(
+        catalog,
+        initial.operation_key,
         updates=[
             {
                 "input_node_id": node_ids["first"],
@@ -1278,9 +1176,9 @@ def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
         if reason.recoverable
     } == {node_ids["second"]}
 
-    second = catalog.patch_operation(
-        operation_key=first.operation_key,
-        expected_revision=2,
+    second = _accept_candidate_patch(
+        catalog,
+        first.operation_key,
         updates=[
             {
                 "input_node_id": node_ids["second"],
@@ -1292,10 +1190,10 @@ def test_patch_clears_only_recoverable_reasons_for_updated_nodes(
     assert second.disabled_reasons == []
 
 
-def test_patch_does_not_hide_an_unrelated_default_configuration_failure(
+def test_candidate_does_not_hide_an_unrelated_default_configuration_failure(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that patch does not hide an unrelated default configuration failure."""
+    """Repairing one input does not hide another default-generation failure."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1337,7 +1235,8 @@ def test_patch_does_not_hide_an_unrelated_default_configuration_failure(
     )
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(ir)
-    initial = catalog.inspect_operation("POST /search")
+    initial = catalog.get_operation("POST /search")
+    assert initial is not None
     query_id = initial.snapshot.parameters[0].input_node_id
     body_id = initial.snapshot.media_type_node_ids["application/json"]
 
@@ -1347,9 +1246,9 @@ def test_patch_does_not_hide_an_unrelated_default_configuration_failure(
         if reason.recoverable
     } == {query_id, body_id}
 
-    patched = catalog.patch_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
+    patched = _accept_candidate_patch(
+        catalog,
+        initial.operation_key,
         updates=[
             {
                 "input_node_id": query_id,
@@ -1407,7 +1306,8 @@ def test_repository_compare_and_swap_rejects_a_concurrent_old_revision(
 
     catalog, engine = _catalog(tmp_path)
     catalog.initialize_once(_ir())
-    created = catalog.inspect_operation("POST /orders/{orderId}")
+    created = catalog.get_operation("POST /orders/{orderId}")
+    assert created is not None
     session_factory = make_session_factory(engine)
 
     with (
@@ -1433,13 +1333,6 @@ def test_repository_compare_and_swap_rejects_a_concurrent_old_revision(
 
         with pytest.raises(GeneratorConfigConcurrentWrite):
             second.generator_configs.replace(**payload)
-
-
-def test_generator_catalog_has_no_delete_operation(tmp_path: Path) -> None:
-    """Scenario: verify that generator catalog has no delete operation."""
-    catalog, _ = _catalog(tmp_path)
-
-    assert not hasattr(catalog, "delete_operation")
 
 
 def test_explicit_leaf_presence_patch_closes_all_request_body_ancestors() -> None:

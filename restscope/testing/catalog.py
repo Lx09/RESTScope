@@ -13,7 +13,6 @@ from .models import (
     ChoiceGenerator,
     ConstantGenerator,
     FormatGenerator,
-    GeneratorConfigRevision,
     InputGeneratorConfig,
     InputGeneratorPatch,
     InputNodeSnapshot,
@@ -34,7 +33,7 @@ from .snapshot import build_initial_catalog
 
 
 class GeneratorConfigError(ValueError):
-    """Base error with a stable code suitable for tool results."""
+    """Base error with a stable code for Smoke and execution boundaries."""
 
     def __init__(
         self,
@@ -65,7 +64,7 @@ class GeneratorConfigRevisionConflict(GeneratorConfigError):
 
 
 class GeneratorConfigCatalog:
-    """Initialize once from IR, then mutate only the frozen generator models."""
+    """Initialize frozen configs and own Smoke's all-or-nothing candidates."""
 
     def __init__(self, unit_of_work_factory: GeneratorConfigUnitOfWorkFactory) -> None:
         self.unit_of_work_factory = unit_of_work_factory
@@ -80,45 +79,6 @@ class GeneratorConfigCatalog:
         """
         with self.unit_of_work_factory() as uow:
             return uow.generator_configs.get(operation_key)
-
-    def inspect_operation(self, operation_key: str) -> OperationGeneratorConfig:
-        """
-        Handle inspect operation as part of deterministic request generation, constraint
-        solving, and execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        return self._require_existing(operation_key)
-
-    def list_revisions(
-        self,
-        operation_key: str,
-    ) -> list[GeneratorConfigRevision]:
-        """
-        Return revisions for deterministic request generation, constraint solving, and
-        execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        with self.unit_of_work_factory() as uow:
-            return uow.generator_configs.list_revisions(operation_key)
-
-    def get_revision(
-        self,
-        operation_key: str,
-        revision: int,
-    ) -> GeneratorConfigRevision | None:
-        """
-        Return revision for deterministic request generation, constraint solving, and
-        execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        with self.unit_of_work_factory() as uow:
-            return uow.generator_configs.get_revision(operation_key, revision)
 
     def initialize_once(self, ir: OpenAPISpecIR) -> bool:
         """Persist the first IR-derived generator catalog and never resync it."""
@@ -137,92 +97,6 @@ class GeneratorConfigCatalog:
                 return False
             uow.commit()
             return True
-
-    def replace_operation(
-        self,
-        *,
-        operation_key: str,
-        expected_revision: int,
-        active_media_type: str | None,
-        configs: Sequence[InputGeneratorConfig],
-    ) -> OperationGeneratorConfig:
-        """
-        Handle replace operation as part of deterministic request generation, constraint
-        solving, and execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        current = self._require_existing(operation_key)
-        normalized = [
-            InputGeneratorConfig.model_validate(config)
-            for config in configs
-        ]
-        media_type = _normalize_media_type(current, active_media_type)
-        _validate_configs(
-            current,
-            media_type=media_type,
-            configs=normalized,
-            enforce_schema=False,
-        )
-        return self._replace(
-            current,
-            expected_revision=expected_revision,
-            active_media_type=media_type,
-            configs=normalized,
-            clear_recoverable_reasons=True,
-        )
-
-    def patch_operation(
-        self,
-        *,
-        operation_key: str,
-        expected_revision: int,
-        updates: Sequence[InputGeneratorPatch],
-    ) -> OperationGeneratorConfig:
-        """
-        Handle patch operation as part of deterministic request generation, constraint
-        solving, and execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        current = self._require_existing(operation_key)
-        updated, patched_node_ids = _apply_patches(current, updates)
-        _validate_configs(
-            current,
-            media_type=current.active_media_type,
-            configs=updated,
-            enforce_schema=False,
-        )
-        return self._replace(
-            current,
-            expected_revision=expected_revision,
-            active_media_type=current.active_media_type,
-            configs=updated,
-            clear_recoverable_reasons=False,
-            cleared_recoverable_node_ids=patched_node_ids,
-        )
-
-    def preview_candidate(
-        self,
-        *,
-        operation_key: str,
-        updates: Sequence[InputGeneratorPatch],
-    ) -> OperationGeneratorConfig:
-        """Validate and apply a candidate patch without writing catalog state."""
-
-        current = self._require_existing(operation_key)
-        if not updates:
-            return current
-        updated, _ = _apply_patches(current, updates)
-        _validate_configs(
-            current,
-            media_type=current.active_media_type,
-            configs=updated,
-            enforce_schema=False,
-        )
-        return current.model_copy(update={"configs": updated})
 
     def stage_candidate(
         self,
@@ -247,14 +121,11 @@ class GeneratorConfigCatalog:
             configs=updated,
             enforce_schema=False,
         )
-        return self._replace(
+        return self._persist_candidate(
             current,
             expected_revision=expected_revision,
-            active_media_type=current.active_media_type,
             configs=updated,
-            clear_recoverable_reasons=False,
             cleared_recoverable_node_ids=patched_node_ids,
-            lifecycle="candidate",
             hypothesis=dict(hypothesis),
         )
 
@@ -264,13 +135,12 @@ class GeneratorConfigCatalog:
         operation_key: str,
         candidate_revision: int,
         evaluation: dict,
-    ) -> GeneratorConfigRevision:
-        """
-        Handle accept candidate as part of deterministic request generation, constraint
-        solving, and execution.
+    ) -> OperationGeneratorConfig:
+        """Accept one complete candidate and return its executable configuration.
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
+        ``candidate_revision`` must still be the operation's current revision and
+        must still have the ``candidate`` lifecycle. Acceptance changes only that
+        lifecycle record; it never selects individual input changes.
         """
         with self.unit_of_work_factory() as uow:
             current = uow.generator_configs.get(operation_key)
@@ -293,105 +163,7 @@ class GeneratorConfigCatalog:
                     "Generator candidate is no longer pending evaluation",
                 ) from exc
             uow.commit()
-            return revision
-
-    def finalize_candidate(
-        self,
-        *,
-        operation_key: str,
-        candidate_revision: int,
-        accepted_input_node_ids: set[str],
-        evaluation: dict,
-    ) -> OperationGeneratorConfig:
-        """Atomically accept all, part, or none of a tested candidate."""
-
-        accepted_node_ids = set(accepted_input_node_ids)
-        with self.unit_of_work_factory() as uow:
-            current = uow.generator_configs.get(operation_key)
-            if current is None or current.revision != candidate_revision:
-                raise GeneratorConfigRevisionConflict(
-                    expected=candidate_revision,
-                    actual=current.revision if current is not None else 0,
-                )
-            candidate = uow.generator_configs.get_revision(
-                operation_key,
-                candidate_revision,
-            )
-            if (
-                candidate is None
-                or candidate.lifecycle != "candidate"
-                or candidate.parent_revision is None
-            ):
-                raise GeneratorConfigError(
-                    "generator_candidate_state_invalid",
-                    "Generator candidate is not pending or has no parent revision",
-                )
-            parent = uow.generator_configs.get_revision(
-                operation_key,
-                candidate.parent_revision,
-            )
-            if parent is None:
-                raise GeneratorConfigError(
-                    "generator_candidate_parent_missing",
-                    "Generator candidate parent revision does not exist",
-                )
-            changed_node_ids = _changed_input_node_ids(
-                parent.config,
-                candidate.config,
-            )
-            unexpected = sorted(accepted_node_ids - changed_node_ids)
-            if unexpected:
-                raise GeneratorConfigError(
-                    "generator_candidate_invalid_accepted_nodes",
-                    "Accepted nodes were not changed by the candidate: "
-                    f"{unexpected}",
-                    input_node_ids=unexpected,
-                )
-            try:
-                if accepted_node_ids == changed_node_ids:
-                    uow.generator_configs.update_revision(
-                        operation_key=operation_key,
-                        revision=candidate_revision,
-                        expected_lifecycle="candidate",
-                        lifecycle="accepted",
-                        evaluation=dict(evaluation),
-                    )
-                    uow.commit()
-                    return candidate.config
-
-                uow.generator_configs.update_revision(
-                    operation_key=operation_key,
-                    revision=candidate_revision,
-                    expected_lifecycle="candidate",
-                    lifecycle="rejected",
-                    evaluation=dict(evaluation),
-                )
-                merged = _merge_candidate_subset(
-                    parent.config,
-                    candidate.config,
-                    accepted_node_ids=accepted_node_ids,
-                )
-                accepted = uow.generator_configs.replace(
-                    operation_key=operation_key,
-                    expected_revision=candidate_revision,
-                    revision=candidate_revision + 1,
-                    snapshot=merged.snapshot.model_dump(mode="json"),
-                    enabled=merged.enabled,
-                    disabled_reasons=[
-                        item.model_dump(mode="json")
-                        for item in merged.disabled_reasons
-                    ],
-                    active_media_type=merged.active_media_type,
-                    configs=merged.configs,
-                    lifecycle="accepted",
-                )
-            except GeneratorConfigConcurrentWrite as exc:
-                raise GeneratorConfigRevisionConflict(
-                    expected=candidate_revision,
-                    actual=None,
-                ) from exc
-            uow.commit()
-            return accepted
+            return revision.config
 
     def reject_candidate_and_rollback(
         self,
@@ -520,25 +292,16 @@ class GeneratorConfigCatalog:
             )
         return current
 
-    def _replace(
+    def _persist_candidate(
         self,
         current: OperationGeneratorConfig,
         *,
         expected_revision: int,
-        active_media_type: str | None,
         configs: list[InputGeneratorConfig],
-        clear_recoverable_reasons: bool,
-        cleared_recoverable_node_ids: set[str] | None = None,
-        lifecycle: str = "accepted",
-        hypothesis: dict | None = None,
+        cleared_recoverable_node_ids: set[str],
+        hypothesis: dict,
     ) -> OperationGeneratorConfig:
-        """
-        Handle replace as part of deterministic request generation, constraint solving,
-        and execution.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Persist one complete pending candidate under a revision lock."""
         if current.revision != expected_revision:
             raise GeneratorConfigRevisionConflict(
                 expected=expected_revision,
@@ -546,17 +309,14 @@ class GeneratorConfigCatalog:
             )
         remaining_reasons = _contract_disabled_reasons(
             current,
-            active_media_type,
+            current.active_media_type,
         )
-        if not clear_recoverable_reasons:
-            remaining_reasons.extend(
-                reason
-                for reason in current.disabled_reasons
-                if reason.recoverable
-                and reason.input_node_id not in (
-                    cleared_recoverable_node_ids or set()
-                )
-            )
+        remaining_reasons.extend(
+            reason
+            for reason in current.disabled_reasons
+            if reason.recoverable
+            and reason.input_node_id not in cleared_recoverable_node_ids
+        )
         remaining_reasons = list(
             {
                 (
@@ -586,9 +346,9 @@ class GeneratorConfigCatalog:
                     disabled_reasons=[
                         item.model_dump(mode="json") for item in remaining_reasons
                     ],
-                    active_media_type=active_media_type,
+                    active_media_type=current.active_media_type,
                     configs=configs,
-                    lifecycle=lifecycle,
+                    lifecycle="candidate",
                     hypothesis=hypothesis,
                 )
             except GeneratorConfigConcurrentWrite as exc:
@@ -757,87 +517,6 @@ def preview_generator_patch(
         enforce_schema=False,
     )
     return current.model_copy(update={"configs": updated})
-
-
-def _changed_input_node_ids(
-    parent: OperationGeneratorConfig,
-    candidate: OperationGeneratorConfig,
-) -> set[str]:
-    parent_by_id = {item.input_node_id: item for item in parent.configs}
-    candidate_by_id = {item.input_node_id: item for item in candidate.configs}
-    return {
-        input_node_id
-        for input_node_id in set(parent_by_id) | set(candidate_by_id)
-        if parent_by_id.get(input_node_id) != candidate_by_id.get(input_node_id)
-    }
-
-
-def _merge_candidate_subset(
-    parent: OperationGeneratorConfig,
-    candidate: OperationGeneratorConfig,
-    *,
-    accepted_node_ids: set[str],
-) -> OperationGeneratorConfig:
-    """
-    Merge candidate subset for deterministic request generation, constraint solving, and
-    execution.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
-    candidate_by_id = {
-        item.input_node_id: item for item in candidate.configs
-    }
-    configs = [
-        (
-            candidate_by_id[item.input_node_id]
-            if item.input_node_id in accepted_node_ids
-            else item
-        )
-        for item in parent.configs
-    ]
-    remaining_reasons = [
-        reason
-        for reason in parent.disabled_reasons
-        if not (
-            reason.recoverable
-            and reason.input_node_id in accepted_node_ids
-        )
-    ]
-    return parent.model_copy(
-        update={
-            "revision": candidate.revision + 1,
-            "enabled": not remaining_reasons,
-            "disabled_reasons": remaining_reasons,
-            "configs": configs,
-        }
-    )
-
-
-def _normalize_media_type(
-    current: OperationGeneratorConfig,
-    active_media_type: str | None,
-) -> str | None:
-    snapshot = current.snapshot
-    if snapshot.request_body_node_id is None:
-        if active_media_type is not None:
-            raise GeneratorConfigError(
-                "generator_config_invalid_media_type",
-                "Operation has no request body",
-            )
-        return None
-    if active_media_type is None:
-        raise GeneratorConfigError(
-            "generator_config_invalid_media_type",
-            "Operation request body requires an active media type",
-        )
-    normalized = active_media_type.strip().lower()
-    if normalized not in snapshot.available_media_types:
-        raise GeneratorConfigError(
-            "generator_config_invalid_media_type",
-            f"Unknown or unsupported active request media type: {active_media_type}",
-        )
-    return normalized
 
 
 def _validate_initial_record(

@@ -84,11 +84,10 @@ The Alembic chain starts with the schema-source baseline, adds operation
 generator configuration in revision `0002_create_generator_configs`, and adds
 the resource evidence catalog in `0003_create_resource_catalog`. Revision
 `0004_create_generator_revision_history` adds immutable candidate, accepted,
-rejected, and legacy compensating rollback generator revisions. Current
-Operation Smoke candidate finalization does not create rollback lifecycle
-rows: a fully valid candidate becomes accepted in place, while partial or
-fully rejected candidates create a new accepted revision containing only
-validated changes. Revision
+rejected, and compensating rollback Generator revisions. A candidate accepted
+by Effect validation becomes accepted in place. Every other outcome marks the
+whole candidate rejected and creates one rollback revision that restores its
+complete parent; individual input changes are never selected. Revision
 `0005_create_response_value_catalog` adds persistent Response Value monitor,
 source, and typed-value tables. A schema source stores either an absolute file
 path or verbatim JSON/YAML content. Paths are reread on every load, while
@@ -216,14 +215,10 @@ builds the local RESTScope tools only.
 
 Every default `RESTScopeApp` runtime includes the Operation Smoke testing path:
 
-- `restscope.testing.inspect_operation_inputs`
-- `restscope.testing.replace_operation_generators`
-- `restscope.testing.patch_operation_generators`
-- `restscope.testing.run_operation`
-
-The three configuration capabilities are management endpoints registered in
-the runtime but excluded from model tool selection by the current policy. The
-execution capability is model-visible to every Agent role.
+There are no model-callable Testing or Generator-configuration tools.
+`OperationSmokeAgent` reaches complete batch execution through the narrower
+internal `SmokeBatchRunner` interface, so other Agent roles cannot bypass
+Smoke's round history, budgets, same-seed validation, or candidate lifecycle.
 
 During the first successful `RESTScopeApp.initialize()`, every OpenAPI operation
 is frozen into a persistent request snapshot. Each parameter, body, media type,
@@ -238,27 +233,28 @@ there is no runtime reset or delete tool.
 Initial generators treat the OpenAPI document as the source for their defaults.
 For concrete values the precedence is `enum`, `const`, `default`, then
 `example`; a non-empty enum becomes an equal-weight choice containing every
-declared value. After initialization, a management-side replace or patch is
-feedback-owned configuration and may deliberately generate values that do not
-match the frozen Schema. Required and structural nodes must still use inclusion
+declared value. Later Generator changes can enter only through Smoke's complete
+candidate transaction and may deliberately generate values that do not match
+the frozen Schema. Required and structural nodes must still use inclusion
 probability `1.0`, and every generated case must still serialize under the
-frozen parameter and request-body contract before any request is sent. A patch
-clears recoverable default-generation failures attributed to the nodes it
-updates and enables the operation once no blocking reason remains.
+frozen parameter and request-body contract before any request is sent. A
+candidate clears recoverable default-generation failures attributed to the
+nodes it updates and enables the operation once no blocking reason remains.
 
-`run_operation` accepts a frozen Catalog `operation_key` such as
-`POST /orders`. It reads method, path, serialization rules, input constraints,
-and generators only from that persisted snapshot; it does not compare the
-operation with the current `ToolContext.ir`. It generates all requested cases
-in preflight and only then sends requests serially to the current App-bound
-target. It supports at most 20 cases, does not follow redirects or retry, and
-creates an isolated HTTP client per case. When the default API Behavior Monitor
-is present, it reads at most 1 MiB from each response before returning. Every
-first `operation + exact status + normalized media type` observation is
-compared with the current OpenAPI IR. The Monitor can conservatively add an
-exact status, media type, optional field, or wider type directly to that
-in-memory IR. Invalid or truncated JSON stays pending for the next matching
-response; the evolved IR and first-observation registry are not persisted.
+The internal Smoke batch runner accepts a frozen Catalog `operation_key` such
+as `POST /orders`. It reads method, path, serialization rules, input
+constraints, and generators only from that persisted snapshot; it does not
+compare the operation with the current `ToolContext.ir`. It generates all
+requested cases in preflight and only then sends requests serially to the
+current App-bound target. It supports at most 20 cases, does not follow
+redirects or retry, and creates an isolated HTTP client per case. When the
+default API Behavior Monitor is present, it reads at most 1 MiB from each
+response before returning. Every first
+`operation + exact status + normalized media type` observation is compared
+with the current OpenAPI IR. The Monitor can conservatively add an exact
+status, media type, optional field, or wider type directly to that in-memory
+IR. Invalid or truncated JSON stays pending for the next matching response;
+the evolved IR and first-observation registry are not persisted.
 
 Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
 tracking. Non-2xx bodies are also reused to build the batch failure report, but
@@ -269,19 +265,17 @@ unique failure messages with case associations, and a `response_validation`
 state of `evaluated`, `partial`, or `not_evaluated`. Only exact configured
 THINK, FAST, and Phoenix API key values are replaced.
 
-Both `restscope.testing.run_operation` and `restscope.http.request` are
-high-risk, non-read-only capabilities allowed for every Agent role without a
-separate approval gate. Calling either can trigger side effects on the bound
-target. The raw HTTP tool remains independent and can issue an arbitrary
-target-relative request; the generated testing tool can execute only an
-operation stored in the frozen Generator Catalog using its complete persisted
-generator configuration.
+`restscope.http.request` is a high-risk, non-read-only model capability that
+can trigger side effects on the bound target. Failure Solve receives a further
+operation-scoped wrapper around it. Generated batch execution remains internal
+to Operation Smoke and can execute only an operation stored in the frozen
+Generator Catalog using its complete persisted Generator configuration.
 The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
 The default and only Supervisor execution path is
-`Supervisor → OperationSmokeAgent → restscope.testing.run_operation`. The
-default App does not start MCP processes.
+`Supervisor → OperationSmokeAgent → OperationTestingService.run_smoke_batch`.
+The default App does not start MCP processes.
 
 ## API Behavior Monitor Agent
 

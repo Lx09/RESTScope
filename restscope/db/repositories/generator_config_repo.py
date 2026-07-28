@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from restscope.testing.models import (
     GeneratorConfigRevision,
+    GeneratorRevisionLifecycle,
     InputGeneratorConfig,
     OperationGeneratorConfig,
 )
@@ -69,7 +72,10 @@ class SqlAlchemyGeneratorConfigRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        operation = self.session.get(OperationGeneratorConfigORM, operation_key)
+        operation = self.session.get(
+            OperationGeneratorConfigORM,
+            operation_key,
+        )
         if operation is None:
             return None
         rows = self.session.scalars(
@@ -77,21 +83,23 @@ class SqlAlchemyGeneratorConfigRepository:
             .where(InputGeneratorConfigORM.operation_key == operation_key)
             .order_by(InputGeneratorConfigORM.position)
         ).all()
-        return OperationGeneratorConfig(
-            operation_key=operation.operation_key,
-            revision=operation.revision,
-            snapshot=operation.snapshot,
-            enabled=operation.enabled,
-            disabled_reasons=operation.disabled_reasons,
-            active_media_type=operation.active_media_type,
-            configs=[
-                InputGeneratorConfig(
-                    input_node_id=row.input_node_id,
-                    inclusion_probability=row.inclusion_probability,
-                    strategy=row.strategy,
-                )
-                for row in rows
-            ],
+        return OperationGeneratorConfig.model_validate(
+            {
+                "operation_key": operation.operation_key,
+                "revision": operation.revision,
+                "snapshot": operation.snapshot,
+                "enabled": operation.enabled,
+                "disabled_reasons": operation.disabled_reasons,
+                "active_media_type": operation.active_media_type,
+                "configs": [
+                    {
+                        "input_node_id": row.input_node_id,
+                        "inclusion_probability": row.inclusion_probability,
+                        "strategy": row.strategy,
+                    }
+                    for row in rows
+                ],
+            }
         )
 
     def replace(
@@ -105,7 +113,7 @@ class SqlAlchemyGeneratorConfigRepository:
         disabled_reasons: list[dict],
         active_media_type: str | None,
         configs: list[InputGeneratorConfig],
-        lifecycle: str = "accepted",
+        lifecycle: GeneratorRevisionLifecycle = "accepted",
         hypothesis: dict | None = None,
         evaluation: dict | None = None,
         rollback_of_revision: int | None = None,
@@ -165,36 +173,22 @@ class SqlAlchemyGeneratorConfigRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        row = self.session.get(
-            GeneratorConfigRevisionORM,
-            (operation_key, revision),
+        row = cast(
+            GeneratorConfigRevisionORM | None,
+            self.session.get(
+                GeneratorConfigRevisionORM,
+                (operation_key, revision),
+            ),
         )
         return self._revision_record(row) if row is not None else None
-
-    def list_revisions(
-        self,
-        operation_key: str,
-    ) -> list[GeneratorConfigRevision]:
-        """
-        Return revisions for the repository and database persistence boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        rows = self.session.scalars(
-            select(GeneratorConfigRevisionORM)
-            .where(GeneratorConfigRevisionORM.operation_key == operation_key)
-            .order_by(GeneratorConfigRevisionORM.revision)
-        ).all()
-        return [self._revision_record(row) for row in rows]
 
     def update_revision(
         self,
         *,
         operation_key: str,
         revision: int,
-        expected_lifecycle: str,
-        lifecycle: str,
+        expected_lifecycle: GeneratorRevisionLifecycle,
+        lifecycle: GeneratorRevisionLifecycle,
         evaluation: dict | None,
     ) -> GeneratorConfigRevision:
         """
@@ -264,7 +258,7 @@ class SqlAlchemyGeneratorConfigRepository:
         record: OperationGeneratorConfig,
         *,
         parent_revision: int | None,
-        lifecycle: str,
+        lifecycle: GeneratorRevisionLifecycle,
         hypothesis: dict | None = None,
         evaluation: dict | None = None,
         rollback_of_revision: int | None = None,
@@ -296,16 +290,18 @@ class SqlAlchemyGeneratorConfigRepository:
     def _revision_record(
         row: GeneratorConfigRevisionORM,
     ) -> GeneratorConfigRevision:
-        return GeneratorConfigRevision(
-            operation_key=row.operation_key,
-            revision=row.revision,
-            parent_revision=row.parent_revision,
-            lifecycle=row.lifecycle,
-            rollback_of_revision=row.rollback_of_revision,
-            restored_from_revision=row.restored_from_revision,
-            hypothesis=row.hypothesis,
-            config=row.config,
-            evaluation=row.evaluation,
-            created_at=row.created_at,
-            evaluated_at=row.evaluated_at,
+        return GeneratorConfigRevision.model_validate(
+            {
+                "operation_key": row.operation_key,
+                "revision": row.revision,
+                "parent_revision": row.parent_revision,
+                "lifecycle": row.lifecycle,
+                "rollback_of_revision": row.rollback_of_revision,
+                "restored_from_revision": row.restored_from_revision,
+                "hypothesis": row.hypothesis,
+                "config": row.config,
+                "evaluation": row.evaluation,
+                "created_at": row.created_at,
+                "evaluated_at": row.evaluated_at,
+            }
         )

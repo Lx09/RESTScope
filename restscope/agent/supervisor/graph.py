@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
@@ -17,7 +17,14 @@ from ..operation_smoke import (
     OperationSmokeRequest,
     OperationSmokeResult,
 )
-from .schemas import OperationAttempt, RESTScopeRunReport, RESTScopeRunRequest
+from .schemas import (
+    AttemptDisposition,
+    OperationAttempt,
+    RESTScopeRunReport,
+    RESTScopeRunRequest,
+    RunStatus,
+    StopReason,
+)
 
 
 class RESTScopeMainState(TypedDict, total=False):
@@ -32,8 +39,8 @@ class RESTScopeMainState(TypedDict, total=False):
     attempt_counts: dict[str, int]
     current_round: int
     rounds: int
-    status: str
-    stop_reason: str
+    status: RunStatus
+    stop_reason: StopReason
     last_error: dict[str, Any]
     final_report: dict[str, Any]
 
@@ -92,9 +99,13 @@ class RESTScopeMainGraph:
             span.set_attribute("restscope.run.status", report.status)
             return report
 
-    def _build_graph(self, *, request: RESTScopeRunRequest):
+    def _build_graph(self, *, request: RESTScopeRunRequest) -> Any:
         """Create the four-node LangGraph state machine for this invocation."""
-        graph = StateGraph(RESTScopeMainState)
+        # LangGraph accepts standard TypedDict state at runtime, but its
+        # published generic bounds are not understood consistently by static
+        # IDE inspection. Keep that escape at this library boundary; every
+        # RESTScope node remains fully typed.
+        graph: Any = StateGraph(cast(Any, RESTScopeMainState))
         graph.add_node("discover_operations", self._discover_operations)
         graph.add_node("run_next_operation", self._run_next_operation(request))
         graph.add_node("advance_round", self._advance_round)
@@ -362,18 +373,24 @@ class RESTScopeMainGraph:
             if operation.identity() not in attempted_ids
         ]
         error = state.get("last_error")
+        status: RunStatus = (
+            "errored"
+            if error is not None
+            else state["status"]
+            if "status" in state
+            else "failed"
+        )
+        stop_reason: StopReason = (
+            "technical_error"
+            if error is not None
+            else state["stop_reason"]
+            if "stop_reason" in state
+            else "technical_error"
+        )
         report = RESTScopeRunReport(
             report_id=f"restscope_run_{uuid4().hex}",
-            status=(
-                "errored"
-                if error is not None
-                else state.get("status", "failed")
-            ),
-            stop_reason=(
-                "technical_error"
-                if error is not None
-                else state.get("stop_reason", "technical_error")
-            ),
+            status=status,
+            stop_reason=stop_reason,
             operations=operations,
             attempts=attempts,
             satisfied_operations=satisfied,
@@ -433,7 +450,7 @@ def _attempt_disposition(
     *,
     attempt_number: int,
     max_attempts: int,
-) -> str:
+) -> AttemptDisposition:
     if result.status == "passed":
         return "satisfied"
     if result.status == "unsupported":

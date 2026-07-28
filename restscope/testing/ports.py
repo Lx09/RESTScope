@@ -8,6 +8,7 @@ from typing import Protocol, TypeAlias
 
 from .models import (
     GeneratorConfigRevision,
+    GeneratorRevisionLifecycle,
     InputGeneratorConfig,
     OperationGeneratorConfig,
     ResourceIdentifierGenerator,
@@ -52,7 +53,7 @@ class GeneratorConfigRepository(Protocol):
         disabled_reasons: list[dict],
         active_media_type: str | None,
         configs: list[InputGeneratorConfig],
-        lifecycle: str = "accepted",
+        lifecycle: GeneratorRevisionLifecycle = "accepted",
         hypothesis: dict | None = None,
         evaluation: dict | None = None,
         rollback_of_revision: int | None = None,
@@ -65,18 +66,13 @@ class GeneratorConfigRepository(Protocol):
         revision: int,
     ) -> GeneratorConfigRevision | None: ...
 
-    def list_revisions(
-        self,
-        operation_key: str,
-    ) -> list[GeneratorConfigRevision]: ...
-
     def update_revision(
         self,
         *,
         operation_key: str,
         revision: int,
-        expected_lifecycle: str,
-        lifecycle: str,
+        expected_lifecycle: GeneratorRevisionLifecycle,
+        lifecycle: GeneratorRevisionLifecycle,
         evaluation: dict | None,
     ) -> GeneratorConfigRevision: ...
 

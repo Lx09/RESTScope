@@ -46,6 +46,11 @@ and task records. Do not load unrelated large documents by default.
   materially changes the problem or expands the proposed solution.
 - Prefer the smallest reversible change that answers the current question. Do
   not add speculative frameworks or unrelated cleanup.
+- Do not over-design. Unless current user-approved behavior requires it, do not
+  add an Entity, DTO, Protocol, Adapter, Repository, Service, wrapper Module,
+  configuration field, or persistence record. Every new abstraction must have
+  a concrete current consumer and must hide or remove more complexity than its
+  Interface adds. Prefer deleting, reusing, or deepening an existing Module.
 - Maintain a `docs/tasks/` record for approved work that is multi-step, spans
   sessions, or crosses architectural areas. Small edits and read-only
   investigations do not require one.
@@ -88,9 +93,9 @@ production code and tests:
 - Add nearby comments before non-obvious branches, loops, transformations,
   validation rules, state transitions, security boundaries, and cleanup paths.
   Explain the intent and consequence, not merely the Python syntax.
-- Domain terms and compact identifiers such as IR, DTO, F/C/O evidence refs,
-  Patch Group, Generator, Constraint, and operation key must be introduced in
-  plain language where a new reader first encounters them.
+- Domain terms and compact identifiers such as IR, DTO, Failure Todo,
+  Patch Requirement, Generator, Constraint, and operation key must be
+  introduced in plain language where a new reader first encounters them.
 - Tests must explain the behavior or failure scenario they protect. Prefer a
   short scenario docstring or arrange/act/assert comments over narration of
   each assertion.

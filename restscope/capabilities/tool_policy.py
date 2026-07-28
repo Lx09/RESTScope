@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 from restscope.capabilities.http_request import HTTP_REQUEST_TOOL_NAME
-from restscope.capabilities.testing_tools import (
-    CONFIGURATION_TOOL_NAMES,
-    RUN_OPERATION_TOOL_NAME,
-)
 from restscope.llm.schemas import ToolSpec
 
 
@@ -34,11 +30,8 @@ class ToolPolicy:
         """
         if tool_spec.name == "restscope.resource.lookup":
             return True
-        if tool_spec.name in {HTTP_REQUEST_TOOL_NAME, RUN_OPERATION_TOOL_NAME}:
+        if tool_spec.name == HTTP_REQUEST_TOOL_NAME:
             return True
-        if tool_spec.name in CONFIGURATION_TOOL_NAMES:
-            return False
-
         if tool_spec.requires_approval:
             return False
         if tool_spec.risk_level == "high":

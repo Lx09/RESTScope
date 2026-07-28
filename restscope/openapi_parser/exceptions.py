@@ -31,16 +31,6 @@ class RecursiveReferenceError(OpenAPIParserError):
     pass
 
 
-class PathItemParseError(OpenAPIParserError):
-    """Raised when a path item cannot be parsed."""
-    pass
-
-
-class OperationParseError(OpenAPIParserError):
-    """Raised when an operation cannot be parsed."""
-    pass
-
-
 class SchemaParseError(OpenAPIParserError):
     """Raised when a schema cannot be parsed."""
     pass

@@ -7,7 +7,7 @@ App-lifetime ledger because they may contain sensitive target data.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -42,6 +42,19 @@ TodoFinishStatus = Literal[
     "insufficient_evidence",
     "no_new_attempt",
     "solve_budget_exhausted",
+]
+
+OperationSmokeStatus: TypeAlias = Literal[
+    "passed",
+    "retry",
+    "unsupported",
+    "errored",
+]
+OperationSmokeFailureKind: TypeAlias = Literal[
+    "no_new_failure_work",
+    "plan_budget_exhausted",
+    "unsupported_operation",
+    "operation_error",
 ]
 
 
@@ -87,20 +100,15 @@ class SmokeRoundSummary(_PublicModel):
 class OperationSmokeResult(_PublicModel):
     """Supervisor-facing outcome based only on the latest complete batch."""
 
-    status: Literal["passed", "retry", "unsupported", "errored"]
+    status: OperationSmokeStatus
     operation_key: str
     success_rate: float = Field(ge=0, le=1)
     required_success_rate: float = Field(ge=0, le=1)
     active_config_revision: int = Field(ge=1)
     batch_reports: list[OperationExecutionReport] = Field(default_factory=list)
     rounds: list[SmokeRoundSummary] = Field(default_factory=list)
-    failure_kind: Literal[
-        "no_new_failure_work",
-        "plan_budget_exhausted",
-        "unsupported_operation",
-        "operation_error",
-    ] | None = None
-    error: dict[str, str] | None = None
+    failure_kind: OperationSmokeFailureKind | None = None
+    error: dict[str, str] | None = Field(default=None)
 
     @model_validator(mode="after")
     def validate_status_pair(self) -> "OperationSmokeResult":

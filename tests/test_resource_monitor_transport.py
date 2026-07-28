@@ -104,7 +104,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
         response_content=b'{"id":7}',
     )
 
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -116,7 +116,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
         ),
         operation_key="GET /users/{userId}",
         seed=1,
-    )
+    ).report
 
     assert report.status == "completed"
     assert len(processor.calls) == 1
@@ -355,7 +355,7 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
         response_content=content,
     )
 
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -367,7 +367,7 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
         ),
         operation_key="GET /users/{userId}",
         seed=1,
-    )
+    ).report
 
     observation, _context = processor.calls[0]
     assert len(observation.body) == 1024 * 1024
@@ -392,7 +392,7 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
         status_code=404,
     )
 
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -404,7 +404,7 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
         ),
         operation_key="GET /users/{userId}",
         seed=1,
-    )
+    ).report
 
     assert report.cases[0].response is not None
     assert report.cases[0].response.status_code == 404

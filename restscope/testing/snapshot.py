@@ -43,10 +43,14 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
         try:
             # Required nodes are always present. Optional nodes start at 50% so
             # a batch can exercise both inclusion and omission.
-            config = InputGeneratorConfig(
-                input_node_id=node.input_node_id,
-                inclusion_probability=1.0 if node.required else 0.5,
-                strategy=strategy,
+            config = InputGeneratorConfig.model_validate(
+                {
+                    "input_node_id": node.input_node_id,
+                    "inclusion_probability": (
+                        1.0 if node.required else 0.5
+                    ),
+                    "strategy": strategy,
+                }
             )
         except ValidationError:
             if node.input_node_id in selected_node_ids:
@@ -56,10 +60,14 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
                         "derived strategy options are internally inconsistent",
                     )
                 )
-            config = InputGeneratorConfig(
-                input_node_id=node.input_node_id,
-                inclusion_probability=1.0 if node.required else 0.5,
-                strategy=_fallback_strategy(node),
+            config = InputGeneratorConfig.model_validate(
+                {
+                    "input_node_id": node.input_node_id,
+                    "inclusion_probability": (
+                        1.0 if node.required else 0.5
+                    ),
+                    "strategy": _fallback_strategy(node),
+                }
             )
         configs.append(config)
     if snapshot.request_body_node_id is not None and active_media_type is None:
@@ -112,16 +120,23 @@ def build_operation_snapshot(
             reasons.append(reason)
             unsupported_parameter_nodes[node.input_node_id] = reason.message
         parameters.append(
-            ParameterSnapshot(
-                input_node_id=node.input_node_id,
-                name=parameter.name,
-                location=parameter.location,
-                required=parameter.required,
-                style=parameter.style,
-                explode=parameter.explode,
-                allow_reserved=parameter.allow_reserved,
-                collection_format=parameter.raw.get("collectionFormat"),
-                swagger="schema" not in parameter.raw and "type" in parameter.raw,
+            ParameterSnapshot.model_validate(
+                {
+                    "input_node_id": node.input_node_id,
+                    "name": parameter.name,
+                    "location": parameter.location,
+                    "required": parameter.required,
+                    "style": parameter.style,
+                    "explode": parameter.explode,
+                    "allow_reserved": parameter.allow_reserved,
+                    "collection_format": parameter.raw.get(
+                        "collectionFormat"
+                    ),
+                    "swagger": (
+                        "schema" not in parameter.raw
+                        and "type" in parameter.raw
+                    ),
+                }
             )
         )
 

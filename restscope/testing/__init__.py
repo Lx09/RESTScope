@@ -34,15 +34,18 @@ from .constraint_solver import (
     assignments_from_generated_case,
     solve_input_overrides,
 )
-from .execution import OperationTestingService, TestingExecutionError
+from .execution import (
+    OperationTestingService,
+    SmokeCaseExecutionEvidence,
+    SmokeExecutionOutcome,
+    TestingExecutionError,
+)
 from .failure_reporting import (
     FailureCaseEvidence,
-    failure_messages_for_evidence,
 )
 from .models import (
     BatchFailureReport,
     GeneratorDisabledReason,
-    GeneratorConfigRevision,
     GeneratedNodeValue,
     GeneratedTestCase,
     InputGeneratorConfig,
@@ -61,10 +64,7 @@ from .models import (
 from .generation import generate_strategy_value, project_generated_input_value
 from .ports import ReferenceValueProvider
 from .semantics import (
-    SemanticInputMap,
     build_semantic_input_map,
-    patchable_descendant_handles,
-    patchable_semantic_input_handles,
 )
 
 __all__ = [
@@ -80,7 +80,6 @@ __all__ = [
     "GeneratorConfigError",
     "GeneratorConfigRevisionConflict",
     "GeneratorDisabledReason",
-    "GeneratorConfigRevision",
     "GeneratedNodeValue",
     "GeneratedTestCase",
     "FailureCaseEvidence",
@@ -98,28 +97,26 @@ __all__ = [
     "OperationTestSnapshot",
     "ParameterSnapshot",
     "SchemaSnapshot",
+    "SmokeCaseExecutionEvidence",
+    "SmokeExecutionOutcome",
     "OperationExecutionReport",
     "OperationTestingService",
     "PreparedTestRequest",
     "ReferenceValueProvider",
     "ResourceIdentifierGenerator",
     "ResponseValueGenerator",
-    "SemanticInputMap",
     "OrConstraint",
     "PresentPredicate",
     "TestingExecutionError",
     "UniqueFailureMessage",
     "classify_constraint",
     "evaluate_constraint_set",
-    "failure_messages_for_evidence",
     "expand_generator_patch_presence",
     "build_semantic_input_map",
     "assignments_from_generated_case",
     "generate_strategy_value",
     "normalize_constraint_set",
     "preview_generator_patch",
-    "patchable_descendant_handles",
-    "patchable_semantic_input_handles",
     "project_generated_input_value",
     "referenced_input_node_ids",
     "solve_input_overrides",

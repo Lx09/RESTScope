@@ -169,10 +169,10 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     assert exc_info.value.code == "database_already_exists"
 
 
-def test_run_operation_uses_persisted_snapshot_when_current_ir_is_different(
+def test_smoke_batch_uses_persisted_snapshot_when_current_ir_is_different(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that run operation uses persisted snapshot when current ir is different."""
+    """Scenario: Smoke uses the persisted snapshot even when the current IR differs."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -198,7 +198,7 @@ def test_run_operation_uses_persisted_snapshot_when_current_ir_is_different(
         ),
     )
     current_ir = OpenAPIParser.parse(_spec(path="/replacement", title="Changed"))
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         ToolContext(
             ir=current_ir,
             baseline_schema_source={
@@ -212,7 +212,7 @@ def test_run_operation_uses_persisted_snapshot_when_current_ir_is_different(
         operation_key="POST /orders/{orderId}",
         case_count=1,
         seed=3,
-    )
+    ).report
 
     assert report.status == "completed"
     assert len(requested_urls) == 1
@@ -220,16 +220,15 @@ def test_run_operation_uses_persisted_snapshot_when_current_ir_is_different(
     assert "/replacement" not in requested_urls[0]
 
 
-def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
+def test_catalog_candidates_modify_frozen_generators_by_revision(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that catalog patch and replace modify frozen generators by revision."""
+    """Whole candidates preserve the frozen snapshot and revision lock."""
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import (
         GeneratorConfigRevisionConflict,
-        InputGeneratorConfig,
         InputGeneratorPatch,
     )
 
@@ -248,7 +247,7 @@ def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
         == "query/verbose"
     )
 
-    patched = catalog.patch_operation(
+    candidate = catalog.stage_candidate(
         operation_key=initial.operation_key,
         expected_revision=1,
         updates=[
@@ -258,6 +257,12 @@ def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
                 strategy={"type": "constant", "value": True},
             )
         ],
+        hypothesis={"kind": "test_setup"},
+    )
+    patched = catalog.accept_candidate(
+        operation_key=initial.operation_key,
+        candidate_revision=candidate.revision,
+        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
 
     assert patched.revision == 2
@@ -271,33 +276,32 @@ def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
     assert updated_verbose.strategy.type == "constant"
     assert updated_verbose.strategy.value is True
 
-    replacement_configs = [
-        InputGeneratorConfig.model_validate(
-            {
-                **item.model_dump(mode="json"),
-                "strategy": {"type": "constant", "value": 5},
-            }
-        )
-        if item.input_node_id
-        == next(
-            node.input_node_id
-            for node in patched.snapshot.input_nodes
-            if node.canonical_path == "path/orderId"
-        )
-        else item
-        for item in patched.configs
-    ]
-    replaced = catalog.replace_operation(
+    path_node_id = next(
+        node.input_node_id
+        for node in patched.snapshot.input_nodes
+        if node.canonical_path == "path/orderId"
+    )
+    second_candidate = catalog.stage_candidate(
         operation_key=patched.operation_key,
         expected_revision=2,
-        active_media_type=None,
-        configs=replacement_configs,
+        updates=[
+            InputGeneratorPatch(
+                input_node_id=path_node_id,
+                strategy={"type": "constant", "value": 5},
+            )
+        ],
+        hypothesis={"kind": "test_setup"},
+    )
+    replaced = catalog.accept_candidate(
+        operation_key=patched.operation_key,
+        candidate_revision=second_candidate.revision,
+        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
 
     assert replaced.revision == 3
     assert replaced.snapshot == initial.snapshot
     with pytest.raises(GeneratorConfigRevisionConflict):
-        catalog.patch_operation(
+        catalog.stage_candidate(
             operation_key=initial.operation_key,
             expected_revision=2,
             updates=[
@@ -306,6 +310,7 @@ def test_catalog_patch_and_replace_modify_frozen_generators_by_revision(
                     inclusion_probability=0,
                 )
             ],
+            hypothesis={"kind": "stale_test_setup"},
         )
 
 

@@ -47,6 +47,22 @@ def _configured_catalog(tmp_path: Path, ir):
     return catalog
 
 
+def _accept_patch(catalog, operation_key: str, updates):
+    """Apply test-only setup through the same whole-candidate path as Smoke."""
+    current = catalog.require_operation(operation_key)
+    candidate = catalog.stage_candidate(
+        operation_key=operation_key,
+        expected_revision=current.revision,
+        updates=updates,
+        hypothesis={"kind": "test_setup"},
+    )
+    return catalog.accept_candidate(
+        operation_key=operation_key,
+        candidate_revision=candidate.revision,
+        evaluation={"validation_status": "accepted", "kind": "test_setup"},
+    )
+
+
 def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
     import httpx
 
@@ -177,7 +193,7 @@ def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
         headers={"Authorization": "Bearer runtime-secret"},
     )
 
-    outcome = service.run_operation_for_smoke(
+    outcome = service.run_smoke_batch(
         context,
         operation_key=operation.operation_key,
         case_count=2,
@@ -255,11 +271,11 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
     )
     operation = ir.operations["GET /items"]
     catalog = _configured_catalog(tmp_path, ir)
-    initial = catalog.inspect_operation(operation.operation_key)
+    initial = catalog.require_operation(operation.operation_key)
     parameter_id = initial.snapshot.parameters[0].input_node_id
-    patched = catalog.patch_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
+    patched = _accept_patch(
+        catalog,
+        initial.operation_key,
         updates=[
             {
                 "input_node_id": parameter_id,
@@ -295,11 +311,11 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
         headers={},
     )
 
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         context,
         operation_key=operation.operation_key,
         seed=19,
-    )
+    ).report
 
     assert len(requests) == 1
     assert requests[0].url.params["mode"] == "ffffffff"
@@ -319,7 +335,7 @@ def test_smoke_execution_applies_constraints_and_traces_only_the_count(
         tmp_path,
         tracing_runtime=tracing,
     )
-    config = catalog.inspect_operation(operation.operation_key)
+    config = catalog.require_operation(operation.operation_key)
     mode_id = config.snapshot.parameters[0].input_node_id
     secret_literal = "slow"
     constraints = ConstraintSet.model_validate(
@@ -341,13 +357,13 @@ def test_smoke_execution_applies_constraints_and_traces_only_the_count(
         }
     )
 
-    outcome = service.run_operation_for_smoke(
+    outcome = service.run_smoke_batch(
         context,
         operation_key=operation.operation_key,
         case_count=2,
         seed=17,
         constraints=constraints,
-    )
+    ).report
 
     assert len(requests) == 2
     assert [request.url.params["mode"] for request in requests] == ["slow", "slow"]
@@ -374,7 +390,7 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
     operation, catalog, service, context, requests = _constrained_execution_setup(
         tmp_path
     )
-    config = catalog.inspect_operation(operation.operation_key)
+    config = catalog.require_operation(operation.operation_key)
     mode_id = config.snapshot.parameters[0].input_node_id
     constraints = ConstraintSet.model_validate(
         {
@@ -399,7 +415,7 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
     )
 
     with pytest.raises(TestingExecutionError) as raised:
-        service.run_operation_for_smoke(
+        service.run_smoke_batch(
             context,
             operation_key=operation.operation_key,
             case_count=2,
@@ -408,38 +424,6 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
         )
 
     assert raised.value.code == "constraint_unsatisfiable"
-    assert requests == []
-
-
-def test_ordinary_operation_execution_does_not_accept_constraints(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that ordinary operation execution does not accept constraints."""
-    import pytest
-
-    from restscope.testing import ConstraintSet
-
-    operation, catalog, service, context, requests = _constrained_execution_setup(
-        tmp_path
-    )
-    mode_id = catalog.inspect_operation(
-        operation.operation_key
-    ).snapshot.parameters[0].input_node_id
-    constraints = ConstraintSet.model_validate(
-        {
-            "constraints": [
-                {"type": "present", "input_node_id": mode_id}
-            ]
-        }
-    )
-
-    with pytest.raises(TypeError):
-        service.run_operation(
-            context,
-            operation_key=operation.operation_key,
-            constraints=constraints,
-        )
-
     assert requests == []
 
 
@@ -490,11 +474,11 @@ def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    initial = catalog.inspect_operation(operation.operation_key)
+    initial = catalog.require_operation(operation.operation_key)
     parameter_id = initial.snapshot.parameters[0].input_node_id
-    patched = catalog.patch_operation(
-        operation_key=initial.operation_key,
-        expected_revision=1,
+    patched = _accept_patch(
+        catalog,
+        initial.operation_key,
         updates=[
             {
                 "input_node_id": parameter_id,
@@ -534,7 +518,12 @@ def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -
         SerializationError,
         match="deepObject query parameters require an exploded object",
     ):
-        service.run_operation(context, operation_key=operation.operation_key, case_count=2, seed=2)
+        service.run_smoke_batch(
+            context,
+            operation_key=operation.operation_key,
+            case_count=2,
+            seed=2,
+        )
 
     assert requests == []
 
@@ -589,7 +578,7 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
             )
         ),
     )
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
@@ -599,7 +588,7 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
         operation_key=operation.operation_key,
         case_count=2,
         seed=9,
-    )
+    ).report
 
     assert len(requests) == 2
     assert report.status == "partial"
@@ -696,9 +685,9 @@ def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    catalog.patch_operation(
-        operation_key=operation.operation_key,
-        expected_revision=1,
+    _accept_patch(
+        catalog,
+        operation.operation_key,
         updates=[
             {
                 "input_node_id": node.input_node_id,
@@ -719,7 +708,7 @@ def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(
         ),
     )
 
-    report = service.run_operation(
+    report = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
@@ -728,7 +717,7 @@ def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(
         ),
         operation_key=operation.operation_key,
         seed=1,
-    )
+    ).report
 
     assert sent_paths == [f"/users/{secret}"]
     assert report.cases[0].request.path == f"/users/{secret}"
@@ -805,11 +794,16 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    catalog.replace_operation(
-        operation_key=operation.operation_key,
-        expected_revision=1,
-        active_media_type=None,
-        configs=[input_config],
+    _accept_patch(
+        catalog,
+        operation.operation_key,
+        updates=[
+            {
+                "input_node_id": input_config.input_node_id,
+                "inclusion_probability": input_config.inclusion_probability,
+                "strategy": input_config.strategy,
+            }
+        ],
     )
     requests = []
     service = OperationTestingService(
@@ -825,7 +819,7 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
     )
 
     with pytest.raises(TargetHTTPTransportError) as raised:
-        service.run_operation(
+        service.run_smoke_batch(
             ToolContext(
                 ir=ir,
                 baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},

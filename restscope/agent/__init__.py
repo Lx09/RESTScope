@@ -28,11 +28,11 @@ from .api_behavior_monitor import (
 )
 from .operation_smoke import (
     BehaviorMonitorReferenceValues,
-    OperationBatchRunner,
     OperationSmokeAgent,
     OperationSmokeRequest,
     OperationSmokeResult,
     PatchAttemptSummary,
+    SmokeBatchRunner,
     SmokeRoundSummary,
     TodoRunSummary,
     build_operation_smoke_agent,
@@ -77,7 +77,6 @@ __all__ = [
     "APIBehaviorMonitorResult",
     "APIBehaviorResponseProcessor",
     "APIBehaviorWarning",
-    "OperationBatchRunner",
     "OperationSmokeAgent",
     "OperationSmokeRequest",
     "OperationSmokeResult",
@@ -91,6 +90,7 @@ __all__ = [
     "ParameterPatchFailure",
     "ParameterPatchTask",
     "PatchAttemptSummary",
+    "SmokeBatchRunner",
     "SmokeRoundSummary",
     "TodoRunSummary",
     "ValidatedParameterPatch",

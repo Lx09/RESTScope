@@ -21,7 +21,7 @@ from .schema_parser import extract_legacy_inline_schema, parse_schema
 def parse_response_headers(
     raw_headers: dict,
     resolver: ReferenceResolver,
-    scope: str,
+    scope: str | None,
     diagnostics: DiagnosticsIR,
 ) -> dict[str, HeaderIR]:
     """
@@ -99,7 +99,7 @@ def parse_response_headers(
 def parse_response_links(
     raw_links: dict,
     resolver: ReferenceResolver,
-    scope: str,
+    scope: str | None,
     diagnostics: DiagnosticsIR,
 ) -> dict[str, LinkIR]:
     """
@@ -183,7 +183,7 @@ def parse_server(server_raw: dict) -> ServerIR:
 def parse_response_contents(
     raw_response: dict,
     resolver: ReferenceResolver,
-    scope: str,
+    scope: str | None,
     diagnostics: DiagnosticsIR,
 ) -> dict[str, MediaTypeIR]:
     """
@@ -246,7 +246,7 @@ def parse_responses(
     operation_raw: dict,
     adapter: SpecificationAdapter,
     resolver: ReferenceResolver,
-    scope: str,
+    scope: str | None,
     diagnostics: DiagnosticsIR,
 ) -> ResponsesIR:
     """

@@ -179,7 +179,7 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
                     pytrace=False,
                 )
 
-            agent.catalog.record_groups(
+            agent.resource_identifier_tracker.catalog.record_groups(
                 operation=MonitoredOperation(
                     operation_key="POST /accounts",
                     method="POST",

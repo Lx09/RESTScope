@@ -27,6 +27,13 @@ Status: Implemented and offline-verified; awaiting user review
 - Updated Supervisor stop reasons and public Agent facades.
 - Added complete Operation IR context, App-close memory clearing, and a
   separate unexecuted Live verification proposal.
+- A later user-approved simplification removed the model-visible
+  `restscope.testing.run_operation` capability. Generated batches now enter
+  only through Smoke's required `SmokeBatchRunner.run_smoke_batch` interface;
+  a subsequent redundancy cleanup removed the remaining Generator
+  configuration tools and their direct management APIs. Generator changes now
+  enter only through complete Smoke candidate transactions and are accepted or
+  rolled back as a whole.
 
 ## Non-goals
 
@@ -44,10 +51,25 @@ Fresh offline verification on 2026-07-27:
 - `uv run python -m compileall -q restscope tests`: passed.
 - `git diff --check`: passed.
 
-The extra skipped tests include the former diagnosis/Group Project Swagger
-Live contract, which is now explicitly superseded. Its replacement scope is
-recorded in `llm-led-operation-smoke-live-verification-proposal.md`; it was not
-executed because model names and target authorization are absent.
+The former diagnosis/Group Project Swagger Live test was explicitly
+superseded and was later removed during redundancy cleanup. Its replacement
+scope remains recorded in
+`llm-led-operation-smoke-live-verification-proposal.md`; it was not executed
+because model names and target authorization are absent.
 
 No real model, target API, or Phoenix request was sent. No commit, merge, push,
 branch deletion, or worktree cleanup was performed.
+
+## 2026-07-28 redundancy cleanup
+
+A user-approved follow-up removed unused Context and Memory prototypes, the
+Generator management tool layer, dead parser/testing helpers, revision-history
+browsing, partial candidate acceptance, and compatibility fallbacks around
+Smoke references and the API Behavior Monitor. The Catalog now exposes only
+initialization, current-config reads, and complete candidate
+stage/accept/reject/rollback/recovery. The superseded diagnosis/Group Live test
+was also removed.
+
+Per the user's instruction, this follow-up did not run pytest, a Live model, or
+a target API. Verification was limited to Python compilation, import checks,
+`git diff --check`, and residual-symbol searches.

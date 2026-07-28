@@ -53,7 +53,7 @@ class ModelSelector:
             selected = self.thinking
         else:
             raise ValueError(f"Unsupported LLM role: {role}")
-        update = {"role": role}
+        update: dict[str, object] = {"role": role}
         if role in self.ZERO_TEMPERATURE_ROLES:
             update["temperature"] = 0
         return selected.model_copy(update=update)

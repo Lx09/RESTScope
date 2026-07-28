@@ -9,13 +9,13 @@ transactions, combines accepted runtime Constraints, and computes the final
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict
 import secrets
-from typing import Protocol
+from typing import Literal, Protocol
 
-from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
+from restscope.capabilities.tool_context import ToolContext
 from restscope.agent.failure_solver import (
     FailureSolveAgentFactory,
     FailureSolveRequest,
@@ -35,36 +35,40 @@ from restscope.testing import (
     GeneratorConfigCatalog,
     OperationExecutionReport,
     OperationGeneratorConfig,
-    ReferenceValueProvider,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
+    SmokeExecutionOutcome,
     build_semantic_input_map,
     expand_generator_patch_presence,
 )
 
 from .evidence import build_batch_evidence, build_plan_case_map
 from .history import OperationSmokeHistory
+from .references import BehaviorMonitorReferenceValues
 from .schemas import (
+    OperationSmokeFailureKind,
     OperationSmokeRequest,
     OperationSmokeResult,
+    OperationSmokeStatus,
     PatchAttemptSummary,
     SmokeRoundSummary,
     TodoRunSummary,
 )
 
 
-class OperationBatchRunner(Protocol):
-    """Describe the complete-batch execution boundary used by Smoke."""
+class SmokeBatchRunner(Protocol):
+    """Run a complete same-seed Batch and return Smoke-only response evidence."""
 
-    def run_operation(
+    def run_smoke_batch(
         self,
-        context,
+        context: ToolContext,
         /,
         *,
         operation_key: str,
-        case_count: int = 1,
-        seed: int | None = None,
-    ) -> OperationExecutionReport: ...
+        case_count: int,
+        seed: int,
+        constraints: ConstraintSet | None,
+    ) -> SmokeExecutionOutcome: ...
 
 
 class OperationSmokeAgent:
@@ -74,12 +78,12 @@ class OperationSmokeAgent:
         self,
         *,
         config_catalog: GeneratorConfigCatalog,
-        batch_runner: OperationBatchRunner,
+        batch_runner: SmokeBatchRunner,
         plan_agent: SmokePlanAgent,
         failure_solver_factory: FailureSolveAgentFactory,
         patch_agent_factory: ParameterPatchAgentFactory,
         effect_agent: SmokeEffectAgent,
-        reference_values: ReferenceValueProvider,
+        reference_values: BehaviorMonitorReferenceValues,
         history: OperationSmokeHistory | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
@@ -96,7 +100,7 @@ class OperationSmokeAgent:
 
     def run(
         self,
-        context,
+        context: ToolContext,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
         """Run one traced lifecycle without exposing raw ledger evidence."""
@@ -143,7 +147,7 @@ class OperationSmokeAgent:
 
     def _run(
         self,
-        context,
+        context: ToolContext,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
         """Execute the thin coordination loop and protect candidate cleanup."""
@@ -512,13 +516,9 @@ class OperationSmokeAgent:
                         )
                         if accepted:
                             if pending_candidate:
-                                current = self.config_catalog.finalize_candidate(
+                                current = self.config_catalog.accept_candidate(
                                     operation_key=request.operation_key,
                                     candidate_revision=current.revision,
-                                    accepted_input_node_ids={
-                                        item.input_node_id
-                                        for item in expanded_updates
-                                    },
                                     evaluation=_candidate_evaluation(
                                         candidate_report,
                                         request=request,
@@ -618,13 +618,13 @@ class OperationSmokeAgent:
     @staticmethod
     def _result(
         *,
-        status: str,
+        status: OperationSmokeStatus,
         request: OperationSmokeRequest,
         current: OperationGeneratorConfig,
         success_rate: float,
         reports: list[OperationExecutionReport],
         rounds: list[SmokeRoundSummary],
-        failure_kind: str | None = None,
+        failure_kind: OperationSmokeFailureKind | None = None,
         error: dict[str, str] | None = None,
     ) -> OperationSmokeResult:
         """Build the public summary without copying App-only raw evidence."""
@@ -653,26 +653,17 @@ def _success_rate(report: OperationExecutionReport) -> float:
 
 
 def _operation_context(
-    context,
+    context: ToolContext,
     *,
     config: OperationGeneratorConfig,
 ) -> dict:
     """Return the complete current Operation IR plus its frozen test snapshot.
 
-    ``ToolContext.ir`` is available in the real App. Small offline callers may
-    omit it, in which case the complete frozen testing snapshot still provides
-    the current method, path, input schemas, media types, and support limits.
+    The initialized ``ToolContext`` supplies the live Operation IR, while the
+    Catalog snapshot supplies the frozen generation contract.
     """
-    ir = getattr(context, "ir", None)
-    operation = getattr(ir, "operations", {}).get(config.operation_key)
-    if isinstance(operation, BaseModel):
-        operation_value = operation.model_dump(mode="json")
-    elif operation is not None and is_dataclass(operation):
-        operation_value = asdict(operation)
-    elif isinstance(operation, dict):
-        operation_value = dict(operation)
-    else:
-        operation_value = None
+    operation = context.ir.operations.get(config.operation_key)
+    operation_value = asdict(operation) if operation is not None else None
     return {
         "openapi_operation_ir": operation_value,
         "testing_snapshot": config.snapshot.model_dump(mode="json"),
@@ -683,7 +674,7 @@ def _candidate_evaluation(
     report: OperationExecutionReport,
     *,
     request: OperationSmokeRequest,
-    status: str,
+    status: Literal["accepted", "rejected"],
     change_count: int,
 ) -> dict:
     """Describe all-or-nothing candidate disposition for the Catalog audit."""
@@ -700,7 +691,7 @@ def _candidate_evaluation(
 
 def _assert_reference_invariants(
     config: OperationGeneratorConfig,
-    reference_values: ReferenceValueProvider,
+    reference_values: BehaviorMonitorReferenceValues,
 ) -> None:
     """Fail before generation when a configured reference pool is empty."""
     for item in config.configs:
@@ -719,19 +710,16 @@ def _assert_reference_invariants(
 
 
 def _available_reference_options(
-    reference_values: ReferenceValueProvider,
+    reference_values: BehaviorMonitorReferenceValues,
     *,
-    context,
+    context: ToolContext,
     config: OperationGeneratorConfig,
     input_node_ids: set[str],
 ) -> list[AvailableReferenceOption]:
-    """Return Behavior Monitor reference options when the provider supports it."""
-    available = getattr(reference_values, "available_options", None)
-    if not callable(available):
-        return []
+    """Return populated Behavior Monitor references for the affected inputs."""
     return list(
-        available(
-            ir=getattr(context, "ir", None),
+        reference_values.available_options(
+            ir=context.ir,
             config=config,
             input_node_ids=input_node_ids,
         )
@@ -739,24 +727,19 @@ def _available_reference_options(
 
 
 def _prepare_reference_updates(
-    reference_values: ReferenceValueProvider,
+    reference_values: BehaviorMonitorReferenceValues,
     *,
-    context,
+    context: ToolContext,
     config: OperationGeneratorConfig,
     updates,
     selected_reference_options,
 ):
     """Resolve selected reference metadata and verify its pool before staging."""
-    prepare = getattr(reference_values, "prepare_updates", None)
-    prepared = (
-        prepare(
-            ir=getattr(context, "ir", None),
-            config=config,
-            updates=updates,
-            selected_reference_options=selected_reference_options,
-        )
-        if callable(prepare)
-        else updates
+    prepared = reference_values.prepare_updates(
+        ir=context.ir,
+        config=config,
+        updates=updates,
+        selected_reference_options=selected_reference_options,
     )
     for update in prepared:
         strategy = update.strategy
@@ -785,38 +768,22 @@ def _combined_constraints(
 
 
 def _run_smoke_batch(
-    runner: OperationBatchRunner,
+    runner: SmokeBatchRunner,
     *,
-    context,
+    context: ToolContext,
     operation_key: str,
     case_count: int,
     seed: int,
     constraints: ConstraintSet | None,
 ) -> tuple[OperationExecutionReport, dict[str, object]]:
-    """Run one complete batch and retain private evidence when supported."""
-    run_for_smoke = getattr(runner, "run_operation_for_smoke", None)
-    if not callable(run_for_smoke):
-        if constraints is not None:
-            raise RuntimeError(
-                "The batch runner does not support runtime constraints"
-            )
-        return (
-            runner.run_operation(
-                context,
-                operation_key=operation_key,
-                case_count=case_count,
-                seed=seed,
-            ),
-            {},
-        )
-    arguments = {
-        "operation_key": operation_key,
-        "case_count": case_count,
-        "seed": seed,
-    }
-    if constraints is not None:
-        arguments["constraints"] = constraints
-    outcome = run_for_smoke(context, **arguments)
+    """Run one complete Batch through the required Smoke execution interface."""
+    outcome = runner.run_smoke_batch(
+        context,
+        operation_key=operation_key,
+        case_count=case_count,
+        seed=seed,
+        constraints=constraints,
+    )
     return (
         outcome.report,
         {item.case_id: item for item in outcome.case_evidence},

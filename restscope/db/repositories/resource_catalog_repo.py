@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
@@ -303,7 +303,10 @@ class SqlAlchemyResourceCatalogRepository:
         )
         if alias is None:
             return ResourceLookupResult(status="not_found")
-        resource = self.session.get(ResourceORM, alias.resource_id)
+        resource = cast(
+            ResourceORM | None,
+            self.session.get(ResourceORM, alias.resource_id),
+        )
         assert resource is not None
         aliases = self.session.scalars(
             select(ResourceAliasORM)
@@ -404,7 +407,13 @@ class SqlAlchemyResourceCatalogRepository:
                 "Resource aliases resolve to multiple existing resources"
             )
         if matched_resource_ids:
-            resource = self.session.get(ResourceORM, next(iter(matched_resource_ids)))
+            resource = cast(
+                ResourceORM | None,
+                self.session.get(
+                    ResourceORM,
+                    next(iter(matched_resource_ids)),
+                ),
+            )
             assert resource is not None
             return resource
         resource = ResourceORM(
@@ -590,7 +599,6 @@ class SqlAlchemyResourceCatalogRepository:
         """
         from restscope.agent.api_behavior_monitor.resource_schemas import (
             LearnedResourceRule,
-            MonitoredOperation,
         )
 
         resource = (
@@ -598,23 +606,31 @@ class SqlAlchemyResourceCatalogRepository:
             if row.resource_id is not None
             else None
         )
-        return LearnedResourceRule(
-            rule_id=row.id,
-            resource_id=resource.id if resource is not None else None,
-            has_resource=row.has_resource,
-            resource_name=resource.canonical_name if resource is not None else None,
-            resource_aliases=list(row.resource_aliases),
-            operation=MonitoredOperation(
-                operation_key=row.operation_key,
-                method=row.method,
-                path=row.path,
-            ),
-            group_path=row.group_path,
-            id_field_name=row.id_field_name,
-            id_selector=row.id_selector,
-            access_mode=row.access_mode,
-            classification_source=row.classification_source,
-            id_observed=row.id_observed,
+        return LearnedResourceRule.model_validate(
+            {
+                "rule_id": row.id,
+                "resource_id": (
+                    resource.id if resource is not None else None
+                ),
+                "has_resource": row.has_resource,
+                "resource_name": (
+                    resource.canonical_name
+                    if resource is not None
+                    else None
+                ),
+                "resource_aliases": list(row.resource_aliases),
+                "operation": {
+                    "operation_key": row.operation_key,
+                    "method": row.method,
+                    "path": row.path,
+                },
+                "group_path": row.group_path,
+                "id_field_name": row.id_field_name,
+                "id_selector": row.id_selector,
+                "access_mode": row.access_mode,
+                "classification_source": row.classification_source,
+                "id_observed": row.id_observed,
+            }
         )
 
     def _operation_summaries(
@@ -656,25 +672,39 @@ class SqlAlchemyResourceCatalogRepository:
                 continue
             representative = operation_rules[0]
             output.append(
-                ResourceOperationSummary(
-                    operation_key=operation_key,
-                    method=representative.method,
-                    path=representative.path,
-                    access_mode=representative.access_mode,
-                    resource_aliases=sorted(
+                ResourceOperationSummary.model_validate(
+                    {
+                        "operation_key": operation_key,
+                        "method": representative.method,
+                        "path": representative.path,
+                        "access_mode": representative.access_mode,
+                        "resource_aliases": sorted(
                         {
                             alias
                             for rule in operation_rules
                             for alias in rule.resource_aliases
                         },
-                        key=str.casefold,
-                    ),
-                    id_field_aliases=sorted(
-                        {rule.id_field_name for rule in operation_rules},
-                        key=str.casefold,
-                    ),
-                    selectors=sorted({rule.id_selector for rule in operation_rules}),
-                    latest_seen_at=max(as_utc(item.latest_seen_at) for item in usages),
+                            key=lambda value: value.casefold(),
+                        ),
+                        "id_field_aliases": sorted(
+                            {
+                                rule.id_field_name
+                                for rule in operation_rules
+                                if rule.id_field_name is not None
+                            },
+                            key=lambda value: value.casefold(),
+                        ),
+                        "selectors": sorted(
+                            {
+                                rule.id_selector
+                                for rule in operation_rules
+                                if rule.id_selector is not None
+                            }
+                        ),
+                        "latest_seen_at": max(
+                            as_utc(item.latest_seen_at) for item in usages
+                        ),
+                    }
                 )
             )
         output.sort(key=lambda item: (item.latest_seen_at, item.operation_key), reverse=True)

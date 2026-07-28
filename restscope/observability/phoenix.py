@@ -161,4 +161,13 @@ def _collector_export_endpoint(endpoint: str, *, protocol: str) -> str:
     parsed = urlparse(endpoint)
     if parsed.path not in {"", "/"}:
         return endpoint
-    return urlunparse(parsed._replace(path="/v1/traces"))
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            "/v1/traces",
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )

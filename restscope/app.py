@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 from pydantic import TypeAdapter
 
 from restscope.agent import (
     OperationSmokeAgent,
+    SmokeBatchRunner,
     RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
@@ -115,12 +116,11 @@ class RESTScopeApp:
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
                 )
-                # Capabilities expose these concrete services as policy-checked
-                # tools.  Agents receive the runtime instead of importing
-                # database or network implementations directly.
+                # The capability runtime exposes HTTP and evidence lookup tools.
+                # Generated Batch execution stays internal: Smoke receives the
+                # testing service through its narrow runner Protocol below.
                 built_runtime = build_capabilities(
                     tracing_runtime=self._tracing_runtime,
-                    generator_config_catalog=generator_catalog,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
                     api_behavior_monitor_agent=api_behavior_monitor_agent,
@@ -130,7 +130,14 @@ class RESTScopeApp:
                     smoke_agent = build_operation_smoke_agent(
                         config,
                         config_catalog=generator_catalog,
-                        batch_runner=operation_testing_service,
+                        # OperationTestingService implements this structural
+                        # Protocol. The cast records that composition-root
+                        # binding without making the testing layer import its
+                        # coordinating Agent.
+                        batch_runner=cast(
+                            SmokeBatchRunner,
+                            operation_testing_service,
+                        ),
                         reference_values=reference_values,
                         tool_executor=built_runtime.tool_executor,
                         tracing_runtime=self._tracing_runtime,
@@ -245,7 +252,6 @@ class RESTScopeApp:
                 assert api_behavior_monitor_agent is not None
                 runtime = build_capabilities(
                     tracing_runtime=trace_runtime,
-                    generator_config_catalog=generator_catalog,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
                     api_behavior_monitor_agent=api_behavior_monitor_agent,

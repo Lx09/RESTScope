@@ -19,8 +19,10 @@ from restscope.http_transport import (
 )
 from restscope.testing import OperationGeneratorConfig
 
+from .agent import HTTPProbe
 
-class CurrentOperationHTTPProbe:
+
+class CurrentOperationHTTPProbe(HTTPProbe):
     """Expose the global HTTP tool without granting cross-operation requests."""
 
     ROLE = "operation_smoke_failure_solve"

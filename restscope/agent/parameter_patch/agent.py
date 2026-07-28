@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from restscope.agent.prompt_context import fit_message_context
@@ -185,12 +186,14 @@ class ParameterPatchAgent:
                             return outcome
                     else:
                         assert decision.patch is not None
+                        proposal = decision.patch
+                        assert isinstance(proposal, ParameterPatchProposal)
                         # A new proposal invalidates prior sample acceptance even
                         # when this replacement cannot compile.
                         validated = None
                         try:
                             patch = _compile_patch(
-                                decision.patch,
+                                proposal,
                                 task=task,
                                 config=config,
                                 reference_by_alias=prompt.reference_by_alias,
@@ -386,7 +389,7 @@ def _compile_constraint(
     *,
     index: int,
     task: ParameterPatchTask,
-    semantic: dict[str, str],
+    semantic: Mapping[str, str],
     config: OperationGeneratorConfig,
 ) -> CompiledConstraintPatch:
     """Compile one semantic Constraint and reject out-of-scope inputs."""

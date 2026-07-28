@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,7 +26,11 @@ class SqlAlchemySchemaRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        obj = SchemaORM(id=id, file_path=file_path, raw_content=raw_content)
+        obj = SchemaORM(
+            id=id,
+            file_path=file_path,
+            raw_content=raw_content,
+        )
         self.session.add(obj)
         self.session.flush()
         return self._to_record(obj)
@@ -36,7 +42,7 @@ class SqlAlchemySchemaRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        obj = self.session.get(SchemaORM, schema_id)
+        obj = cast(SchemaORM | None, self.session.get(SchemaORM, schema_id))
         return self._to_record(obj) if obj is not None else None
 
     def list(self) -> list[SchemaRecord]:
@@ -65,7 +71,7 @@ class SqlAlchemySchemaRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        obj = self.session.get(SchemaORM, schema_id)
+        obj = cast(SchemaORM | None, self.session.get(SchemaORM, schema_id))
         if obj is None:
             return None
         obj.file_path = file_path

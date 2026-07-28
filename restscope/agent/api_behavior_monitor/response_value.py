@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 from restscope.llm import (
     LLMClient,
@@ -44,7 +44,7 @@ class ResponseValueRegistrationResult:
     The annotated fields form the contract; validation rejects missing, extra, or
     incorrectly typed values at the boundary.
     """
-    status: str
+    status: Literal["registered", "existing"]
     monitor_id: str
     value_name: str
     sources: list[PersistedResponseValueSource]

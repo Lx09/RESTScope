@@ -13,17 +13,18 @@ from restscope.capabilities import ToolExecutor
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
 from restscope.restscope_config import RESTScopeConfig
-from restscope.testing import GeneratorConfigCatalog, ReferenceValueProvider
+from restscope.testing import GeneratorConfigCatalog
 
-from .agent import OperationBatchRunner, OperationSmokeAgent
+from .agent import OperationSmokeAgent, SmokeBatchRunner
+from .references import BehaviorMonitorReferenceValues
 
 
 def build_operation_smoke_agent(
     config: RESTScopeConfig,
     *,
     config_catalog: GeneratorConfigCatalog,
-    batch_runner: OperationBatchRunner,
-    reference_values: ReferenceValueProvider,
+    batch_runner: SmokeBatchRunner,
+    reference_values: BehaviorMonitorReferenceValues,
     tool_executor: ToolExecutor | None = None,
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,

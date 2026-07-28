@@ -64,14 +64,6 @@ def build_batch_failure_report(
     )
 
 
-def failure_messages_for_evidence(
-    evidence: FailureCaseEvidence,
-) -> list[str]:
-    """Return the canonical messages used to deduplicate one failed case."""
-
-    return _case_messages(evidence)
-
-
 def _case_messages(case: FailureCaseEvidence) -> list[str]:
     """
     Handle case messages as part of deterministic request generation, constraint

@@ -143,7 +143,7 @@ def parse_request_body(
     operation_raw: dict,
     adapter: SpecificationAdapter,
     resolver: ReferenceResolver,
-    scope: str,
+    scope: str | None,
     diagnostics: DiagnosticsIR,
 ) -> RequestBodyIR | None:
     """

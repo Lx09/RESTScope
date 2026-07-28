@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from restscope.http_transport import (
     TargetResponseObservation,
     TargetResponseOperationContext,
@@ -58,10 +60,13 @@ class APIBehaviorResponseProcessor:
                     ),
                 ),
             )
+        response_validation: Literal[
+            "evaluated",
+            "partial",
+            "not_evaluated",
+        ] = "partial" if result.warnings else "evaluated"
         return TargetResponseProcessorResult(
-            response_validation=(
-                "partial" if result.warnings else "evaluated"
-            ),
+            response_validation=response_validation,
             warnings=tuple(
                 TargetResponseProcessorWarning(
                     code=warning.code,
@@ -93,16 +98,8 @@ def _result_details(result) -> dict:
         "resource_identifier": (
             {
                 "status": resource.status,
-                "groups_processed": getattr(
-                    resource,
-                    "groups_processed",
-                    0,
-                ),
-                "identifiers_recorded": getattr(
-                    resource,
-                    "identifiers_recorded",
-                    0,
-                ),
+                "groups_processed": resource.groups_processed,
+                "identifiers_recorded": resource.identifiers_recorded,
                 "warning_code": (
                     resource.warning.code
                     if resource.warning is not None

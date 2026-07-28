@@ -50,7 +50,7 @@ class ToolSpec(BaseModel):
     description: str
     kind: ToolKind
     input_schema: dict[str, Any]
-    output_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = Field(default=None)
     risk_level: ToolRiskLevel = "low"
     read_only: bool = True
     requires_approval: bool = False
@@ -66,7 +66,7 @@ class ToolResult(BaseModel):
     status: ToolResultStatus
     content: str | None = None
     structured: Any | None = None
-    error: dict[str, Any] | None = None
+    error: dict[str, Any] | None = Field(default=None)
     artifact_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

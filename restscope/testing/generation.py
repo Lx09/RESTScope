@@ -706,7 +706,7 @@ class _TestCaseGenerator:
         if isinstance(strategy, ObjectGenerator) and schema.all_of:
             return True, self._build_all_of(node, schema=schema, instance_path=instance_path)
         if isinstance(strategy, ObjectGenerator):
-            result: dict[str, Any] = {}
+            object_result: dict[str, Any] = {}
             prefix = f"{node.canonical_path}/properties/"
             for child in self.children.get(node.input_node_id, []):
                 if not child.canonical_path.startswith(prefix):
@@ -717,8 +717,8 @@ class _TestCaseGenerator:
                     instance_path=f"{instance_path}.{name}",
                 )
                 if included:
-                    result[name] = value
-            return True, result
+                    object_result[name] = value
+            return True, object_result
         if isinstance(strategy, ArrayGenerator):
             item_node = next(
                 (
@@ -748,15 +748,15 @@ class _TestCaseGenerator:
                 minimum_items,
                 strategy.max_items,
             )
-            result = []
+            array_result: list[Any] = []
             for index in range(length):
                 included, value = self._build_value(
                     item_node,
                     instance_path=f"{instance_path}[{index}]",
                 )
                 if included:
-                    result.append(value)
-            return True, result
+                    array_result.append(value)
+            return True, array_result
 
         raise GenerationError(
             f"Strategy {strategy.type} cannot build input node: {node.canonical_path}"

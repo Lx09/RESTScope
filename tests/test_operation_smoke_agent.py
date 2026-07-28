@@ -22,6 +22,8 @@ from restscope.agent.parameter_patch import (
 )
 from restscope.agent.smoke_effect import SmokeEffectOutcome
 from restscope.agent.smoke_plan import FailureTodo, SmokeRoundPlan
+from restscope.capabilities import ToolContext
+from restscope.openapi_parser import OpenAPIParser
 from restscope.testing import (
     BatchFailureReport,
     InputGeneratorPatch,
@@ -66,7 +68,7 @@ class StubCatalog:
         self.current = smoke_config()
         self.parent = self.current
         self.lifecycle = "accepted"
-        self.finalized: list[set[str]] = []
+        self.accepted = 0
         self.rolled_back = 0
 
     def get_operation(self, operation_key):
@@ -98,19 +100,18 @@ class StubCatalog:
         self.lifecycle = "candidate"
         return self.current
 
-    def finalize_candidate(
+    def accept_candidate(
         self,
         *,
         operation_key,
         candidate_revision,
-        accepted_input_node_ids,
         evaluation,
     ):
-        """Accept every staged input; partial acceptance is forbidden by tests."""
+        """Accept the complete staged Patch."""
         assert operation_key == self.current.operation_key
         assert candidate_revision == self.current.revision
         assert evaluation["validation_status"] == "accepted"
-        self.finalized.append(set(accepted_input_node_ids))
+        self.accepted += 1
         self.lifecycle = "accepted"
         return self.current
 
@@ -135,13 +136,6 @@ class StubCatalog:
         self.lifecycle = "accepted"
         return self.current
 
-    def get_revision(self, operation_key, revision):
-        """Expose candidate lifecycle to technical-error cleanup."""
-        if operation_key != self.current.operation_key:
-            return None
-        return SimpleNamespace(lifecycle=self.lifecycle)
-
-
 class StubRunner:
     """Return prepared complete batches and retain seed/Constraint arguments."""
 
@@ -149,7 +143,7 @@ class StubRunner:
         self.reports = list(reports)
         self.calls = []
 
-    def run_operation_for_smoke(self, context, **arguments):
+    def run_smoke_batch(self, context, **arguments):
         """Return the next full report with App-only body evidence."""
         del context
         self.calls.append(arguments)
@@ -257,6 +251,50 @@ class EmptyReferences:
         """No current config in these tests uses a reference strategy."""
         del strategy
         return []
+
+    def available_options(self, **arguments):
+        """Expose the complete empty-reference behavior required by Smoke."""
+        del arguments
+        return []
+
+    def prepare_updates(self, *, updates, **arguments):
+        """Leave non-reference Patch updates unchanged."""
+        del arguments
+        return updates
+
+
+def _context() -> ToolContext:
+    """Build the smallest real initialized target context used by Smoke."""
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Smoke test", "version": "1"},
+            "paths": {
+                "/projects/{projectId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "projectId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    return ToolContext(
+        ir=ir,
+        baseline_schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": {},
+        },
+        base_url="https://api.example.test",
+    )
 
 
 def _todo(todo_id: str = "T1") -> FailureTodo:
@@ -366,7 +404,7 @@ def test_complete_baseline_can_pass_without_any_plan_output() -> None:
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=7),
     )
 
@@ -413,13 +451,13 @@ def test_patch_is_atomically_accepted_then_next_round_uses_same_seed() -> None:
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=9),
     )
 
     assert result.status == "passed"
     assert [call["seed"] for call in runner.calls] == [9, 9, 9]
-    assert catalog.finalized == [{"path/projectId"}]
+    assert catalog.accepted == 1
     assert catalog.rolled_back == 0
     assert result.rounds[0].todos[0].status == "resolved"
     assert result.rounds[0].todos[0].patch_attempts[0].accepted is True
@@ -476,13 +514,13 @@ def test_unresolved_candidate_rolls_back_and_returns_to_same_solve_session() -> 
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=4),
     )
 
     assert result.status == "retry"
     assert result.failure_kind == "no_new_failure_work"
-    assert catalog.finalized == []
+    assert catalog.accepted == 0
     assert catalog.rolled_back == 1
     assert len(solve.sessions) == 1
     feedback = solve.sessions[0].feedback[1]
@@ -537,7 +575,7 @@ def test_remaining_todo_receives_latest_accepted_candidate_batch() -> None:
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}", seed=2),
     )
 
@@ -560,7 +598,7 @@ def test_plan_budget_exhaustion_is_the_only_other_retry_stop_reason() -> None:
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
     )
 
@@ -596,7 +634,7 @@ def test_planned_output_that_consumes_last_plan_turn_stops_before_another_call()
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
     )
 
@@ -632,7 +670,7 @@ def test_accepted_constraints_survive_a_later_smoke_retry_in_same_app() -> None:
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
     )
 
@@ -686,8 +724,8 @@ def test_flow_accepted_constraint_is_applied_on_next_supervisor_retry() -> None:
         seed=15,
     )
 
-    first = agent.run(object(), request)
-    second = agent.run(object(), request)
+    first = agent.run(_context(), request)
+    second = agent.run(_context(), request)
 
     assert first.status == "retry"
     assert second.status == "passed"
@@ -727,7 +765,7 @@ def test_technical_error_rolls_back_a_staged_candidate() -> None:
     )
 
     result = agent.run(
-        object(),
+        _context(),
         OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
     )
 
@@ -769,7 +807,7 @@ def test_database_error_rolls_back_candidate_then_propagates_to_supervisor() -> 
 
     with pytest.raises(SQLAlchemyError):
         agent.run(
-            object(),
+            _context(),
             OperationSmokeRequest(operation_key="GET /projects/{projectId}"),
         )
 
