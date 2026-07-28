@@ -19,6 +19,14 @@ from uuid import uuid4
 import pytest
 
 
+pytestmark = pytest.mark.skip(
+    reason=(
+        "The former diagnosis/Group live contract is superseded. A bounded "
+        "Plan/Solve/Patch/Effect live protocol requires separate user approval."
+    )
+)
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = PROJECT_ROOT / "assets" / "openapi" / "project_swagger.yaml"
 DEFAULT_TARGET = "http://127.0.0.1:34985"

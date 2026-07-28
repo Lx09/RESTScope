@@ -1,4 +1,11 @@
-"""Bounded Generator/Constraint construction for one Patch Group."""
+"""Construct and locally review one Solve-owned parameter Patch.
+
+Failure Solve decides why a batch failed and what behavior must change.
+Parameter Patch converts that requirement into executable Generator and
+Constraint objects. Free-form model choices are retained, while code enforces
+only input scope, schemas, references, Constraint satisfiability, and local
+generation before the same model may accept its latest complete proposal.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +13,7 @@ import hashlib
 import json
 from typing import Any
 
+from restscope.agent.prompt_context import fit_message_context
 from restscope.llm import (
     LLMClient,
     LLMMessage,
@@ -36,29 +44,20 @@ from .prompts import build_parameter_patch_prompt
 from .schemas import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
-    GeneratorPatchAttribution,
     GeneratorPatchDraft,
     ParameterPatchDecision,
+    ParameterPatchFailure,
     ParameterPatchProposal,
-    PatchGroupFailure,
-    PatchGroupTask,
-    ValidatedPatchGroup,
+    ParameterPatchTask,
+    ValidatedParameterPatch,
 )
 
 
-PATCH_SAMPLE_COUNT = 10
 _MAX_ERRORS = 20
 
 
 class ParameterPatchAgent:
-    """Construct, validate, sample, and self-review one isolated Patch Group.
-
-    The model proposes complete Generator/Constraint patches, but deterministic
-    code owns every safety boundary: allowed inputs, schema parsing, reference
-    aliases, constraint satisfiability, compatibility with prior groups, and
-    generation of exactly ten samples.  The same model may accept only after it
-    has seen those samples.  No sample is sent to the target API or catalog.
-    """
+    """Propose, compile, sample, and self-review one Patch requirement."""
 
     def __init__(
         self,
@@ -68,6 +67,7 @@ class ParameterPatchAgent:
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
+        """Store immutable model, validation, and tracing collaborators."""
         self.client = client
         self.model = model
         self.validator = validator or OutputValidator()
@@ -76,62 +76,70 @@ class ParameterPatchAgent:
     def run(
         self,
         *,
-        task: PatchGroupTask,
+        task: ParameterPatchTask,
         config: OperationGeneratorConfig,
         active_constraints: list[CompiledConstraintPatch],
+        case_count: int,
         reference_values: ReferenceValueProvider | None = None,
         reference_options: list[AvailableReferenceOption] | None = None,
-        max_attempts: int = 20,
-    ) -> ValidatedPatchGroup | PatchGroupFailure:
-        """Run the bounded propose → validate → sample → review conversation."""
-        if not 2 <= max_attempts <= 20:
-            raise ValueError("max_attempts must be between 2 and 20")
+        max_outputs: int = 20,
+    ) -> ValidatedParameterPatch | ParameterPatchFailure:
+        """Run a bounded propose → compile → sample → self-review conversation.
+
+        Every model response consumes the output budget. Each proposal replaces
+        the prior candidate, including when compilation fails. ``case_count``
+        matches the surrounding Smoke request so local review scales from one
+        to twenty samples instead of relying on a fixed ten-sample rule.
+        """
+        if not 1 <= case_count <= 20:
+            raise ValueError("case_count must be between 1 and 20")
+        if not 1 <= max_outputs <= 20:
+            raise ValueError("max_outputs must be between 1 and 20")
         if not self.model.enabled:
             raise RuntimeError("The Parameter Patch model is not configured")
+
         prompt = build_parameter_patch_prompt(
             task=task,
             config=config,
             reference_options=list(reference_options or []),
+            model=self.model,
         )
         messages = [
             LLMMessage(role="system", content=prompt.system),
             LLMMessage(role="user", content=prompt.user),
         ]
-        # ``validated`` is deliberately reset by every proposal.  Therefore an
-        # accept decision can refer only to the most recently compiled and
-        # sampled complete patch.
         validated: tuple[
             GeneratorPatchDraft,
             list[dict[str, Any]],
             dict[str, list[Any]],
         ] | None = None
         latest_errors: list[str] = []
-        last_candidate_signature: str | None = None
-        repeated_candidates = 0
+        attempt_history: list[dict[str, Any]] = []
 
         with self.tracing_runtime.span(
             "ParameterPatchAgent.run",
             kind="AGENT",
             input_value={
-                "group_id": task.group_id,
-                "item_count": len(task.item_ids),
-                "input_count": len(task.inputs),
-                "max_attempts": max_attempts,
+                "todo_id": task.todo_id,
+                "input_count": len(task.affected_inputs),
+                "case_count": case_count,
+                "max_outputs": max_outputs,
             },
             attributes={
-                "restscope.patch.group_id": task.group_id,
-                "restscope.patch.item_count": len(task.item_ids),
-                "restscope.patch.input_count": len(task.inputs),
+                "restscope.patch.todo_id": task.todo_id,
+                "restscope.patch.input_count": len(task.affected_inputs),
+                "restscope.patch.sample_count": case_count,
             },
         ) as span:
-            for attempt in range(1, max_attempts + 1):
-                # Structured roles use temperature zero to reduce schema drift
-                # and make repeated-candidate detection meaningful.
+            for output_number in range(1, max_outputs + 1):
                 response = self.client.invoke(
                     LLMRequest(
                         provider=self.model.provider,
                         model=self.model.model,
-                        messages=messages,
+                        messages=fit_message_context(
+                            messages,
+                            model=self.model,
+                        ).messages,
                         temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
@@ -142,56 +150,45 @@ class ParameterPatchAgent:
                         metadata={"role": "parameter_patch_agent"},
                     )
                 )
+                attempt_history.append(
+                    {
+                        "content": response.content,
+                        "parsed_json": response.parsed_json,
+                        "finish_reason": response.finish_reason,
+                    }
+                )
                 decision, errors = self._parse(response)
-                if decision is None or decision.action != "propose":
-                    last_candidate_signature = None
-                    repeated_candidates = 0
                 if decision is not None and not errors:
                     if decision.action == "accept":
                         if validated is None:
                             errors = [
-                                "accept requires validated sample feedback"
+                                "accept requires compiled sample feedback"
                             ]
                         else:
-                            patch, samples, reference_pool_values = validated
-                            result = ValidatedPatchGroup(
-                                group_id=task.group_id,
-                                item_ids=task.item_ids,
-                                root_failure_refs=task.root_failure_refs,
+                            patch, samples, pool_values = validated
+                            outcome = ValidatedParameterPatch(
+                                todo_id=task.todo_id,
                                 patch=patch,
                                 samples=samples,
-                                attempts=attempt,
+                                outputs_used=output_number,
+                                attempt_history=list(attempt_history),
                             )
                             span.set_output(
                                 {
-                                    "status": result.status,
-                                    "attempts": result.attempts,
-                                    "sample_count": len(result.samples),
-                                    "samples": result.samples,
-                                    "reference_pool_values": (
-                                        reference_pool_values
-                                    ),
+                                    "status": outcome.status,
+                                    "outputs_used": outcome.outputs_used,
+                                    "sample_count": len(samples),
+                                    "samples": samples,
+                                    "reference_pool_values": pool_values,
                                 }
                             )
-                            span.set_attribute(
-                                "restscope.patch.attempts",
-                                result.attempts,
-                            )
-                            span.set_attribute(
-                                "restscope.patch.validation_result",
-                                "validated",
-                            )
-                            return result
+                            return outcome
                     else:
                         assert decision.patch is not None
-                        # A complete revision replaces the prior candidate even
-                        # when compilation or sampling later rejects it.
+                        # A new proposal invalidates prior sample acceptance even
+                        # when this replacement cannot compile.
                         validated = None
                         try:
-                            # Compilation translates model-facing semantic
-                            # handles into internal node IDs.  Sampling then
-                            # checks the patch together with constraints already
-                            # accepted from earlier groups.
                             patch = _compile_patch(
                                 decision.patch,
                                 task=task,
@@ -204,60 +201,16 @@ class ParameterPatchAgent:
                                 patch=patch,
                                 active_constraints=active_constraints,
                                 reference_values=reference_values,
+                                case_count=case_count,
                             )
-                            reference_pool_values = _reference_pool_values(
-                                reference_by_alias=(
-                                    prompt.reference_by_alias
-                                ),
+                            pool_values = _reference_pool_values(
+                                reference_by_alias=prompt.reference_by_alias,
                                 reference_values=reference_values,
                             )
-                            validated = (
-                                patch,
-                                samples,
-                                reference_pool_values,
-                            )
+                            validated = (patch, samples, pool_values)
                         except (KeyError, TypeError, ValueError) as exc:
                             errors = [str(exc)]
                         else:
-                            signature = _candidate_signature(
-                                decision.patch,
-                                [],
-                            )
-                            if signature == last_candidate_signature:
-                                repeated_candidates += 1
-                            else:
-                                last_candidate_signature = signature
-                                repeated_candidates = 1
-                            # A model that returns the same already-valid patch
-                            # three times without accepting it is stalled; stop
-                            # early instead of spending the full attempt budget.
-                            if repeated_candidates >= 3:
-                                failure = PatchGroupFailure(
-                                    group_id=task.group_id,
-                                    item_ids=task.item_ids,
-                                    root_failure_refs=(
-                                        task.root_failure_refs
-                                    ),
-                                    reason="stalled_candidate",
-                                    attempts=attempt,
-                                    errors=[],
-                                )
-                                span.set_output(
-                                    {
-                                        "status": failure.status,
-                                        "reason": failure.reason,
-                                        "attempts": failure.attempts,
-                                    }
-                                )
-                                span.set_attribute(
-                                    "restscope.patch.attempts",
-                                    failure.attempts,
-                                )
-                                span.set_attribute(
-                                    "restscope.patch.validation_result",
-                                    failure.reason,
-                                )
-                                return failure
                             messages.extend(
                                 (
                                     LLMMessage(
@@ -267,75 +220,30 @@ class ParameterPatchAgent:
                                     LLMMessage(
                                         role="user",
                                         content=(
-                                            "The complete patch passed local "
-                                            "validation. Review these exactly "
-                                            "10 generated parameter value "
-                                            "groups:\n"
+                                            "The complete Patch passed "
+                                            "executable validation. Review these "
+                                            f"exactly {case_count} generated "
+                                            "parameter value groups against the "
+                                            "root cause, desired behavior, and "
+                                            "acceptance criteria:\n"
                                             + json.dumps(
                                                 {
-                                                    "parameter_value_groups": (
-                                                        samples
-                                                    ),
-                                                    "reference_pool_values": (
-                                                        reference_pool_values
-                                                    ),
+                                                    "parameter_value_groups": samples,
+                                                    "reference_pool_values": pool_values,
                                                 },
                                                 ensure_ascii=False,
                                                 separators=(",", ":"),
                                                 default=str,
                                             )
-                                            + "\nReturn action=accept if they "
-                                            "satisfy every task requirement; "
-                                            "otherwise return action=propose "
-                                            "with one complete replacement patch."
+                                            + "\nReturn action=accept, or action="
+                                            "propose with one complete replacement."
                                         ),
                                     ),
                                 )
                             )
                             continue
-                # Invalid output is returned to the same isolated conversation
-                # with concrete errors.  Nothing from this group is shared with
-                # another Parameter Patch Agent.
-                latest_errors = errors or ["The model output could not be used"]
-                if (
-                    decision is not None
-                    and decision.action == "propose"
-                    and decision.patch is not None
-                ):
-                    signature = _candidate_signature(
-                        decision.patch,
-                        latest_errors,
-                    )
-                    if signature == last_candidate_signature:
-                        repeated_candidates += 1
-                    else:
-                        last_candidate_signature = signature
-                        repeated_candidates = 1
-                    if repeated_candidates >= 3:
-                        failure = PatchGroupFailure(
-                            group_id=task.group_id,
-                            item_ids=task.item_ids,
-                            root_failure_refs=task.root_failure_refs,
-                            reason="stalled_candidate",
-                            attempts=attempt,
-                            errors=latest_errors[:_MAX_ERRORS],
-                        )
-                        span.set_output(
-                            {
-                                "status": failure.status,
-                                "reason": failure.reason,
-                                "attempts": failure.attempts,
-                            }
-                        )
-                        span.set_attribute(
-                            "restscope.patch.attempts",
-                            failure.attempts,
-                        )
-                        span.set_attribute(
-                            "restscope.patch.validation_result",
-                            failure.reason,
-                        )
-                        return failure
+
+                latest_errors = errors or ["The Patch output could not be used."]
                 messages.extend(
                     (
                         LLMMessage(
@@ -345,7 +253,7 @@ class ParameterPatchAgent:
                         LLMMessage(
                             role="user",
                             content=(
-                                "Your previous output could not be used:\n"
+                                "The previous output could not be used:\n"
                                 + "\n".join(
                                     f"- {error}"
                                     for error in latest_errors[:_MAX_ERRORS]
@@ -356,32 +264,21 @@ class ParameterPatchAgent:
                     )
                 )
 
-            failure = PatchGroupFailure(
-                group_id=task.group_id,
-                item_ids=task.item_ids,
-                root_failure_refs=task.root_failure_refs,
-                reason="attempt_limit",
-                attempts=max_attempts,
+            failure = ParameterPatchFailure(
+                todo_id=task.todo_id,
+                reason="output_budget_exhausted",
+                outputs_used=max_outputs,
                 errors=latest_errors[:_MAX_ERRORS],
+                attempt_history=list(attempt_history),
             )
-            span.set_output(
-                {
-                    "status": failure.status,
-                    "reason": failure.reason,
-                    "attempts": failure.attempts,
-                }
-            )
-            span.set_attribute("restscope.patch.attempts", failure.attempts)
-            span.set_attribute(
-                "restscope.patch.validation_result",
-                failure.reason,
-            )
+            span.set_output(failure.model_dump(mode="json"))
             return failure
 
     def _parse(
         self,
         response: LLMResponse,
     ) -> tuple[ParameterPatchDecision | None, list[str]]:
+        """Parse one strict Patch proposal or acceptance."""
         result = self.validator.validate(
             response=response,
             output_model=ParameterPatchDecision,
@@ -401,57 +298,31 @@ class ParameterPatchAgent:
         )
 
 
-def _candidate_signature(
-    proposal: ParameterPatchProposal,
-    errors: list[str],
-) -> str:
-    return json.dumps(
-        {
-            "patch": proposal.model_dump(mode="json"),
-            "errors": [" ".join(error.split()) for error in errors],
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-
-
 def _compile_patch(
     proposal: ParameterPatchProposal,
     *,
-    task: PatchGroupTask,
+    task: ParameterPatchTask,
     config: OperationGeneratorConfig,
     reference_by_alias: dict[str, AvailableReferenceOption],
 ) -> GeneratorPatchDraft:
-    """Translate model-facing handles and aliases into validated runtime objects.
-
-    This is the trust boundary between free-form model output and the testing
-    engine.  It rejects edits outside the assigned group, duplicate edits,
-    system-managed generators, invented observed-value sources, and malformed
-    constraints before previewing the patch against the current configuration.
-    """
+    """Translate semantic model output into executable testing objects."""
     semantic = build_semantic_input_map(config)
-    allowed = set(task.inputs)
+    allowed = set(task.affected_inputs)
     supplied = [change.input for change in proposal.changes]
-    if len(set(supplied)) != len(supplied):
+    if len(supplied) != len(set(supplied)):
         raise ValueError("each semantic input may be changed at most once")
     updates: list[InputGeneratorPatch] = []
-    attributions: list[GeneratorPatchAttribution] = []
-    selected_reference_options: list[AvailableReferenceOption] = []
+    selected_options: list[AvailableReferenceOption] = []
     for change in proposal.changes:
         if change.input not in allowed:
             raise ValueError(
-                f"{change.input} is outside Patch Group {task.group_id}"
+                f"{change.input} is outside the Solve Patch requirement"
             )
         node_id = semantic.node_by_handle.get(change.input)
         if node_id is None:
             raise ValueError(f"Unknown semantic input: {change.input}")
         strategy = change.strategy
-        if strategy is not None and strategy.type in {
-            "object",
-            "request_body",
-        }:
+        if strategy is not None and strategy.type in {"object", "request_body"}:
             raise ValueError(
                 f"{strategy.type} is system-managed and cannot be patched"
             )
@@ -483,20 +354,12 @@ def _compile_patch(
                     value_name=option.value_name,
                 )
             )
-            selected_reference_options.append(option)
+            selected_options.append(option)
         updates.append(
             InputGeneratorPatch(
                 input_node_id=node_id,
                 inclusion_probability=change.inclusion_probability,
                 strategy=strategy,
-            )
-        )
-        attributions.append(
-            GeneratorPatchAttribution(
-                input_node_id=node_id,
-                group_ids=[task.group_id],
-                item_ids=task.item_ids,
-                root_failure_refs=task.root_failure_refs,
             )
         )
     constraints = [
@@ -511,9 +374,8 @@ def _compile_patch(
     ]
     patch = GeneratorPatchDraft(
         updates=updates,
-        attributions=attributions,
         constraints=constraints,
-        selected_reference_options=selected_reference_options,
+        selected_reference_options=selected_options,
     )
     preview_generator_patch(config, patch.updates)
     return patch
@@ -523,17 +385,12 @@ def _compile_constraint(
     expression: dict[str, Any],
     *,
     index: int,
-    task: PatchGroupTask,
-    semantic,
+    task: ParameterPatchTask,
+    semantic: dict[str, str],
     config: OperationGeneratorConfig,
 ) -> CompiledConstraintPatch:
-    """
-    Compile constraint for one isolated Generator and Constraint Patch Group.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
-    referenced: list[str] = []
+    """Compile one semantic Constraint and reject out-of-scope inputs."""
+    allowed = set(task.affected_inputs)
 
     def convert(value: Any) -> Any:
         if isinstance(value, list):
@@ -547,11 +404,10 @@ def _compile_constraint(
             handle = value.get("input")
             if not isinstance(handle, str) or handle not in semantic:
                 raise ValueError(f"Unknown constraint input: {handle}")
-            if handle not in task.inputs:
+            if handle not in allowed:
                 raise ValueError(
-                    f"{handle} is outside Patch Group {task.group_id}"
+                    f"{handle} is outside the Solve Patch requirement"
                 )
-            referenced.append(handle)
             output.pop("input", None)
             output["input_node_id"] = semantic[handle]
         return output
@@ -567,13 +423,10 @@ def _compile_constraint(
         separators=(",", ":"),
     )
     identity = hashlib.sha256(
-        f"{task.group_id}:{index}:{encoded}".encode()
+        f"{task.todo_id}:{index}:{encoded}".encode()
     ).hexdigest()[:16]
     return CompiledConstraintPatch(
         constraint_id=f"constraint_{identity}",
-        group_ids=[task.group_id],
-        item_ids=task.item_ids,
-        root_failure_refs=task.root_failure_refs,
         kind=classify_constraint(normalized.constraints[0]),
         constraint=normalized,
     )
@@ -581,38 +434,30 @@ def _compile_constraint(
 
 def _sample_patch(
     *,
-    task: PatchGroupTask,
+    task: ParameterPatchTask,
     config: OperationGeneratorConfig,
     patch: GeneratorPatchDraft,
     active_constraints: list[CompiledConstraintPatch],
     reference_values: ReferenceValueProvider | None,
+    case_count: int,
 ) -> list[dict[str, Any]]:
-    """
-    Handle sample patch as part of one isolated Generator and Constraint Patch Group.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Generate request-shaped local samples without sending HTTP requests."""
     candidate = preview_generator_patch(config, patch.updates)
-    all_constraints = [
+    expressions = [
         expression
         for item in [*active_constraints, *patch.constraints]
         for expression in item.constraint.constraints
     ]
-    constraints = (
-        ConstraintSet(constraints=all_constraints)
-        if all_constraints
-        else None
-    )
+    constraints = ConstraintSet(constraints=expressions) if expressions else None
     semantic = build_semantic_input_map(candidate)
     seed = int.from_bytes(
         hashlib.sha256(
-            f"{candidate.operation_key}:{task.group_id}".encode()
+            f"{candidate.operation_key}:{task.todo_id}".encode()
         ).digest()[:8],
         "big",
     )
     samples: list[dict[str, Any]] = []
-    for case_index in range(PATCH_SAMPLE_COUNT):
+    for case_index in range(case_count):
         generated = generate_test_case(
             candidate.snapshot,
             candidate,
@@ -625,42 +470,22 @@ def _sample_patch(
             candidate.snapshot,
             generated,
         )
-        sample_values: dict[str, Any] = {}
-        sample_presence: dict[str, bool] = {}
-        for handle in task.inputs:
+        values: dict[str, Any] = {}
+        present: dict[str, bool] = {}
+        for handle in task.affected_inputs:
             node_id = semantic.node_by_handle[handle]
             assignment = assignments[node_id]
-            sample_presence[handle] = assignment.present
-            if assignment.present:
-                sample_values[handle] = project_generated_input_value(
+            present[handle] = assignment.present
+            values[handle] = (
+                project_generated_input_value(
                     candidate.snapshot,
                     generated,
                     input_node_id=node_id,
                 )
-            else:
-                sample_values[handle] = None
-        samples.append(
-            {
-                "values": sample_values,
-                "present": sample_presence,
-            }
-        )
-    explicitly_mandatory_handles = {
-        semantic.handle_by_node[update.input_node_id]
-        for update in patch.updates
-        if update.inclusion_probability == 1
-        and update.input_node_id in semantic.handle_by_node
-    }
-    missing_handles = sorted(
-        handle
-        for handle in explicitly_mandatory_handles
-        if any(not sample["present"].get(handle, False) for sample in samples)
-    )
-    if missing_handles:
-        raise ValueError(
-            "Explicit inclusion_probability=1 inputs were absent from local "
-            f"samples: {missing_handles}"
-        )
+                if assignment.present
+                else None
+            )
+        samples.append({"values": values, "present": present})
     return samples
 
 
@@ -669,6 +494,7 @@ def _reference_pool_values(
     reference_by_alias: dict[str, AvailableReferenceOption],
     reference_values: ReferenceValueProvider | None,
 ) -> dict[str, list[Any]]:
+    """Expose bounded raw pool values only to the Patch self-review."""
     if reference_values is None:
         return {}
     values: dict[str, list[Any]] = {}
@@ -689,6 +515,7 @@ def _reference_pool_values(
 
 
 def _response_json(response: LLMResponse) -> str:
+    """Serialize the model's prior output for in-conversation correction."""
     value = (
         response.parsed_json
         if response.parsed_json is not None
@@ -696,4 +523,9 @@ def _response_json(response: LLMResponse) -> str:
         if response.content is not None
         else {}
     )
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 LLMRole = Literal["system", "user", "assistant", "tool"]
@@ -113,12 +113,22 @@ class LLMModelConfig(BaseModel):
     provider: str
     model: str
     temperature: float = 0.0
-    max_tokens: int = 2048
+    max_tokens: int = 8192
+    context_window_tokens: int = 131072
     timeout_seconds: int = 60
     response_format: LLMResponseFormat = "json_schema"
     tool_choice: str = "none"
     reasoning: LLMReasoningConfig = Field(default_factory=LLMReasoningConfig)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_context_capacity(self) -> "LLMModelConfig":
+        """Reserve at least one token of the context window for model input."""
+        if self.max_tokens >= self.context_window_tokens:
+            raise ValueError(
+                "max_tokens must be smaller than context_window_tokens"
+            )
+        return self
 
 
 class ValidationIssue(BaseModel):

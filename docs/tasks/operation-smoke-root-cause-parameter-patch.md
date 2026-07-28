@@ -1,6 +1,6 @@
 # Operation Smoke Root-Cause and Parameter Patch Agent
 
-Status: Implemented and offline-verified
+Status: Superseded on 2026-07-27 by `llm-led-operation-smoke.md`
 
 ## Objective
 

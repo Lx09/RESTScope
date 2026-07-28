@@ -318,75 +318,54 @@ internally by Operation Smoke.
 
 ## Operation Smoke Agent
 
-`OperationSmokeAgent` runs a bounded generated batch and measures its 2xx
-success rate. When the threshold is not met,
-`OperationSmokeDiagnoser` starts a fresh in-memory Plan & Solve session. A
-THINK model first classifies every failure as:
+`OperationSmokeAgent` is a thin coordinator around four independent roles:
 
-- `ready` when the cause, affected request input, and change direction are
-  known;
-- `pending` when a falsifiable hypothesis still needs evidence;
-- `non-parameter` when changing a generated input cannot solve it; or
-- `unplanned` when no bounded investigation is currently available.
+1. A complete generated batch establishes the current evidence and 2xx rate.
+2. `SmokePlanAgent` reads the full batch and App-lifetime ledger, identifies
+   distinct failure todos, associates every failed case, and fixes their order
+   for that round. Temporary case codes exist only in this Plan request; todos
+   contain the expanded requests, generated values, and responses.
+3. Each todo gets a fresh `FailureSolveAgent` and one continuous conversation.
+   THINK may use `restscope.http.request`, but every call is preflighted against
+   the current operation's exact method and path template before any call in
+   that output executes. Solve alone decides root cause, affected semantic
+   inputs, Patch requirements, and terminal outcomes.
+4. A fresh FAST `ParameterPatchAgent` compiles one Solve requirement into
+   executable Generator and Constraint changes. Code retains only schema,
+   type, satisfiability, reference-pool, and generation safety checks. The
+   Agent reviews the same number of local samples as the Smoke `case_count`.
+5. `SmokeEffectAgent` compares the latest accepted complete batch with one
+   complete same-seed candidate batch. The candidate is accepted only for
+   `resolved_without_regression`; `unresolved`, `regression`, `unknown`, and
+   technical errors roll back the whole candidate and return full feedback to
+   the same Solve conversation.
 
-The model uses semantic request paths such as `path.projectId`,
-`query.filter`, or `body.items[].sku`; internal node IDs stay in code. Failure,
-case, and HTTP-observation evidence use request-local `F*`, `C*`, and `O*`
-references. Each prompt is rebuilt from typed `PlanState` and
-`EvidenceJournal`, not from an accumulating chat transcript.
+There is no failure grouping, ownership inference, deterministic duplicate
+filter, partial candidate acceptance, or global-success override. Later todos
+in the fixed round see the latest accepted batch and may return
+`already_absent`; newly observed failures wait for the next Plan round. Every
+outer round starts with another complete batch, and the same seed is reused
+throughout one Smoke invocation.
 
-After the initial tool-free plan, THINK may call a constrained view of
-`restscope.http.request`. Each tool round contains at most four serial requests
-and can only use the current frozen operation's method and a concrete path
-matching its path template. Context authentication is injected by code. Query,
-ordinary headers, and JSON/text/form bodies may be varied to test a hypothesis.
-Responses pass through the same API Behavior Monitor and can add new `F*` and
-`O*` evidence. Tool failures are evidence and are not automatically retried.
+The default limits are 50 Plan outputs, 50 Solve outputs per todo, 20 Patch
+outputs per attempt, and two Effect outputs. Every model response counts,
+including malformed responses and tool-call responses; executing an HTTP call
+does not. Solve outputs 10, 20, 30, and 40 are tool-free continuation checks.
+They must identify a genuinely new direction or end the todo.
 
-One diagnosis allows at most 20 valid plan decisions and 40 HTTP tool rounds;
-callers may lower both limits. A malformed model decision gets one free repair.
-HTTP tool rounds do not consume the decision budget. When the decision budget
-is exhausted, already-ready analyses still proceed to patching while pending
-or unplanned work remains visible in the result.
+Prompt input allowance is the model context window minus its configured output
+limit and a 2048-token reserve. Current todo, batch, operation/config, active
+Solve conversation, and recent Effect evidence have priority. Older ledger
+records are loaded newest first and summarized only when required by the
+window. An oversized current response keeps its structure, original size, and
+marked head/tail excerpts.
 
-At analysis completion, the FAST model is called once to convert all ready
-items into one compatible Generator patch. It must account for every ready
-item as covered or deferred and may change each semantic input at most once.
-Every concrete change names the covered `I*` items it serves, so code can later
-retain or remove that change independently.
-Code—not the model—maps semantic paths and observed-value `R*` aliases to real
-input nodes and pools, compiles generator intents such as `sample_values`,
-`integer_between`, or `observed_value`, and enforces required inputs,
-serialization, and Generator validity. The final output gets one repair
-outside the THINK decision budget.
-
-The diagnosis input includes generated values, omitted inputs, bounded failure
-response bodies, monitor summaries, and the previous candidate experiment
-summary. Full Schema, config revisions, internal node IDs, prepared target
-headers, ToolContext Authorization/Cookie values, and observed pool values are
-not sent to the model. Private response bodies and the in-memory plan do not
-enter the public testing report, LangGraph state, or the database.
-
-The patch is stored as a candidate revision and exercised by one complete
-same-seed batch; RESTScope never validates by replaying or cloning one failed
-case. A separate THINK Patch Validation call then classifies each covered item
-as `resolved`, `persisting`, or `unknown` from its cause, proposed solution,
-current `F*/C*` evidence, and changed-input coverage. This validation has one
-repair, cannot call HTTP tools, and does not consume the Plan & Solve decision
-budget.
-
-When the candidate reaches the 2xx success threshold, the entire candidate is
-accepted even if Patch Validation still reports a persisting item. Below the
-threshold, changes owned by at least one resolved item are accepted
-immediately; changes owned only by persisting or unknown items are removed.
-Shared changes are retained when any owning item is resolved. The next patch is
-staged from this newly accepted revision, so earlier effective fixes accumulate.
-Partial acceptance deliberately does not run an extra stabilization batch. The
-next PlanState receives a compact experiment summary that marks accepted and
-removed changes and warns that the candidate evidence included the complete
-experimental patch. The final feedback round still validates and finalizes its
-candidate, but performs no further diagnosis or patch and never rolls back the
-whole accumulated configuration.
+Complete evidence, Plan/Solve outputs, HTTP observations, Patch attempts,
+candidate batches, Effects, and accepted runtime Constraints remain in an
+operation-isolated App-memory ledger. Generator changes still use durable
+Catalog candidate revisions. Accepted Constraints survive later Supervisor
+retries in the same App but are never written to the database. Public results
+contain bounded round/todo/Patch/Effect summaries rather than raw responses.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.

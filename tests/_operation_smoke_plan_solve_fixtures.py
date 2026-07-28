@@ -123,3 +123,75 @@ def smoke_report(*, long_value: str | None = None):
             ]
         ),
     )
+
+
+def request_body_date_config():
+    """Build nested request-body inputs used by presence-closure regressions."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Assignments", "version": "1"},
+            "paths": {
+                "/assignments": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": [
+                                            "commitDate",
+                                            "employee",
+                                            "project",
+                                        ],
+                                        "properties": {
+                                            "commitDate": {
+                                                "type": "string",
+                                                "format": "date-time",
+                                            },
+                                            "employee": {
+                                                "type": "object",
+                                                "required": ["hiredate"],
+                                                "properties": {
+                                                    "hiredate": {
+                                                        "type": "string",
+                                                        "format": "date",
+                                                    }
+                                                },
+                                            },
+                                            "project": {
+                                                "type": "object",
+                                                "required": [
+                                                    "startDate",
+                                                    "endDate",
+                                                ],
+                                                "properties": {
+                                                    "startDate": {
+                                                        "type": "string",
+                                                        "format": "date",
+                                                    },
+                                                    "endDate": {
+                                                        "type": "string",
+                                                        "format": "date",
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    }
+                                },
+                                "application/xml": {
+                                    "schema": {"type": "string"}
+                                },
+                            },
+                        },
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /assignments"]
+    return build_initial_operation_config(operation)

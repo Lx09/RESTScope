@@ -211,7 +211,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     del tmp_path
     import httpx
 
-    from restscope.agent.operation_smoke.probe import CurrentOperationHTTPProbe
+    from restscope.agent.failure_solver import CurrentOperationHTTPProbe
     from restscope.capabilities import (
         ToolCallValidator,
         ToolContext,

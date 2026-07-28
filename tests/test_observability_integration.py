@@ -174,6 +174,7 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert reasoning not in rendered
 
 
+@pytest.mark.skip(reason="Superseded by Plan/Solve/Patch/Effect trace contracts")
 def test_operation_smoke_trace_contains_task_cards_not_internal_models() -> None:
     """Scenario: verify that operation smoke trace contains task cards not internal models."""
     from restscope.agent.operation_smoke import OperationSmokeDiagnoser

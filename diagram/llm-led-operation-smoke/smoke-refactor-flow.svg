@@ -1,0 +1,797 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3200 4480">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="1"/>
+    </pattern>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow-cyan" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrow-rose" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#fb7185"/>
+    </marker>
+    <style>
+      text { font-family: "PingFang SC", "Arial Unicode MS", sans-serif; fill: #e2e8f0; }
+      .title { font-size: 38px; font-weight: 700; fill: #f8fafc; letter-spacing: 1px; }
+      .subtitle { font-size: 17px; fill: #94a3b8; }
+      .section-title { font-size: 25px; font-weight: 700; fill: #f8fafc; }
+      .role-title { font-size: 21px; font-weight: 700; }
+      .node-title { font-size: 18px; font-weight: 700; fill: #f8fafc; }
+      .body { font-size: 16px; fill: #cbd5e1; }
+      .small { font-size: 14px; fill: #cbd5e1; }
+      .tiny { font-size: 12px; fill: #94a3b8; }
+      .mono { font-family: "SFMono-Regular", "Menlo", monospace; }
+      .lane { fill: #111c31; stroke: #334155; stroke-width: 2; rx: 24; }
+      .lane-head { fill: #17233a; stroke: #475569; stroke-width: 1.5; rx: 18; }
+      .mask { fill: #0f172a; stroke: none; }
+      .proc { fill: #10283a; stroke: #22d3ee; stroke-width: 2.2; rx: 16; }
+      .llm { fill: #281b48; stroke: #a78bfa; stroke-width: 2.4; rx: 18; }
+      .fast { fill: #11382f; stroke: #34d399; stroke-width: 2.4; rx: 18; }
+      .data { fill: #142847; stroke: #60a5fa; stroke-width: 2; rx: 14; }
+      .store { fill: #231c42; stroke: #8b5cf6; stroke-width: 2; rx: 18; }
+      .safety { fill: #33250f; stroke: #f59e0b; stroke-width: 2; rx: 16; }
+      .success { fill: #12382f; stroke: #34d399; stroke-width: 2.4; rx: 18; }
+      .failure { fill: #3b1722; stroke: #fb7185; stroke-width: 2.4; rx: 18; }
+      .neutral { fill: #1e293b; stroke: #64748b; stroke-width: 2; rx: 16; }
+      .decision { fill: #35260f; stroke: #fbbf24; stroke-width: 2.4; }
+      .decision-rose { fill: #381820; stroke: #fb7185; stroke-width: 2.4; }
+      .arrow { fill: none; stroke: #22d3ee; stroke-width: 3; marker-end: url(#arrow-cyan); }
+      .arrow-green { fill: none; stroke: #34d399; stroke-width: 3; marker-end: url(#arrow-green); }
+      .arrow-orange { fill: none; stroke: #f59e0b; stroke-width: 3; marker-end: url(#arrow-orange); }
+      .arrow-rose { fill: none; stroke: #fb7185; stroke-width: 3; marker-end: url(#arrow-rose); }
+      .arrow-dash { fill: none; stroke: #64748b; stroke-width: 2.5; stroke-dasharray: 10 8; marker-end: url(#arrow-cyan); }
+      .rail-link { fill: none; stroke: #f59e0b; stroke-width: 2.5; }
+      .divider { stroke: #334155; stroke-width: 1.5; stroke-dasharray: 8 8; }
+      .yes { font-size: 14px; font-weight: 700; fill: #34d399; }
+      .no { font-size: 14px; font-weight: 700; fill: #fb7185; }
+      .warn { font-size: 14px; font-weight: 700; fill: #fbbf24; }
+      .badge { font-size: 13px; font-weight: 700; fill: #0f172a; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="3200" height="4480" fill="#0f172a"/>
+  <rect x="0" y="0" width="3200" height="4480" fill="url(#grid)" opacity="0.78"/>
+
+  <!-- Title and legend -->
+  <text x="48" y="55" class="title">LLM 主导的 Operation Smoke：重构后完整逻辑</text>
+  <text x="50" y="88" class="subtitle">完整同 Seed Batch → Plan 管理固定 Todo → 连续 Solve 调查 → Patch 编译与自审 → Effect 原子验收 → 下一 Todo / 下一轮</text>
+  <g transform="translate(1990,36)">
+    <rect x="0" y="0" width="18" height="18" rx="4" fill="#22d3ee"/><text x="28" y="15" class="tiny">协调器 / 运行时</text>
+    <rect x="180" y="0" width="18" height="18" rx="4" fill="#a78bfa"/><text x="208" y="15" class="tiny">THINK LLM</text>
+    <rect x="350" y="0" width="18" height="18" rx="4" fill="#34d399"/><text x="378" y="15" class="tiny">FAST LLM / 接受</text>
+    <rect x="555" y="0" width="18" height="18" rx="4" fill="#fbbf24"/><text x="583" y="15" class="tiny">决策 / 安全边界</text>
+    <rect x="790" y="0" width="18" height="18" rx="4" fill="#fb7185"/><text x="818" y="15" class="tiny">回滚 / 错误</text>
+  </g>
+
+  <!-- ========================================================= -->
+  <!-- A. Main coordinator overview -->
+  <!-- ========================================================= -->
+  <rect x="30" y="120" width="3140" height="1900" class="lane"/>
+  <rect x="52" y="142" width="3096" height="54" class="lane-head"/>
+  <text x="82" y="178" class="section-title">A. OperationSmokeAgent 薄协调器：外层轮次、Todo 调度、候选事务与最终状态</text>
+
+  <!-- Side region headers -->
+  <text x="115" y="246" class="role-title" fill="#a78bfa">App 生命周期证据与上下文</text>
+  <text x="1307" y="246" class="role-title" fill="#22d3ee">主控制流</text>
+  <text x="2475" y="246" class="role-title" fill="#f59e0b">安全边界与持久化</text>
+  <line x1="930" y1="215" x2="930" y2="1988" class="divider"/>
+  <line x1="2270" y1="215" x2="2270" y2="1988" class="divider"/>
+
+  <!-- Main arrows: drawn before node boxes -->
+  <g>
+    <path d="M1600 335 L1600 375" class="arrow"/>
+    <path d="M1600 455 L1600 505" class="arrow"/>
+    <path d="M1740 545 L2030 545" class="arrow-rose"/>
+    <path d="M1600 585 L1600 625" class="arrow"/>
+    <path d="M1600 705 L1600 745" class="arrow"/>
+    <path d="M1740 785 L2030 785" class="arrow-orange"/>
+    <path d="M1600 825 L1600 870" class="arrow"/>
+    <path d="M1600 960 L1600 1005" class="arrow"/>
+    <path d="M1600 1095 L1600 1140" class="arrow"/>
+    <path d="M1740 1180 L2030 1180" class="arrow-green"/>
+    <path d="M1600 1220 L1600 1265" class="arrow"/>
+    <path d="M1460 1305 L1160 1305" class="arrow-rose"/>
+    <path d="M1600 1345 L1600 1390" class="arrow"/>
+    <path d="M1600 1480 L1600 1525" class="arrow"/>
+    <path d="M1460 1565 L1160 1565" class="arrow-orange"/>
+    <path d="M1468 1590 L1160 1655" class="arrow-rose"/>
+    <path d="M1600 1605 L1600 1655" class="arrow"/>
+    <path d="M1600 1755 L1600 1792" class="arrow"/>
+    <path d="M1600 1882 L1600 1915" class="arrow"/>
+    <!-- Todo and outer-round loops use dedicated right-side rails. -->
+    <path d="M1740 1955 L2180 1955 L2180 1837 L2000 1837" class="arrow-orange"/>
+    <path d="M1460 1955 L2325 1955 L2325 1050 L1950 1050" class="arrow-green"/>
+  </g>
+
+  <!-- Main nodes -->
+  <g>
+    <rect x="1250" y="265" width="700" height="70" class="mask" rx="18"/>
+    <rect x="1250" y="265" width="700" height="70" class="proc"/>
+    <text x="1600" y="294" text-anchor="middle" class="node-title">收到 OperationSmokeRequest</text>
+    <text x="1600" y="319" text-anchor="middle" class="small mono">operation_key · case_count(1–20) · threshold · seed? · 4 类输出预算</text>
+
+    <rect x="1250" y="375" width="700" height="80" class="mask" rx="16"/>
+    <rect x="1250" y="375" width="700" height="80" class="proc"/>
+    <text x="1600" y="407" text-anchor="middle" class="node-title">读取 operation / testing 配置</text>
+    <text x="1600" y="433" text-anchor="middle" class="small">数据库异常交给 Supervisor；operation 范围异常在本 Agent 内转为 errored</text>
+
+    <polygon points="1600,505 1740,545 1600,585 1460,545" class="mask"/>
+    <polygon points="1600,505 1740,545 1600,585 1460,545" class="decision"/>
+    <text x="1600" y="541" text-anchor="middle" class="node-title">operation 可读取？</text>
+    <text x="1600" y="561" text-anchor="middle" class="tiny">SQL 错误不在此吞掉</text>
+
+    <rect x="2030" y="505" width="200" height="80" class="mask" rx="16"/>
+    <rect x="2030" y="505" width="200" height="80" class="failure"/>
+    <text x="2130" y="537" text-anchor="middle" class="node-title">errored</text>
+    <text x="2130" y="562" text-anchor="middle" class="small mono">operation_error</text>
+
+    <rect x="1250" y="625" width="700" height="80" class="mask" rx="16"/>
+    <rect x="1250" y="625" width="700" height="80" class="proc"/>
+    <text x="1600" y="657" text-anchor="middle" class="node-title">恢复被中断的 Catalog candidate</text>
+    <text x="1600" y="682" text-anchor="middle" class="small">保证上次技术异常不会遗留 pending candidate</text>
+
+    <polygon points="1600,745 1740,785 1600,825 1460,785" class="mask"/>
+    <polygon points="1600,745 1740,785 1600,825 1460,785" class="decision"/>
+    <text x="1600" y="781" text-anchor="middle" class="node-title">Smoke 已启用且可支持？</text>
+
+    <rect x="2030" y="745" width="250" height="80" class="mask" rx="16"/>
+    <rect x="2030" y="745" width="250" height="80" class="neutral"/>
+    <text x="2155" y="777" text-anchor="middle" class="node-title">unsupported</text>
+    <text x="2155" y="802" text-anchor="middle" class="small mono">unsupported_operation</text>
+
+    <rect x="1250" y="870" width="700" height="90" class="mask" rx="16"/>
+    <rect x="1250" y="870" width="700" height="90" class="proc"/>
+    <text x="1600" y="902" text-anchor="middle" class="node-title">初始化本次 Smoke run</text>
+    <text x="1600" y="928" text-anchor="middle" class="small">固定 seed；加载该 operation 的 App 历史与已接受 runtime Constraints</text>
+    <text x="1600" y="949" text-anchor="middle" class="tiny">Supervisor 新重试：未显式传 seed 时生成新 seed</text>
+
+    <rect x="1250" y="1005" width="700" height="90" class="mask" rx="16"/>
+    <rect x="1250" y="1005" width="700" height="90" class="proc" filter="url(#glow)"/>
+    <text x="1600" y="1038" text-anchor="middle" class="node-title">运行完整 Batch（当前已接受配置）</text>
+    <text x="1600" y="1064" text-anchor="middle" class="small">相同 seed / case_count；完整 preflight、序列化、HTTP、Behavior Monitor</text>
+    <text x="1600" y="1085" text-anchor="middle" class="tiny">证据含生成输入、脱敏请求、响应状态/头/body、执行错误</text>
+
+    <polygon points="1600,1140 1740,1180 1600,1220 1460,1180" class="mask"/>
+    <polygon points="1600,1140 1740,1180 1600,1220 1460,1180" class="decision"/>
+    <text x="1600" y="1176" text-anchor="middle" class="node-title">最新完整 Batch 的 2xx 成功率</text>
+    <text x="1600" y="1198" text-anchor="middle" class="small">≥ success_rate_threshold？</text>
+
+    <rect x="2030" y="1140" width="260" height="80" class="mask" rx="16"/>
+    <rect x="2030" y="1140" width="260" height="80" class="success"/>
+    <text x="2160" y="1172" text-anchor="middle" class="node-title">passed</text>
+    <text x="2160" y="1197" text-anchor="middle" class="small">仅此条件允许通过</text>
+
+    <polygon points="1600,1265 1740,1305 1600,1345 1460,1305" class="mask"/>
+    <polygon points="1600,1265 1740,1305 1600,1345 1460,1305" class="decision"/>
+    <text x="1600" y="1301" text-anchor="middle" class="node-title">全局 Plan 输出预算已耗尽？</text>
+    <text x="1600" y="1323" text-anchor="middle" class="tiny">跨外层轮次累计，默认 50</text>
+
+    <rect x="890" y="1265" width="270" height="80" class="mask" rx="16"/>
+    <rect x="890" y="1265" width="270" height="80" class="failure"/>
+    <text x="1025" y="1297" text-anchor="middle" class="node-title">retry</text>
+    <text x="1025" y="1322" text-anchor="middle" class="small mono">plan_budget_exhausted</text>
+
+    <rect x="1250" y="1390" width="700" height="90" class="mask" rx="16"/>
+    <rect x="1250" y="1390" width="700" height="90" class="llm"/>
+    <text x="1600" y="1422" text-anchor="middle" class="node-title">[P] 新建 Plan THINK 会话</text>
+    <text x="1600" y="1448" text-anchor="middle" class="small">完整 Batch + 临时代号 + App 历史 → 固定 Failure Todo 快照</text>
+    <text x="1600" y="1469" text-anchor="middle" class="tiny">详见 B：每个外层轮次都是全新会话</text>
+
+    <polygon points="1600,1525 1740,1565 1600,1605 1460,1565" class="mask"/>
+    <polygon points="1600,1525 1740,1565 1600,1605 1460,1565" class="decision"/>
+    <text x="1600" y="1561" text-anchor="middle" class="node-title">Plan 结果？</text>
+    <text x="1600" y="1583" text-anchor="middle" class="tiny">planned / no-work / budget exhausted</text>
+
+    <rect x="890" y="1525" width="270" height="80" class="mask" rx="16"/>
+    <rect x="890" y="1525" width="270" height="80" class="neutral"/>
+    <text x="1025" y="1557" text-anchor="middle" class="node-title">retry</text>
+    <text x="1025" y="1582" text-anchor="middle" class="small mono">no_new_failure_work</text>
+
+    <rect x="890" y="1615" width="270" height="80" class="mask" rx="16"/>
+    <rect x="890" y="1615" width="270" height="80" class="failure"/>
+    <text x="1025" y="1647" text-anchor="middle" class="node-title">retry</text>
+    <text x="1025" y="1672" text-anchor="middle" class="small mono">plan_budget_exhausted</text>
+
+    <rect x="1250" y="1655" width="700" height="100" class="mask" rx="16"/>
+    <rect x="1250" y="1655" width="700" height="100" class="data"/>
+    <text x="1600" y="1687" text-anchor="middle" class="node-title">固定本轮 Todo 顺序，并立即展开全部 case 证据</text>
+    <text x="1600" y="1713" text-anchor="middle" class="small">代号只服务 Plan 关联；Solve / Patch / Effect 不再看到 C/F/O 代号</text>
+    <text x="1600" y="1737" text-anchor="middle" class="tiny">Plan 之后出现的新 failure 留给下一外层轮次</text>
+
+    <rect x="1200" y="1792" width="800" height="90" class="mask" rx="16"/>
+    <rect x="1200" y="1792" width="800" height="90" class="proc" filter="url(#glow)"/>
+    <text x="1600" y="1823" text-anchor="middle" class="node-title">按固定顺序处理下一个 Todo</text>
+    <text x="1600" y="1849" text-anchor="middle" class="small">读取最新已接受 Batch → [S] Solve → [A] Patch → 同 Seed candidate → [E] Effect</text>
+    <text x="1600" y="1871" text-anchor="middle" class="tiny">todo 内 Solve 会话连续；todo 之间 Agent 独立</text>
+
+    <polygon points="1600,1915 1740,1955 1600,1995 1460,1955" class="mask"/>
+    <polygon points="1600,1915 1740,1955 1600,1995 1460,1955" class="decision"/>
+    <text x="1600" y="1951" text-anchor="middle" class="node-title">本轮固定 Todo 全部结束？</text>
+    <text x="1600" y="1973" text-anchor="middle" class="tiny">resolved 或明确终止状态</text>
+  </g>
+
+  <!-- Branch labels -->
+  <text x="1775" y="530" class="no">否：operation_error</text>
+  <text x="1620" y="611" class="yes">是</text>
+  <text x="1775" y="770" class="no">否</text>
+  <text x="1620" y="852" class="yes">是</text>
+  <text x="1775" y="1165" class="yes">是</text>
+  <text x="1620" y="1245" class="no">否</text>
+  <text x="1200" y="1290" class="no">是</text>
+  <text x="1620" y="1370" class="yes">否</text>
+  <text x="1170" y="1545" class="warn">no-work</text>
+  <text x="1170" y="1650" class="no">budget</text>
+  <text x="1620" y="1635" class="yes">planned</text>
+  <text x="2030" y="1938" class="warn">否：下一 Todo</text>
+  <text x="1150" y="1938" class="yes">是：记录 Round，下一完整 Batch</text>
+
+  <!-- Left state cards -->
+  <g>
+    <rect x="85" y="285" width="775" height="170" class="mask" rx="18"/>
+    <rect x="85" y="285" width="775" height="170" class="store"/>
+    <text x="115" y="320" class="node-title">Operation 隔离的 App-memory Ledger</text>
+    <text x="115" y="350" class="small">• Round：完整 batch、failure/case 快照、Plan 输出</text>
+    <text x="115" y="376" class="small">• Todo：Solve 输出、HTTP observations、PatchRequirement</text>
+    <text x="115" y="402" class="small">• Patch：实际 patch、动态样本、candidate batch、Effect</text>
+    <text x="115" y="428" class="small">• 已接受 runtime Constraints；完整原始证据只在内存</text>
+
+    <rect x="85" y="490" width="775" height="225" class="mask" rx="18"/>
+    <rect x="85" y="490" width="775" height="225" class="data"/>
+    <text x="115" y="525" class="node-title">动态 Prompt 上下文装载</text>
+    <text x="115" y="555" class="small mono">input_budget = context_window_tokens - max_tokens - 2048</text>
+    <text x="115" y="584" class="small">默认 context 131072；默认最大输出 8192；启动时校验输出 &lt; 窗口</text>
+    <text x="115" y="613" class="small">必保：当前 Todo、最新 Batch、operation/schema/config、当前会话、最近 Effect</text>
+    <text x="115" y="642" class="small">旧历史新到旧装载；仅超窗才摘要；tool call/result 组不拆开</text>
+    <text x="115" y="671" class="small">单个当前值仍超限：保留结构、原始大小、头尾，并标记 context_truncated</text>
+    <text x="115" y="698" class="tiny">目的：最大化事实证据，同时防止对话超过模型上下文</text>
+
+    <rect x="85" y="750" width="775" height="175" class="mask" rx="18"/>
+    <rect x="85" y="750" width="775" height="175" class="safety"/>
+    <text x="115" y="785" class="node-title">输出预算是最终硬边界，不做语义 hash 拦截</text>
+    <text x="115" y="815" class="small">Plan 50（跨轮次） · Solve 50 / todo · Patch 20 / requirement · Effect 2</text>
+    <text x="115" y="844" class="small">所有 LLM 响应都计数：有效、无效、tool-call 输出均计 1</text>
+    <text x="115" y="873" class="small">HTTP 执行本身不计；Solve 默认第 10/20/30/40 输出进入继续检查</text>
+    <text x="115" y="902" class="tiny">Plan / Solve 通过完整账本负责语义去重和“是否还有新尝试”</text>
+
+    <rect x="85" y="960" width="775" height="220" class="mask" rx="18"/>
+    <rect x="85" y="960" width="775" height="220" class="neutral"/>
+    <text x="115" y="995" class="node-title">Todo 终止状态（不再尝试 Patch）</text>
+    <text x="115" y="1027" class="small mono">resolved · already_absent · non_parameter · dependency_related</text>
+    <text x="115" y="1056" class="small mono">insufficient_evidence · no_new_attempt · solve_budget_exhausted</text>
+    <text x="115" y="1090" class="small">failure 未知且无法形成参数修复，或属于 operation dependencies，可明确结束</text>
+    <text x="115" y="1121" class="small">本轮后续 Todo 使用最新 Batch，因此可能返回 already_absent</text>
+    <text x="115" y="1152" class="tiny">Todo 结束不等于 Smoke passed；外层仍以最新完整 Batch 的 2xx 阈值判断</text>
+
+    <rect x="85" y="1215" width="775" height="220" class="mask" rx="18"/>
+    <rect x="85" y="1215" width="775" height="220" class="failure"/>
+    <text x="115" y="1250" class="node-title">技术异常清理与传播</text>
+    <text x="115" y="1282" class="small">• 已 stage candidate：先 best-effort rollback，避免污染 Catalog</text>
+    <text x="115" y="1311" class="small">• SQLAlchemyError：继续上抛为 Supervisor 全局技术错误</text>
+    <text x="115" y="1340" class="small">• 其他 operation 范围异常：OperationSmokeResult.errored / operation_error</text>
+    <text x="115" y="1369" class="small">• App 关闭：clear_app_state，释放原始证据与 runtime Constraints</text>
+    <text x="115" y="1403" class="tiny">不写 LLM reasoning、原始响应、队列或一般 Agent memory 到数据库</text>
+
+    <rect x="85" y="1470" width="775" height="250" class="mask" rx="18"/>
+    <rect x="85" y="1470" width="775" height="250" class="data"/>
+    <text x="115" y="1505" class="node-title">公开 OperationSmokeResult（摘要，不泄露原始 body）</text>
+    <text x="115" y="1537" class="small">• 最新/各轮 batch report 与最终 2xx success rate</text>
+    <text x="115" y="1566" class="small">• Round → Todo → Patch → Effect 摘要</text>
+    <text x="115" y="1595" class="small">• status：passed / retry / unsupported / errored</text>
+    <text x="115" y="1624" class="small">• retry stop_reason：no_new_failure_work / plan_budget_exhausted</text>
+    <text x="115" y="1653" class="small">• unsupported_operation / operation_error</text>
+    <text x="115" y="1688" class="tiny">完整调查证据仍只存在于 App 内存，供后续 Agent Prompt 使用</text>
+  </g>
+
+  <!-- Right safety / persistence cards -->
+  <g>
+    <rect x="2380" y="285" width="700" height="210" class="mask" rx="18"/>
+    <rect x="2380" y="285" width="700" height="210" class="store"/>
+    <text x="2410" y="320" class="node-title">Catalog candidate revision（Generator 持久化）</text>
+    <text x="2410" y="352" class="small">1. Patch 合法后按 presence closure 扩展 generator updates</text>
+    <text x="2410" y="381" class="small">2. stage candidate（pending），再跑完整 candidate batch</text>
+    <text x="2410" y="410" class="small">3. Effect 仅 resolved_without_regression → finalize 全部输入</text>
+    <text x="2410" y="439" class="small">4. 其余结论 / 异常 → 整体 rollback</text>
+    <text x="2410" y="470" class="tiny">候选事务原子化；删除旧 Group 级部分接受</text>
+
+    <rect x="2380" y="530" width="700" height="195" class="mask" rx="18"/>
+    <rect x="2380" y="530" width="700" height="195" class="success"/>
+    <text x="2410" y="565" class="node-title">App-lifetime Constraints（不写数据库）</text>
+    <text x="2410" y="597" class="small">候选 Constraint 与 candidate batch 一起测试</text>
+    <text x="2410" y="626" class="small">Effect 接受后加入 operation 隔离内存集合</text>
+    <text x="2410" y="655" class="small">后续 Todo、外层轮次和同一 App 的 Supervisor 重试继续应用</text>
+    <text x="2410" y="691" class="tiny">App 关闭即清空；没有新表或 migration</text>
+
+    <rect x="2380" y="760" width="700" height="225" class="mask" rx="18"/>
+    <rect x="2380" y="760" width="700" height="225" class="safety"/>
+    <text x="2410" y="795" class="node-title">HTTP Request Tool 安全范围</text>
+    <text x="2410" y="827" class="small">• 仅 Failure Solver 可调用；Plan / Patch / Effect 无工具</text>
+    <text x="2410" y="856" class="small">• 只能访问当前 operation 的 method + path template</text>
+    <text x="2410" y="885" class="small">• 认证由运行时注入；模型不能跨 operation 构造请求</text>
+    <text x="2410" y="914" class="small">• 同一输出的全部 tool calls 先整体预检，再执行（原子边界）</text>
+    <text x="2410" y="949" class="tiny">任何一个越界 / 无效 → 一个也不执行，返回协议修正</text>
+
+    <rect x="2380" y="1020" width="700" height="180" class="mask" rx="18"/>
+    <rect x="2380" y="1020" width="700" height="180" class="neutral"/>
+    <text x="2410" y="1055" class="node-title">保留的确定性 testing 能力</text>
+    <text x="2410" y="1087" class="small">生成、Constraint solver、serialization、完整 preflight</text>
+    <text x="2410" y="1116" class="small">Behavior Monitor、reference pools、Catalog revision 检查</text>
+    <text x="2410" y="1145" class="small">代码只做安全/可执行性；failure 语义、方向与停止由 LLM 决定</text>
+    <text x="2410" y="1177" class="tiny">不再做确定性 diagnosis / grouping / ownership / provenance 推导</text>
+
+    <rect x="2380" y="1235" width="700" height="205" class="mask" rx="18"/>
+    <rect x="2380" y="1235" width="700" height="205" class="data"/>
+    <text x="2410" y="1270" class="node-title">Reference 安全与可用证据</text>
+    <text x="2410" y="1302" class="small">每次最新 Batch 后重新计算可用 reference aliases / typed pools</text>
+    <text x="2410" y="1331" class="small">Patch 编译拒绝不存在的 alias、空 pool、类型不兼容引用</text>
+    <text x="2410" y="1360" class="small">动态样本 Prompt 展示实际 pool values，供 Patch Agent 自审</text>
+    <text x="2410" y="1404" class="tiny">引用池是代码保留的确定性安全边界，不由 LLM 猜测</text>
+
+    <rect x="2380" y="1475" width="700" height="245" class="mask" rx="18"/>
+    <rect x="2380" y="1475" width="700" height="245" class="safety"/>
+    <text x="2410" y="1510" class="node-title">候选 Patch 的原子验收规则</text>
+    <text x="2410" y="1542" class="small">接受条件只有：Effect = resolved_without_regression</text>
+    <text x="2410" y="1571" class="small">含义：目标 failure 已解决，且此前成功 case / 已解决 failure 未回归</text>
+    <text x="2410" y="1600" class="small">unresolved / regression / unknown：Generator 与 Constraint 全部不接受</text>
+    <text x="2410" y="1629" class="small">完整 candidate 证据与 Effect 原因交回同一 Solve 会话</text>
+    <text x="2410" y="1658" class="small">Solve 可继续 HTTP 调查、形成新的 PatchRequirement，或结束 Todo</text>
+    <text x="2410" y="1694" class="tiny">删除“全局成功率提高就强制接受”和 Group 部分验收</text>
+  </g>
+
+  <!-- ========================================================= -->
+  <!-- B. Plan protocol -->
+  <!-- ========================================================= -->
+  <rect x="30" y="2050" width="1500" height="1030" class="lane"/>
+  <rect x="52" y="2072" width="1456" height="54" class="lane-head"/>
+  <text x="82" y="2108" class="section-title">B. [P] smoke_plan · THINK · 每外层轮次全新会话</text>
+
+  <!-- Plan arrows -->
+  <g>
+    <path d="M780 2365 L780 2410" class="arrow"/>
+    <path d="M780 2500 L780 2540" class="arrow"/>
+    <path d="M920 2580 L1110 2580" class="arrow-rose"/>
+    <path d="M1250 2620 L1250 2670" class="arrow-orange"/>
+    <path d="M1110 2710 L1025 2710 L1025 2455 L1130 2455" class="arrow-orange"/>
+    <path d="M1390 2710 L1450 2710" class="arrow-rose"/>
+    <path d="M780 2620 L780 2670" class="arrow-green"/>
+    <path d="M640 2830 L390 2830" class="arrow-orange"/>
+    <path d="M920 2830 L1120 2830" class="arrow-green"/>
+    <path d="M1285 2870 L1285 2895 L780 2895 L780 2920" class="arrow"/>
+    <path d="M780 3000 L780 3030" class="arrow-green"/>
+  </g>
+
+  <!-- Plan nodes -->
+  <g>
+    <rect x="80" y="2150" width="1400" height="215" class="mask" rx="16"/>
+    <rect x="80" y="2150" width="1400" height="215" class="data"/>
+    <text x="110" y="2184" class="node-title">LLM 输入 · SmokePlanRequest</text>
+    <text x="110" y="2215" class="small">operation_key；最新完整 Batch；所有 case 的完整请求/生成值/响应/错误</text>
+    <text x="110" y="2243" class="small">临时代号 C1…Cn 与 failed_case_codes；operation 隔离的完整 Round/Todo/Patch/Effect 历史</text>
+    <text x="110" y="2271" class="small">任务边界：只识别语义独特的 failure、关联 case、决定固定顺序；不分析根因/参数/Patch</text>
+    <text x="110" y="2299" class="small">每个失败 case 必须至少被一个 Todo 覆盖；可基于账本判断没有新工作</text>
+    <text x="110" y="2336" class="tiny">代号仅减少 Plan 结构化关联歧义；完整证据仍在同一输入中</text>
+
+    <rect x="430" y="2410" width="700" height="90" class="mask" rx="18"/>
+    <rect x="430" y="2410" width="700" height="90" class="llm" filter="url(#glow)"/>
+    <text x="780" y="2443" text-anchor="middle" class="node-title">调用 THINK 模型（本次输出计数 +1）</text>
+    <text x="780" y="2470" text-anchor="middle" class="small">无工具；无效 JSON / 无效字段同样消耗 Plan 全局预算</text>
+
+    <polygon points="780,2540 920,2580 780,2620 640,2580" class="mask"/>
+    <polygon points="780,2540 920,2580 780,2620 640,2580" class="decision"/>
+    <text x="780" y="2576" text-anchor="middle" class="node-title">结构与引用校验有效？</text>
+    <text x="780" y="2598" text-anchor="middle" class="tiny">ID 唯一 / code 存在 / 覆盖全部失败 case</text>
+
+    <rect x="1110" y="2540" width="280" height="80" class="mask" rx="14"/>
+    <rect x="1110" y="2540" width="280" height="80" class="failure"/>
+    <text x="1250" y="2572" text-anchor="middle" class="node-title">协议修正 Prompt</text>
+    <text x="1250" y="2597" text-anchor="middle" class="small">留在同一 Plan 会话</text>
+
+    <polygon points="1250,2670 1390,2710 1250,2750 1110,2710" class="mask"/>
+    <polygon points="1250,2670 1390,2710 1250,2750 1110,2710" class="decision-rose"/>
+    <text x="1250" y="2706" text-anchor="middle" class="node-title">仍有输出预算？</text>
+
+    <rect x="1400" y="2670" width="80" height="80" class="mask" rx="12"/>
+    <rect x="1400" y="2670" width="80" height="80" class="failure"/>
+    <text x="1440" y="2705" text-anchor="middle" class="small">耗尽</text>
+    <text x="1440" y="2727" text-anchor="middle" class="tiny">retry</text>
+
+    <polygon points="780,2670 920,2710 780,2750 640,2710" class="mask"/>
+    <polygon points="780,2670 920,2710 780,2750 640,2710" class="decision"/>
+    <text x="780" y="2706" text-anchor="middle" class="node-title">action？</text>
+    <text x="780" y="2728" text-anchor="middle" class="tiny">process / no_new_failure_work</text>
+
+    <rect x="80" y="2790" width="310" height="80" class="mask" rx="14"/>
+    <rect x="80" y="2790" width="310" height="80" class="neutral"/>
+    <text x="235" y="2822" text-anchor="middle" class="node-title">no_new_failure_work</text>
+    <text x="235" y="2847" text-anchor="middle" class="small">结束本次 Smoke：retry</text>
+
+    <rect x="1120" y="2790" width="330" height="80" class="mask" rx="14"/>
+    <rect x="1120" y="2790" width="330" height="80" class="data"/>
+    <text x="1285" y="2822" text-anchor="middle" class="node-title">process</text>
+    <text x="1285" y="2847" text-anchor="middle" class="small">todos[{id, failure, case_codes}]</text>
+
+    <rect x="430" y="2790" width="700" height="80" class="mask" rx="14"/>
+    <rect x="430" y="2790" width="700" height="80" class="safety"/>
+    <text x="780" y="2822" text-anchor="middle" class="node-title">代码不判断“语义上是否真的独特”</text>
+    <text x="780" y="2847" text-anchor="middle" class="small">只验证结构、引用池与覆盖；去重责任留给 Plan + 历史账本</text>
+
+    <rect x="360" y="2920" width="840" height="80" class="mask" rx="14"/>
+    <rect x="360" y="2920" width="840" height="80" class="success"/>
+    <text x="780" y="2952" text-anchor="middle" class="node-title">输出：FailureTodo 固定快照</text>
+    <text x="780" y="2977" text-anchor="middle" class="small">立即把 case_codes 展开为完整 FailureCaseEvidence；下游不使用代号</text>
+
+    <rect x="360" y="3028" width="840" height="34" rx="17" fill="#a78bfa"/>
+    <text x="780" y="3051" text-anchor="middle" class="badge">Plan 的语义职责：failure 去重、case 关联、处理顺序、是否已无新工作</text>
+  </g>
+  <text x="935" y="2563" class="no">否</text>
+  <text x="790" y="2650" class="yes">是</text>
+  <text x="1000" y="2698" class="yes">是：修正</text>
+  <text x="1400" y="2698" class="no">否</text>
+
+  <!-- ========================================================= -->
+  <!-- C. Solve protocol -->
+  <!-- ========================================================= -->
+  <rect x="1570" y="2050" width="1600" height="1480" class="lane"/>
+  <rect x="1592" y="2072" width="1556" height="54" class="lane-head"/>
+  <text x="1622" y="2108" class="section-title">C. [S] failure_solver · THINK · 每 Todo 新 Agent、Todo 内连续会话</text>
+
+  <!-- Solve arrows -->
+  <g>
+    <path d="M2370 2355 L2370 2390" class="arrow"/>
+    <path d="M2230 2430 L1880 2430" class="arrow-rose"/>
+    <path d="M2370 2470 L2370 2505" class="arrow"/>
+    <path d="M2230 2545 L1940 2545 L1940 2630" class="arrow-orange"/>
+    <path d="M2510 2545 L2800 2545 L2800 2630" class="arrow"/>
+    <path d="M1940 2710 L1940 2740 L2180 2740 L2180 2770" class="arrow"/>
+    <path d="M2800 2710 L2800 2740 L2560 2740 L2560 2770" class="arrow"/>
+    <path d="M2370 2860 L2370 2895" class="arrow"/>
+    <path d="M2230 2935 L1980 2935" class="arrow-orange"/>
+    <path d="M1840 2975 L1840 3010" class="arrow"/>
+    <path d="M1700 3050 L1635 3050" class="arrow-rose"/>
+    <path d="M1980 3050 L2140 3050" class="arrow-green"/>
+    <path d="M1840 3090 L1840 3180" class="arrow"/>
+    <path d="M2510 2935 L2770 2935" class="arrow"/>
+    <path d="M2910 2975 L2910 3010" class="arrow"/>
+    <path d="M2770 3050 L2550 3050 L2550 3160 L2510 3160" class="arrow-green"/>
+    <path d="M2910 3090 L2910 3110 L3140 3110" class="rail-link"/>
+    <path d="M2370 3200 L2370 3240" class="arrow"/>
+    <path d="M2230 3280 L1930 3280" class="arrow-green"/>
+    <path d="M2510 3280 L2780 3280" class="arrow-orange"/>
+    <path d="M2370 3320 L2370 3370" class="arrow-green"/>
+    <!-- Every continuation path joins one right-side retry rail before rechecking budget. -->
+    <path d="M1642 3090 L1642 3110 L3140 3110" class="rail-link"/>
+    <path d="M1840 3260 L1840 3345 L3140 3345" class="rail-link"/>
+    <path d="M2930 3320 L2930 3345 L3140 3345" class="rail-link"/>
+    <path d="M2790 3410 L2800 3410" class="arrow-dash"/>
+    <path d="M3120 3435 L3140 3435" class="rail-link"/>
+    <path d="M3140 3435 L3140 2430 L2510 2430" class="arrow-orange"/>
+  </g>
+
+  <!-- Solve nodes -->
+  <g>
+    <rect x="1620" y="2150" width="1500" height="205" class="mask" rx="16"/>
+    <rect x="1620" y="2150" width="1500" height="205" class="data"/>
+    <text x="1650" y="2184" class="node-title">LLM 初始输入 · FailureSolveRequest（全部是展开后的完整证据）</text>
+    <text x="1650" y="2215" class="small">FailureTodo + 全部关联 cases；最新完整 Batch；完整 operation IR / schema / testing snapshot</text>
+    <text x="1650" y="2243" class="small">当前 generator config；可用 references；历史调查、HTTP observations、Patch/Effect 尝试</text>
+    <text x="1650" y="2271" class="small">允许 HTTP Tool 的当前 method/path template 与认证边界；当前已接受 runtime Constraints</text>
+    <text x="1650" y="2299" class="small">目标：用证据判断“为什么失败、该如何改”，或明确为什么不应继续</text>
+    <text x="1650" y="2336" class="tiny">Patch 失败或 Effect 回滚后，反馈进入同一对话；不会新建 Solve Agent 丢失调查脉络</text>
+
+    <polygon points="2370,2390 2510,2430 2370,2470 2230,2430" class="mask"/>
+    <polygon points="2370,2390 2510,2430 2370,2470 2230,2430" class="decision-rose"/>
+    <text x="2370" y="2426" text-anchor="middle" class="node-title">Solve 输出预算耗尽？</text>
+    <text x="2370" y="2448" text-anchor="middle" class="tiny">默认每 Todo 50</text>
+
+    <rect x="1625" y="2390" width="255" height="80" class="mask" rx="14"/>
+    <rect x="1625" y="2390" width="255" height="80" class="failure"/>
+    <text x="1752" y="2422" text-anchor="middle" class="node-title">Todo 结束</text>
+    <text x="1752" y="2447" text-anchor="middle" class="small mono">solve_budget_exhausted</text>
+
+    <polygon points="2370,2505 2510,2545 2370,2585 2230,2545" class="mask"/>
+    <polygon points="2370,2505 2510,2545 2370,2585 2230,2545" class="decision"/>
+    <text x="2370" y="2541" text-anchor="middle" class="node-title">下一个输出是继续检查点？</text>
+    <text x="2370" y="2563" text-anchor="middle" class="tiny">默认 #10 / #20 / #30 / #40</text>
+
+    <rect x="1710" y="2630" width="460" height="80" class="mask" rx="14"/>
+    <rect x="1710" y="2630" width="460" height="80" class="safety"/>
+    <text x="1940" y="2662" text-anchor="middle" class="node-title">Checkpoint Prompt · 禁用工具</text>
+    <text x="1940" y="2687" text-anchor="middle" class="small">必须 continue+全新方向，或明确 finish</text>
+
+    <rect x="2570" y="2630" width="460" height="80" class="mask" rx="14"/>
+    <rect x="2570" y="2630" width="460" height="80" class="llm"/>
+    <text x="2800" y="2662" text-anchor="middle" class="node-title">正常调查 Prompt · 提供 HTTP Tool</text>
+    <text x="2800" y="2687" text-anchor="middle" class="small">可 tool call，或给单一结构化决定</text>
+
+    <rect x="2040" y="2770" width="660" height="90" class="mask" rx="18"/>
+    <rect x="2040" y="2770" width="660" height="90" class="llm" filter="url(#glow)"/>
+    <text x="2370" y="2803" text-anchor="middle" class="node-title">调用 THINK 模型（输出计数 +1）</text>
+    <text x="2370" y="2829" text-anchor="middle" class="small">tool-call 输出也计数；一次输出不能同时含 tool call 与 decision</text>
+
+    <polygon points="2370,2895 2510,2935 2370,2975 2230,2935" class="mask"/>
+    <polygon points="2370,2895 2510,2935 2370,2975 2230,2935" class="decision"/>
+    <text x="2370" y="2931" text-anchor="middle" class="node-title">本次输出包含 tool calls？</text>
+
+    <polygon points="1840,3010 1980,3050 1840,3090 1700,3050" class="mask"/>
+    <polygon points="1840,3010 1980,3050 1840,3090 1700,3050" class="decision"/>
+    <text x="1840" y="3046" text-anchor="middle" class="node-title">全部调用预检通过？</text>
+    <text x="1840" y="3068" text-anchor="middle" class="tiny">不混合 / 当前 operation / 参数合法</text>
+
+    <rect x="1585" y="3010" width="115" height="80" class="mask" rx="12"/>
+    <rect x="1585" y="3010" width="115" height="80" class="failure"/>
+    <text x="1642" y="3043" text-anchor="middle" class="small">协议修正</text>
+    <text x="1642" y="3066" text-anchor="middle" class="tiny">0 个执行</text>
+
+    <rect x="1660" y="3180" width="360" height="80" class="mask" rx="14"/>
+    <rect x="1660" y="3180" width="360" height="80" class="safety"/>
+    <text x="1840" y="3212" text-anchor="middle" class="node-title">原子执行全部 HTTP calls</text>
+    <text x="1840" y="3237" text-anchor="middle" class="small">执行不计输出；结果加入 observations</text>
+
+    <polygon points="2910,3010 3050,3050 2910,3090 2770,3050" class="mask"/>
+    <polygon points="2910,3010 3050,3050 2910,3090 2770,3050" class="decision"/>
+    <text x="2910" y="3046" text-anchor="middle" class="node-title">结构化决定有效？</text>
+    <text x="2910" y="3068" text-anchor="middle" class="tiny">且符合 normal / checkpoint 协议</text>
+
+    <rect x="2850" y="3180" width="120" height="80" class="mask" rx="12"/>
+    <rect x="2850" y="3180" width="120" height="80" class="failure"/>
+    <text x="2910" y="3213" text-anchor="middle" class="small">协议修正</text>
+    <text x="2910" y="3236" text-anchor="middle" class="tiny">仍计数</text>
+
+    <polygon points="2370,3120 2510,3160 2370,3200 2230,3160" class="mask"/>
+    <polygon points="2370,3120 2510,3160 2370,3200 2230,3160" class="decision"/>
+    <text x="2370" y="3156" text-anchor="middle" class="node-title">decision.action？</text>
+    <text x="2370" y="3178" text-anchor="middle" class="tiny">patch_ready / finish / continue(checkpoint only)</text>
+
+    <polygon points="2370,3240 2510,3280 2370,3320 2230,3280" class="mask"/>
+    <polygon points="2370,3240 2510,3280 2370,3320 2230,3280" class="decision"/>
+    <text x="2370" y="3276" text-anchor="middle" class="node-title">输出种类</text>
+
+    <rect x="1640" y="3240" width="290" height="80" class="mask" rx="14"/>
+    <rect x="1640" y="3240" width="290" height="80" class="neutral"/>
+    <text x="1785" y="3272" text-anchor="middle" class="node-title">finish → Todo 结束</text>
+    <text x="1785" y="3297" text-anchor="middle" class="tiny">already_absent / non_parameter / dependency_related / …</text>
+
+    <rect x="2780" y="3240" width="300" height="80" class="mask" rx="14"/>
+    <rect x="2780" y="3240" width="300" height="80" class="safety"/>
+    <text x="2930" y="3272" text-anchor="middle" class="node-title">continue</text>
+    <text x="2930" y="3297" text-anchor="middle" class="small">必须给不同于历史的新方向</text>
+
+    <rect x="1950" y="3370" width="840" height="80" class="mask" rx="14"/>
+    <rect x="1950" y="3370" width="840" height="80" class="success"/>
+    <text x="2370" y="3402" text-anchor="middle" class="node-title">patch_ready → PatchRequirement</text>
+    <text x="2370" y="3427" text-anchor="middle" class="small mono">root_cause · affected_inputs · desired_behavior · acceptance_criteria</text>
+
+    <rect x="2800" y="3370" width="320" height="130" class="mask" rx="14"/>
+    <rect x="2800" y="3370" width="320" height="130" class="data"/>
+    <text x="2960" y="3402" text-anchor="middle" class="node-title">回到同一 Solve 会话</text>
+    <text x="2960" y="3428" text-anchor="middle" class="small">Patch 编译/预算失败</text>
+    <text x="2960" y="3453" text-anchor="middle" class="small">或 Effect 未接受</text>
+    <text x="2960" y="3478" text-anchor="middle" class="tiny">附完整失败、candidate、原因</text>
+  </g>
+  <text x="2150" y="2417" class="no">是</text>
+  <text x="2388" y="2492" class="yes">否</text>
+  <text x="2100" y="2533" class="warn">是</text>
+  <text x="2600" y="2533" class="yes">否</text>
+  <text x="2070" y="2923" class="warn">是</text>
+  <text x="2600" y="2923" class="yes">否</text>
+  <text x="1660" y="3038" class="no">否</text>
+  <text x="2000" y="3038" class="yes">是</text>
+  <text x="2740" y="3038" class="yes">是</text>
+  <text x="2928" y="3120" class="no">否</text>
+
+  <!-- ========================================================= -->
+  <!-- D. Patch protocol -->
+  <!-- ========================================================= -->
+  <rect x="30" y="3110" width="1500" height="1330" class="lane"/>
+  <rect x="52" y="3132" width="1456" height="54" class="lane-head"/>
+  <text x="82" y="3168" class="section-title">D. [A] parameter_patch_agent · FAST · 生成完整替代 Patch 并自审</text>
+
+  <!-- Patch arrows -->
+  <g>
+    <path d="M780 3440 L780 3475" class="arrow"/>
+    <path d="M640 3515 L360 3515" class="arrow-rose"/>
+    <path d="M780 3555 L780 3590" class="arrow"/>
+    <path d="M780 3680 L780 3715" class="arrow"/>
+    <path d="M640 3755 L350 3755" class="arrow-orange"/>
+    <path d="M920 3755 L1200 3755" class="arrow-green"/>
+    <path d="M215 3795 L215 3810 L780 3810 L780 3830" class="arrow"/>
+    <path d="M640 3870 L360 3870" class="arrow-rose"/>
+    <path d="M780 3910 L780 3945" class="arrow-green"/>
+    <path d="M780 4025 L780 4060" class="arrow"/>
+    <path d="M640 4215 L360 4215" class="arrow-rose"/>
+    <path d="M780 4255 L780 4290" class="arrow-green"/>
+    <!-- Accept skips compilation and reaches the sampled-version check on its own rail. -->
+    <path d="M1325 3795 L1460 3795 L1460 4215 L920 4215" class="arrow-green"/>
+    <!-- Invalid proposals, samples needing review, and invalid accepts share one retry rail. -->
+    <path d="M220 3910 L220 3925 L1485 3925" class="rail-link"/>
+    <path d="M1180 4100 L1485 4100" class="rail-link"/>
+    <path d="M1325 4025 L1485 4025" class="rail-link"/>
+    <path d="M220 4255 L220 4270 L1485 4270" class="rail-link"/>
+    <path d="M1485 4270 L1485 3515 L920 3515" class="arrow-orange"/>
+  </g>
+
+  <!-- Patch nodes -->
+  <g>
+    <rect x="80" y="3210" width="1400" height="230" class="mask" rx="16"/>
+    <rect x="80" y="3210" width="1400" height="230" class="data"/>
+    <text x="110" y="3244" class="node-title">LLM 输入 · 单个 Solve 形成的 PatchRequirement</text>
+    <text x="110" y="3275" class="small">Todo failure + root_cause + affected_inputs（语义路径）+ desired_behavior + acceptance_criteria</text>
+    <text x="110" y="3303" class="small">当前 generator config；已接受 Constraints；reference aliases/pools；case_count；历史 Patch/Effect 尝试</text>
+    <text x="110" y="3331" class="small">无 HTTP 工具、无数据库写入；模型输出必须是 propose 完整替代 Patch，或在看到样本后 accept</text>
+    <text x="110" y="3359" class="small">Patch 可同时包含 generator changes 与 runtime Constraints，但必须限定在 affected_inputs</text>
+    <text x="110" y="3397" class="tiny">每次新的 PatchRequirement 都创建新 FAST Agent；同一 requirement 内保留编译/样本反馈会话</text>
+
+    <polygon points="780,3475 920,3515 780,3555 640,3515" class="mask"/>
+    <polygon points="780,3475 920,3515 780,3555 640,3515" class="decision-rose"/>
+    <text x="780" y="3511" text-anchor="middle" class="node-title">Patch 输出预算耗尽？</text>
+    <text x="780" y="3533" text-anchor="middle" class="tiny">默认 20 / requirement</text>
+
+    <rect x="80" y="3475" width="280" height="80" class="mask" rx="14"/>
+    <rect x="80" y="3475" width="280" height="80" class="failure"/>
+    <text x="220" y="3507" text-anchor="middle" class="node-title">返回 Solve</text>
+    <text x="220" y="3532" text-anchor="middle" class="small mono">output_budget_exhausted</text>
+
+    <rect x="430" y="3590" width="700" height="90" class="mask" rx="18"/>
+    <rect x="430" y="3590" width="700" height="90" class="fast" filter="url(#glow)"/>
+    <text x="780" y="3623" text-anchor="middle" class="node-title">调用 FAST 模型（输出计数 +1）</text>
+    <text x="780" y="3649" text-anchor="middle" class="small">无效输出也计数；模型看到此前的完整编译、样本与 reference 反馈</text>
+
+    <polygon points="780,3715 920,3755 780,3795 640,3755" class="mask"/>
+    <polygon points="780,3715 920,3755 780,3795 640,3755" class="decision"/>
+    <text x="780" y="3751" text-anchor="middle" class="node-title">action？</text>
+    <text x="780" y="3773" text-anchor="middle" class="tiny">propose / accept</text>
+
+    <rect x="80" y="3715" width="270" height="80" class="mask" rx="14"/>
+    <rect x="80" y="3715" width="270" height="80" class="data"/>
+    <text x="215" y="3747" text-anchor="middle" class="node-title">propose</text>
+    <text x="215" y="3772" text-anchor="middle" class="small">完整 replacement Patch</text>
+
+    <rect x="1200" y="3715" width="250" height="80" class="mask" rx="14"/>
+    <rect x="1200" y="3715" width="250" height="80" class="success"/>
+    <text x="1325" y="3747" text-anchor="middle" class="node-title">accept</text>
+    <text x="1325" y="3772" text-anchor="middle" class="small">只能接受已采样版本</text>
+
+    <polygon points="780,3830 920,3870 780,3910 640,3870" class="mask"/>
+    <polygon points="780,3830 920,3870 780,3910 640,3870" class="decision"/>
+    <text x="780" y="3866" text-anchor="middle" class="node-title">代码安全编译通过？</text>
+    <text x="780" y="3888" text-anchor="middle" class="tiny">scope / type / system input / satisfiable / reference pool</text>
+
+    <rect x="80" y="3830" width="280" height="80" class="mask" rx="14"/>
+    <rect x="80" y="3830" width="280" height="80" class="failure"/>
+    <text x="220" y="3862" text-anchor="middle" class="node-title">完整错误反馈</text>
+    <text x="220" y="3887" text-anchor="middle" class="small">同一模型提出替代 Patch</text>
+
+    <rect x="1200" y="3945" width="250" height="80" class="mask" rx="14"/>
+    <rect x="1200" y="3945" width="250" height="80" class="failure"/>
+    <text x="1325" y="3977" text-anchor="middle" class="node-title">accept 无效</text>
+    <text x="1325" y="4002" text-anchor="middle" class="small">尚未看到样本</text>
+
+    <rect x="430" y="3945" width="700" height="80" class="mask" rx="14"/>
+    <rect x="430" y="3945" width="700" height="80" class="proc"/>
+    <text x="780" y="3977" text-anchor="middle" class="node-title">用候选 Patch 动态生成 case_count 个本地样本</text>
+    <text x="780" y="4002" text-anchor="middle" class="small">严格等于本次 1–20 case_count；同时展示实际 reference pool values</text>
+
+    <rect x="380" y="4060" width="800" height="80" class="mask" rx="14"/>
+    <rect x="380" y="4060" width="800" height="80" class="data"/>
+    <text x="780" y="4092" text-anchor="middle" class="node-title">把编译结果 + 全部动态样本回送同一 FAST 会话</text>
+    <text x="780" y="4117" text-anchor="middle" class="small">模型选择 accept 当前版本，或 propose 一份完整替代 Patch</text>
+
+    <polygon points="780,4175 920,4215 780,4255 640,4215" class="mask"/>
+    <polygon points="780,4175 920,4215 780,4255 640,4215" class="decision"/>
+    <text x="780" y="4211" text-anchor="middle" class="node-title">接受的是最新已验证版本？</text>
+
+    <rect x="80" y="4175" width="280" height="80" class="mask" rx="14"/>
+    <rect x="80" y="4175" width="280" height="80" class="failure"/>
+    <text x="220" y="4207" text-anchor="middle" class="node-title">协议修正</text>
+    <text x="220" y="4232" text-anchor="middle" class="small">继续消耗预算</text>
+
+    <rect x="360" y="4290" width="840" height="100" class="mask" rx="14"/>
+    <rect x="360" y="4290" width="840" height="100" class="success"/>
+    <text x="780" y="4322" text-anchor="middle" class="node-title">输出：ValidatedParameterPatch</text>
+    <text x="780" y="4348" text-anchor="middle" class="small">实际 Patch + samples + outputs_used + attempt_history</text>
+    <text x="780" y="4372" text-anchor="middle" class="tiny">交给协调器 stage candidate；Patch Agent 自己不修改 Catalog / DB</text>
+  </g>
+  <text x="565" y="3503" class="no">是</text>
+  <text x="795" y="3575" class="yes">否</text>
+  <text x="520" y="3743" class="warn">propose</text>
+  <text x="1000" y="3743" class="yes">accept</text>
+  <text x="550" y="3858" class="no">否</text>
+  <text x="795" y="3930" class="yes">是</text>
+
+  <!-- ========================================================= -->
+  <!-- E. Effect protocol -->
+  <!-- ========================================================= -->
+  <rect x="1570" y="3560" width="1600" height="880" class="lane"/>
+  <rect x="1592" y="3582" width="1556" height="54" class="lane-head"/>
+  <text x="1622" y="3618" class="section-title">E. [E] smoke_effect · THINK · 最多两次输出、候选原子验收</text>
+
+  <!-- Effect arrows -->
+  <g>
+    <path d="M2370 3870 L2370 3910" class="arrow"/>
+    <path d="M2370 4000 L2370 4040" class="arrow"/>
+    <path d="M2510 4080 L2820 4080" class="arrow-rose"/>
+    <path d="M2960 4120 L2960 4160" class="arrow-orange"/>
+    <path d="M2820 4200 L2740 4200 L2740 3955 L2700 3955" class="arrow-orange"/>
+    <path d="M3100 4200 L3140 4200 L3140 4335 L3120 4335" class="arrow-rose"/>
+    <path d="M2370 4120 L2370 4160" class="arrow-green"/>
+    <path d="M2230 4200 L1880 4200" class="arrow-green"/>
+    <path d="M2370 4240 L2370 4290" class="arrow-rose"/>
+    <path d="M2800 4340 L2770 4340" class="arrow-rose"/>
+  </g>
+
+  <!-- Effect nodes -->
+  <g>
+    <rect x="1620" y="3660" width="1500" height="210" class="mask" rx="16"/>
+    <rect x="1620" y="3660" width="1500" height="210" class="data"/>
+    <text x="1650" y="3694" class="node-title">LLM 输入 · SmokeEffectRequest（无工具）</text>
+    <text x="1650" y="3725" class="small">展开后的 Todo + 完整 PatchRequirement + 实际 Validated Patch + 动态样本/尝试历史</text>
+    <text x="1650" y="3753" class="small">before_batch：候选前最新已接受的完整 Batch；candidate_batch：完整同 seed Batch</text>
+    <text x="1650" y="3781" class="small">完整请求、生成值、响应与已有历史，用于判断目标 failure 和此前成功/已解决 failure</text>
+    <text x="1650" y="3809" class="small">只能输出四种语义结论之一；不能依据单一 case 或全局成功率增量“部分接受”</text>
+    <text x="1650" y="3847" class="tiny">candidate batch 与 before batch 使用相同 seed/case_count，使差异尽量归因于候选 Patch</text>
+
+    <rect x="2040" y="3910" width="660" height="90" class="mask" rx="18"/>
+    <rect x="2040" y="3910" width="660" height="90" class="llm" filter="url(#glow)"/>
+    <text x="2370" y="3943" text-anchor="middle" class="node-title">调用 THINK 模型（输出计数 +1）</text>
+    <text x="2370" y="3969" text-anchor="middle" class="small">首次无效允许一次协议修正；最大输出数默认 2</text>
+
+    <polygon points="2370,4040 2510,4080 2370,4120 2230,4080" class="mask"/>
+    <polygon points="2370,4040 2510,4080 2370,4120 2230,4080" class="decision"/>
+    <text x="2370" y="4076" text-anchor="middle" class="node-title">输出协议有效？</text>
+
+    <rect x="2820" y="4040" width="280" height="80" class="mask" rx="14"/>
+    <rect x="2820" y="4040" width="280" height="80" class="failure"/>
+    <text x="2960" y="4072" text-anchor="middle" class="node-title">第一次：协议修正</text>
+    <text x="2960" y="4097" text-anchor="middle" class="small">第二次：强制 unknown</text>
+
+    <polygon points="2960,4160 3100,4200 2960,4240 2820,4200" class="mask"/>
+    <polygon points="2960,4160 3100,4200 2960,4240 2820,4200" class="decision-rose"/>
+    <text x="2960" y="4196" text-anchor="middle" class="node-title">还有第 2 次机会？</text>
+
+    <polygon points="2370,4160 2510,4200 2370,4240 2230,4200" class="mask"/>
+    <polygon points="2370,4160 2510,4200 2370,4240 2230,4200" class="decision"/>
+    <text x="2370" y="4196" text-anchor="middle" class="node-title">Effect 结论？</text>
+
+    <rect x="1620" y="4160" width="260" height="80" class="mask" rx="14"/>
+    <rect x="1620" y="4160" width="260" height="80" class="success"/>
+    <text x="1750" y="4192" text-anchor="middle" class="node-title">resolved_without_regression</text>
+    <text x="1750" y="4217" text-anchor="middle" class="tiny">唯一接受结果</text>
+
+    <rect x="2800" y="4280" width="320" height="110" class="mask" rx="14"/>
+    <rect x="2800" y="4280" width="320" height="110" class="failure"/>
+    <text x="2960" y="4312" text-anchor="middle" class="node-title">unknown</text>
+    <text x="2960" y="4338" text-anchor="middle" class="small">整体 rollback</text>
+    <text x="2960" y="4364" text-anchor="middle" class="tiny">反馈同一 Solve 会话</text>
+
+    <rect x="1970" y="4290" width="800" height="100" class="mask" rx="14"/>
+    <rect x="1970" y="4290" width="800" height="100" class="failure"/>
+    <text x="2370" y="4322" text-anchor="middle" class="node-title">unresolved / regression / unknown</text>
+    <text x="2370" y="4348" text-anchor="middle" class="small">整体 rollback；Patch + candidate batch + reason 回到同一 Solve 会话</text>
+    <text x="2370" y="4372" text-anchor="middle" class="tiny">Solve 继续调查、重新形成 requirement，或给明确 Todo 结束状态</text>
+
+    <rect x="1585" y="4280" width="360" height="110" class="mask" rx="14"/>
+    <rect x="1585" y="4280" width="360" height="110" class="success"/>
+    <text x="1765" y="4312" text-anchor="middle" class="node-title">原子接受全部候选</text>
+    <text x="1765" y="4338" text-anchor="middle" class="small">finalize Generator candidate</text>
+    <text x="1765" y="4364" text-anchor="middle" class="small">加入 runtime Constraints；Todo=resolved</text>
+  </g>
+  <text x="2550" y="4068" class="no">否</text>
+  <text x="2388" y="4145" class="yes">是</text>
+  <text x="2050" y="4188" class="yes">resolved</text>
+  <text x="2525" y="4188" class="no">其他三种</text>
+
+  <!-- Footer -->
+  <text x="50" y="4460" class="tiny">阅读顺序：A 主生命周期 → B Plan 固定工作清单 → C Solve 连续调查与继续检查 → D Patch 可执行性与自审 → E 同 Seed Effect 原子验收。</text>
+</svg>

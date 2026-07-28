@@ -10,7 +10,7 @@ class ModelSelector:
 
     Callers request a role rather than a provider/model name. This keeps model
     choice centralized and applies deterministic temperature zero to structured
-    diagnosis, patch, and effect-validation protocols.
+    Plan, Solve, Patch, and Effect protocols.
     """
 
     THINKING_ROLES = {
@@ -18,7 +18,8 @@ class ModelSelector:
         "result_analyst",
         "check_designer",
         "intelligence_updater",
-        "operation_smoke_root_cause_diagnosis",
+        "operation_smoke_plan",
+        "operation_smoke_failure_solve",
         "operation_smoke_effect_validation",
     }
     FAST_ROLES = {
@@ -27,7 +28,8 @@ class ModelSelector:
         "parameter_patch_agent",
     }
     ZERO_TEMPERATURE_ROLES = {
-        "operation_smoke_root_cause_diagnosis",
+        "operation_smoke_plan",
+        "operation_smoke_failure_solve",
         "operation_smoke_effect_validation",
         "parameter_patch_agent",
     }
@@ -64,6 +66,7 @@ class ModelSelector:
             model=raw_config.model,
             temperature=raw_config.temperature,
             max_tokens=raw_config.max_tokens,
+            context_window_tokens=raw_config.context_window_tokens,
             timeout_seconds=raw_config.timeout,
             response_format="json_schema",
             tool_choice="none",

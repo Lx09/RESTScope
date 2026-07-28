@@ -1,30 +1,27 @@
 """Public facade for the Parameter Patch Agent package."""
 
-from .agent import PATCH_SAMPLE_COUNT, ParameterPatchAgent
+from .agent import ParameterPatchAgent
 from .factory import ParameterPatchAgentFactory
 from .schemas import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
-    GeneratorPatchAttribution,
     GeneratorPatchDraft,
     ParameterPatchDecision,
+    ParameterPatchFailure,
     ParameterPatchProposal,
-    PatchGroupFailure,
-    PatchGroupTask,
-    ValidatedPatchGroup,
+    ParameterPatchTask,
+    ValidatedParameterPatch,
 )
 
 __all__ = [
     "AvailableReferenceOption",
     "CompiledConstraintPatch",
-    "GeneratorPatchAttribution",
     "GeneratorPatchDraft",
-    "PATCH_SAMPLE_COUNT",
     "ParameterPatchAgent",
     "ParameterPatchAgentFactory",
     "ParameterPatchDecision",
+    "ParameterPatchFailure",
     "ParameterPatchProposal",
-    "PatchGroupFailure",
-    "PatchGroupTask",
-    "ValidatedPatchGroup",
+    "ParameterPatchTask",
+    "ValidatedParameterPatch",
 ]

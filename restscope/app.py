@@ -411,6 +411,18 @@ class RESTScopeApp:
         if executor is not None:
             executor.clear_context()
         self._tool_context = None
+        clear_smoke_state = getattr(
+            self.operation_smoke_agent,
+            "clear_app_state",
+            None,
+        )
+        if callable(clear_smoke_state):
+            try:
+                clear_smoke_state()
+            except Exception:
+                # Resource cleanup must continue even if a custom injected
+                # Smoke Agent cannot release its optional in-memory state.
+                pass
         mcp_host = getattr(self.capability_runtime, "mcp_host", None)
         try:
             if mcp_host is not None:

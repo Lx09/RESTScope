@@ -181,14 +181,25 @@ def _smoke_runtime(tmp_path: Path):
         reference_values=references,
     )
 
-    class UnexpectedDiagnoser:
-        def diagnose(self, **kwargs):
-            raise AssertionError("a successful batch must not invoke diagnosis")
+    class UnexpectedPlan:
+        def plan(self, *args, **kwargs):
+            raise AssertionError("a successful batch must not invoke Plan")
+
+    class UnexpectedFactory:
+        def create(self):
+            raise AssertionError("a successful batch must not create a sub-Agent")
+
+    class UnexpectedEffect:
+        def validate(self, *args, **kwargs):
+            raise AssertionError("a successful batch must not invoke Effect")
 
     smoke = OperationSmokeAgent(
         config_catalog=catalog,
         batch_runner=testing,
-        diagnoser=UnexpectedDiagnoser(),
+        plan_agent=UnexpectedPlan(),
+        failure_solver_factory=UnexpectedFactory(),
+        patch_agent_factory=UnexpectedFactory(),
+        effect_agent=UnexpectedEffect(),
         reference_values=references,
         tracing_runtime=runtime,
     )
@@ -256,11 +267,12 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     )
 
 
-def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
+def test_smoke_plan_uses_the_new_role_in_llm_trace(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that smoke diagnosis groups plan llm calls under agent span."""
-    from restscope.agent.operation_smoke import OperationSmokeDiagnoser
+    """Plan model calls are tagged with the independent Plan role."""
+    del tmp_path
+    from restscope.agent.smoke_plan import SmokePlanAgent, SmokePlanRequest
     from restscope.llm import (
         LLMClient,
         LLMModelConfig,
@@ -269,15 +281,8 @@ def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
         LLMResponse,
     )
     from restscope.llm.providers.base import BaseLLMProvider
-    from restscope.testing import (
-        BatchFailureReport,
-        OperationExecutionReport,
-        OperationGeneratorConfig,
-        OperationTestSnapshot,
-        UniqueFailureMessage,
-    )
 
-    class DiagnosisProvider(BaseLLMProvider):
+    class PlanProvider(BaseLLMProvider):
         name = "stub"
 
         def invoke(self, request: LLMRequest) -> LLMResponse:
@@ -285,87 +290,36 @@ def test_smoke_diagnosis_groups_plan_llm_calls_under_agent_span(
                 provider=self.name,
                 model=request.model,
                 parsed_json={
-                    "action": "deferred",
-                    "reason": "non_parameter",
+                    "action": "no_new_failure_work",
+                    "todos": [],
+                    "reason": "History contains no new work.",
                 },
             )
 
     registry = LLMProviderRegistry()
-    registry.register(DiagnosisProvider())
+    registry.register(PlanProvider())
     runtime, exporter = _recording_runtime()
-    diagnoser = OperationSmokeDiagnoser(
+    planner = SmokePlanAgent(
         client=LLMClient(registry, tracing_runtime=runtime),
-        planning_model=LLMModelConfig(
-            role="operation_smoke_root_cause_diagnosis",
+        model=LLMModelConfig(
+            role="operation_smoke_plan",
             provider="stub",
             model="think",
             enabled=True,
         ),
-        tracing_runtime=runtime,
     )
-    report = OperationExecutionReport(
-        run_id="run_failure",
-        operation_key="GET /items",
-        seed=1,
-        config_revision=1,
-        status="completed",
-        cases=[],
-        status_code_counts={"400": 1},
-        error_count=0,
-        observed_2xx=False,
-        failure_report=BatchFailureReport(
-            unique_failure_messages=[
-                UniqueFailureMessage(
-                    failure_id="failure_1",
-                    message="HTTP 400: invalid input",
-                    case_ids=["case_1"],
-                )
-            ]
-        ),
-    )
-    config = OperationGeneratorConfig(
-        operation_key="GET /items",
-        revision=1,
-        enabled=True,
-        snapshot=OperationTestSnapshot(
+    result = planner.plan(
+        SmokePlanRequest(
             operation_key="GET /items",
-            method="GET",
-            path="/items",
-            parameters=[],
-            input_nodes=[],
-        ),
-        configs=[],
+            batch={"run_id": "run_failure"},
+            coded_cases={"C1": {"case_id": "case_1"}},
+            failed_case_codes=["C1"],
+            history=[{"status": "no_new_attempt"}],
+        )
     )
-
-    result = diagnoser.diagnose(report=report, config=config)
     runtime.close()
 
     spans = list(exporter.get_finished_spans())
-    diagnosis_span = next(
-        span for span in spans if span.name == "OperationSmokeDiagnoser.diagnose"
-    )
-    failure_span = next(
-        span
-        for span in spans
-        if span.name == "OperationSmokeDiagnoser.investigate_failure"
-    )
     llm_span = next(span for span in spans if span.name == "LLMClient.invoke")
-    assert result.status == "no_parameter_issue"
-    assert failure_span.parent.span_id == diagnosis_span.context.span_id
-    assert llm_span.parent.span_id == failure_span.context.span_id
-    assert diagnosis_span.attributes["restscope.operation.key"] == "GET /items"
-    assert diagnosis_span.attributes["restscope.test.run_id"] == "run_failure"
-    assert (
-        diagnosis_span.attributes[
-            "restscope.smoke.diagnosis_valid_outputs"
-        ]
-        == 1
-    )
-    assert (
-        diagnosis_span.attributes[
-            "restscope.smoke.diagnosis_http_tool_calls"
-        ]
-        == 0
-    )
-    assert diagnosis_span.attributes["restscope.smoke.actionable_count"] == 0
-    assert diagnosis_span.attributes["restscope.smoke.deferred_count"] == 1
+    assert result.status == "no_new_failure_work"
+    assert llm_span.attributes["gen_ai.request.model"] == "think"
