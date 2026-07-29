@@ -153,10 +153,15 @@ class FailureSolveAgent:
         patch_agent_factory: PatchAgentFactory,
         patch_application: PatchApplication,
         reference_values: ReferenceValueProvider | None = None,
+        system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Store shared stateless collaborators; sessions own mutable state."""
+        """Store shared stateless collaborators; sessions own mutable state.
+
+        ``system_prompt`` is a complete-prompt evaluation seam. Normal App
+        construction leaves it unset and preserves the built-in instructions.
+        """
         self.client = client
         self.model = model
         self.http_probe = http_probe
@@ -164,6 +169,7 @@ class FailureSolveAgent:
         self.patch_agent_factory = patch_agent_factory
         self.patch_application = patch_application
         self.reference_values = reference_values
+        self.system_prompt = system_prompt or _system_prompt()
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
@@ -213,6 +219,7 @@ class FailureSolveAgent:
             max_patch_outputs=max_patch_outputs,
             prepare_patch_updates=prepare_patch_updates,
             failure_history=history[0],
+            system_prompt=self.system_prompt,
             max_outputs=max_outputs,
             continuation_interval=continuation_interval,
         )
@@ -241,6 +248,7 @@ class FailureSolveSession:
         max_patch_outputs: int,
         prepare_patch_updates: Callable | None,
         failure_history: FailureHistory,
+        system_prompt: str,
         max_outputs: int,
         continuation_interval: int,
     ) -> None:
@@ -287,7 +295,7 @@ class FailureSolveSession:
             model=model,
         )
         self.messages = [
-            LLMMessage(role="system", content=_system_prompt()),
+            LLMMessage(role="system", content=system_prompt),
             LLMMessage(
                 role="user",
                 content=json.dumps(

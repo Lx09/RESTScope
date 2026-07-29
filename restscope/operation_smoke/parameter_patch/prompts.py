@@ -174,6 +174,7 @@ def build_parameter_patch_prompt(
     config: OperationGeneratorConfig,
     reference_options: list[AvailableReferenceOption],
     model: LLMModelConfig,
+    system_prompt: str | None = None,
 ) -> ParameterPatchPrompt:
     """
     Build the complete prompt for one Solve-owned Patch requirement.
@@ -230,7 +231,7 @@ def build_parameter_patch_prompt(
         model=model,
     )
     return ParameterPatchPrompt(
-        system=EXPERT_SYSTEM_PROMPT,
+        system=system_prompt or EXPERT_SYSTEM_PROMPT,
         user=json.dumps(
             fitted.payload,
             ensure_ascii=False,

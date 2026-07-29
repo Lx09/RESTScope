@@ -428,3 +428,25 @@ def test_patch_output_budget_is_part_of_solve_budget() -> None:
 
     assert outcome.status == "solve_budget_exhausted"
     assert outcome.outputs_used == 4
+
+
+def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:
+    """Scenario: evaluation replaces only this Investigation's instructions."""
+    from restscope.operation_smoke.failure_solver import FailureSolveAgent
+
+    client = StubClient([_terminal("no_patch")])
+    agent = FailureSolveAgent(
+        client=client,
+        model=_model(),
+        http_probe=StubProbe(),
+        memory=StubMemory(),
+        patch_agent_factory=StubPatchFactory([]),
+        patch_application=StubPatchApplication(),
+        system_prompt="Candidate Solve instructions.",
+    )
+
+    _start(agent).advance()
+
+    assert client.requests[0].messages[0].content == (
+        "Candidate Solve instructions."
+    )

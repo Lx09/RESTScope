@@ -65,12 +65,18 @@ class ParameterPatchAgent:
         *,
         client: LLMClient,
         model: LLMModelConfig,
+        system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Store immutable model, validation, and tracing collaborators."""
+        """Store immutable model, prompt, validation, and tracing collaborators.
+
+        The optional prompt is a complete evaluation replacement. Production
+        callers leave it unset and keep the built-in expert instructions.
+        """
         self.client = client
         self.model = model
+        self.system_prompt = system_prompt
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
@@ -106,6 +112,7 @@ class ParameterPatchAgent:
             config=config,
             reference_options=list(reference_options or []),
             model=self.model,
+            system_prompt=self.system_prompt,
         )
         messages = [
             LLMMessage(role="system", content=prompt.system),

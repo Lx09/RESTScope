@@ -262,3 +262,25 @@ def test_patch_requires_case_count_within_testing_boundary() -> None:
             case_count=21,
             max_outputs=20,
         )
+
+
+def test_patch_uses_an_explicit_complete_system_prompt_override() -> None:
+    """Scenario: evaluation can compare one candidate Patch prompt in isolation."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
+
+    client = StubClient([_constant_patch(), {"action": "accept"}])
+
+    ParameterPatchAgent(
+        client=client,
+        model=_model(),
+        system_prompt="Candidate Patch instructions.",
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+    )
+
+    assert client.requests[0].messages[0].content == (
+        "Candidate Patch instructions."
+    )
