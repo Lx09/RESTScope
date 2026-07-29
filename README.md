@@ -169,6 +169,27 @@ data, non-sensitive tool parameters, and model-visible reasoning, so anyone
 with local Phoenix access can inspect those values even though target
 credentials are redacted.
 
+## Phoenix Evals for Operation Smoke Agents
+
+The developer-only [`evaluations/`](evaluations/README.md) directory evaluates
+Plan, Solve, and Parameter Patch independently with native Phoenix Datasets,
+Experiments, and code evaluators. Repository YAML Scenarios are synchronized by
+stable ID, and each Scenario/repetition receives fresh temporary Memory and
+scripted tools. Experiment runs call the real configured DeepSeek model and
+record linked traces, but never open the RESTScope database or request a target
+API. This is LLM evaluation, not part of the runtime test suite.
+
+```bash
+uv sync --group evaluation
+uv run --group evaluation python -m evaluations list
+uv run --group evaluation python -m evaluations run patch \
+  --scenario patch-integer-range --prompt current --repetitions 1 --seed 0
+```
+
+Use one repetition while exploring and three when comparing complete prompt
+variants. Semantic scores are intentionally independent; there is no aggregate
+pass/fail and no LLM Judge.
+
 ## MCP Tools
 
 RESTScope retains a generic lightweight MCP Host for caller-owned integrations.

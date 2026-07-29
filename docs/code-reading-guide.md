@@ -264,6 +264,16 @@ Creates Phoenix/OpenTelemetry spans while applying redaction and size limits.
 Tracing is optional: the disabled runtime preserves behavior without exporting
 data.
 
+### `evaluations/`
+
+Provides the developer-only Phoenix Evals entrypoint for the three Operation
+Smoke Agents. `registry.py` is the one-line-per-suite registry; `core.py` owns
+only Dataset synchronization, prompt selection, and Experiment metadata.
+`agents/plan/`, `agents/solve/`, and `agents/patch/` each own their Scenario
+DTO, temporary collaborators, Phoenix task, code evaluators, and YAML evidence.
+These Modules reuse production Agents but never import a database Adapter or
+send target HTTP requests.
+
 ### `tests/`
 
 Tests are executable behavior examples. Fixture helpers construct small OpenAPI
