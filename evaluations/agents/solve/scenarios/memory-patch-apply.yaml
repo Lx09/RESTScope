@@ -1,0 +1,89 @@
+scenario_id: solve-memory-patch-apply
+title: Query parameter history and apply a validated candidate
+provenance:
+  kind: trace
+  source: restscope-project-swagger-smoke-20260727T010238Z-9712a1cf/spans-complete.json
+  trace_id: bc870e1e64d11b290a11c70fb497a01c
+  span_ids: []
+  rationale: The source investigation connected identifier failures to Generator changes.
+tags: [acceptance, memory, patch]
+input:
+  request:
+    operation_key: GET /projects/{projectId}
+    round_number: 2
+    todo:
+      todo_id: T1
+      failure_id: failure-project-id-range
+      failure: Project identifiers outside 3..100 are rejected.
+      cases:
+        - case_id: project-id-too-large
+          failure: unexpected status
+          request:
+            path_parameters: {projectId: 900001}
+          response: {status_code: 404}
+    operation: {method: GET, path: "/projects/{projectId}"}
+    generator_config: {}
+    current_batch: {status_code_counts: {"404": 1}}
+  config:
+    operation_key: GET /projects/{projectId}
+    revision: 1
+    snapshot:
+      operation_key: GET /projects/{projectId}
+      method: GET
+      path: "/projects/{projectId}"
+      parameters:
+        - input_node_id: path/projectId
+          name: projectId
+          location: path
+          required: true
+      input_nodes:
+        - input_node_id: path/projectId
+          node_kind: parameter
+          canonical_path: path/projectId
+          required: true
+          schema_contract: {type: integer, minimum: 1, maximum: 999999}
+    configs:
+      - input_node_id: path/projectId
+        inclusion_probability: 1
+        strategy: {type: integer_range, minimum: 1, maximum: 999999}
+  failure_history:
+    failure_id: failure-project-id-range
+    summary: Project identifiers outside 3..100 are rejected.
+    observations: []
+    investigations: []
+  parameter_histories:
+    - input_node_id: path/projectId
+      failures:
+        - failure_id: prior-project-id-minimum
+          summary: Values smaller than 3 are rejected.
+          observations: []
+          investigations:
+            - investigation_id: prior-minimum-investigation
+              round_number: 1
+              outcome: no_patch
+              trigger_conditions: projectId is below 3
+              root_cause: projectId generator includes 1 and 2
+              solution: retain a minimum of 3 in a future compatible patch
+              evidence_source: batch
+              parameters:
+                - input_node_id: path/projectId
+                  cause_summary: generated value is below the accepted minimum
+  patch_results:
+    - status: validated
+      todo_id: T1
+      patch:
+        updates:
+          - input_node_id: path/projectId
+            strategy: {type: integer_range, minimum: 3, maximum: 100}
+        constraints: []
+        selected_reference_options: []
+      samples:
+        - values: {path.projectId: 3}
+        - values: {path.projectId: 100}
+      outputs_used: 2
+  probe_results: []
+expected:
+  status: applied_patch
+  memory_input_handles: [path.projectId]
+  minimum_patch_calls: 1
+  applied_patch_count: 1
