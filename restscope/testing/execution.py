@@ -16,6 +16,7 @@ from restscope.http_transport import (
     TargetHTTPTransport,
     TargetHTTPTransportError,
     TargetResponseOperationContext,
+    is_sensitive_header,
 )
 from restscope.observability import TracingRuntime
 
@@ -112,7 +113,7 @@ class OperationTestingService:
         ``seed`` control deterministic generation, while optional runtime
         ``constraints`` express relationships learned during the current App
         lifetime. The returned outcome contains both the public-shaped execution
-        report and bounded response evidence needed by Smoke's planning and effect
+        report and bounded response evidence needed by Smoke planning and investigation
         checks. Generation or serialization failures abort before any request is
         sent; transport failures are recorded per case.
         """
@@ -486,11 +487,25 @@ def _request_summary(
     *,
     target_request: PreparedTargetRequest,
 ) -> PreparedRequestSummary:
+    """Build public request evidence without copying trusted credentials.
+
+    ``target_request`` contains the real merged headers sent over the wire.
+    Authentication, Cookies, API keys, CSRF tokens, and similarly named
+    secrets remain available only to the transport; reports, Planner evidence,
+    and case spans receive a visible redaction marker instead.
+    """
     return PreparedRequestSummary(
         method=request.method,
         path=request.path,
         query_items=list(request.query_items),
-        headers=dict(target_request.headers),
+        headers={
+            name: (
+                "[redacted]"
+                if is_sensitive_header(name)
+                else value
+            )
+            for name, value in target_request.headers.items()
+        },
         body_size_bytes=len(request.content or b""),
     )
 

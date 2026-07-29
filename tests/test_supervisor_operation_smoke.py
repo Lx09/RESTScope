@@ -38,21 +38,28 @@ def _context():
     )
 
 
-class _SmokeAgent:
+class _SmokeCoordinator:
     def __init__(self, statuses: list[str]) -> None:
         self.statuses = list(statuses)
         self.requests = []
 
     def run(self, context, request):
-        from restscope.agent.operation_smoke import OperationSmokeResult
+        from restscope.operation_smoke import OperationSmokeResult
         from restscope.testing import OperationExecutionReport
 
         del context
         self.requests.append(request)
         status = self.statuses.pop(0)
+        passed_stop_reasons = {
+            "passed": "success_rate_reached",
+            "planner_no_debug": "planner_no_debug",
+            "no_patch_applied": "no_patch_applied",
+        }
         result_status = (
-            "retry"
-            if status in {"no_new_failure_work", "plan_budget_exhausted"}
+            "passed"
+            if status in passed_stop_reasons
+            else "errored"
+            if status == "plan_budget_exhausted"
             else status
         )
         reports = []
@@ -76,15 +83,16 @@ class _SmokeAgent:
             success_rate=1.0 if result_status == "passed" else 0.0,
             required_success_rate=request.success_rate_threshold,
             active_config_revision=1,
+            stop_reason=passed_stop_reasons.get(status),
+            reason=(
+                f"The scripted Coordinator stopped because {passed_stop_reasons[status]}."
+                if status in passed_stop_reasons
+                else None
+            ),
             batch_reports=reports,
             failure_kind=(
-                status
-                if status in {
-                    "no_new_failure_work",
-                    "plan_budget_exhausted",
-                }
-                else "no_new_failure_work"
-                if result_status == "retry"
+                "plan_budget_exhausted"
+                if status == "plan_budget_exhausted"
                 else "unsupported_operation"
                 if result_status == "unsupported"
                 else "operation_error"
@@ -99,15 +107,16 @@ class _SmokeAgent:
         )
 
 
-def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() -> None:
+def test_supervisor_uses_smoke_coordinator_without_exposing_successful_operations() -> None:
     """Scenario: verify that supervisor uses smoke agent without exposing successful operations."""
-    from restscope.agent import OperationAttempt, RESTScopeMainGraph, RESTScopeRunReport, RESTScopeRunRequest
+    from restscope.supervisor import OperationAttempt, RESTScopeMainGraph, RESTScopeRunReport, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["passed", "passed"])
+    smoke = _SmokeCoordinator(["passed", "passed"])
 
     report = RESTScopeMainGraph(
-        operation_smoke_agent=smoke,
+        operation_smoke_coordinator=smoke,
         tool_context=_context(),
+        random_seed=731,
     ).run(RESTScopeRunRequest())
 
     assert report.status == "passed"
@@ -133,6 +142,7 @@ def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() ->
     ]
     assert list(RESTScopeRunReport.model_fields) == [
         "report_id",
+        "random_seed",
         "status",
         "stop_reason",
         "operations",
@@ -144,16 +154,17 @@ def test_supervisor_uses_smoke_agent_without_exposing_successful_operations() ->
         "error",
         "metadata",
     ]
+    assert report.random_seed == 731
 
 
 def test_supervisor_retries_smoke_operation_in_the_next_round() -> None:
     """Scenario: verify that supervisor retries smoke operation in the next round."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["retry", "passed", "passed"])
+    smoke = _SmokeCoordinator(["errored", "passed", "passed"])
 
     report = RESTScopeMainGraph(
-        operation_smoke_agent=smoke,
+        operation_smoke_coordinator=smoke,
         tool_context=_context(),
     ).run(RESTScopeRunRequest())
 
@@ -176,12 +187,12 @@ def test_supervisor_retries_smoke_operation_in_the_next_round() -> None:
 
 def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> None:
     """Scenario: verify that supervisor exhausts retries without interrupting other operations."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["retry", "passed", "retry", "retry"])
+    smoke = _SmokeCoordinator(["errored", "passed", "errored", "errored"])
 
     report = RESTScopeMainGraph(
-        operation_smoke_agent=smoke,
+        operation_smoke_coordinator=smoke,
         tool_context=_context(),
     ).run(RESTScopeRunRequest(max_operation_attempts=3))
 
@@ -199,7 +210,7 @@ def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> 
         "retrying",
         "satisfied",
         "retrying",
-        "failed",
+        "errored",
     ]
     assert [attempt.attempt_number for attempt in report.attempts] == [
         1,
@@ -207,44 +218,41 @@ def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> 
         2,
         3,
     ]
-    assert report.attempts[-1].failure_kind == "no_new_failure_work"
+    assert report.attempts[-1].failure_kind == "operation_error"
     assert report.unattempted_operations == []
 
 
-def test_no_new_failure_work_does_not_interrupt_other_operations() -> None:
-    """A Plan no-work result remains one operation's retry outcome."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+def test_planner_no_debug_satisfies_operation_without_interrupting_others() -> None:
+    """A Planner no-debug result is a passed Operation Smoke outcome."""
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["no_new_failure_work", "passed"])
+    smoke = _SmokeCoordinator(["planner_no_debug", "passed"])
 
     report = RESTScopeMainGraph(
-        operation_smoke_agent=smoke,
+        operation_smoke_coordinator=smoke,
         tool_context=_context(),
     ).run(RESTScopeRunRequest(max_operation_attempts=1))
 
-    assert (report.status, report.stop_reason) == (
-        "failed",
-        "completed_with_failures",
-    )
+    assert (report.status, report.stop_reason) == ("passed", "completed")
     assert [request.operation_key for request in smoke.requests] == [
         "GET /first",
         "POST /second",
     ]
     assert [attempt.disposition for attempt in report.attempts] == [
-        "failed",
+        "satisfied",
         "satisfied",
     ]
-    assert report.attempts[0].failure_kind == "no_new_failure_work"
+    assert report.attempts[0].smoke_result.stop_reason == "planner_no_debug"
     assert report.unattempted_operations == []
 
 
 def test_unsupported_smoke_operation_does_not_retry_or_stop_following_work() -> None:
     """Scenario: verify that unsupported smoke operation does not retry or stop following work."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["unsupported", "passed"])
+    smoke = _SmokeCoordinator(["unsupported", "passed"])
     report = RESTScopeMainGraph(
-        operation_smoke_agent=smoke,
+        operation_smoke_coordinator=smoke,
         tool_context=_context(),
     ).run(RESTScopeRunRequest())
 
@@ -261,11 +269,11 @@ def test_unsupported_smoke_operation_does_not_retry_or_stop_following_work() -> 
 
 def test_operation_scoped_smoke_error_retries_after_other_operations() -> None:
     """Scenario: verify that operation scoped smoke error retries after other operations."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
 
-    smoke = _SmokeAgent(["errored", "passed", "passed"])
+    smoke = _SmokeCoordinator(["errored", "passed", "passed"])
     report = RESTScopeMainGraph(
-        operation_smoke_agent=smoke,
+        operation_smoke_coordinator=smoke,
         tool_context=_context(),
     ).run(RESTScopeRunRequest())
 
@@ -285,7 +293,7 @@ def test_operation_scoped_smoke_error_retries_after_other_operations() -> None:
 
 def test_smoke_runtime_exception_is_a_global_technical_error() -> None:
     """Scenario: verify that smoke runtime exception is a global technical error."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
 
     class BrokenSmokeAgent:
         def run(self, context, request):
@@ -293,7 +301,7 @@ def test_smoke_runtime_exception_is_a_global_technical_error() -> None:
             raise RuntimeError("shared runtime unavailable")
 
     report = RESTScopeMainGraph(
-        operation_smoke_agent=BrokenSmokeAgent(),
+        operation_smoke_coordinator=BrokenSmokeAgent(),
         tool_context=_context(),
     ).run(RESTScopeRunRequest())
 

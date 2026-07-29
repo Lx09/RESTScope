@@ -61,7 +61,6 @@ def test_operation_smoke_phases_select_independent_models() -> None:
     for role, expected_model in (
         ("operation_smoke_plan", "thinking-model"),
         ("operation_smoke_failure_solve", "thinking-model"),
-        ("operation_smoke_effect_validation", "thinking-model"),
         ("parameter_patch_agent", "fast-model"),
     ):
         selected = selector.select(role)

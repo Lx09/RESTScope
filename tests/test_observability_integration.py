@@ -272,12 +272,12 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     assert spans["test.fail"].status.status_code is StatusCode.ERROR
 
 
-def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) -> None:
-    """Scenario: verify that app owns one runtime and emits chain agent hierarchy."""
+def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
+    """Scenario: verify that app owns one runtime and emits a CHAIN hierarchy."""
     from restscope import RESTScopeApp
-    from restscope.agent import RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeRunRequest
     from restscope.restscope_config import RESTScopeConfig
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     schema = {
         "openapi": "3.0.0",
@@ -306,7 +306,7 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     runtime, exporter = _recording_runtime()
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_agent=PassingOperationSmokeAgent(
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(
             tracing_runtime=runtime
         ),
         tracing_runtime=runtime,
@@ -337,7 +337,7 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     app_span = spans["RESTScopeApp.run"]
     graph_span = spans["RESTScopeMainGraph.run"]
     attempt_span = spans["RESTScopeMainGraph.operation_attempt"]
-    operation_span = spans["OperationSmokeAgent.run"]
+    operation_span = spans["OperationSmokeCoordinator.run"]
     rendered = json.dumps(
         [dict(span.attributes) for span in spans.values()],
         default=str,
@@ -355,9 +355,9 @@ def test_app_owns_one_runtime_and_emits_chain_agent_hierarchy(tmp_path: Path) ->
     assert attempt_span.parent.span_id == graph_span.context.span_id
     assert operation_span.parent.span_id == attempt_span.context.span_id
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert graph_span.attributes["openinference.span.kind"] == "AGENT"
-    assert attempt_span.attributes["openinference.span.kind"] == "AGENT"
-    assert operation_span.attributes["openinference.span.kind"] == "AGENT"
+    assert graph_span.attributes["openinference.span.kind"] == "CHAIN"
+    assert attempt_span.attributes["openinference.span.kind"] == "CHAIN"
+    assert operation_span.attributes["openinference.span.kind"] == "CHAIN"
     assert app_span.attributes["restscope.task_id"] == "trace-task"
     assert json.loads(app_span.attributes["output.value"]) == {
         "report_id": report.report_id,
@@ -396,7 +396,7 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
     from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig
     from restscope.testing import OperationTestingService
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
     app_runtime = TracingRuntime.disabled(redactor=Redactor(["app-key"]))
@@ -410,7 +410,7 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(tmp_path / ".env"),
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         capability_runtime=capabilities,
         tracing_runtime=app_runtime,
     )
@@ -531,7 +531,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    candidate = catalog.stage_candidate(
+    catalog.apply_accepted_patch(
         operation_key=operation.operation_key,
         expected_revision=1,
         updates=[
@@ -541,12 +541,6 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
                 "strategy": {"type": "constant", "value": "generated-secret"},
             }
         ],
-        hypothesis={"kind": "test_setup"},
-    )
-    catalog.accept_candidate(
-        operation_key=operation.operation_key,
-        candidate_revision=candidate.revision,
-        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
@@ -575,6 +569,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
         base_url="https://api.example.test",
         headers={
             "Authorization": "Bearer runtime-secret",
+            "X-CSRF-Token": "runtime-csrf-secret",
             "X-Configured-Key": "llm-api-key",
         },
     )
@@ -588,7 +583,10 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     runtime.close()
 
     rendered_result = result.report.model_dump_json()
-    assert "runtime-secret" in rendered_result
+    assert "runtime-secret" not in rendered_result
+    assert "runtime-csrf-secret" not in rendered_result
+    assert '"Authorization":"[redacted]"' in rendered_result
+    assert '"X-CSRF-Token":"[redacted]"' in rendered_result
     assert "generated-secret" in rendered_result
     spans = list(exporter.get_finished_spans())
     batch = next(
@@ -600,7 +598,8 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     assert len(cases) == 2
     assert all(span.parent.span_id == batch.context.span_id for span in cases)
     rendered_spans = json.dumps([dict(span.attributes) for span in spans], default=str)
-    assert "runtime-secret" in rendered_spans
+    assert "runtime-secret" not in rendered_spans
+    assert "runtime-csrf-secret" not in rendered_spans
     assert "generated-secret" in rendered_spans
     assert "llm-api-key" not in rendered_result
     assert "llm-api-key" not in rendered_spans

@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from restscope.agent.operation_smoke.agent import _operation_context
-from restscope.agent.operation_smoke.evidence import (
+from restscope.operation_smoke.coordinator import _operation_context
+from restscope.operation_smoke.evidence import (
     build_batch_evidence,
     build_plan_case_map,
 )

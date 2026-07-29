@@ -10,13 +10,11 @@ from sqlalchemy.orm import Session
 
 from restscope.testing.models import (
     GeneratorConfigRevision,
-    GeneratorRevisionLifecycle,
     InputGeneratorConfig,
     OperationGeneratorConfig,
 )
 from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
-from ..time import utc_now
 from ..orm import (
     GeneratorCatalogStateORM,
     GeneratorConfigRevisionORM,
@@ -58,7 +56,6 @@ class SqlAlchemyGeneratorConfigRepository:
             self._insert_revision(
                 record,
                 parent_revision=None,
-                lifecycle="accepted",
             )
         try:
             self.session.flush()
@@ -113,11 +110,6 @@ class SqlAlchemyGeneratorConfigRepository:
         disabled_reasons: list[dict],
         active_media_type: str | None,
         configs: list[InputGeneratorConfig],
-        lifecycle: GeneratorRevisionLifecycle = "accepted",
-        hypothesis: dict | None = None,
-        evaluation: dict | None = None,
-        rollback_of_revision: int | None = None,
-        restored_from_revision: int | None = None,
     ) -> OperationGeneratorConfig:
         """
         Handle replace as part of the repository and database persistence boundary.
@@ -153,11 +145,6 @@ class SqlAlchemyGeneratorConfigRepository:
         self._insert_revision(
             record,
             parent_revision=expected_revision,
-            lifecycle=lifecycle,
-            hypothesis=hypothesis,
-            evaluation=evaluation,
-            rollback_of_revision=rollback_of_revision,
-            restored_from_revision=restored_from_revision,
         )
         self.session.flush()
         return record
@@ -181,44 +168,6 @@ class SqlAlchemyGeneratorConfigRepository:
             ),
         )
         return self._revision_record(row) if row is not None else None
-
-    def update_revision(
-        self,
-        *,
-        operation_key: str,
-        revision: int,
-        expected_lifecycle: GeneratorRevisionLifecycle,
-        lifecycle: GeneratorRevisionLifecycle,
-        evaluation: dict | None,
-    ) -> GeneratorConfigRevision:
-        """
-        Handle update revision as part of the repository and database persistence
-        boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        updated = self.session.execute(
-            update(GeneratorConfigRevisionORM)
-            .where(
-                GeneratorConfigRevisionORM.operation_key == operation_key,
-                GeneratorConfigRevisionORM.revision == revision,
-                GeneratorConfigRevisionORM.lifecycle == expected_lifecycle,
-            )
-            .values(
-                lifecycle=lifecycle,
-                evaluation=evaluation,
-                evaluated_at=utc_now(),
-            )
-        )
-        if updated.rowcount != 1:
-            raise GeneratorConfigConcurrentWrite(
-                f"{operation_key}@{revision}"
-            )
-        self.session.flush()
-        record = self.get_revision(operation_key, revision)
-        assert record is not None
-        return record
 
     def _insert_record(self, record: OperationGeneratorConfig) -> None:
         self.session.add(
@@ -258,31 +207,14 @@ class SqlAlchemyGeneratorConfigRepository:
         record: OperationGeneratorConfig,
         *,
         parent_revision: int | None,
-        lifecycle: GeneratorRevisionLifecycle,
-        hypothesis: dict | None = None,
-        evaluation: dict | None = None,
-        rollback_of_revision: int | None = None,
-        restored_from_revision: int | None = None,
     ) -> None:
-        """
-        Handle insert revision as part of the repository and database persistence
-        boundary.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Append one immutable initial or directly accepted revision."""
         self.session.add(
             GeneratorConfigRevisionORM(
                 operation_key=record.operation_key,
                 revision=record.revision,
                 parent_revision=parent_revision,
-                lifecycle=lifecycle,
-                rollback_of_revision=rollback_of_revision,
-                restored_from_revision=restored_from_revision,
-                hypothesis=hypothesis,
                 config=record.model_dump(mode="json"),
-                evaluation=evaluation,
-                evaluated_at=utc_now() if evaluation is not None else None,
             )
         )
 
@@ -295,13 +227,7 @@ class SqlAlchemyGeneratorConfigRepository:
                 "operation_key": row.operation_key,
                 "revision": row.revision,
                 "parent_revision": row.parent_revision,
-                "lifecycle": row.lifecycle,
-                "rollback_of_revision": row.rollback_of_revision,
-                "restored_from_revision": row.restored_from_revision,
-                "hypothesis": row.hypothesis,
                 "config": row.config,
-                "evaluation": row.evaluation,
                 "created_at": row.created_at,
-                "evaluated_at": row.evaluated_at,
             }
         )

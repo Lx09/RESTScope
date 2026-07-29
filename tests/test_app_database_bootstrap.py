@@ -33,11 +33,11 @@ def _config(database_url: str):
 
 def _build_default_app(config):
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     return RESTScopeApp.from_config(
         config,
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
 
 
@@ -74,6 +74,13 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
             "response_values",
             "response_observations",
             "response_observation_scalars",
+            "smoke_failures",
+            "smoke_failure_observations",
+            "smoke_failure_observation_links",
+            "smoke_parameters",
+            "smoke_investigations",
+            "smoke_investigation_parameter_links",
+            "smoke_applied_patches",
         }
     finally:
         app.close()
@@ -242,7 +249,10 @@ def test_complete_injected_capability_runtime_skips_database_validation() -> Non
 
     app = _build_app_with_runtime(config, runtime)
     try:
-        assert app.config is config
+        # App resolves an absent RANDOM_SEED once even when the capability
+        # runtime is injected; every later collaborator observes that value.
+        assert app.config.random.seed is not None
+        assert app.config.db is config.db
         assert app.capability_runtime is runtime
     finally:
         app.close()
@@ -251,7 +261,7 @@ def test_complete_injected_capability_runtime_skips_database_validation() -> Non
 def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
     """Scenario: verify that falsey injected capability runtime is not replaced."""
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     class Executor:
         def clear_context(self) -> None:
@@ -268,7 +278,7 @@ def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
     runtime = FalseyRuntime()
     app = RESTScopeApp.from_config(
         _config("postgresql://ignored.example/restscope"),
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         capability_runtime=runtime,
     )
     try:
@@ -321,28 +331,28 @@ def test_falsey_injected_tracing_runtime_is_not_closed_on_factory_failure(
     assert not database.exists()
 
 
-def test_only_injected_smoke_agent_still_enforces_fresh_sqlite() -> None:
+def test_only_injected_smoke_coordinator_still_enforces_fresh_sqlite() -> None:
     """Scenario: verify that only injected smoke agent still enforces fresh sqlite."""
     from restscope import RESTScopeApp
     from restscope.db import UnsupportedDatabaseURLError
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     with pytest.raises(UnsupportedDatabaseURLError):
         RESTScopeApp.from_config(
             _config("sqlite:///:memory:"),
-            operation_smoke_agent=PassingOperationSmokeAgent(),
+            operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         )
 
 
 def test_direct_default_app_construction_bootstraps_database(tmp_path: Path) -> None:
     """Scenario: verify that direct default app construction bootstraps database."""
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     database = tmp_path / "direct.sqlite"
     app = RESTScopeApp(
         config=_config(f"sqlite:///{database}"),
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
     try:
         assert app.config.db.url == f"sqlite:///{database}"
@@ -357,14 +367,14 @@ def test_from_environment_bootstraps_relative_database_from_startup_cwd(
 ) -> None:
     """Scenario: verify that from environment bootstraps relative database from startup cwd."""
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     monkeypatch.chdir(tmp_path)
     env_file = tmp_path / "app.env"
     env_file.write_text("DB_URL=sqlite:///nested/app.sqlite\n", encoding="utf-8")
     app = RESTScopeApp.from_environment(
         env_file=env_file,
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
     try:
         assert app.config.db.url == f"sqlite:///{tmp_path / 'nested/app.sqlite'}"
@@ -487,7 +497,7 @@ def test_direct_app_keyboard_interrupt_cleans_owned_database_and_tracing(
 ) -> None:
     """Scenario: verify that direct app keyboard interrupt cleans owned database and tracing."""
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     trace_runtime = _TrackingTracingRuntime()
     database = tmp_path / "direct-interrupted.sqlite"
@@ -503,7 +513,7 @@ def test_direct_app_keyboard_interrupt_cleans_owned_database_and_tracing(
     with pytest.raises(KeyboardInterrupt):
         RESTScopeApp(
             config=_config(f"sqlite:///{database}"),
-            operation_smoke_agent=PassingOperationSmokeAgent(),
+            operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         )
 
     assert trace_runtime.closed is True
@@ -694,7 +704,7 @@ def test_nul_database_path_is_reported_as_database_bootstrap_failed() -> None:
     assert str(exc_info.value) == "Failed to prepare configured SQLite database"
 
 
-def test_smoke_agent_construction_failure_closes_runtime_and_removes_database(
+def test_smoke_coordinator_construction_failure_closes_runtime_and_removes_database(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -712,11 +722,11 @@ def test_smoke_agent_construction_failure_closes_runtime_and_removes_database(
         lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(
-        "restscope.app.build_api_behavior_monitor_agent",
+        "restscope.app.build_api_behavior_monitor_coordinator",
         lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
     )
     monkeypatch.setattr(
-        "restscope.app.build_operation_smoke_agent",
+        "restscope.app.build_operation_smoke_coordinator",
         lambda *_args, **_kwargs: (
             _ for _ in ()
         ).throw(RuntimeError("smoke failed")),
@@ -740,7 +750,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
     from restscope.observability import TracingRuntime
 
     database = tmp_path / "smoke-default.sqlite"
-    smoke_agent = SimpleNamespace(run=lambda *_args, **_kwargs: None)
+    smoke_coordinator = SimpleNamespace(run=lambda *_args, **_kwargs: None)
     executor = SimpleNamespace(clear_context=lambda: None)
     runtime = SimpleNamespace(
         tool_executor=executor,
@@ -749,7 +759,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
     capability_calls = []
 
     monkeypatch.setattr(
-        "restscope.app.build_api_behavior_monitor_agent",
+        "restscope.app.build_api_behavior_monitor_coordinator",
         lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
     )
     monkeypatch.setattr(
@@ -757,8 +767,8 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
         lambda **kwargs: capability_calls.append(kwargs) or runtime,
     )
     monkeypatch.setattr(
-        "restscope.app.build_operation_smoke_agent",
-        lambda *_args, **_kwargs: smoke_agent,
+        "restscope.app.build_operation_smoke_coordinator",
+        lambda *_args, **_kwargs: smoke_coordinator,
     )
 
     app = RESTScopeApp.from_config(
@@ -766,7 +776,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
         tracing_runtime=TracingRuntime.disabled(),
     )
     try:
-        assert app.operation_smoke_agent is smoke_agent
+        assert app.operation_smoke_coordinator is smoke_coordinator
         assert not hasattr(app, "operation_runner")
         assert not hasattr(app, "dependency_analyzer")
         assert len(capability_calls) == 1
@@ -810,21 +820,21 @@ def test_app_constructor_failure_removes_created_database(
 
 def _build_app_with_runtime(config, runtime):
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     return RESTScopeApp.from_config(
         config,
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         capability_runtime=runtime,
     )
 
 
 def _build_default_app_with_tracing(config, tracing_runtime):
     from restscope import RESTScopeApp
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     return RESTScopeApp.from_config(
         config,
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         tracing_runtime=tracing_runtime,
     )

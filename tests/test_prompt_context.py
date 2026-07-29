@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from restscope.agent.prompt_context import (
+from restscope.operation_smoke.prompt_context import (
     fit_message_context,
     fit_prompt_context,
 )

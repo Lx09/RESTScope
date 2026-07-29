@@ -78,7 +78,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         pytest.skip("select -m phoenix_contract to run the local Phoenix contract")
 
     from restscope import RESTScopeApp
-    from restscope.agent import RESTScopeRunRequest
+    from restscope.supervisor import RESTScopeRunRequest
     from restscope.capabilities import build_capabilities
     from restscope.llm import (
         LLMClient,
@@ -93,7 +93,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     from restscope.observability import build_tracing_runtime
     from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig, TracingConfig
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     _wait_for_phoenix()
     project_name = f"restscope-contract-{uuid4().hex}"
@@ -134,7 +134,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     app = RESTScopeApp.from_config(
         config,
-        operation_smoke_agent=PassingOperationSmokeAgent(
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(
             tracing_runtime=runtime
         ),
         capability_runtime=capabilities,
@@ -206,7 +206,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         "RESTScopeApp.run",
         "RESTScopeMainGraph.run",
         "RESTScopeMainGraph.operation_attempt",
-        "OperationSmokeAgent.run",
+        "OperationSmokeCoordinator.run",
         "contract.tool",
         "LLMClient.invoke",
         "contract.truncated",
@@ -223,7 +223,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
 
     spans = payload["spans"]["data"]
     assert expected_names.issubset({span["name"] for span in spans})
-    assert {"CHAIN", "AGENT", "TOOL", "LLM"}.issubset(
+    assert {"CHAIN", "TOOL", "LLM"}.issubset(
         {span["span_kind"] for span in spans}
     )
 
@@ -238,7 +238,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     operation_span = next(
         span
         for span in spans
-        if span["name"] == "OperationSmokeAgent.run"
+        if span["name"] == "OperationSmokeCoordinator.run"
         and span["context"]["trace_id"] == app_span["context"]["trace_id"]
     )
     tool_span = next(span for span in spans if span["name"] == "contract.tool")
@@ -248,8 +248,11 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     assert graph_span["parent_id"] == app_span["context"]["span_id"]
     assert attempt_span["parent_id"] == graph_span["context"]["span_id"]
     assert operation_span["parent_id"] == attempt_span["context"]["span_id"]
-    assert graph_span["attributes"]["agent.name"] == "RESTScopeMainGraph.run"
-    assert operation_span["attributes"]["agent.name"] == "OperationSmokeAgent.run"
+    assert graph_span["span_kind"] == "CHAIN"
+    assert attempt_span["span_kind"] == "CHAIN"
+    assert operation_span["span_kind"] == "CHAIN"
+    assert "agent.name" not in graph_span["attributes"]
+    assert "agent.name" not in operation_span["attributes"]
     assert tool_span["attributes"]["tool.name"] == "contract.tool"
     assert json.loads(app_span["attributes"]["output.value"]) == {
         "report_id": json.loads(graph_span["attributes"]["output.value"])["report_id"],

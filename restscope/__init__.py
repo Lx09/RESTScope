@@ -1,80 +1,82 @@
-"""RESTScope - OpenAPI parsing utilities."""
+"""Expose RESTScope's small App-facing Interface without eager bootstrapping.
 
-from .logging_config import setup_logging, get_logger
+Importing a focused module such as ``restscope.llm`` should not construct the
+App dependency graph or import every workflow.  The facade therefore initializes
+logging once and resolves approved public entries only when callers request
+them.  Internal Coordinators, Agents, factories, and Patch DTOs remain owned by
+their workflow packages and are intentionally absent here.
+"""
 
-# Auto-initialize logging when package is imported
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+from .logging_config import get_logger, setup_logging
+
+
+# Preserve the existing library behavior: importing RESTScope installs its
+# logging defaults, while no database, LLM, or workflow object is constructed.
 setup_logging()
 
-from .openapi_parser import (
-    OpenAPIParser,
-    OpenAPISpecIR,
-    OperationDocumentGenerationError,
-    build_openapi_document,
-)
-from .restscope_config import CONFIG, RESTScopeConfig
-from .app import RESTScopeApp
-from .catalog import (
-    SchemaCatalog,
-    SchemaNotFoundError,
-    SchemaRecord,
-    SchemaSourceInput,
-    SchemaSourceValidationError,
-)
-from .bootstrap import build_generator_config_catalog, build_schema_catalog
-from .operations import OperationReference
-from .agent import (
-    APIBehaviorMonitorAgent,
-    OperationSmokeAgent,
-    OperationSmokeRequest,
-    OperationSmokeResult,
-    ParameterPatchAgent,
-    ParameterPatchAgentFactory,
-    ParameterPatchFailure,
-    ParameterPatchTask,
-    RESTScopeRunReport,
-    RESTScopeRunRequest,
-    ResourceLookupRequest,
-    ResourceLookupResult,
-    ValidatedParameterPatch,
-    build_api_behavior_monitor_agent,
-    build_operation_smoke_agent,
-)
-
 __all__ = [
-    # Logging
-    "setup_logging",
-    "get_logger",
-    # OpenAPI Parser
+    "CONFIG",
     "OpenAPIParser",
     "OpenAPISpecIR",
     "OperationDocumentGenerationError",
-    "build_openapi_document",
-    # Configuration
-    "CONFIG",
-    "RESTScopeConfig",
-    # Program entry
+    "OperationReference",
     "RESTScopeApp",
+    "RESTScopeConfig",
+    "RESTScopeRunReport",
+    "RESTScopeRunRequest",
     "SchemaCatalog",
     "SchemaNotFoundError",
     "SchemaRecord",
     "SchemaSourceInput",
     "SchemaSourceValidationError",
-    "build_schema_catalog",
     "build_generator_config_catalog",
-    "RESTScopeRunRequest",
-    "RESTScopeRunReport",
-    "OperationReference",
-    "OperationSmokeAgent",
-    "OperationSmokeRequest",
-    "OperationSmokeResult",
-    "ParameterPatchAgent",
-    "ParameterPatchAgentFactory",
-    "ParameterPatchFailure",
-    "ParameterPatchTask",
-    "ResourceLookupRequest",
-    "ResourceLookupResult",
-    "ValidatedParameterPatch",
-    "APIBehaviorMonitorAgent",
-    "build_api_behavior_monitor_agent",
-    "build_operation_smoke_agent",
+    "build_openapi_document",
+    "build_schema_catalog",
+    "get_logger",
+    "setup_logging",
 ]
+
+
+_PUBLIC_MODULE_BY_NAME = {
+    "CONFIG": ".restscope_config",
+    "OpenAPIParser": ".openapi_parser",
+    "OpenAPISpecIR": ".openapi_parser",
+    "OperationDocumentGenerationError": ".openapi_parser",
+    "OperationReference": ".operations",
+    "RESTScopeApp": ".app",
+    "RESTScopeConfig": ".restscope_config",
+    "RESTScopeRunReport": ".supervisor",
+    "RESTScopeRunRequest": ".supervisor",
+    "SchemaCatalog": ".catalog",
+    "SchemaNotFoundError": ".catalog",
+    "SchemaRecord": ".catalog",
+    "SchemaSourceInput": ".catalog",
+    "SchemaSourceValidationError": ".catalog",
+    "build_generator_config_catalog": ".bootstrap",
+    "build_openapi_document": ".openapi_parser",
+    "build_schema_catalog": ".bootstrap",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve one approved facade name from its owning module.
+
+    Raises:
+        AttributeError: The requested symbol is internal or does not exist.
+    """
+    module_name = _PUBLIC_MODULE_BY_NAME.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Show the supported facade Interface to readers and IDEs."""
+    return sorted(set(globals()) | set(__all__))

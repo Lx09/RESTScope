@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _catalog(tmp_path: Path):
-    from restscope.agent.api_behavior_monitor import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -24,7 +24,7 @@ def _catalog(tmp_path: Path):
 
 
 def _catalog_with_engine(tmp_path: Path):
-    from restscope.agent.api_behavior_monitor import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -41,8 +41,8 @@ def _catalog_with_engine(tmp_path: Path):
     )
 
 
-def test_resource_catalog_migration_adds_and_removes_six_tables(tmp_path: Path) -> None:
-    """Scenario: verify that resource catalog migration adds and removes six tables."""
+def test_current_baseline_adds_and_removes_resource_catalog_tables(tmp_path: Path) -> None:
+    """Scenario: the one baseline includes and downgrades Monitor persistence."""
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import inspect
@@ -55,7 +55,6 @@ def test_resource_catalog_migration_adds_and_removes_six_tables(tmp_path: Path) 
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
 
-    command.upgrade(config, "0002_create_generator_configs")
     command.upgrade(config, "head")
 
     engine = create_engine_from_url(f"sqlite:///{database}")
@@ -69,7 +68,7 @@ def test_resource_catalog_migration_adds_and_removes_six_tables(tmp_path: Path) 
         "resource_monitor_errors",
     } <= table_names
 
-    command.downgrade(config, "0002_create_generator_configs")
+    command.downgrade(config, "base")
     assert not {
         "resources",
         "resource_aliases",
@@ -84,11 +83,11 @@ def test_catalog_records_aliases_typed_ids_and_latest_operation_usage(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that catalog records aliases typed ids and latest operation usage."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
-        ResourceLookupRequest,
     )
+    from restscope.api_behavior_monitor import ResourceLookupRequest
 
     catalog = _catalog(tmp_path)
     first_seen = datetime(2026, 7, 23, 10, tzinfo=timezone.utc)
@@ -141,7 +140,7 @@ def test_list_resources_loads_aliases_in_one_bounded_batch_query(
     """Scenario: verify that list resources loads aliases in one bounded batch query."""
     from sqlalchemy import event
 
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -196,11 +195,11 @@ def test_catalog_returns_delete_identifiers_and_filters_by_typed_value(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that catalog returns delete identifiers and filters by typed value."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
-        ResourceLookupRequest,
     )
+    from restscope.api_behavior_monitor import ResourceLookupRequest
 
     catalog = _catalog(tmp_path)
     observed_at = datetime(2026, 7, 23, 11, tzinfo=timezone.utc)
@@ -235,12 +234,12 @@ def test_catalog_returns_delete_identifiers_and_filters_by_typed_value(
 
 def test_catalog_latest_error_is_cleared_by_later_group_success(tmp_path: Path) -> None:
     """Scenario: verify that catalog latest error is cleared by later group success."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
-        ResourceLookupRequest,
         ResourceMonitorWarning,
     )
+    from restscope.api_behavior_monitor import ResourceLookupRequest
 
     catalog = _catalog(tmp_path)
     operation = MonitoredOperation(
@@ -289,11 +288,11 @@ def test_catalog_rolls_back_whole_response_when_one_group_conflicts(
     """Scenario: verify that catalog rolls back whole response when one group conflicts."""
     import pytest
 
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
-        ResourceLookupRequest,
     )
+    from restscope.api_behavior_monitor import ResourceLookupRequest
     from restscope.db.repositories import ResourceCatalogConflict
 
     catalog = _catalog(tmp_path)
@@ -357,11 +356,11 @@ def test_lookup_preserves_operation_specific_aliases_and_all_resource_usage(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that lookup preserves operation specific aliases and all resource usage."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
-        ResourceLookupRequest,
     )
+    from restscope.api_behavior_monitor import ResourceLookupRequest
 
     catalog = _catalog(tmp_path)
     catalog.record_groups(
@@ -426,11 +425,11 @@ def test_same_response_identifiers_have_stable_recommendation_order(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that same response identifiers have stable recommendation order."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
-        ResourceLookupRequest,
     )
+    from restscope.api_behavior_monitor import ResourceLookupRequest
 
     catalog = _catalog(tmp_path)
     catalog.record_groups(

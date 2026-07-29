@@ -1,0 +1,54 @@
+"""Create a fresh Failure Solve Agent for every fixed-round todo."""
+
+from __future__ import annotations
+
+from restscope.llm import LLMClient, LLMModelConfig
+from restscope.observability import TracingRuntime
+from restscope.testing import ReferenceValueProvider
+
+from .agent import (
+    FailureSolveAgent,
+    HTTPProbe,
+    PatchAgentFactory,
+    PatchApplication,
+    SolveMemory,
+)
+
+
+class FailureSolveAgentFactory:
+    """Share immutable collaborators while isolating each todo's Agent."""
+
+    def __init__(
+        self,
+        *,
+        client: LLMClient,
+        model: LLMModelConfig,
+        http_probe: HTTPProbe,
+        memory: SolveMemory,
+        patch_agent_factory: PatchAgentFactory,
+        patch_application: PatchApplication,
+        reference_values: ReferenceValueProvider | None = None,
+        tracing_runtime: TracingRuntime | None = None,
+    ) -> None:
+        """Store stateless services shared by fresh Investigation sessions."""
+        self.client = client
+        self.model = model
+        self.http_probe = http_probe
+        self.memory = memory
+        self.patch_agent_factory = patch_agent_factory
+        self.patch_application = patch_application
+        self.reference_values = reference_values
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
+
+    def create(self) -> FailureSolveAgent:
+        """Return a fresh Agent with no conversation or observations."""
+        return FailureSolveAgent(
+            client=self.client,
+            model=self.model,
+            http_probe=self.http_probe,
+            memory=self.memory,
+            patch_agent_factory=self.patch_agent_factory,
+            patch_application=self.patch_application,
+            reference_values=self.reference_values,
+            tracing_runtime=self.tracing_runtime,
+        )

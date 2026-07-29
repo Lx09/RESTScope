@@ -107,6 +107,18 @@ class DBConfig:
 
 
 @dataclass(frozen=True)
+class RandomConfig:
+    """Optional root seed shared by all generated test values in one App."""
+
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        """Reject negative seeds before any runtime is constructed."""
+        if self.seed is not None and self.seed < 0:
+            raise ValueError("RANDOM_SEED must be non-negative")
+
+
+@dataclass(frozen=True)
 class MCPConfig:
     """MCP host configuration."""
 
@@ -137,6 +149,7 @@ class RESTScopeConfig:
     db: DBConfig
     mcp: MCPConfig
     tracing: TracingConfig = field(default_factory=TracingConfig)
+    random: RandomConfig = field(default_factory=RandomConfig)
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
@@ -199,6 +212,9 @@ class RESTScopeConfig:
                     values.get("TRACING_FLUSH_TIMEOUT_SECONDS"),
                     5.0,
                 ),
+            ),
+            random=RandomConfig(
+                seed=_optional_int_value(values.get("RANDOM_SEED")),
             ),
         )
 

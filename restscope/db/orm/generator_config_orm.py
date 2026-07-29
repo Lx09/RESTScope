@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from datetime import datetime
-
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-
-from restscope.testing.models import GeneratorRevisionLifecycle
 
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
@@ -64,12 +60,7 @@ class InputGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class GeneratorConfigRevisionORM(CreatedAtMixin, Base):
-    """
-    Map persisted generator config revision rows to a database table.
-
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
+    """Store immutable initial and directly accepted Generator revisions."""
     __tablename__ = "generator_config_revisions"
 
     operation_key: Mapped[str] = mapped_column(
@@ -78,13 +69,4 @@ class GeneratorConfigRevisionORM(CreatedAtMixin, Base):
     )
     revision: Mapped[int] = mapped_column(Integer, primary_key=True)
     parent_revision: Mapped[int | None] = mapped_column(Integer)
-    lifecycle: Mapped[GeneratorRevisionLifecycle] = mapped_column(
-        String(20),
-        nullable=False,
-    )
-    rollback_of_revision: Mapped[int | None] = mapped_column(Integer)
-    restored_from_revision: Mapped[int | None] = mapped_column(Integer)
-    hypothesis: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    evaluation: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

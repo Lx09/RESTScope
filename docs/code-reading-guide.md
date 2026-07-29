@@ -28,19 +28,18 @@ The core loop is:
    target API.
 7. **Observe responses.** The API Behavior Monitor checks response contracts
    and learns narrowly approved identifier and response-value evidence.
-8. **Plan failure work.** Smoke Plan reads the complete batch and creates a
-   fixed ordered list of distinct Failure Todos for that round.
-9. **Investigate and patch one todo.** A continuous Failure Solve conversation
-   may use HTTP probes limited to the current operation. When evidence supports
-   a parameter cause, a fresh Parameter Patch Agent compiles one Patch
-   Requirement and reviews `case_count` local samples.
-10. **Validate one complete candidate.** A complete same-seed batch and the
-    Effect Agent decide whether the todo was resolved without regression. The
-    whole candidate is accepted or rolled back before the next todo.
+8. **Classify Failure Observations.** Planner associates every failed case with
+   a stable Failure, using read-only Memory lookups when history is useful.
+9. **Investigate one Failure.** Failure Solve may query Parameter history or
+   use an HTTP probe restricted to the current operation.
+10. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
+    internal tool. A selected Patch and its Investigation commit atomically.
+    Every Plan item finishes before the next complete Batch measures the result.
 
 Most state used in steps 4–10 is deliberately temporary. RESTScope does not
 persist plans, Agent conversations, hypotheses, queues, or evolved OpenAPI
-snapshots.
+snapshots. It does persist bounded Failure Observations, stable Failures,
+Investigations, Parameter links, and applied Patches for the current App.
 
 ## 2. A few Python concepts used throughout
 
@@ -99,21 +98,21 @@ A relationship that generated inputs must satisfy together. Examples include
 “end is present only if start is present”, “minimum is no greater than
 maximum”, or “exactly one of these fields is included”.
 
-### Plan case codes
+### Request-local references
 
-`C1`, `C2`, … are temporary references used only while Smoke Plan associates
-failed cases with todos. Code validates that every failed case is covered and
-then immediately expands each todo back into complete case evidence. Solve,
-Patch, and Effect do not rely on failure/case/observation aliases.
+`C1`, `C2`, … identify current Batch cases and `F1`, `F2`, … identify historical
+Failures inside one Planner request. Solve uses `P1`, `P2`, … for Patch
+candidates created in its own session. Runtime code validates and resolves
+these references; database primary keys never enter model prompts.
 
-### Failure Todo and Patch Requirement
+### Failure Observation, Failure, and Investigation
 
-A Failure Todo is one semantically distinct failure selected by Smoke Plan.
-Its fresh, continuous Failure Solve conversation investigates why it happens.
-When the cause is parameter-related and supported by evidence, Solve emits one
-Patch Requirement: root cause, affected semantic inputs, desired behavior, and
-acceptance criteria. Parameter Patch converts only that requirement into an
-executable atomic candidate.
+A Failure Observation is concrete evidence from one Batch. A Failure is
+Planner's stable semantic category linking observations across rounds. An
+Investigation is one independent Solve session, including trigger conditions,
+Parameter attribution, root cause, proposed solution, and terminal outcome.
+An Applied Patch is recorded only when Solve selects a validated session
+candidate and the Generator revision commits.
 
 ### DTO
 
@@ -127,18 +126,18 @@ Read these files in order:
 
 1. `README.md` — configuration and supported runtime workflows.
 2. `restscope/app.py` — builds the application and owns shared resources.
-3. `restscope/agent/supervisor/graph.py` — the top-level dynamic operation loop.
+3. `restscope/supervisor/graph.py` — the top-level dynamic operation loop.
 4. `restscope/testing/execution.py` — turns generated cases into real HTTP
    results.
-5. `restscope/agent/operation_smoke/agent.py` — complete-batch rounds, todo
-   dispatch, candidate transactions, and final success calculation.
-6. `restscope/agent/smoke_plan/agent.py` and
-   `restscope/agent/failure_solver/agent.py` — failure todo management and one
+5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds, fixed
+   Plan dispatch, and explicit stop conditions.
+6. `restscope/operation_smoke/plan/agent.py` and
+   `restscope/operation_smoke/failure_solver/agent.py` — failure todo management and one
    continuous investigation.
-7. `restscope/agent/parameter_patch/agent.py` and
-   `restscope/agent/smoke_effect/agent.py` — executable Patch construction,
-   dynamic sample review, and atomic Effect acceptance.
-8. `restscope/agent/api_behavior_monitor/agent.py` — response observation and
+7. `restscope/operation_smoke/parameter_patch/agent.py` and
+   `restscope/operation_smoke/memory/patch_application.py` — executable Patch
+   construction, local sample review, and atomic persistence.
+8. `restscope/api_behavior_monitor/coordinator.py` — response observation and
    the narrow persistent evidence catalog.
 
 When a file imports a name from a package, open that package's `__init__.py`
@@ -185,51 +184,47 @@ Owns deterministic request generation and execution.
 - `execution.py` sends batches and records bounded evidence.
 - `catalog.py` persists approved Generator configuration revisions.
 
-### `restscope/agent/supervisor/`
+### `restscope/supervisor/`
 
 Owns the dynamic top-level loop. It chooses operations from current runtime
 evidence; it does not load a persisted static plan.
 
-### `restscope/agent/operation_smoke/`
+### `restscope/operation_smoke/`
 
-Owns thin coordination, full in-memory evidence, App-lifetime history, public
-round summaries, reference adaptation, and Catalog candidate transactions.
+Owns thin coordination, bounded current-Batch evidence, structured Failure
+Memory, public round summaries, and reference adaptation.
 
 Important files:
 
-- `agent.py`: complete-batch and fixed-todo orchestration.
+- `coordinator.py`: complete-batch and fixed-todo orchestration.
 - `evidence.py`: complete App-only case evidence and Plan-only code mapping.
-- `history.py`: operation-isolated, non-persistent records and Constraints.
+- `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
 - `references.py`: observed-value options exposed as model-safe `R` aliases.
 
-### `restscope/agent/smoke_plan/`
+### `restscope/operation_smoke/plan/`
 
-Creates an ordered fixed-round todo snapshot from a complete batch and
-App-lifetime history. It does not diagnose causes or Patch requirements.
+Creates an ordered fixed-round Failure snapshot from a complete Batch and
+stable Failure memory. It does not diagnose causes or Parameters.
 
-### `restscope/agent/failure_solver/`
+### `restscope/operation_smoke/failure_solver/`
 
-Owns one continuous THINK investigation per todo and the scoped HTTP Probe.
-It alone decides root cause, Patch requirements, and terminal todo outcomes.
+Owns one continuous THINK Investigation per Failure, Parameter-memory and HTTP
+tools, and the internal Parameter Patch tool. It alone decides root cause,
+Parameter attribution, candidate selection, conflict, and no-Patch outcomes.
 
-### `restscope/agent/parameter_patch/`
+### `restscope/operation_smoke/parameter_patch/`
 
-Constructs one complete Solve-owned Patch. It compiles model output into
+Constructs one Solve-owned Patch candidate. It compiles model output into
 testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and requires the same Agent to review them.
 
-### `restscope/agent/smoke_effect/`
-
-Compares the latest accepted and candidate complete batches. Only
-`resolved_without_regression` accepts the entire candidate.
-
-### `restscope/agent/prompt_context/`
+### `restscope/operation_smoke/prompt_context/`
 
 Applies the shared model-window reserve, current-evidence priority, recent
 history loading, older-history summaries, and marked head/tail clipping.
 
-### `restscope/agent/api_behavior_monitor/`
+### `restscope/api_behavior_monitor/`
 
 Observes real HTTP responses. It can check response contracts and maintain the
 explicitly approved resource-identifier and response-value catalogs. It never
@@ -282,30 +277,29 @@ For a normal generated Smoke case:
 ```text
 RESTScopeApp
   -> RESTScopeMainGraph
-  -> OperationSmokeAgent
+  -> OperationSmokeCoordinator
   -> OperationTestingService
   -> generate_test_case
   -> serialize generated values
   -> TargetHTTPTransport
-  -> APIBehaviorMonitorAgent
+  -> APIBehaviorMonitorCoordinator
   -> OperationExecutionReport
 ```
 
-For a failed batch that receives a candidate Patch:
+For a failed Batch that receives an applied Patch:
 
 ```text
 OperationExecutionReport
-  -> SmokePlanAgent (Plan-only case codes)
-  -> expanded FailureTodo
-  -> fresh continuous FailureSolveAgent
-  -> optional current-operation HTTP probes
-  -> PatchRequirement
-  -> fresh ParameterPatchAgent
+  -> SmokePlanAgent (C* cases and F* memory references)
+  -> stable Failure
+  -> fresh FailureSolveAgent
+  -> optional Parameter-memory and HTTP tools
+  -> internal ParameterPatchAgent tool
   -> compile + solve + case_count local samples
-  -> complete same-seed candidate batch
-  -> SmokeEffectAgent
-  -> accept or roll back the whole Patch
-  -> next todo, then next complete-batch round
+  -> Solve selects a session-local P* candidate
+  -> atomic Generator + Investigation + Applied Patch write
+  -> remaining Plan items
+  -> next complete Batch
 ```
 
 ## 7. Where optimization is safe
@@ -320,8 +314,8 @@ Before optimizing, identify the boundary being changed:
   request-shape projection.
 - **LLM retries:** preserve DTO validation and explicit stop reasons; do not
   silently accept malformed output.
-- **Database access:** optimize inside repositories; do not turn transient
-  plans or Agent state into persistent records.
+- **Database access:** optimize inside repositories; preserve the approved
+  structured Memory boundary and never persist raw transcripts or Plans.
 - **Tracing cost:** preserve parent-child structure and redaction even when
   reducing payload size.
 

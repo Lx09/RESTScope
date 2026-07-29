@@ -79,25 +79,19 @@ def _catalog(tmp_path: Path):
     )
 
 
-def _accept_candidate_patch(catalog, operation_key: str, updates):
-    """Apply setup through the complete candidate transaction used by Smoke."""
+def _apply_accepted_patch(catalog, operation_key: str, updates):
+    """Apply setup as one directly accepted revision."""
     current = catalog.get_operation(operation_key)
     assert current is not None
-    candidate = catalog.stage_candidate(
+    return catalog.apply_accepted_patch(
         operation_key=operation_key,
         expected_revision=current.revision,
         updates=updates,
-        hypothesis={"kind": "test_setup"},
-    )
-    return catalog.accept_candidate(
-        operation_key=operation_key,
-        candidate_revision=candidate.revision,
-        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
 
 
-def _accept_candidate_configs(catalog, current, configs):
-    """Translate changed full configs into the candidate Patch input boundary."""
+def _apply_accepted_configs(catalog, current, configs):
+    """Translate changed full configs into the accepted Patch input boundary."""
     previous = {item.input_node_id: item for item in current.configs}
     updates = []
     for item in configs:
@@ -109,7 +103,7 @@ def _accept_candidate_configs(catalog, current, configs):
             update["strategy"] = item.strategy
         if len(update) > 1:
             updates.append(update)
-    return _accept_candidate_patch(catalog, current.operation_key, updates)
+    return _apply_accepted_patch(catalog, current.operation_key, updates)
 
 
 def test_first_initialization_creates_every_operation_and_default_generator(tmp_path: Path) -> None:
@@ -617,7 +611,7 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
         else item
         for item in stored.configs
     ]
-    replaced = _accept_candidate_configs(catalog, stored, invalid)
+    replaced = _apply_accepted_configs(catalog, stored, invalid)
     assert replaced.enabled is True
     replaced_media_config = next(
         item
@@ -641,7 +635,7 @@ def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) ->
     body_id = current.snapshot.request_body_node_id
 
     with pytest.raises(GeneratorConfigError) as raised:
-        catalog.stage_candidate(
+        catalog.apply_accepted_patch(
             operation_key=current.operation_key,
             expected_revision=1,
             updates=[
@@ -650,7 +644,6 @@ def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) ->
                     "strategy": {"type": "constant", "value": "invalid"},
                 }
             ],
-            hypothesis={"kind": "test_validation"},
         )
     assert raised.value.code == "generator_config_incompatible_strategy"
 
@@ -681,7 +674,7 @@ def test_unsupported_operation_is_saved_disabled_without_blocking_other_operatio
         for reason in disabled.disabled_reasons
         if reason.input_node_id is not None
     )
-    replaced = _accept_candidate_patch(
+    replaced = _apply_accepted_patch(
         catalog,
         disabled.operation_key,
         updates=[
@@ -883,14 +876,14 @@ def test_object_cardinality_requires_a_generator_set_that_always_conforms(
         else item
         for item in initial.configs
     ]
-    replaced = _accept_candidate_configs(catalog, initial, configs)
+    replaced = _apply_accepted_configs(catalog, initial, configs)
     assert replaced.enabled is True
 
 
-def test_constant_object_candidate_ignores_unused_child_inclusion_probabilities(
+def test_constant_object_patch_ignores_unused_child_inclusion_probabilities(
     tmp_path: Path,
 ) -> None:
-    """A constant-object candidate need not rewrite unused child probabilities."""
+    """A constant-object Patch need not rewrite unused child probabilities."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import InputGeneratorConfig
 
@@ -940,7 +933,7 @@ def test_constant_object_candidate_ignores_unused_child_inclusion_probabilities(
         for item in initial.configs
     ]
 
-    replaced = _accept_candidate_configs(catalog, initial, configs)
+    replaced = _apply_accepted_configs(catalog, initial, configs)
 
     assert replaced.enabled is True
 
@@ -992,7 +985,7 @@ def test_nullable_text_body_rejects_a_null_generator_before_execution(
     ]
 
     with pytest.raises(GeneratorConfigError) as raised:
-        _accept_candidate_configs(catalog, initial, configs)
+        _apply_accepted_configs(catalog, initial, configs)
 
     assert raised.value.code == "generator_config_incompatible_strategy"
 
@@ -1050,16 +1043,16 @@ def test_manual_range_generator_can_override_a_discrete_enum(
         for item in initial.configs
     ]
 
-    replaced = _accept_candidate_configs(catalog, initial, configs)
+    replaced = _apply_accepted_configs(catalog, initial, configs)
 
     assert replaced.enabled is True
     assert replaced.configs[0].strategy.type == strategy["type"]
 
 
-def test_candidate_with_feedback_generator_clears_its_recoverable_reason(
+def test_accepted_patch_with_feedback_generator_clears_recoverable_reason(
     tmp_path: Path,
 ) -> None:
-    """A candidate clears the recoverable reason for the input it repairs."""
+    """An accepted Patch clears the recoverable reason for its repaired input."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1099,7 +1092,7 @@ def test_candidate_with_feedback_generator_clears_its_recoverable_reason(
         node_id
     }
 
-    patched = _accept_candidate_patch(
+    patched = _apply_accepted_patch(
         catalog,
         initial.operation_key,
         updates=[
@@ -1114,10 +1107,10 @@ def test_candidate_with_feedback_generator_clears_its_recoverable_reason(
     assert patched.configs[0].strategy.value == "lowercase"
 
 
-def test_candidate_clears_only_recoverable_reasons_for_updated_nodes(
+def test_accepted_patch_clears_recoverable_reasons_only_for_updated_nodes(
     tmp_path: Path,
 ) -> None:
-    """A candidate preserves recoverable reasons owned by untouched inputs."""
+    """An accepted Patch preserves reasons owned by untouched inputs."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -1159,7 +1152,7 @@ def test_candidate_clears_only_recoverable_reasons_for_updated_nodes(
         if reason.recoverable
     } == set(node_ids.values())
 
-    first = _accept_candidate_patch(
+    first = _apply_accepted_patch(
         catalog,
         initial.operation_key,
         updates=[
@@ -1176,7 +1169,7 @@ def test_candidate_clears_only_recoverable_reasons_for_updated_nodes(
         if reason.recoverable
     } == {node_ids["second"]}
 
-    second = _accept_candidate_patch(
+    second = _apply_accepted_patch(
         catalog,
         first.operation_key,
         updates=[
@@ -1190,7 +1183,7 @@ def test_candidate_clears_only_recoverable_reasons_for_updated_nodes(
     assert second.disabled_reasons == []
 
 
-def test_candidate_does_not_hide_an_unrelated_default_configuration_failure(
+def test_accepted_patch_keeps_unrelated_default_configuration_failure(
     tmp_path: Path,
 ) -> None:
     """Repairing one input does not hide another default-generation failure."""
@@ -1246,7 +1239,7 @@ def test_candidate_does_not_hide_an_unrelated_default_configuration_failure(
         if reason.recoverable
     } == {query_id, body_id}
 
-    patched = _accept_candidate_patch(
+    patched = _apply_accepted_patch(
         catalog,
         initial.operation_key,
         updates=[

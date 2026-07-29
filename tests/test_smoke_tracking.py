@@ -63,8 +63,8 @@ def _supervisor_context():
 
 def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
     """Scenario: verify that supervisor records each smoke attempt as graph child."""
-    from restscope.agent import RESTScopeMainGraph, RESTScopeRunRequest
-    from restscope.agent.operation_smoke import OperationSmokeResult
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
+    from restscope.operation_smoke import OperationSmokeResult
 
     class PassingSmoke:
         def run(self, context, request):
@@ -75,11 +75,13 @@ def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
                 success_rate=1,
                 required_success_rate=request.success_rate_threshold,
                 active_config_revision=1,
+                stop_reason="success_rate_reached",
+                reason="The complete Batch passed in this tracing scenario.",
             )
 
     runtime, exporter = _recording_runtime()
     report = RESTScopeMainGraph(
-        operation_smoke_agent=PassingSmoke(),
+        operation_smoke_coordinator=PassingSmoke(),
         tool_context=_supervisor_context(),
         tracing_runtime=runtime,
     ).run(RESTScopeRunRequest(metadata={"task_id": "tracking-task"}))
@@ -101,13 +103,13 @@ def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
 def _smoke_runtime(tmp_path: Path):
     import httpx
 
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor import (
         APIBehaviorResponseProcessor,
-        build_api_behavior_monitor_agent,
+        build_api_behavior_monitor_coordinator,
     )
-    from restscope.agent.operation_smoke import (
+    from restscope.operation_smoke import (
         BehaviorMonitorReferenceValues,
-        OperationSmokeAgent,
+        OperationSmokeCoordinator,
     )
     from restscope.db import (
         Base,
@@ -156,7 +158,7 @@ def _smoke_runtime(tmp_path: Path):
         RESTScopeConfig.from_environment(tmp_path / ".env"),
         db=DBConfig(url=f"sqlite:///{database}"),
     )
-    monitor = build_api_behavior_monitor_agent(
+    monitor = build_api_behavior_monitor_coordinator(
         config,
         tracing_runtime=runtime,
     )
@@ -189,17 +191,11 @@ def _smoke_runtime(tmp_path: Path):
         def create(self):
             raise AssertionError("a successful batch must not create a sub-Agent")
 
-    class UnexpectedEffect:
-        def validate(self, *args, **kwargs):
-            raise AssertionError("a successful batch must not invoke Effect")
-
-    smoke = OperationSmokeAgent(
+    smoke = OperationSmokeCoordinator(
         config_catalog=catalog,
         batch_runner=testing,
         plan_agent=UnexpectedPlan(),
         failure_solver_factory=UnexpectedFactory(),
-        patch_agent_factory=UnexpectedFactory(),
-        effect_agent=UnexpectedEffect(),
         reference_values=references,
         tracing_runtime=runtime,
     )
@@ -210,7 +206,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that smoke batch case and behavior tracking form one hierarchy."""
-    from restscope.agent.operation_smoke import OperationSmokeRequest
+    from restscope.operation_smoke import OperationSmokeRequest
     from restscope.capabilities import ToolContext
 
     ir, smoke, runtime, exporter = _smoke_runtime(tmp_path)
@@ -227,13 +223,12 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
         OperationSmokeRequest(
             operation_key="GET /items",
             case_count=2,
-            seed=7,
         ),
     )
     runtime.close()
 
     spans = list(exporter.get_finished_spans())
-    smoke_span = next(span for span in spans if span.name == "OperationSmokeAgent.run")
+    smoke_span = next(span for span in spans if span.name == "OperationSmokeCoordinator.run")
     batch_span = next(
         span
         for span in spans
@@ -241,7 +236,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     )
     cases = [span for span in spans if span.name == "RESTScopeTestCase.execute"]
     monitors = [
-        span for span in spans if span.name == "APIBehaviorMonitorAgent.observe_response"
+        span for span in spans if span.name == "APIBehaviorMonitorCoordinator.observe_response"
     ]
     resources = [
         span for span in spans if span.name == "ResourceIdentifierTracker.observe"
@@ -274,7 +269,7 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
 ) -> None:
     """Plan model calls are tagged with the independent Plan role."""
     del tmp_path
-    from restscope.agent.smoke_plan import SmokePlanAgent, SmokePlanRequest
+    from restscope.operation_smoke.plan import SmokePlanAgent, SmokePlanRequest
     from restscope.llm import (
         LLMClient,
         LLMModelConfig,
@@ -292,8 +287,17 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
                 provider=self.name,
                 model=request.model,
                 parsed_json={
-                    "action": "no_new_failure_work",
-                    "todos": [],
+                    "action": "no_debug",
+                    "classifications": [
+                        {
+                            "item_id": "T1",
+                            "failure_ref": None,
+                            "summary": "The response cannot be debugged here.",
+                            "case_codes": ["C1"],
+                            "disposition": "non_debuggable",
+                            "disposition_reason": "The trace test has no target.",
+                        }
+                    ],
                     "reason": "History contains no new work.",
                 },
             )
@@ -301,6 +305,37 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
     registry = LLMProviderRegistry()
     registry.register(PlanProvider())
     runtime, exporter = _recording_runtime()
+
+    class EmptyMemory:
+        """Keep this trace test focused on the Planner's LLM span."""
+
+        def list_operation_failures(self, operation_key):
+            del operation_key
+            return []
+
+        def lookup_failure_history(self, operation_key, failure_ids):
+            del operation_key, failure_ids
+            return []
+
+        def record_plan(self, write):
+            from restscope.operation_smoke.memory import (
+                RecordedFailure,
+                RecordedPlan,
+            )
+
+            return RecordedPlan(
+                failures=[
+                    RecordedFailure(
+                        failure_id=f"failure-{index}",
+                        summary=item.summary,
+                    )
+                    for index, item in enumerate(
+                        write.classifications,
+                        start=1,
+                    )
+                ]
+            )
+
     planner = SmokePlanAgent(
         client=LLMClient(registry, tracing_runtime=runtime),
         model=LLMModelConfig(
@@ -309,19 +344,21 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
             model="think",
             enabled=True,
         ),
+        memory=EmptyMemory(),
     )
     result = planner.plan(
         SmokePlanRequest(
             operation_key="GET /items",
+            round_number=1,
+            batch_run_id="run_failure",
             batch={"run_id": "run_failure"},
             coded_cases={"C1": {"case_id": "case_1"}},
             failed_case_codes=["C1"],
-            history=[{"status": "no_new_attempt"}],
         )
     )
     runtime.close()
 
     spans = list(exporter.get_finished_spans())
     llm_span = next(span for span in spans if span.name == "LLMClient.invoke")
-    assert result.status == "no_new_failure_work"
-    assert llm_span.attributes["gen_ai.request.model"] == "think"
+    assert result.status == "no_debug"
+    assert llm_span.attributes["llm.model_name"] == "think"

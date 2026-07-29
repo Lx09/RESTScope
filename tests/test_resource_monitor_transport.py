@@ -211,7 +211,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     del tmp_path
     import httpx
 
-    from restscope.agent.failure_solver import CurrentOperationHTTPProbe
+    from restscope.operation_smoke.failure_solver import CurrentOperationHTTPProbe
     from restscope.capabilities import (
         ToolCallValidator,
         ToolContext,
@@ -416,14 +416,12 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
 
 
 def _resource_monitor(tmp_path: Path):
-    from restscope.agent.api_behavior_monitor import (
-        APIBehaviorMonitorAgent,
-        ResourceCatalog,
-        ResourceIdentifierTracker,
-        ResponseContractTracker,
-        ResponseValueCatalog,
-        ResponseValueTracker,
-    )
+    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_identifier import ResourceIdentifierTracker
+    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_value_catalog import ResponseValueCatalog
+    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -456,7 +454,7 @@ def _resource_monitor(tmp_path: Path):
         lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
     )
     return (
-        APIBehaviorMonitorAgent(
+        APIBehaviorMonitorCoordinator(
             contract_tracker=ResponseContractTracker(),
             resource_identifier_tracker=resource_tracker,
             response_value_tracker=ResponseValueTracker(
@@ -473,7 +471,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
     """Scenario: verify that raw http matches operation before synchronously updating catalog."""
     import httpx
 
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor import (
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
@@ -481,8 +479,8 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
-    agent, catalog = _resource_monitor(tmp_path)
-    processor = APIBehaviorResponseProcessor(agent)
+    coordinator, catalog = _resource_monitor(tmp_path)
+    processor = APIBehaviorResponseProcessor(coordinator)
     transport = TargetHTTPTransport(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
@@ -553,7 +551,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
     """Scenario: verify that raw http ambiguous operation match warns without catalog write."""
     import httpx
 
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor import (
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
@@ -561,7 +559,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
-    agent, catalog = _resource_monitor(tmp_path)
+    coordinator, catalog = _resource_monitor(tmp_path)
     transport = TargetHTTPTransport(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
@@ -573,7 +571,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
             ),
             **kwargs,
         ),
-        response_processor=APIBehaviorResponseProcessor(agent),
+        response_processor=APIBehaviorResponseProcessor(coordinator),
     )
     registry = ToolRegistry()
     register_http_request_tool(registry, transport=transport)
@@ -617,11 +615,13 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that resolved operation monitor error is persisted and later cleared."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         MonitoredOperation,
+        ResourceObservation,
+    )
+    from restscope.api_behavior_monitor import (
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
-        ResourceObservation,
     )
     from restscope.http_transport import (
         TargetResponseObservation,
@@ -629,8 +629,8 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     )
     from restscope.openapi_parser import OpenAPIParser
 
-    agent, catalog = _resource_monitor(tmp_path)
-    agent.resource_identifier_tracker.observe(
+    coordinator, catalog = _resource_monitor(tmp_path)
+    coordinator.resource_identifier_tracker.observe(
         ResourceObservation(
             operation=MonitoredOperation(
                 operation_key="GET /users/{userId}",
@@ -653,7 +653,7 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
             },
         }
     )
-    processor = APIBehaviorResponseProcessor(agent)
+    processor = APIBehaviorResponseProcessor(coordinator)
     context = TargetResponseOperationContext(ir=ir)
     invalid = TargetResponseObservation(
         method="GET",
@@ -694,7 +694,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that schema only dotted property fails closed without learning selector."""
-    from restscope.agent.api_behavior_monitor import (
+    from restscope.api_behavior_monitor import (
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
@@ -704,7 +704,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     )
     from restscope.openapi_parser import OpenAPIParser
 
-    agent, catalog = _resource_monitor(tmp_path)
+    coordinator, catalog = _resource_monitor(tmp_path)
     ir = OpenAPIParser.parse(
         {
             "openapi": "3.0.3",
@@ -732,7 +732,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
             },
         }
     )
-    processor = APIBehaviorResponseProcessor(agent)
+    processor = APIBehaviorResponseProcessor(coordinator)
     observation = TargetResponseObservation(
         method="GET",
         path="/commits/abc123",
@@ -756,7 +756,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
 
 def test_response_schema_fields_include_collection_item_resource_name() -> None:
     """Scenario: verify that response schema fields include collection item resource name."""
-    from restscope.agent.api_behavior_monitor.agent import _response_schema_fields
+    from restscope.api_behavior_monitor.coordinator import _response_schema_fields
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -820,7 +820,7 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
     """Scenario: verify that default app uses one monitored transport and registers lookup tool."""
     from restscope import RESTScopeApp
     from restscope.restscope_config import RESTScopeConfig
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -829,7 +829,7 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
     try:
         runtime = app.capability_runtime
@@ -838,11 +838,11 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
         raw_handler = runtime.tool_registry.get_handler("restscope.http.request")
         raw_tool = raw_handler.__self__
 
-        assert runtime.api_behavior_monitor_agent is not None
-        assert not hasattr(runtime.api_behavior_monitor_agent, "initialize")
+        assert runtime.api_behavior_monitor_coordinator is not None
+        assert not hasattr(runtime.api_behavior_monitor_coordinator, "initialize")
         assert service.transport is raw_tool.transport
-        assert service.transport.response_processor.agent is (
-            runtime.api_behavior_monitor_agent
+        assert service.transport.response_processor.coordinator is (
+            runtime.api_behavior_monitor_coordinator
         )
         assert runtime.tool_registry.get_spec("restscope.resource.lookup").read_only is True
     finally:

@@ -7,6 +7,7 @@ from .resource_catalog_repo import (
 )
 from .response_value_repo import SqlAlchemyResponseValueCatalogRepository
 from .schema_repo import SqlAlchemySchemaRepository
+from .smoke_memory_repo import SqlAlchemySmokeMemoryRepository
 
 __all__ = [
     "ResourceCatalogConflict",
@@ -14,4 +15,5 @@ __all__ = [
     "SqlAlchemyResourceCatalogRepository",
     "SqlAlchemyResponseValueCatalogRepository",
     "SqlAlchemySchemaRepository",
+    "SqlAlchemySmokeMemoryRepository",
 ]

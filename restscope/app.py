@@ -10,17 +10,21 @@ from typing import Any, cast
 
 from pydantic import TypeAdapter
 
-from restscope.agent import (
-    OperationSmokeAgent,
+from restscope.api_behavior_monitor import (
+    APIBehaviorResponseProcessor,
+    build_api_behavior_monitor_coordinator,
+)
+from restscope.operation_smoke import (
+    BehaviorMonitorReferenceValues,
+    OperationSmokeCoordinator,
     SmokeBatchRunner,
+    build_operation_smoke_coordinator,
+)
+from restscope.supervisor import (
     RESTScopeMainGraph,
     RESTScopeRunReport,
     RESTScopeRunRequest,
-    APIBehaviorResponseProcessor,
-    BehaviorMonitorReferenceValues,
     SchemaSource,
-    build_api_behavior_monitor_agent,
-    build_operation_smoke_agent,
 )
 from restscope.capabilities import (
     CapabilityRuntime,
@@ -32,6 +36,7 @@ from restscope.http_transport import TargetHTTPTransport
 from restscope.openapi_parser import OpenAPIParser
 from restscope.observability import TracingRuntime, build_tracing_runtime
 from restscope.redaction import Redactor
+from restscope.randomness import SeededRandom
 from restscope.restscope_config import RESTScopeConfig
 from restscope.bootstrap import build_generator_config_catalog
 from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
@@ -43,7 +48,7 @@ class RESTScopeApp:
 
     Creating the app is intentionally more than constructing a data object.  It
     opens the run-local database, tracing exporter, behavior monitor, HTTP
-    transport, testing service, capability registry, and top-level Agent graph.
+    transport, testing service, capability registry, and top-level run graph.
     The app also records which resources it created so :meth:`close` can release
     them if startup succeeds *or* fails part-way through.
     """
@@ -52,13 +57,13 @@ class RESTScopeApp:
         self,
         *,
         config: RESTScopeConfig,
-        operation_smoke_agent: OperationSmokeAgent | None = None,
+        operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Build the dependency graph, or adopt explicitly injected test doubles.
 
-        ``capability_runtime`` and ``operation_smoke_agent`` are injection
+        ``capability_runtime`` and ``operation_smoke_coordinator`` are injection
         points used by tests and embedders.  In the normal path both are
         omitted and RESTScope wires the complete production stack itself.
         """
@@ -71,6 +76,7 @@ class RESTScopeApp:
         built_tracing_runtime = tracing_runtime is None
         trace_runtime: TracingRuntime | None = None
         try:
+            config = _resolve_app_random_seed(config)
             # A default runtime needs a private, freshly migrated SQLite file.
             # An injected runtime owns its own persistence and must not be
             # silently paired with another database.
@@ -78,7 +84,8 @@ class RESTScopeApp:
                 config, database = _prepare_app_database(config)
 
             self.config = config
-            smoke_agent = operation_smoke_agent
+            self.random_source = SeededRandom(config.random.seed)
+            smoke_coordinator = operation_smoke_coordinator
             trace_runtime = (
                 _build_app_tracing_runtime(config)
                 if tracing_runtime is None
@@ -98,16 +105,16 @@ class RESTScopeApp:
                 # generators, while the transport sends requests and returns
                 # every response to that monitor.
                 generator_catalog = build_generator_config_catalog(config)
-                api_behavior_monitor_agent = build_api_behavior_monitor_agent(
+                api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
                     config,
                     tracing_runtime=self._tracing_runtime,
                 )
                 reference_values = BehaviorMonitorReferenceValues(
-                    api_behavior_monitor_agent
+                    api_behavior_monitor_coordinator
                 )
                 target_transport = TargetHTTPTransport(
                     response_processor=APIBehaviorResponseProcessor(
-                        api_behavior_monitor_agent
+                        api_behavior_monitor_coordinator
                     )
                 )
                 operation_testing_service = OperationTestingService(
@@ -123,17 +130,17 @@ class RESTScopeApp:
                     tracing_runtime=self._tracing_runtime,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
-                    api_behavior_monitor_agent=api_behavior_monitor_agent,
+                    api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
                 )
                 capability_runtime = built_runtime
-                if smoke_agent is None:
-                    smoke_agent = build_operation_smoke_agent(
+                if smoke_coordinator is None:
+                    smoke_coordinator = build_operation_smoke_coordinator(
                         config,
                         config_catalog=generator_catalog,
                         # OperationTestingService implements this structural
                         # Protocol. The cast records that composition-root
                         # binding without making the testing layer import its
-                        # coordinating Agent.
+                        # coordinating workflow.
                         batch_runner=cast(
                             SmokeBatchRunner,
                             operation_testing_service,
@@ -142,15 +149,15 @@ class RESTScopeApp:
                         tool_executor=built_runtime.tool_executor,
                         tracing_runtime=self._tracing_runtime,
                     )
-            elif smoke_agent is None:
-                # Mixing a custom tool runtime with a default Smoke Agent would
+            elif smoke_coordinator is None:
+                # Mixing a custom tool runtime with a default Smoke Coordinator would
                 # connect two unrelated dependency graphs, so require callers
-                # to inject the matching Agent explicitly.
+                # to inject the matching Coordinator explicitly.
                 raise ValueError(
                     "A custom capability runtime requires an injected "
-                    "OperationSmokeAgent"
+                    "OperationSmokeCoordinator"
                 )
-            self.operation_smoke_agent = smoke_agent
+            self.operation_smoke_coordinator = smoke_coordinator
             self.capability_runtime = capability_runtime
             bind_tracing_runtime = getattr(
                 self.capability_runtime,
@@ -183,7 +190,7 @@ class RESTScopeApp:
         cls,
         *,
         env_file: str | Path | None = None,
-        operation_smoke_agent: OperationSmokeAgent | None = None,
+        operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
@@ -192,7 +199,7 @@ class RESTScopeApp:
         config = RESTScopeConfig.from_environment(Path(env_file).expanduser() if env_file else None)
         return cls.from_config(
             config,
-            operation_smoke_agent=operation_smoke_agent,
+            operation_smoke_coordinator=operation_smoke_coordinator,
             capability_runtime=capability_runtime,
             tracing_runtime=tracing_runtime,
         )
@@ -202,7 +209,7 @@ class RESTScopeApp:
         cls,
         config: RESTScopeConfig,
         *,
-        operation_smoke_agent: OperationSmokeAgent | None = None,
+        operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
         capability_runtime: CapabilityRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
@@ -213,6 +220,7 @@ class RESTScopeApp:
         runtime = capability_runtime
         runtime_is_owned = False
         try:
+            config = _resolve_app_random_seed(config)
             if runtime is None:
                 config, database = _prepare_app_database(config)
 
@@ -221,24 +229,24 @@ class RESTScopeApp:
                 if tracing_runtime is None
                 else tracing_runtime
             )
-            smoke_agent = operation_smoke_agent
+            smoke_coordinator = operation_smoke_coordinator
             generator_catalog = None
             operation_testing_service = None
-            api_behavior_monitor_agent = None
+            api_behavior_monitor_coordinator = None
             target_transport = None
             reference_values = None
             if runtime is None:
                 generator_catalog = build_generator_config_catalog(config)
-                api_behavior_monitor_agent = build_api_behavior_monitor_agent(
+                api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
                     config,
                     tracing_runtime=trace_runtime,
                 )
                 reference_values = BehaviorMonitorReferenceValues(
-                    api_behavior_monitor_agent
+                    api_behavior_monitor_coordinator
                 )
                 target_transport = TargetHTTPTransport(
                     response_processor=APIBehaviorResponseProcessor(
-                        api_behavior_monitor_agent
+                        api_behavior_monitor_coordinator
                     )
                 )
                 operation_testing_service = OperationTestingService(
@@ -249,48 +257,48 @@ class RESTScopeApp:
                 )
                 assert generator_catalog is not None
                 assert operation_testing_service is not None
-                assert api_behavior_monitor_agent is not None
+                assert api_behavior_monitor_coordinator is not None
                 runtime = build_capabilities(
                     tracing_runtime=trace_runtime,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
-                    api_behavior_monitor_agent=api_behavior_monitor_agent,
+                    api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
                 )
                 runtime_is_owned = True
-            elif smoke_agent is None:
+            elif smoke_coordinator is None:
                 operation_testing_service = getattr(
                     runtime,
                     "operation_testing_service",
                     None,
                 )
-                api_behavior_monitor_agent = getattr(
+                api_behavior_monitor_coordinator = getattr(
                     runtime,
-                    "api_behavior_monitor_agent",
+                    "api_behavior_monitor_coordinator",
                     None,
                 )
                 if (
                     operation_testing_service is None
-                    or api_behavior_monitor_agent is None
+                    or api_behavior_monitor_coordinator is None
                 ):
                     raise ValueError(
                         "A custom capability runtime requires an injected "
-                        "OperationSmokeAgent or testing and API behavior "
+                        "OperationSmokeCoordinator or testing and API behavior "
                         "monitor services"
                     )
                 generator_catalog = operation_testing_service.config_catalog
                 reference_values = (
                     operation_testing_service.reference_values
                     or BehaviorMonitorReferenceValues(
-                        api_behavior_monitor_agent
+                        api_behavior_monitor_coordinator
                     )
                 )
                 operation_testing_service.reference_values = reference_values
 
-            if smoke_agent is None:
+            if smoke_coordinator is None:
                 assert generator_catalog is not None
                 assert operation_testing_service is not None
                 assert reference_values is not None
-                smoke_agent = build_operation_smoke_agent(
+                smoke_coordinator = build_operation_smoke_coordinator(
                     config,
                     config_catalog=generator_catalog,
                     batch_runner=operation_testing_service,
@@ -301,7 +309,7 @@ class RESTScopeApp:
 
             return cls(
                 config=config,
-                operation_smoke_agent=smoke_agent,
+                operation_smoke_coordinator=smoke_coordinator,
                 capability_runtime=runtime,
                 tracing_runtime=trace_runtime,
             )
@@ -398,8 +406,9 @@ class RESTScopeApp:
             attributes=attributes,
         ) as span:
             report = RESTScopeMainGraph(
-                operation_smoke_agent=self.operation_smoke_agent,
+                operation_smoke_coordinator=self.operation_smoke_coordinator,
                 tool_context=self._tool_context,
+                random_seed=self.random_source.seed,
                 tracing_runtime=self.tracing_runtime,
             ).run(request)
             span.set_output(_app_run_trace_summary(report))
@@ -418,7 +427,7 @@ class RESTScopeApp:
             executor.clear_context()
         self._tool_context = None
         clear_smoke_state = getattr(
-            self.operation_smoke_agent,
+            self.operation_smoke_coordinator,
             "clear_app_state",
             None,
         )
@@ -427,7 +436,7 @@ class RESTScopeApp:
                 clear_smoke_state()
             except Exception:
                 # Resource cleanup must continue even if a custom injected
-                # Smoke Agent cannot release its optional in-memory state.
+                # Smoke Coordinator cannot release its optional in-memory state.
                 pass
         mcp_host = getattr(self.capability_runtime, "mcp_host", None)
         try:
@@ -493,6 +502,17 @@ def _prepare_app_database(
 
     db_config, database = prepare_fresh_sqlite(config.db)
     return replace(config, db=db_config), database
+
+
+def _resolve_app_random_seed(config: RESTScopeConfig) -> RESTScopeConfig:
+    """Resolve the optional root seed once before building App collaborators."""
+    if config.random.seed is not None:
+        return config
+    source = SeededRandom()
+    return replace(
+        config,
+        random=replace(config.random, seed=source.seed),
+    )
 
 
 def _close_runtime_host(runtime: Any | None) -> None:

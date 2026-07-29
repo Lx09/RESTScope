@@ -21,7 +21,7 @@ from ..orm import (
 from ..time import as_utc
 
 if TYPE_CHECKING:
-    from restscope.agent.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         LearnedResourceRule,
         MonitoredOperation,
@@ -129,7 +129,7 @@ class SqlAlchemyResourceCatalogRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        from restscope.agent.api_behavior_monitor.resource_schemas import (
+        from restscope.api_behavior_monitor.resource_schemas import (
             ResourceNameSummary,
         )
 
@@ -290,7 +290,7 @@ class SqlAlchemyResourceCatalogRepository:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
-        from restscope.agent.api_behavior_monitor.resource_schemas import (
+        from restscope.api_behavior_monitor.resource_schemas import (
             ResourceIdentifierSummary,
             ResourceLookupResult,
             ResourceMonitorErrorSummary,
@@ -597,7 +597,7 @@ class SqlAlchemyResourceCatalogRepository:
         This private helper keeps one transformation or policy decision explicit so the
         surrounding orchestration remains readable.
         """
-        from restscope.agent.api_behavior_monitor.resource_schemas import (
+        from restscope.api_behavior_monitor.resource_schemas import (
             LearnedResourceRule,
         )
 
@@ -646,7 +646,7 @@ class SqlAlchemyResourceCatalogRepository:
         This private helper keeps one transformation or policy decision explicit so the
         surrounding orchestration remains readable.
         """
-        from restscope.agent.api_behavior_monitor.resource_schemas import (
+        from restscope.api_behavior_monitor.resource_schemas import (
             ResourceOperationSummary,
         )
 

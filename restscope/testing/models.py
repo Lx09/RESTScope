@@ -448,12 +448,6 @@ class OperationGeneratorConfig(BaseModel):
     configs: list[InputGeneratorConfig]
 
 
-GeneratorRevisionLifecycle = Literal[
-    "candidate",
-    "accepted",
-    "rejected",
-    "rollback",
-]
 ResponseValidationStatus = Literal[
     "evaluated",
     "partial",
@@ -463,21 +457,15 @@ OperationExecutionStatus = Literal["completed", "partial", "errored"]
 
 
 class GeneratorConfigRevision(BaseModel):
-    """One durable generator configuration revision and its evaluation state."""
+    """One immutable initial or directly accepted Generator configuration."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     operation_key: str
     revision: int = Field(ge=1)
     parent_revision: int | None = Field(default=None, ge=1)
-    lifecycle: GeneratorRevisionLifecycle
-    rollback_of_revision: int | None = Field(default=None, ge=1)
-    restored_from_revision: int | None = Field(default=None, ge=1)
-    hypothesis: dict[str, Any] | None = None
     config: OperationGeneratorConfig
-    evaluation: dict[str, Any] | None = None
     created_at: datetime
-    evaluated_at: datetime | None = None
 
 
 class GeneratedNodeValue(BaseModel):

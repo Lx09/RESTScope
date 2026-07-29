@@ -56,12 +56,11 @@ frozen operation. Each row references only the stable `input_node_id`, its
 inclusion probability, and its discriminated generator strategy.
 
 `generator_config_revisions` stores the complete immutable configuration for
-each revision. Initial and direct management revisions are accepted. Smoke
-feedback first creates a candidate revision; a successful next batch marks it
-accepted. A failed next batch marks it rejected and appends a compensating
-rollback revision containing the restored parent configuration. Evaluation
-records retain only bounded batch counts, success rate, threshold, and run ID;
-test cases, response bodies, and failure reports are not persisted.
+each revision. Only the initial configuration and directly accepted revisions
+exist; there is no pending candidate, Effect evaluation, rejected state, or
+compensating rollback revision. Operation Smoke records the reason for an
+accepted revision in its separate Applied Patch memory. Test cases, response
+bodies, and failure reports are not persisted.
 
 Whole-set replacement and node-level patch both use an expected revision, a
 database compare-and-swap update, and one transaction. Concurrent writers with

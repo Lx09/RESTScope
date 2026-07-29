@@ -20,7 +20,7 @@ from restscope.http_transport import TargetHTTPTransport
 from restscope.observability import TracingRuntime
 
 if TYPE_CHECKING:
-    from restscope.agent.api_behavior_monitor import APIBehaviorMonitorAgent
+    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
     from restscope.testing.execution import OperationTestingService
 
 
@@ -36,7 +36,7 @@ class CapabilityRuntime:
     skill_policy: SkillPolicy
     mcp_host: MCPHost | None = None
     operation_testing_service: OperationTestingService | None = None
-    api_behavior_monitor_agent: APIBehaviorMonitorAgent | None = None
+    api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
         """Bind one tracing/redaction runtime to every built-in trace consumer."""
@@ -44,9 +44,9 @@ class CapabilityRuntime:
         self.tool_executor.tracing_runtime = tracing_runtime
         if self.operation_testing_service is not None:
             self.operation_testing_service.tracing_runtime = tracing_runtime
-        if self.api_behavior_monitor_agent is not None:
-            self.api_behavior_monitor_agent.tracing_runtime = tracing_runtime
-            tracker = self.api_behavior_monitor_agent.resource_identifier_tracker
+        if self.api_behavior_monitor_coordinator is not None:
+            self.api_behavior_monitor_coordinator.tracing_runtime = tracing_runtime
+            tracker = self.api_behavior_monitor_coordinator.resource_identifier_tracker
             tracker.client.tracing_runtime = tracing_runtime
 
 
@@ -57,7 +57,7 @@ def build_capabilities(
     tracing_runtime: TracingRuntime | None = None,
     operation_testing_service: OperationTestingService | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    api_behavior_monitor_agent: APIBehaviorMonitorAgent | None = None,
+    api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None,
 ) -> CapabilityRuntime:
     """Build a complete capability runtime from external sources and skills."""
 
@@ -77,10 +77,10 @@ def build_capabilities(
         tool_registry,
         transport=target_http_transport,
     )
-    if api_behavior_monitor_agent is not None:
-        from restscope.agent.api_behavior_monitor import register_resource_lookup_tool
+    if api_behavior_monitor_coordinator is not None:
+        from restscope.api_behavior_monitor import register_resource_lookup_tool
 
-        register_resource_lookup_tool(tool_registry, api_behavior_monitor_agent)
+        register_resource_lookup_tool(tool_registry, api_behavior_monitor_coordinator)
     for skill in skills:
         skill_registry.register(skill)
 
@@ -99,7 +99,7 @@ def build_capabilities(
         skill_registry=skill_registry,
         skill_policy=skill_policy,
         operation_testing_service=operation_testing_service,
-        api_behavior_monitor_agent=api_behavior_monitor_agent,
+        api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
     )
 
 
@@ -112,7 +112,7 @@ def build_capabilities_with_mcp_host(
     tracing_runtime: TracingRuntime | None = None,
     operation_testing_service: OperationTestingService | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    api_behavior_monitor_agent: APIBehaviorMonitorAgent | None = None,
+    api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None,
 ) -> CapabilityRuntime:
     """Build capabilities after discovering tools through RESTScope's MCP host."""
 
@@ -131,7 +131,7 @@ def build_capabilities_with_mcp_host(
             tracing_runtime=tracing_runtime,
             operation_testing_service=operation_testing_service,
             target_http_transport=target_http_transport,
-            api_behavior_monitor_agent=api_behavior_monitor_agent,
+            api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
         )
         return CapabilityRuntime(
             tool_registry=runtime.tool_registry,
@@ -142,7 +142,7 @@ def build_capabilities_with_mcp_host(
             skill_policy=runtime.skill_policy,
             mcp_host=host,
             operation_testing_service=runtime.operation_testing_service,
-            api_behavior_monitor_agent=runtime.api_behavior_monitor_agent,
+            api_behavior_monitor_coordinator=runtime.api_behavior_monitor_coordinator,
         )
     except BaseException:
         if owns_host:

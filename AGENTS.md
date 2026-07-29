@@ -136,9 +136,17 @@ explicit project decision:
   the current OpenAPI IR remain App-lifetime only. It must not persist raw
   responses, LLM reasoning, plans, queues, general Agent memory, or evolved IR
   snapshots.
+- Operation Smoke Memory is a second narrow exception approved for the current
+  App lifecycle. It may persist stable per-operation Failures, bounded Failure
+  Observations, append-only Investigations, operation-local Parameter links,
+  and applied Generator/Constraint Patches. It must not persist raw Batches,
+  response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
+  queues, or a permanent `resolved` flag. Agents receive read-only memory tools;
+  validated outputs are written by deterministic runtime code.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
-  current evidence.
+  current evidence. Operation Smoke's Failure Memory is evidence supplied to
+  the runtime Planner; it is not a persisted test plan.
 
 This architecture is deliberately revisable, not a claim that the present MVP
 is final. Exploration should change the system through small, evidence-backed
@@ -148,20 +156,26 @@ Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.
 
-## Agent package boundary
+## Workflow and Agent package boundaries
 
-This is a hard project constraint for code under `restscope/agent/`:
+These are hard project constraints:
 
-- Every Agent, including orchestration Agents, must live in its own named
-  Python package such as `restscope/agent/planner/`.
-- An Agent package owns its runtime, schemas, state, prompts, and directly
-  supporting services. Do not add `<name>_agent.py`, `<name>_schemas.py`, or
-  other implementation modules at the root of `restscope/agent/`.
-- `restscope/agent/__init__.py` is only a stable public import facade.
-- Cross-Agent imports must use the target package's public exports. Do not
-  reach into another Agent's private implementation modules.
+- Code is organized by runtime workflow, not by a horizontal component
+  category. A workflow package owns its Coordinator, Agents, schemas, state,
+  prompts, and directly supporting implementation.
+- A class named `Agent` must call an LLM directly, and the LLM must own that
+  class's core domain decision. Tool use and multi-turn interaction are not
+  required. Deterministic orchestration classes use names such as
+  `Coordinator`, `Graph`, or `Tracker`.
+- Every Agent must live in its own named subpackage inside its owning workflow,
+  such as `restscope/operation_smoke/plan/`. Do not place `<name>_agent.py`,
+  `<name>_schemas.py`, or other Agent implementation files at the workflow
+  package root.
+- A workflow package's `__init__.py` is its small external Interface.
+  Cross-Agent imports must use the target Agent subpackage's public exports;
+  do not reach into another Agent's private implementation modules.
 - Extract a shared package only when multiple real consumers have identical
   semantics and lifecycle requirements. Do not create speculative common base
   Agents or catch-all schema modules.
-- Keep `tests/test_agent_package_boundaries.py` passing when adding or moving an
-  Agent.
+- Keep `tests/test_workflow_package_boundaries.py` passing when adding or
+  moving a workflow or Agent.

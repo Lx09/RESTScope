@@ -20,6 +20,8 @@ DATA_DIR=./data
 
 DB_URL=sqlite:///./data/restscope.db
 DB_ECHO=false
+# Optional. If omitted, one seed is generated at App startup and reported.
+RANDOM_SEED=731
 
 THINK_PROVIDER=openai_compatible
 THINK_MODEL=glm-4.5-air
@@ -66,8 +68,9 @@ uv run pytest
 
 ## Database
 
-The database stores OpenAPI schema sources, generator configuration, and the
-narrow API Behavior Monitor evidence catalogs for the single current API.
+The database stores OpenAPI schema sources, generator configuration, the
+narrow API Behavior Monitor evidence catalogs, and structured Operation Smoke
+Failure memory for the single current API.
 Those catalogs contain Resource Identifier facts and registered Response Value
 selectors and typed values; response-contract IR mutations remain in memory.
 Domain services depend on repository and transaction protocols; SQLAlchemy
@@ -80,18 +83,15 @@ automatically deletes a successfully created database. A caller that injects a
 complete custom `CapabilityRuntime` owns its persistence and bypasses this
 default database bootstrap.
 
-The Alembic chain starts with the schema-source baseline, adds operation
-generator configuration in revision `0002_create_generator_configs`, and adds
-the resource evidence catalog in `0003_create_resource_catalog`. Revision
-`0004_create_generator_revision_history` adds immutable candidate, accepted,
-rejected, and compensating rollback Generator revisions. A candidate accepted
-by Effect validation becomes accepted in place. Every other outcome marks the
-whole candidate rejected and creates one rollback revision that restores its
-complete parent; individual input changes are never selected. Revision
-`0005_create_response_value_catalog` adds persistent Response Value monitor,
-source, and typed-value tables. A schema source stores either an absolute file
-path or verbatim JSON/YAML content. Paths are reread on every load, while
-parsed/evolved IR, raw responses, and test reports are not persisted:
+Alembic now has one `0001_current_baseline` for fresh databases. Old exploratory
+database files and the former `0001`–`0006` chain are intentionally
+incompatible. Generator history contains only the initial configuration and
+directly accepted revisions. Smoke Memory stores bounded Observations,
+Failures, Investigations, operation-local Parameter links, and applied Patches;
+it never stores raw responses, HTTP/LLM transcripts, rejected candidates, or a
+permanent resolved state. A schema source stores either an absolute file path
+or verbatim JSON/YAML content. Paths are reread on every load, while
+parsed/evolved IR and test reports are not persisted:
 
 ```python
 from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
@@ -139,10 +139,12 @@ TRACING_FLUSH_TIMEOUT_SECONDS=5
 
 Open [http://localhost:6006](http://localhost:6006) to inspect traces. RESTScope
 records App, Agent, LLM, and tool spans. Trace inputs and outputs preserve
-parameter values and target Authorization/Cookie headers. Only the exact
-configured THINK, FAST, and Phoenix API key values are replaced. Provider-private
-tool-call context is not projected into traces; model-visible reasoning remains
-visible when it is part of a recorded message.
+generated parameter values, but sensitive request headers such as
+Authorization, Cookie, API key, token, secret, and CSRF headers are represented
+only as `[redacted]`. Exact configured THINK, FAST, and Phoenix API key values
+are also replaced wherever they appear. Provider-private tool-call context is
+not projected into traces; model-visible reasoning remains visible when it is
+part of a recorded message.
 
 Agent, tool, and chain inputs and outputs are indented JSON. App and Supervisor
 root spans contain bounded run summaries, while operation and case details stay
@@ -162,9 +164,10 @@ docker compose -f compose.phoenix.yaml down
 
 The compose service disables Phoenix analytics, external UI resources, and its
 built-in MCP server. It does not enable authentication and is intended only for
-local development on `127.0.0.1`. Because traces intentionally include target
-credentials, generated test data, complete tool parameters, and model
-reasoning, anyone with local Phoenix access can inspect those values.
+local development on `127.0.0.1`. Traces intentionally include generated test
+data, non-sensitive tool parameters, and model-visible reasoning, so anyone
+with local Phoenix access can inspect those values even though target
+credentials are redacted.
 
 ## MCP Tools
 
@@ -216,9 +219,9 @@ builds the local RESTScope tools only.
 Every default `RESTScopeApp` runtime includes the Operation Smoke testing path:
 
 There are no model-callable Testing or Generator-configuration tools.
-`OperationSmokeAgent` reaches complete batch execution through the narrower
+`OperationSmokeCoordinator` reaches complete batch execution through the narrower
 internal `SmokeBatchRunner` interface, so other Agent roles cannot bypass
-Smoke's round history, budgets, same-seed validation, or candidate lifecycle.
+Smoke's round ordering, budgets, shared seed, or direct Patch transaction.
 
 During the first successful `RESTScopeApp.initialize()`, every OpenAPI operation
 is frozen into a persistent request snapshot. Each parameter, body, media type,
@@ -233,12 +236,12 @@ there is no runtime reset or delete tool.
 Initial generators treat the OpenAPI document as the source for their defaults.
 For concrete values the precedence is `enum`, `const`, `default`, then
 `example`; a non-empty enum becomes an equal-weight choice containing every
-declared value. Later Generator changes can enter only through Smoke's complete
-candidate transaction and may deliberately generate values that do not match
+declared value. Later Generator changes can enter only through a validated,
+directly accepted Patch and may deliberately generate values that do not match
 the frozen Schema. Required and structural nodes must still use inclusion
 probability `1.0`, and every generated case must still serialize under the
 frozen parameter and request-body contract before any request is sent. A
-candidate clears recoverable default-generation failures attributed to the
+An accepted Patch clears recoverable default-generation failures attributed to the
 nodes it updates and enables the operation once no blocking reason remains.
 
 The internal Smoke batch runner accepts a frozen Catalog `operation_key` such
@@ -259,11 +262,12 @@ the evolved IR and first-observation registry are not persisted.
 Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
 tracking. Non-2xx bodies are also reused to build the batch failure report, but
 never become reusable input values and are not persisted. The report contains
-generated/request values, merged target headers, response metadata, transport
-errors, API Behavior Monitor warnings, a first-seen list of at most 100 exact
-unique failure messages with case associations, and a `response_validation`
-state of `evaluated`, `partial`, or `not_evaluated`. Only exact configured
-THINK, FAST, and Phoenix API key values are replaced.
+generated/request values, merged non-sensitive target headers, `[redacted]`
+markers for sensitive target headers, response metadata, transport errors, API
+Behavior Monitor warnings, a first-seen list of at most 100 exact unique
+failure messages with case associations, and a `response_validation` state of
+`evaluated`, `partial`, or `not_evaluated`. Exact configured THINK, FAST, and
+Phoenix API key values are also replaced.
 
 `restscope.http.request` is a high-risk, non-read-only model capability that
 can trigger side effects on the bound target. Failure Solve receives a further
@@ -274,10 +278,10 @@ The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
 The default and only Supervisor execution path is
-`Supervisor → OperationSmokeAgent → OperationTestingService.run_smoke_batch`.
+`Supervisor → OperationSmokeCoordinator → OperationTestingService.run_smoke_batch`.
 The default App does not start MCP processes.
 
-## API Behavior Monitor Agent
+## API Behavior Monitor Coordinator
 
 Every default `RESTScopeApp` includes one synchronous API Behavior Monitor. The
 lightweight testing path supplies its already-known operation key. The
@@ -310,56 +314,52 @@ including sensitive-looking names, may be retained. `restscope.resource.lookup`
 remains the explicit read-only lookup tool; Response Value pools are consumed
 internally by Operation Smoke.
 
-## Operation Smoke Agent
+## Operation Smoke workflow
 
-`OperationSmokeAgent` is a thin coordinator around four independent roles:
+`OperationSmokeCoordinator` owns ordering around three LLM Agents:
 
-1. A complete generated batch establishes the current evidence and 2xx rate.
-2. `SmokePlanAgent` reads the full batch and App-lifetime ledger, identifies
-   distinct failure todos, associates every failed case, and fixes their order
-   for that round. Temporary case codes exist only in this Plan request; todos
-   contain the expanded requests, generated values, and responses.
-3. Each todo gets a fresh `FailureSolveAgent` and one continuous conversation.
-   THINK may use `restscope.http.request`, but every call is preflighted against
-   the current operation's exact method and path template before any call in
-   that output executes. Solve alone decides root cause, affected semantic
-   inputs, Patch requirements, and terminal outcomes.
-4. A fresh FAST `ParameterPatchAgent` compiles one Solve requirement into
-   executable Generator and Constraint changes. Code retains only schema,
-   type, satisfiability, reference-pool, and generation safety checks. The
-   Agent reviews the same number of local samples as the Smoke `case_count`.
-5. `SmokeEffectAgent` compares the latest accepted complete batch with one
-   complete same-seed candidate batch. The candidate is accepted only for
-   `resolved_without_regression`; `unresolved`, `regression`, `unknown`, and
-   technical errors roll back the whole candidate and return full feedback to
-   the same Solve conversation.
+1. A complete generated Batch establishes the current evidence and 2xx rate.
+   The App-wide `RANDOM_SEED` is reused by Batch inputs, Constraint solving, and
+   Patch samples.
+2. `SmokePlanAgent` sees the Batch and a compact catalog of stable Failures.
+   It may query complete Failure histories through a read-only memory tool.
+   Temporary `F*` and `C*` references exist only in that request. Every failed
+   case must be classified or explicitly marked non-debuggable; valid final
+   classifications are written by deterministic code.
+3. Each debug item gets a fresh `FailureSolveAgent`. Solve preloads the current
+   Failure, may query other Failure history by semantic Parameter handle, and
+   may use the current-operation HTTP probe. Before replacing a Parameter
+   Generator it must inspect that Parameter's earlier Failure/Patch history.
+4. Solve calls a fresh FAST `ParameterPatchAgent` as an internal tool.
+   Structured root cause, affected inputs, desired behavior, and acceptance
+   criteria are compiled into Generator/Constraint changes. DTO, Schema,
+   satisfiability, and local samples are validated before the tool returns a
+   session-local `P*` candidate reference.
+5. Solve finishes with `apply_patch(P*)`, `no_patch`, or `conflict`. Only the
+   first action changes Generator state. The new revision, Investigation,
+   Parameter links, and Applied Patch memory commit in one transaction.
 
-There is no failure grouping, ownership inference, deterministic duplicate
-filter, partial candidate acceptance, or global-success override. Later todos
-in the fixed round see the latest accepted batch and may return
-`already_absent`; newly observed failures wait for the next Plan round. Every
-outer round starts with another complete batch, and the same seed is reused
-throughout one Smoke invocation.
+Every item in the fixed Plan finishes before another Batch is allowed. If no
+Patch was applied, Smoke passes with `no_patch_applied`; if Planner says no
+debug work remains, it passes with `planner_no_debug`. Otherwise the next
+complete Batch validates all applied changes together, and
+`success_rate_reached` stops at the configured threshold (80% by default).
+There is no Effect Agent, candidate Batch, rollback revision, or permanent
+`resolved` flag.
 
-The default limits are 50 Plan outputs, 50 Solve outputs per todo, 20 Patch
-outputs per attempt, and two Effect outputs. Every model response counts,
-including malformed responses and tool-call responses; executing an HTTP call
-does not. Solve outputs 10, 20, 30, and 40 are tool-free continuation checks.
-They must identify a genuinely new direction or end the todo.
+The Planner has a 50-output workflow budget. Each Solve has a 50-output budget
+that also counts every nested Parameter Patch LLM output; one Patch tool call is
+capped at 20 outputs. Malformed replies and tool-requesting model outputs count.
+Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Planner or
+Solve exhaustion is a technical error; one Patch-tool exhaustion is recoverable
+feedback within its Solve session.
 
-Prompt input allowance is the model context window minus its configured output
-limit and a 2048-token reserve. Current todo, batch, operation/config, active
-Solve conversation, and recent Effect evidence have priority. Older ledger
-records are loaded newest first and summarized only when required by the
-window. An oversized current response keeps its structure, original size, and
-marked head/tail excerpts.
-
-Complete evidence, Plan/Solve outputs, HTTP observations, Patch attempts,
-candidate batches, Effects, and accepted runtime Constraints remain in an
-operation-isolated App-memory ledger. Generator changes still use durable
-Catalog candidate revisions. Accepted Constraints survive later Supervisor
-retries in the same App but are never written to the database. Public results
-contain bounded round/todo/Patch/Effect summaries rather than raw responses.
+The database keeps only structured Failure knowledge and applied Patches.
+Rejected session candidates, raw Batches/responses, HTTP transcripts, and LLM
+transcripts are not persisted. Accepted Constraints remain executable for the
+current App and are also present inside the structured Applied Patch record.
+Public results contain bounded Batch, round, Investigation, and applied-Patch
+summaries.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.
@@ -389,7 +389,7 @@ with RESTScopeApp.from_environment() as app:
 ```
 
 `RESTScopeApp.run()` is an execution API, not a dry-run API. The default Smoke
-Agent immediately sends generated requests to the target bound during
+Coordinator immediately sends generated requests to the target bound during
 `initialize()`, including operations that may have side effects. Run it only
 against a target you are authorized to test.
 
@@ -404,11 +404,10 @@ are bound out-of-band to trusted tool handlers; they are not copied into graph
 state, tool schemas, or model arguments.
 
 Supervisor orders operations by stable path depth and retains every attempt.
-Smoke receives only the target operation key. A local `retry` or
-`operation_error` is scheduled in a later round so other operations can add
-global pool evidence first; the default is at most three attempts per
-operation. Unsupported operations are recorded without retry. Local failures
-do not interrupt later operations, and a completed run with any final failures
-returns `failed/completed_with_failures`. Only shared setup, database, or
-runtime failures stop immediately as `errored/technical_error`. Queue and retry
-state are not persisted.
+Smoke receives only the target operation key. Its three normal stop reasons are
+all satisfied Supervisor outcomes, even when the measured rate remains below
+80%. An operation-scoped technical error may be scheduled in a later round so
+other operations can add global pool evidence first; the default is at most
+three attempts. Unsupported operations are recorded without retry. Shared
+setup or uncaught runtime failures stop immediately as
+`errored/technical_error`. Queue and retry state are not persisted.

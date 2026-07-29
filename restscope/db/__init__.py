@@ -12,6 +12,7 @@ from .unit_of_work import (
     SqlAlchemyResourceCatalogUnitOfWork,
     SqlAlchemyResponseValueCatalogUnitOfWork,
     SqlAlchemySchemaUnitOfWork,
+    SqlAlchemySmokeMemoryUnitOfWork,
 )
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     "SqlAlchemyGeneratorConfigUnitOfWork",
     "SqlAlchemyResourceCatalogUnitOfWork",
     "SqlAlchemyResponseValueCatalogUnitOfWork",
+    "SqlAlchemySmokeMemoryUnitOfWork",
     "UnsupportedDatabaseURLError",
     "create_engine_from_config",
     "create_engine_from_url",

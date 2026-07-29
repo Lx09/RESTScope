@@ -101,7 +101,7 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
 
     from restscope import RESTScopeApp
     from restscope.restscope_config import RESTScopeConfig
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     database = tmp_path / "app.sqlite"
     env_file = tmp_path / ".env"
@@ -111,7 +111,7 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_agent=PassingOperationSmokeAgent(),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
     try:
         app.initialize(
@@ -141,7 +141,7 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     from restscope import RESTScopeApp
     from restscope.db import DatabaseAlreadyExistsError
     from restscope.restscope_config import RESTScopeConfig
-    from tests._operation_smoke_stub import PassingOperationSmokeAgent
+    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     database = tmp_path / "shared-app.sqlite"
     env_file = tmp_path / ".env"
@@ -151,7 +151,7 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     def build_app():
         return RESTScopeApp.from_config(
             config,
-            operation_smoke_agent=PassingOperationSmokeAgent(),
+            operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         )
 
     first = build_app()
@@ -220,10 +220,10 @@ def test_smoke_batch_uses_persisted_snapshot_when_current_ir_is_different(
     assert "/replacement" not in requested_urls[0]
 
 
-def test_catalog_candidates_modify_frozen_generators_by_revision(
+def test_catalog_patches_modify_frozen_generators_by_accepted_revision(
     tmp_path: Path,
 ) -> None:
-    """Whole candidates preserve the frozen snapshot and revision lock."""
+    """Directly accepted Patches preserve the snapshot and revision lock."""
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
@@ -247,7 +247,7 @@ def test_catalog_candidates_modify_frozen_generators_by_revision(
         == "query/verbose"
     )
 
-    candidate = catalog.stage_candidate(
+    patched = catalog.apply_accepted_patch(
         operation_key=initial.operation_key,
         expected_revision=1,
         updates=[
@@ -257,12 +257,6 @@ def test_catalog_candidates_modify_frozen_generators_by_revision(
                 strategy={"type": "constant", "value": True},
             )
         ],
-        hypothesis={"kind": "test_setup"},
-    )
-    patched = catalog.accept_candidate(
-        operation_key=initial.operation_key,
-        candidate_revision=candidate.revision,
-        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
 
     assert patched.revision == 2
@@ -281,7 +275,7 @@ def test_catalog_candidates_modify_frozen_generators_by_revision(
         for node in patched.snapshot.input_nodes
         if node.canonical_path == "path/orderId"
     )
-    second_candidate = catalog.stage_candidate(
+    replaced = catalog.apply_accepted_patch(
         operation_key=patched.operation_key,
         expected_revision=2,
         updates=[
@@ -290,18 +284,12 @@ def test_catalog_candidates_modify_frozen_generators_by_revision(
                 strategy={"type": "constant", "value": 5},
             )
         ],
-        hypothesis={"kind": "test_setup"},
-    )
-    replaced = catalog.accept_candidate(
-        operation_key=patched.operation_key,
-        candidate_revision=second_candidate.revision,
-        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
 
     assert replaced.revision == 3
     assert replaced.snapshot == initial.snapshot
     with pytest.raises(GeneratorConfigRevisionConflict):
-        catalog.stage_candidate(
+        catalog.apply_accepted_patch(
             operation_key=initial.operation_key,
             expected_revision=2,
             updates=[
@@ -310,7 +298,6 @@ def test_catalog_candidates_modify_frozen_generators_by_revision(
                     inclusion_probability=0,
                 )
             ],
-            hypothesis={"kind": "stale_test_setup"},
         )
 
 

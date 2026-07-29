@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from restscope.agent.api_behavior_monitor.response_value_catalog import (
+from restscope.api_behavior_monitor.response_value_catalog import (
     PersistedResponseValueSource,
     ResponseValueCatalogRegistration,
     ResponseValueMonitorRecord,

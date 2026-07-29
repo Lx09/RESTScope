@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from restscope.agent.failure_solver import CurrentOperationHTTPProbe
-from restscope.agent.operation_smoke import OperationSmokeRequest
+from restscope.operation_smoke.failure_solver import CurrentOperationHTTPProbe
+from restscope.operation_smoke import OperationSmokeRequest
 from restscope.llm import ToolCall
 from tests._operation_smoke_plan_solve_fixtures import smoke_config
 
@@ -20,8 +20,9 @@ def test_operation_smoke_request_uses_large_output_budgets() -> None:
     assert request.max_plan_outputs == 50
     assert request.max_solve_outputs_per_todo == 50
     assert request.max_patch_outputs == 20
-    assert request.max_effect_outputs == 2
     assert request.continuation_interval == 10
+    assert not hasattr(request, "seed")
+    assert not hasattr(request, "max_effect_outputs")
     assert not hasattr(request, "max_feedback_rounds")
     assert not hasattr(request, "max_diagnosis_outputs_per_failure")
     assert not hasattr(request, "max_patch_attempts")
@@ -33,6 +34,8 @@ def test_operation_smoke_request_uses_large_output_budgets() -> None:
         "max_feedback_rounds",
         "max_diagnosis_outputs_per_failure",
         "max_patch_attempts",
+        "seed",
+        "max_effect_outputs",
     ],
 )
 def test_operation_smoke_request_rejects_legacy_budget_fields(

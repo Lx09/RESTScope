@@ -1,68 +1,44 @@
-"""Regression scenarios for testing migration. Each test documents one observable contract or failure boundary."""
+"""Regression contracts for RESTScope's single fresh-database baseline."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 
-def test_generator_config_migration_upgrades_existing_schema_catalog(tmp_path: Path) -> None:
-    """Scenario: verify that generator config migration upgrades existing schema catalog."""
-    from alembic import command
+def _alembic_config(database: Path):
+    """Point Alembic at one isolated SQLite file."""
     from alembic.config import Config
-    from sqlalchemy import inspect
 
-    from restscope.db import create_engine_from_url
     from restscope.db.migrations import MIGRATIONS_DIR
 
-    database = tmp_path / "migration.sqlite"
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
+    return config
 
-    command.upgrade(config, "0001_create_schema_sources")
-    command.upgrade(config, "head")
 
-    engine = create_engine_from_url(f"sqlite:///{database}")
-    inspector = inspect(engine)
-    assert set(inspector.get_table_names()) == {
-        "alembic_version",
-        "schemas",
-        "generator_catalog_state",
-        "operation_generator_configs",
-        "input_generator_configs",
-        "generator_config_revisions",
-        "resources",
-        "resource_aliases",
-        "operation_resource_rules",
-        "resource_identifiers",
-        "resource_operation_usages",
-        "resource_monitor_errors",
-        "response_value_monitors",
-        "response_observation_scalars",
-        "response_observations",
-        "response_value_sources",
-        "response_values",
-    }
-    assert {column["name"] for column in inspector.get_columns("input_generator_configs")} == {
-        "input_node_id",
-        "operation_key",
-        "position",
-        "inclusion_probability",
-        "strategy",
-        "created_at",
-        "updated_at",
-    }
-    assert {column["name"] for column in inspector.get_columns("operation_generator_configs")} == {
-        "operation_key",
-        "revision",
-        "snapshot",
-        "enabled",
-        "disabled_reasons",
-        "active_media_type",
-        "created_at",
-        "updated_at",
-    }
+def test_current_baseline_creates_simplified_revision_and_smoke_memory_tables(
+    tmp_path: Path,
+) -> None:
+    """Scenario: a new App database receives every current persistence area."""
+    from alembic import command
+    from sqlalchemy import inspect
+
+    from restscope.db import create_engine_from_url
+
+    database = tmp_path / "baseline.sqlite"
+    command.upgrade(_alembic_config(database), "head")
+    inspector = inspect(create_engine_from_url(f"sqlite:///{database}"))
+
+    assert {
+        "smoke_failures",
+        "smoke_failure_observations",
+        "smoke_failure_observation_links",
+        "smoke_parameters",
+        "smoke_investigations",
+        "smoke_investigation_parameter_links",
+        "smoke_applied_patches",
+    } <= set(inspector.get_table_names())
     assert {
         column["name"]
         for column in inspector.get_columns("generator_config_revisions")
@@ -70,98 +46,37 @@ def test_generator_config_migration_upgrades_existing_schema_catalog(tmp_path: P
         "operation_key",
         "revision",
         "parent_revision",
-        "lifecycle",
-        "rollback_of_revision",
-        "restored_from_revision",
-        "hypothesis",
         "config",
-        "evaluation",
-        "evaluated_at",
         "created_at",
     }
 
-    command.downgrade(config, "0001_create_schema_sources")
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", "schemas"}
 
-
-def test_generator_revision_migration_backfills_existing_active_configs(
+def test_database_stamped_with_retired_revision_is_explicitly_incompatible(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that generator revision migration backfills existing active configs."""
+    """Scenario: the deleted exploratory chain is not silently upgraded."""
+    import pytest
     from alembic import command
-    from alembic.config import Config
+    from alembic.util import CommandError
     from sqlalchemy import text
 
     from restscope.db import create_engine_from_url
-    from restscope.db.migrations import MIGRATIONS_DIR
 
-    database = tmp_path / "backfill.sqlite"
-    config = Config()
-    config.set_main_option("script_location", str(MIGRATIONS_DIR))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
-    command.upgrade(config, "0003_create_resource_catalog")
-
+    database = tmp_path / "retired.sqlite"
     engine = create_engine_from_url(f"sqlite:///{database}")
-    snapshot = {
-        "operation_key": "GET /items/{itemId}",
-        "method": "GET",
-        "path": "/items/{itemId}",
-        "available_media_types": [],
-        "request_body_node_id": None,
-        "nodes": [],
-    }
     with engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO operation_generator_configs "
-                "(operation_key, revision, snapshot, enabled, disabled_reasons, "
-                "active_media_type, created_at, updated_at) "
-                "VALUES (:operation_key, 7, :snapshot, 1, :disabled_reasons, "
-                "NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-            ),
-            {
-                "operation_key": "GET /items/{itemId}",
-                "snapshot": json.dumps(snapshot),
-                "disabled_reasons": "[]",
-            },
+                "CREATE TABLE alembic_version "
+                "(version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+            )
         )
         connection.execute(
             text(
-                "INSERT INTO input_generator_configs "
-                "(input_node_id, operation_key, position, inclusion_probability, "
-                "strategy, created_at, updated_at) "
-                "VALUES (:input_node_id, :operation_key, 0, 1.0, :strategy, "
-                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-            ),
-            {
-                "input_node_id": "input_item_id",
-                "operation_key": "GET /items/{itemId}",
-                "strategy": json.dumps(
-                    {"type": "constant", "value": "existing"}
-                ),
-            },
+                "INSERT INTO alembic_version (version_num) "
+                "VALUES ('0006_create_response_observation_history')"
+            )
         )
 
-    command.upgrade(config, "head")
-
-    with engine.connect() as connection:
-        row = connection.execute(
-            text(
-                "SELECT revision, parent_revision, lifecycle, config "
-                "FROM generator_config_revisions "
-                "WHERE operation_key = :operation_key"
-            ),
-            {"operation_key": "GET /items/{itemId}"},
-        ).mappings().one()
-    assert row["revision"] == 7
-    assert row["parent_revision"] is None
-    assert row["lifecycle"] == "accepted"
-    payload = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
-    assert payload["revision"] == 7
-    assert payload["configs"] == [
-        {
-            "input_node_id": "input_item_id",
-            "inclusion_probability": 1.0,
-            "strategy": {"type": "constant", "value": "existing"},
-        }
-    ]
+    with pytest.raises(CommandError, match="Can't locate revision"):
+        command.upgrade(_alembic_config(database), "head")

@@ -35,12 +35,14 @@ assertion.
 | `test_testing_generation.py` | Seeded Generator behavior and construction of path, query, header, cookie, and request-body values. |
 | `test_testing_constraints.py`, `test_testing_constraint_solver.py` | Constraint schema, semantic validation, normalization, partial evaluation, bounded solving, and request-tree consistency. |
 | `test_testing_execution.py`, `test_testing_failure_reporting.py` | Fail-before-send preflight, real batch reports, transport failures, and bounded diagnostic evidence. |
-| `test_operation_smoke_*` | Baseline/diagnosis/probe/group/patch/candidate/effect feedback behavior. |
+| `test_operation_smoke_coordinator.py`, `test_operation_smoke_*` | Complete-Batch coordination, Failure Memory, and Plan/Solve/Patch behavior. |
+| `test_workflow_package_boundaries.py` | Workflow locality, child-Agent seams, and deliberately small public facades. |
 | `test_parameter_patch_agent.py` | Patch trust boundary, ten-sample self-review, attempt limits, and group isolation. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |
 | `test_supervisor_operation_smoke.py` | Runtime FIFO scheduling across operations and rounds. |
 | `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, policy, operation scope, execution, and MCP adaptation. |
 | `test_observability*`, `test_phoenix_tracing_contract.py` | Redaction and trace hierarchy/attributes without changing business behavior. |
+| `test_gitlab_post_projects_smoke_live.py` | Opt-in one-operation GitLab acceptance: real project creation, 80% Smoke threshold, and Phoenix trace coverage. |
 | `test_*_live.py`, `test_project_swagger_smoke_e2e_live.py` | Opt-in checks against real local services or providers; these are not ordinary offline tests. |
 
 ## Fakes, stubs, and fixtures

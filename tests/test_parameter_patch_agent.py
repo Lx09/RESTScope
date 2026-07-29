@@ -66,7 +66,7 @@ def _sampleable_config():
 
 def _task():
     """Build one Solve-owned Patch requirement with no Group concepts."""
-    from restscope.agent.parameter_patch import ParameterPatchTask
+    from restscope.operation_smoke.parameter_patch import ParameterPatchTask
 
     return ParameterPatchTask(
         todo_id="T1",
@@ -100,7 +100,7 @@ def _constant_patch(input_name: str = "path.projectId"):
 
 def test_patch_uses_case_count_for_dynamic_samples_then_accepts() -> None:
     """Scenario: local review sample count follows the Smoke request."""
-    from restscope.agent.parameter_patch import (
+    from restscope.operation_smoke.parameter_patch import (
         ParameterPatchAgent,
         ValidatedParameterPatch,
     )
@@ -128,7 +128,7 @@ def test_patch_uses_case_count_for_dynamic_samples_then_accepts() -> None:
 
 def test_patch_cannot_change_input_outside_solve_requirement() -> None:
     """Scenario: executable safety rejects an input not authorized by Solve."""
-    from restscope.agent.parameter_patch import ParameterPatchAgent
+    from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
         [
@@ -155,7 +155,7 @@ def test_patch_cannot_change_input_outside_solve_requirement() -> None:
 
 def test_patch_accept_before_local_samples_consumes_output_and_repairs() -> None:
     """Scenario: the model must review compiler-backed samples before acceptance."""
-    from restscope.agent.parameter_patch import ParameterPatchAgent
+    from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
 
     client = StubClient(
         [
@@ -183,7 +183,7 @@ def test_patch_accept_before_local_samples_consumes_output_and_repairs() -> None
 
 def test_patch_output_budget_returns_complete_failure_to_solve() -> None:
     """Scenario: every invalid Patch output counts toward the 20-output bound."""
-    from restscope.agent.parameter_patch import (
+    from restscope.operation_smoke.parameter_patch import (
         ParameterPatchAgent,
         ParameterPatchFailure,
     )
@@ -206,7 +206,7 @@ def test_patch_output_budget_returns_complete_failure_to_solve() -> None:
 
 def test_patch_keeps_constraint_compilation_as_executable_boundary() -> None:
     """Scenario: an unsatisfiable Constraint never reaches real HTTP execution."""
-    from restscope.agent.parameter_patch import ParameterPatchAgent
+    from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
 
     impossible = {
         "action": "propose",
@@ -252,7 +252,7 @@ def test_patch_requires_case_count_within_testing_boundary() -> None:
     """Scenario: local review uses the same 1-20 case limit as Smoke execution."""
     import pytest
 
-    from restscope.agent.parameter_patch import ParameterPatchAgent
+    from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
 
     with pytest.raises(ValueError, match="case_count"):
         ParameterPatchAgent(client=StubClient([]), model=_model()).run(

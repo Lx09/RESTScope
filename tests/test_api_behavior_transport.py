@@ -10,11 +10,16 @@ from restscope.openapi_parser import OpenAPIParser
 @dataclass
 class _ResourceResult:
     status: str = "updated"
+    groups_processed: int = 0
+    identifiers_recorded: int = 0
     warning: object | None = None
 
 
 class _CapturingResourceTracker:
     def __init__(self) -> None:
+        # The coordinator shares tracing with its resource tracker in production.
+        # This local stand-in keeps the same collaborator surface.
+        self.tracing_runtime = None
         self.observations = []
 
     def observe(self, observation):
@@ -118,24 +123,22 @@ def _observation(status_code: int, body: bytes):
     )
 
 
-def test_agent_updates_ir_before_success_trackers_receive_evidence() -> None:
-    """Scenario: verify that agent updates ir before success trackers receive evidence."""
-    from restscope.agent.api_behavior_monitor import (
-        APIBehaviorMonitorAgent,
-        ResponseContractTracker,
-    )
+def test_coordinator_updates_ir_before_success_trackers_receive_evidence() -> None:
+    """Scenario: verify that coordinator updates ir before success trackers receive evidence."""
+    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
     from restscope.http_transport import TargetResponseOperationContext
 
     ir = _ir()
     resource_tracker = _CapturingResourceTracker()
     value_tracker = _CapturingValueTracker()
-    agent = APIBehaviorMonitorAgent(
+    coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(),
         resource_identifier_tracker=resource_tracker,
         response_value_tracker=value_tracker,
     )
 
-    result = agent.observe_response(
+    result = coordinator.observe_response(
         _observation(201, b'{"id":7,"name":"Ada"}'),
         TargetResponseOperationContext(
             ir=ir,
@@ -165,21 +168,19 @@ def test_agent_updates_ir_before_success_trackers_receive_evidence() -> None:
 
 def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> None:
     """Scenario: verify that behavior monitor trace uses supplied operation key consistently."""
-    from restscope.agent.api_behavior_monitor import (
-        APIBehaviorMonitorAgent,
-        ResponseContractTracker,
-    )
+    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
     from restscope.http_transport import TargetResponseOperationContext
 
     tracing = _RecordingTracing()
-    agent = APIBehaviorMonitorAgent(
+    coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(),
         resource_identifier_tracker=_CapturingResourceTracker(),
         response_value_tracker=_CapturingValueTracker(),
         tracing_runtime=tracing,
     )
 
-    result = agent.observe_response(
+    result = coordinator.observe_response(
         _observation(201, b'{"id":7}'),
         TargetResponseOperationContext(
             ir=_ir(),
@@ -197,21 +198,21 @@ def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> No
 
 def test_response_processor_keeps_private_monitor_summary() -> None:
     """Scenario: verify that response processor keeps private monitor summary."""
-    from restscope.agent.api_behavior_monitor import (
-        APIBehaviorMonitorAgent,
+    from restscope.api_behavior_monitor import (
+        APIBehaviorMonitorCoordinator,
         APIBehaviorResponseProcessor,
-        ResponseContractTracker,
     )
+    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
     from restscope.http_transport import TargetResponseOperationContext
 
     ir = _ir()
-    agent = APIBehaviorMonitorAgent(
+    coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(),
         resource_identifier_tracker=_CapturingResourceTracker(),
         response_value_tracker=_CapturingValueTracker(),
     )
 
-    result = APIBehaviorResponseProcessor(agent).process(
+    result = APIBehaviorResponseProcessor(coordinator).process(
         _observation(201, b'{"id":7,"name":"Ada"}'),
         TargetResponseOperationContext(
             ir=ir,
@@ -247,22 +248,20 @@ def test_response_processor_keeps_private_monitor_summary() -> None:
 
 def test_non_success_response_only_updates_contract() -> None:
     """Scenario: verify that non success response only updates contract."""
-    from restscope.agent.api_behavior_monitor import (
-        APIBehaviorMonitorAgent,
-        ResponseContractTracker,
-    )
+    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
     from restscope.http_transport import TargetResponseOperationContext
 
     ir = _ir()
     resource_tracker = _CapturingResourceTracker()
     value_tracker = _CapturingValueTracker()
-    agent = APIBehaviorMonitorAgent(
+    coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(),
         resource_identifier_tracker=resource_tracker,
         response_value_tracker=value_tracker,
     )
 
-    result = agent.observe_response(
+    result = coordinator.observe_response(
         _observation(400, b'{"message":"invalid"}'),
         TargetResponseOperationContext(ir=ir, operation_key="POST /users"),
     )
@@ -275,20 +274,20 @@ def test_non_success_response_only_updates_contract() -> None:
 
 def test_unknown_context_operation_preserves_stable_warning_code() -> None:
     """Scenario: verify that unknown context operation preserves stable warning code."""
-    from restscope.agent.api_behavior_monitor import (
-        APIBehaviorMonitorAgent,
+    from restscope.api_behavior_monitor import (
+        APIBehaviorMonitorCoordinator,
         APIBehaviorResponseProcessor,
-        ResponseContractTracker,
     )
+    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
     from restscope.http_transport import TargetResponseOperationContext
 
-    agent = APIBehaviorMonitorAgent(
+    coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(),
         resource_identifier_tracker=_CapturingResourceTracker(),
         response_value_tracker=_CapturingValueTracker(),
     )
 
-    result = APIBehaviorResponseProcessor(agent).process(
+    result = APIBehaviorResponseProcessor(coordinator).process(
         _observation(200, b'{"id":7}'),
         TargetResponseOperationContext(
             ir=_ir(),

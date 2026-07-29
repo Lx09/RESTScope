@@ -64,7 +64,7 @@ class GeneratorConfigRevisionConflict(GeneratorConfigError):
 
 
 class GeneratorConfigCatalog:
-    """Initialize frozen configs and own Smoke's all-or-nothing candidates."""
+    """Initialize frozen configs and append directly accepted revisions."""
 
     def __init__(self, unit_of_work_factory: GeneratorConfigUnitOfWorkFactory) -> None:
         self.unit_of_work_factory = unit_of_work_factory
@@ -98,173 +98,55 @@ class GeneratorConfigCatalog:
             uow.commit()
             return True
 
-    def stage_candidate(
+    def apply_accepted_patch(
         self,
         *,
         operation_key: str,
         expected_revision: int,
         updates: Sequence[InputGeneratorPatch],
-        hypothesis: dict,
     ) -> OperationGeneratorConfig:
-        """
-        Handle stage candidate as part of deterministic request generation, constraint
-        solving, and execution.
+        """Validate and persist one directly accepted Generator revision.
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
+        This generic catalog operation is used by non-Smoke callers and focused
+        tests.  Operation Smoke uses its wider atomic Unit of Work so this same
+        Generator write commits together with Investigation memory.
         """
         current = self._require_existing(operation_key)
-        updated, patched_node_ids = _apply_patches(current, updates)
-        _validate_configs(
-            current,
-            media_type=current.active_media_type,
-            configs=updated,
-            enforce_schema=False,
-        )
-        return self._persist_candidate(
-            current,
-            expected_revision=expected_revision,
-            configs=updated,
-            cleared_recoverable_node_ids=patched_node_ids,
-            hypothesis=dict(hypothesis),
-        )
-
-    def accept_candidate(
-        self,
-        *,
-        operation_key: str,
-        candidate_revision: int,
-        evaluation: dict,
-    ) -> OperationGeneratorConfig:
-        """Accept one complete candidate and return its executable configuration.
-
-        ``candidate_revision`` must still be the operation's current revision and
-        must still have the ``candidate`` lifecycle. Acceptance changes only that
-        lifecycle record; it never selects individual input changes.
-        """
+        if current.revision != expected_revision:
+            raise GeneratorConfigRevisionConflict(
+                expected=expected_revision,
+                actual=current.revision,
+            )
+        accepted = prepare_accepted_generator_patch(current, updates)
         with self.unit_of_work_factory() as uow:
-            current = uow.generator_configs.get(operation_key)
-            if current is None or current.revision != candidate_revision:
+            latest = uow.generator_configs.get(operation_key)
+            actual_revision = latest.revision if latest is not None else 0
+            if actual_revision != expected_revision:
                 raise GeneratorConfigRevisionConflict(
-                    expected=candidate_revision,
-                    actual=current.revision if current is not None else 0,
+                    expected=expected_revision,
+                    actual=actual_revision,
                 )
             try:
-                revision = uow.generator_configs.update_revision(
+                persisted = uow.generator_configs.replace(
                     operation_key=operation_key,
-                    revision=candidate_revision,
-                    expected_lifecycle="candidate",
-                    lifecycle="accepted",
-                    evaluation=dict(evaluation),
-                )
-            except GeneratorConfigConcurrentWrite as exc:
-                raise GeneratorConfigError(
-                    "generator_candidate_state_invalid",
-                    "Generator candidate is no longer pending evaluation",
-                ) from exc
-            uow.commit()
-            return revision.config
-
-    def reject_candidate_and_rollback(
-        self,
-        *,
-        operation_key: str,
-        candidate_revision: int,
-        evaluation: dict,
-    ) -> OperationGeneratorConfig:
-        """
-        Handle reject candidate and rollback as part of deterministic request
-        generation, constraint solving, and execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        with self.unit_of_work_factory() as uow:
-            current = uow.generator_configs.get(operation_key)
-            if current is None or current.revision != candidate_revision:
-                raise GeneratorConfigRevisionConflict(
-                    expected=candidate_revision,
-                    actual=current.revision if current is not None else 0,
-                )
-            candidate = uow.generator_configs.get_revision(
-                operation_key,
-                candidate_revision,
-            )
-            if (
-                candidate is None
-                or candidate.lifecycle != "candidate"
-                or candidate.parent_revision is None
-            ):
-                raise GeneratorConfigError(
-                    "generator_candidate_state_invalid",
-                    "Generator candidate is not pending or has no parent revision",
-                )
-            restored_from = uow.generator_configs.get_revision(
-                operation_key,
-                candidate.parent_revision,
-            )
-            if restored_from is None:
-                raise GeneratorConfigError(
-                    "generator_candidate_parent_missing",
-                    "Generator candidate parent revision does not exist",
-                )
-            try:
-                uow.generator_configs.update_revision(
-                    operation_key=operation_key,
-                    revision=candidate_revision,
-                    expected_lifecycle="candidate",
-                    lifecycle="rejected",
-                    evaluation=dict(evaluation),
-                )
-                source = restored_from.config
-                restored = uow.generator_configs.replace(
-                    operation_key=operation_key,
-                    expected_revision=candidate_revision,
-                    revision=candidate_revision + 1,
-                    snapshot=source.snapshot.model_dump(mode="json"),
-                    enabled=source.enabled,
+                    expected_revision=expected_revision,
+                    revision=accepted.revision,
+                    snapshot=accepted.snapshot.model_dump(mode="json"),
+                    enabled=accepted.enabled,
                     disabled_reasons=[
                         item.model_dump(mode="json")
-                        for item in source.disabled_reasons
+                        for item in accepted.disabled_reasons
                     ],
-                    active_media_type=source.active_media_type,
-                    configs=source.configs,
-                    lifecycle="rollback",
-                    rollback_of_revision=candidate_revision,
-                    restored_from_revision=restored_from.revision,
+                    active_media_type=accepted.active_media_type,
+                    configs=accepted.configs,
                 )
             except GeneratorConfigConcurrentWrite as exc:
                 raise GeneratorConfigRevisionConflict(
-                    expected=candidate_revision,
+                    expected=expected_revision,
                     actual=None,
                 ) from exc
             uow.commit()
-            return restored
-
-    def recover_interrupted_candidate(
-        self,
-        operation_key: str,
-    ) -> OperationGeneratorConfig:
-        """
-        Handle recover interrupted candidate as part of deterministic request
-        generation, constraint solving, and execution.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        current = self._require_existing(operation_key)
-        with self.unit_of_work_factory() as uow:
-            revision = uow.generator_configs.get_revision(
-                operation_key,
-                current.revision,
-            )
-        if revision is None or revision.lifecycle != "candidate":
-            return current
-        return self.reject_candidate_and_rollback(
-            operation_key=operation_key,
-            candidate_revision=current.revision,
-            evaluation={"stop_reason": "interrupted"},
-        )
+            return persisted
 
     def require_operation(self, operation_key: str) -> OperationGeneratorConfig:
         """
@@ -291,74 +173,6 @@ class GeneratorConfigCatalog:
                 f"No generator configuration exists for {operation_key}",
             )
         return current
-
-    def _persist_candidate(
-        self,
-        current: OperationGeneratorConfig,
-        *,
-        expected_revision: int,
-        configs: list[InputGeneratorConfig],
-        cleared_recoverable_node_ids: set[str],
-        hypothesis: dict,
-    ) -> OperationGeneratorConfig:
-        """Persist one complete pending candidate under a revision lock."""
-        if current.revision != expected_revision:
-            raise GeneratorConfigRevisionConflict(
-                expected=expected_revision,
-                actual=current.revision,
-            )
-        remaining_reasons = _contract_disabled_reasons(
-            current,
-            current.active_media_type,
-        )
-        remaining_reasons.extend(
-            reason
-            for reason in current.disabled_reasons
-            if reason.recoverable
-            and reason.input_node_id not in cleared_recoverable_node_ids
-        )
-        remaining_reasons = list(
-            {
-                (
-                    item.code,
-                    item.message,
-                    item.recoverable,
-                    item.input_node_id,
-                ): item
-                for item in remaining_reasons
-            }.values()
-        )
-        with self.unit_of_work_factory() as uow:
-            latest = uow.generator_configs.get(current.operation_key)
-            actual_revision = latest.revision if latest is not None else 0
-            if actual_revision != expected_revision:
-                raise GeneratorConfigRevisionConflict(
-                    expected=expected_revision,
-                    actual=actual_revision,
-                )
-            try:
-                record = uow.generator_configs.replace(
-                    operation_key=current.operation_key,
-                    expected_revision=expected_revision,
-                    revision=expected_revision + 1,
-                    snapshot=current.snapshot.model_dump(mode="json"),
-                    enabled=not remaining_reasons,
-                    disabled_reasons=[
-                        item.model_dump(mode="json") for item in remaining_reasons
-                    ],
-                    active_media_type=current.active_media_type,
-                    configs=configs,
-                    lifecycle="candidate",
-                    hypothesis=hypothesis,
-                )
-            except GeneratorConfigConcurrentWrite as exc:
-                raise GeneratorConfigRevisionConflict(
-                    expected=expected_revision,
-                    actual=None,
-                ) from exc
-            uow.commit()
-            return record
-
 
 def _apply_patches(
     current: OperationGeneratorConfig,
@@ -517,6 +331,57 @@ def preview_generator_patch(
         enforce_schema=False,
     )
     return current.model_copy(update={"configs": updated})
+
+
+def prepare_accepted_generator_patch(
+    current: OperationGeneratorConfig,
+    updates: Sequence[InputGeneratorPatch],
+) -> OperationGeneratorConfig:
+    """Build the next directly accepted revision without writing a database.
+
+    Operation Smoke uses this pure step before opening its atomic persistence
+    transaction.  It applies presence closure, validates every resulting input
+    config, and clears only recoverable disabled reasons owned by patched
+    inputs.  The caller remains responsible for the revision-lock write.
+    """
+    updated, patched_node_ids = _apply_patches(current, updates)
+    _validate_configs(
+        current,
+        media_type=current.active_media_type,
+        configs=updated,
+        enforce_schema=False,
+    )
+    remaining_reasons = _contract_disabled_reasons(
+        current,
+        current.active_media_type,
+    )
+    remaining_reasons.extend(
+        reason
+        for reason in current.disabled_reasons
+        if reason.recoverable
+        and reason.input_node_id not in patched_node_ids
+    )
+    # The same condition can come from the frozen contract and the previous
+    # catalog.  Keep one readable reason rather than accumulating duplicates.
+    unique_reasons = list(
+        {
+            (
+                item.code,
+                item.message,
+                item.recoverable,
+                item.input_node_id,
+            ): item
+            for item in remaining_reasons
+        }.values()
+    )
+    return current.model_copy(
+        update={
+            "revision": current.revision + 1,
+            "configs": updated,
+            "enabled": not unique_reasons,
+            "disabled_reasons": unique_reasons,
+        }
+    )
 
 
 def _validate_initial_record(

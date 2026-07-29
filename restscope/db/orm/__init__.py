@@ -22,6 +22,15 @@ from .response_value_orm import (
     ResponseValueSourceORM,
 )
 from .schema_orm import SchemaORM
+from .smoke_memory_orm import (
+    SmokeAppliedPatchORM,
+    SmokeFailureObservationORM,
+    SmokeFailureORM,
+    SmokeInvestigationORM,
+    SmokeInvestigationParameterORM,
+    SmokeObservationORM,
+    SmokeParameterORM,
+)
 
 __all__ = [
     "GeneratorCatalogStateORM",
@@ -40,4 +49,11 @@ __all__ = [
     "ResponseValueORM",
     "ResponseValueSourceORM",
     "SchemaORM",
+    "SmokeAppliedPatchORM",
+    "SmokeFailureObservationORM",
+    "SmokeFailureORM",
+    "SmokeInvestigationORM",
+    "SmokeInvestigationParameterORM",
+    "SmokeObservationORM",
+    "SmokeParameterORM",
 ]

@@ -48,18 +48,12 @@ def _configured_catalog(tmp_path: Path, ir):
 
 
 def _accept_patch(catalog, operation_key: str, updates):
-    """Apply test-only setup through the same whole-candidate path as Smoke."""
+    """Apply test-only setup as one directly accepted revision."""
     current = catalog.require_operation(operation_key)
-    candidate = catalog.stage_candidate(
+    return catalog.apply_accepted_patch(
         operation_key=operation_key,
         expected_revision=current.revision,
         updates=updates,
-        hypothesis={"kind": "test_setup"},
-    )
-    return catalog.accept_candidate(
-        operation_key=operation_key,
-        candidate_revision=candidate.revision,
-        evaluation={"validation_status": "accepted", "kind": "test_setup"},
     )
 
 
@@ -223,7 +217,13 @@ def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
         ],
         "truncated": False,
     }
-    assert "runtime-secret" in report.model_dump_json()
+    # Trusted authentication reaches the real request but never crosses the
+    # public Batch-report boundary consumed by traces and Planner evidence.
+    assert "runtime-secret" not in report.model_dump_json()
+    assert all(
+        case.request.headers["Authorization"] == "[redacted]"
+        for case in report.cases
+    )
     private = {
         item.case_id: item for item in outcome.case_evidence
     }

@@ -6,6 +6,7 @@ from .catalog import (
     GeneratorConfigRevisionConflict,
     expand_generator_patch_presence,
     preview_generator_patch,
+    prepare_accepted_generator_patch,
 )
 from .constraints import (
     AndConstraint,
@@ -117,6 +118,7 @@ __all__ = [
     "generate_strategy_value",
     "normalize_constraint_set",
     "preview_generator_patch",
+    "prepare_accepted_generator_patch",
     "project_generated_input_value",
     "referenced_input_node_ids",
     "solve_input_overrides",
