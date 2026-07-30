@@ -1,11 +1,11 @@
-scenario_id: plan-reuse-history-nondebuggable
-title: Reuse known failure and retain non-debuggable evidence
+scenario_id: plan-reuse-history-and-transport
+title: Reuse a known failure and separate a transport failure
 provenance:
   kind: trace
   source: restscope-project-swagger-smoke-20260727T010238Z-9712a1cf/spans-complete.json
   trace_id: bc870e1e64d11b290a11c70fb497a01c
   span_ids: []
-  rationale: The source run alternated known failures with inconclusive evidence.
+  rationale: The source run alternated a known failure with a transport failure.
 tags: [memory]
 input:
   request:
@@ -59,6 +59,6 @@ expected:
   status: planned
   case_groups:
     - [known-missing-project]
+    - [connection-reset]
   candidate_failure_ids: [known-missing-project-failure]
   reused_failure_ids: [known-missing-project-failure]
-  non_debuggable_case_ids: [connection-reset]

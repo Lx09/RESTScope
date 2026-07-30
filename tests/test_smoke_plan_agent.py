@@ -349,6 +349,40 @@ def test_plan_uses_an_explicit_complete_system_prompt_override() -> None:
     )
 
 
+def test_plan_prompt_keeps_actionable_failures_debuggable() -> None:
+    """Scenario: generated-value and transport evidence must reach Solve."""
+    from restscope.operation_smoke.plan.agent import _system_prompt
+
+    prompt = _system_prompt()
+
+    assert (
+        "Rejected generated values, target validation failures, response "
+        "mismatches, missing resources, and transport errors are debuggable."
+        in prompt
+    )
+    assert (
+        "non_debuggable is only for evidence that no safe current "
+        "investigation can clarify."
+        in prompt
+    )
+    assert (
+        "Use action=process when any classification has disposition=debug; "
+        "otherwise use action=no_debug."
+        in prompt
+    )
+    assert (
+        "Use disposition=debug without disposition_reason for debuggable "
+        "evidence. Use disposition=non_debuggable with a concrete "
+        "disposition_reason only for non-debuggable evidence."
+        in prompt
+    )
+    assert (
+        "reason must be a non-empty string summarizing the classification; "
+        "never return null."
+        in prompt
+    )
+
+
 def test_plan_caps_a_large_retrieval_result_at_24_candidate_cards() -> None:
     """Scenario: hundreds of historical Failures cannot flood Planner context."""
     from restscope.operation_smoke.plan import SmokePlanAgent

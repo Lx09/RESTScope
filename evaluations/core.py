@@ -30,8 +30,10 @@ def sync_suite(client: Any, suite: EvaluationSuite) -> Any:
         Phoenix's Dataset object for the newly synchronized version.
 
     Raises:
-        Validation or Phoenix client errors unchanged, because either means the
-        Experiment cannot reliably start.
+        Validation or Phoenix client errors unchanged. Raises ``RuntimeError``
+        when Phoenix's returned version is not an exact mirror of the current
+        repository examples, because an Experiment must never run against
+        pre-refactor inputs or expected outputs.
     """
     examples = []
     for scenario in suite.load_scenarios():
@@ -45,7 +47,7 @@ def sync_suite(client: Any, suite: EvaluationSuite) -> Any:
                 "splits": example.splits,
             }
         )
-    return client.datasets.create_dataset(
+    dataset = client.datasets.create_dataset(
         name=suite.dataset_name,
         examples=examples,
         dataset_description=(
@@ -53,6 +55,74 @@ def sync_suite(client: Any, suite: EvaluationSuite) -> Any:
             f"RESTScope {suite.agent_name} Agent."
         ),
     )
+    _assert_exact_dataset_mirror(
+        dataset=dataset,
+        expected_examples=examples,
+        agent_name=suite.agent_name,
+    )
+    return dataset
+
+
+def _assert_exact_dataset_mirror(
+    *,
+    dataset: Any,
+    expected_examples: list[dict[str, Any]],
+    agent_name: str,
+) -> None:
+    """Reject a Phoenix version that differs from repository scenarios.
+
+    Phoenix returns the examples stored in the version created by the upload.
+    Comparing their stable IDs and model-facing fields makes deletion and
+    replacement observable instead of trusting a successful HTTP status alone.
+
+    Args:
+        dataset: Dataset version returned by the official Phoenix client.
+        expected_examples: Fully rendered repository examples sent to Phoenix.
+        agent_name: Human-readable Agent name included in failure messages.
+
+    Returns:
+        Nothing. The function is an assertion boundary and does not mutate the
+        Dataset or repository examples.
+
+    Raises:
+        RuntimeError: Phoenix retained an old ID, omitted a current ID, returned
+            duplicate IDs, or stored stale input, output, or metadata content.
+    """
+    actual_examples = list(dataset.examples)
+    expected_by_id = {item["id"]: item for item in expected_examples}
+    actual_by_id = {item["id"]: item for item in actual_examples}
+
+    # A set comparison proves that removed scenarios disappeared and every
+    # current repository scenario reached the newly selected Dataset version.
+    missing_ids = sorted(set(expected_by_id) - set(actual_by_id))
+    unexpected_ids = sorted(set(actual_by_id) - set(expected_by_id))
+    if missing_ids or unexpected_ids:
+        raise RuntimeError(
+            f"{agent_name} Dataset sync returned mismatched example IDs; "
+            f"missing example IDs: {missing_ids}; "
+            f"unexpected example IDs: {unexpected_ids}"
+        )
+    if len(actual_examples) != len(actual_by_id):
+        raise RuntimeError(
+            f"{agent_name} Dataset sync returned duplicate example IDs"
+        )
+
+    # Phoenix does not include split labels on each returned example. The
+    # model-facing input, reference output, and metadata are available and must
+    # match exactly before an Experiment may start.
+    stale_ids = sorted(
+        scenario_id
+        for scenario_id, expected in expected_by_id.items()
+        if any(
+            actual_by_id[scenario_id].get(field) != expected[field]
+            for field in ("input", "output", "metadata")
+        )
+    )
+    if stale_ids:
+        raise RuntimeError(
+            f"{agent_name} Dataset sync returned stale example content for "
+            f"IDs: {stale_ids}"
+        )
 
 
 @dataclass(frozen=True)

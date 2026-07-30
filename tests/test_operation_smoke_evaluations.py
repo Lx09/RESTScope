@@ -87,7 +87,11 @@ def test_dataset_sync_uses_stable_ids_references_and_scenario_splits() -> None:
             return type(
                 "Dataset",
                 (),
-                {"name": kwargs["name"], "version_id": "version-1"},
+                {
+                    "name": kwargs["name"],
+                    "version_id": "version-1",
+                    "examples": kwargs["examples"],
+                },
             )()
 
     datasets = RecordingDatasets()
@@ -101,7 +105,7 @@ def test_dataset_sync_uses_stable_ids_references_and_scenario_splits() -> None:
     assert call["name"] == "restscope-operation-smoke-plan"
     assert [item["id"] for item in call["examples"]] == [
         "plan-merge-duplicate-observations",
-        "plan-reuse-history-nondebuggable",
+        "plan-reuse-history-and-transport",
         "plan-split-independent-failures",
     ]
     first = call["examples"][0]
@@ -112,6 +116,67 @@ def test_dataset_sync_uses_stable_ids_references_and_scenario_splits() -> None:
     )
     assert first["id"] in first["splits"]
     assert "acceptance" in first["splits"]
+
+
+def test_dataset_sync_rejects_a_result_that_still_contains_old_examples() -> None:
+    """Scenario: a full mirror cannot silently retain a pre-refactor example."""
+    from evaluations.core import sync_suite
+    from evaluations.registry import SUITES
+
+    class StaleDatasets:
+        """Return the requested examples plus one old row Phoenix failed to delete."""
+
+        def create_dataset(self, **kwargs):
+            """Model an incomplete server-side update of the current version."""
+            stale_example = {
+                "id": "plan-retired-memory-tool-scenario",
+                "input": {"operation": "GET /retired"},
+                "output": {"memory_failure_ids": ["old-failure"]},
+                "metadata": {"source": "before-project-agent-context"},
+            }
+            return type(
+                "Dataset",
+                (),
+                {
+                    "version_id": "version-stale",
+                    "examples": [*kwargs["examples"], stale_example],
+                },
+            )()
+
+    client = type("Client", (), {"datasets": StaleDatasets()})()
+
+    with pytest.raises(RuntimeError, match="unexpected example IDs"):
+        sync_suite(client, SUITES["plan"])
+
+
+def test_dataset_sync_rejects_old_content_under_a_current_scenario_id() -> None:
+    """Scenario: a stable ID cannot hide a pre-refactor expected output."""
+    from copy import deepcopy
+
+    from evaluations.core import sync_suite
+    from evaluations.registry import SUITES
+
+    class StaleDatasets:
+        """Return current IDs while preserving one obsolete Planner field."""
+
+        def create_dataset(self, **kwargs):
+            """Model the stale Plan Dataset observed before this repair."""
+            examples = deepcopy(kwargs["examples"])
+            examples[0]["output"] = {
+                "status": "planned",
+                "memory_failure_ids": [],
+                "case_groups": [["missing-project-a", "missing-project-b"]],
+            }
+            return type(
+                "Dataset",
+                (),
+                {"version_id": "version-stale", "examples": examples},
+            )()
+
+    client = type("Client", (), {"datasets": StaleDatasets()})()
+
+    with pytest.raises(RuntimeError, match="stale example content"):
+        sync_suite(client, SUITES["plan"])
 
 
 def test_plan_code_evaluators_report_one_zero_and_not_applicable() -> None:
@@ -319,7 +384,14 @@ def test_run_syncs_filters_and_records_reproducible_experiment_metadata() -> Non
         def create_dataset(self, **kwargs):
             """Return the synchronized version after retaining all examples."""
             self.created.append(kwargs)
-            return type("Dataset", (), {"version_id": "version-9"})()
+            return type(
+                "Dataset",
+                (),
+                {
+                    "version_id": "version-9",
+                    "examples": kwargs["examples"],
+                },
+            )()
 
         def get_dataset(self, **kwargs):
             """Return a one-scenario marker and retain the split filter."""
