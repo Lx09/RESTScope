@@ -339,3 +339,29 @@ def test_forged_memory_ref_consumes_budget_without_reading_or_writing() -> None:
     assert "F99" in plan.reason
     assert memory.lookups == []
     assert memory.writes == []
+
+
+def test_plan_uses_an_explicit_complete_system_prompt_override() -> None:
+    """Scenario: evaluation can compare a candidate without changing production."""
+    from restscope.operation_smoke.plan import SmokePlanAgent
+
+    client = StubClient(
+        [
+            {
+                "action": "process",
+                "classifications": [_classification()],
+                "reason": "One known Failure covers both observations.",
+            }
+        ]
+    )
+
+    SmokePlanAgent(
+        client=client,
+        model=_model(),
+        memory=StubMemory(),
+        system_prompt="Candidate Planner instructions.",
+    ).plan(_request())
+
+    assert client.requests[0].messages[0].content == (
+        "Candidate Planner instructions."
+    )

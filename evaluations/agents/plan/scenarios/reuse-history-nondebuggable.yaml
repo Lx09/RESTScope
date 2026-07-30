@@ -1,0 +1,64 @@
+scenario_id: plan-reuse-history-nondebuggable
+title: Reuse known failure and retain non-debuggable evidence
+provenance:
+  kind: trace
+  source: restscope-project-swagger-smoke-20260727T010238Z-9712a1cf/spans-complete.json
+  trace_id: bc870e1e64d11b290a11c70fb497a01c
+  span_ids: []
+  rationale: The source run alternated known failures with inconclusive evidence.
+tags: [memory]
+input:
+  request:
+    operation_key: GET /projects/{projectId}
+    round_number: 3
+    batch_run_id: eval-plan-memory
+    batch:
+      status_code_counts: {"404": 1}
+      transport_error_count: 1
+    coded_cases:
+      C1:
+        case_id: known-missing-project
+        failure: unexpected status
+        request:
+          path_parameters: {projectId: 900003}
+        response: {status_code: 404, media_type: application/json}
+      C2:
+        case_id: connection-reset
+        failure: transport error
+        request:
+          path_parameters: {projectId: 1}
+        response: {error: connection reset before response headers}
+    failed_case_codes: [C1, C2]
+  catalog:
+    - failure_id: known-missing-project-failure
+      summary: Unknown project identifiers return 404.
+      observation_count: 2
+      investigation_count: 1
+      applied_patch_count: 0
+  histories:
+    - failure_id: known-missing-project-failure
+      summary: Unknown project identifiers return 404.
+      observations:
+        - batch_run_id: prior-batch
+          round_number: 2
+          observation_key: prior-missing-project
+          trigger: unexpected status
+          response_summary: {status_code: 404}
+          necessary_values:
+            path_parameters: {projectId: 900000}
+          disposition: planned
+      investigations:
+        - investigation_id: prior-investigation
+          round_number: 2
+          outcome: no_patch
+          trigger_conditions: projectId does not identify an existing project
+          root_cause: the generated identifier is absent from the target
+          solution: use a known identifier source when one becomes available
+          evidence_source: batch
+expected:
+  status: planned
+  case_groups:
+    - [known-missing-project]
+  memory_failure_ids: [known-missing-project-failure]
+  reused_failure_ids: [known-missing-project-failure]
+  non_debuggable_case_ids: [connection-reset]

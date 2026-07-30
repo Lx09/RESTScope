@@ -550,3 +550,25 @@ def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
     assert outcome.status == "applied_patch"
     assert outcome.outputs_used == 5
     assert len(client.requests) == 3
+
+
+def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:
+    """Scenario: evaluation replaces only this Investigation's instructions."""
+    from restscope.operation_smoke.failure_solver import FailureSolveAgent
+
+    client = StubClient([_terminal("no_patch")])
+    agent = FailureSolveAgent(
+        client=client,
+        model=_model(),
+        http_probe=StubProbe(),
+        memory=StubMemory(),
+        patch_agent_factory=StubPatchFactory([]),
+        patch_application=StubPatchApplication(),
+        system_prompt="Candidate Solve instructions.",
+    )
+
+    _start(agent).advance()
+
+    assert client.requests[0].messages[0].content == (
+        "Candidate Solve instructions."
+    )

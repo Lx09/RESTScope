@@ -82,13 +82,20 @@ class SmokePlanAgent:
         client: LLMClient,
         model: LLMModelConfig,
         memory: PlannerMemory,
+        system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Store the model, Memory Interface, validator, and tracing boundary."""
+        """Store the model, Memory Interface, prompt, and tracing boundary.
+
+        ``system_prompt`` replaces the complete instruction message only for an
+        explicit evaluation. Production composition leaves it unset and keeps
+        using the built-in prompt.
+        """
         self.client = client
         self.model = model
         self.memory = memory
+        self.system_prompt = system_prompt or _system_prompt()
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
@@ -122,7 +129,7 @@ class SmokePlanAgent:
             model=self.model,
         )
         messages = [
-            LLMMessage(role="system", content=_system_prompt()),
+            LLMMessage(role="system", content=self.system_prompt),
             LLMMessage(
                 role="user",
                 content=json.dumps(
