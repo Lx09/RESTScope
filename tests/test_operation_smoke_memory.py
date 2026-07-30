@@ -80,12 +80,102 @@ def test_plan_memory_reuses_failure_and_supports_many_failure_observation_links(
     )
 
     catalog = memory.list_operation_failures("POST /projects")
+    from restscope.operation_smoke.memory import FailureRetrievalObservation
+
+    candidates = memory.find_failure_candidates(
+        "POST /projects",
+        [
+            FailureRetrievalObservation(
+                case_code="C1",
+                failure_kind="name is empty",
+                status_code=400,
+                input_paths=["body.name"],
+                error_signature="name is empty",
+                keywords=["name", "empty"],
+            )
+        ],
+    )
+    status_only = memory.find_failure_candidates(
+        "POST /projects",
+        [
+            FailureRetrievalObservation(
+                case_code="C1",
+                failure_kind="unexpected status",
+                status_code=400,
+                input_paths=["body.unrelated"],
+            )
+        ],
+    )
 
     assert len(catalog) == 2
     assert catalog[0].failure_id == first.failures[0].failure_id
     assert reused.failures[0].failure_id == first.failures[0].failure_id
     assert catalog[0].observation_count == 2
     assert catalog[1].observation_count == 1
+    # The same stored Observation supports both Failures in this scenario, so
+    # both are legitimate candidates. Stable ranking still puts the direct
+    # name Failure first.
+    assert candidates[0].failure_id == first.failures[0].failure_id
+    assert {item.failure_id for item in candidates} == {
+        first.failures[0].failure_id,
+        first.failures[1].failure_id,
+    }
+    assert candidates[0].matched_case_codes == ["C1"]
+    assert status_only == []
+
+
+def test_candidate_retrieval_searches_stored_response_error_signatures() -> None:
+    """A service error code is reusable even when Failure prose is generic."""
+    from restscope.operation_smoke.memory import (
+        FailureClassificationWrite,
+        FailureObservationWrite,
+        FailureRetrievalObservation,
+        PlanMemoryWrite,
+    )
+
+    memory = _memory()
+    recorded = memory.record_plan(
+        PlanMemoryWrite(
+            operation_key="POST /projects",
+            round_number=1,
+            batch_run_id="batch-1",
+            classifications=[
+                FailureClassificationWrite(
+                    summary="The service rejected a project request.",
+                    observations=[
+                        FailureObservationWrite(
+                            observation_key="case-1",
+                            trigger="unexpected-status",
+                            response_summary={
+                                "status_code": 404,
+                                "error_code": "namespace_not_found",
+                            },
+                            necessary_values={"body.namespace_id": 900001},
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+
+    candidates = memory.find_failure_candidates(
+        "POST /projects",
+        [
+            FailureRetrievalObservation(
+                case_code="C1",
+                failure_kind="unexpected-status",
+                status_code=404,
+                input_paths=["body.unrelated"],
+                error_signature="namespace_not_found",
+                keywords=["namespace_not_found"],
+            )
+        ],
+    )
+
+    assert [candidate.failure_id for candidate in candidates] == [
+        recorded.failures[0].failure_id
+    ]
+    assert "exact-error-signature" in candidates[0].match_reasons
 
 
 def test_investigation_memory_queries_by_failure_and_parameter() -> None:

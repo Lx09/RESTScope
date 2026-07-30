@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
+from restscope.llm import LLMModelConfig, LLMResponse
 from restscope.operation_smoke.memory import (
     FailureCatalogEntry,
-    FailureHistory,
+    FailureCandidate,
     InvestigationMemory,
     RecordedFailure,
     RecordedPlan,
@@ -56,28 +56,26 @@ class StubMemory:
                 applied_patch_count=1,
             ),
         ]
-        self.lookups: list[tuple[str, list[str]]] = []
+        self.retrievals = []
         self.writes = []
 
-    def list_operation_failures(self, operation_key):
-        """Return the compact directory for the requested operation."""
+    def find_failure_candidates(self, operation_key, observations):
+        """Return ranked candidates and retain the typed retrieval observations."""
         assert operation_key == "GET /projects/{projectId}"
-        return list(self.catalog)
-
-    def lookup_failure_history(self, operation_key, failure_ids):
-        """Return complete histories while recording resolved database IDs."""
-        self.lookups.append((operation_key, list(failure_ids)))
+        self.retrievals.append((operation_key, list(observations)))
         return [
-            FailureHistory(
-                failure_id=failure_id,
-                summary=next(
-                    item.summary
-                    for item in self.catalog
-                    if item.failure_id == failure_id
-                ),
-                investigations=[
+            FailureCandidate(
+                failure_id=item.failure_id,
+                summary=item.summary,
+                matched_case_codes=["C1", "C2"],
+                match_reasons=["same-status-kind-and-input"],
+                observation_count=item.observation_count,
+                investigation_count=item.investigation_count,
+                applied_patch_count=item.applied_patch_count,
+                last_seen_round=1,
+                recent_investigations=[
                     InvestigationMemory(
-                        investigation_id=f"investigation-{failure_id}",
+                        investigation_id=f"investigation-{item.failure_id}",
                         round_number=1,
                         outcome="no_patch",
                         trigger_conditions="identifier is unknown",
@@ -87,7 +85,7 @@ class StubMemory:
                     )
                 ],
             )
-            for failure_id in failure_ids
+            for item in self.catalog
         ]
 
     def record_plan(self, write):
@@ -171,23 +169,12 @@ def _classification(
     return result
 
 
-def test_plan_queries_multiple_failure_histories_without_exposing_database_ids() -> None:
-    """Scenario: model aliases resolve to storage IDs only inside runtime code."""
+def test_plan_receives_ranked_candidates_without_a_memory_tool_or_database_ids() -> None:
+    """Scenario: runtime retrieves candidates before the one-output Plan call."""
     from restscope.operation_smoke.plan import SmokePlanAgent
 
     client = StubClient(
         [
-            LLMResponse(
-                provider="stub",
-                model="think-model",
-                tool_calls=[
-                    ToolCall(
-                        id="call-1",
-                        name="lookup_failure_history",
-                        arguments={"failure_refs": ["F1", "F2"]},
-                    )
-                ],
-            ),
             {
                 "action": "process",
                 "classifications": [_classification()],
@@ -204,17 +191,17 @@ def test_plan_queries_multiple_failure_histories_without_exposing_database_ids()
     ).plan(_request())
 
     assert plan.status == "planned"
-    assert plan.outputs_used == 2
-    assert memory.lookups == [
-        (
-            "GET /projects/{projectId}",
-            ["db-failure-a", "db-failure-b"],
-        )
-    ]
-    tool_message = client.requests[1].messages[-1]
-    assert tool_message.role == "tool"
-    assert '"failure_ref":"F1"' in tool_message.content
-    assert "db-failure-a" not in tool_message.content
+    assert plan.outputs_used == 1
+    assert len(memory.retrievals) == 1
+    assert [item.case_code for item in memory.retrievals[0][1]] == ["C1", "C2"]
+    request = client.requests[0]
+    assert request.tools == []
+    assert request.tool_choice == "none"
+    prompt = request.messages[1].content
+    assert "F1" in prompt
+    assert "C3" not in prompt
+    assert "db-failure-a" not in prompt
+    assert '{"' not in prompt
 
 
 def test_valid_plan_is_written_once_and_expanded_to_stable_failure_todo() -> None:
@@ -310,25 +297,21 @@ def test_non_debuggable_classification_records_reason_and_returns_no_debug() -> 
     )
 
 
-def test_forged_memory_ref_consumes_budget_without_reading_or_writing() -> None:
-    """Scenario: a model cannot query a Failure outside its supplied catalog."""
+def test_forged_candidate_ref_consumes_budget_without_writing() -> None:
+    """Scenario: a model cannot reuse a Failure outside ranked candidates."""
     from restscope.operation_smoke.plan import SmokePlanAgent
 
     memory = StubMemory()
     plan = SmokePlanAgent(
         client=StubClient(
             [
-                LLMResponse(
-                    provider="stub",
-                    model="think-model",
-                    tool_calls=[
-                        ToolCall(
-                            id="call-forged",
-                            name="lookup_failure_history",
-                            arguments={"failure_refs": ["F99"]},
-                        )
+                {
+                    "action": "process",
+                    "classifications": [
+                        _classification(failure_ref="F99")
                     ],
-                )
+                    "reason": "Forged candidate.",
+                }
             ]
         ),
         model=_model(),
@@ -337,7 +320,6 @@ def test_forged_memory_ref_consumes_budget_without_reading_or_writing() -> None:
 
     assert plan.status == "plan_budget_exhausted"
     assert "F99" in plan.reason
-    assert memory.lookups == []
     assert memory.writes == []
 
 
@@ -365,3 +347,47 @@ def test_plan_uses_an_explicit_complete_system_prompt_override() -> None:
     assert client.requests[0].messages[0].content == (
         "Candidate Planner instructions."
     )
+
+
+def test_plan_caps_a_large_retrieval_result_at_24_candidate_cards() -> None:
+    """Scenario: hundreds of historical Failures cannot flood Planner context."""
+    from restscope.operation_smoke.plan import SmokePlanAgent
+
+    class LargeCandidateMemory(StubMemory):
+        """Return more candidates than the public Planner prompt allowance."""
+
+        def find_failure_candidates(self, operation_key, observations):
+            self.retrievals.append((operation_key, list(observations)))
+            return [
+                FailureCandidate(
+                    failure_id=f"failure-{index}",
+                    summary=f"Historical Failure {index}.",
+                    matched_case_codes=["C1"],
+                    match_reasons=["shared-terms:project"],
+                    observation_count=1,
+                    investigation_count=0,
+                    applied_patch_count=0,
+                    last_seen_round=1,
+                )
+                for index in range(1, 501)
+            ]
+
+    client = StubClient(
+        [
+            {
+                "action": "process",
+                "classifications": [_classification(failure_ref="F1")],
+                "reason": "Reuse the first ranked candidate.",
+            }
+        ]
+    )
+    SmokePlanAgent(
+        client=client,
+        model=_model(),
+        memory=LargeCandidateMemory(),
+    ).plan(_request())
+
+    prompt = client.requests[0].messages[1].content
+    assert "F24 |" in prompt
+    assert "F25 |" not in prompt
+    assert "maximum=int:24" in prompt

@@ -1,43 +1,35 @@
-"""Classify one Batch using stable Failure memory and optional history lookup.
+"""Classify one Batch using a small set of retrieved historical Failures.
 
 The LLM owns the semantic decision: whether observations describe the same
 Failure, whether an existing Failure should be reused, and whether work is
-debuggable.  Runtime code owns identity and durability: it creates temporary
-references, rejects forged references, checks complete observation coverage,
-and writes memory only after the final output is valid.
+debuggable. Runtime code retrieves candidates, owns identity and durability:
+it creates temporary references, rejects forged references, checks complete
+observation coverage, and writes memory only after the final output is valid.
 """
 
 from __future__ import annotations
 
-import json
+import re
 from typing import Protocol
 
+from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
-    LLMMessage,
     LLMModelConfig,
     LLMRequest,
     LLMResponse,
     OutputValidator,
-    ToolCall,
-    ToolSpec,
 )
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.memory import (
-    FailureCatalogEntry,
+    FailureCandidate,
     FailureClassificationWrite,
-    FailureHistory,
     FailureObservationWrite,
+    FailureRetrievalObservation,
     PlanMemoryWrite,
     RecordedPlan,
 )
-from restscope.operation_smoke.prompt_context import (
-    fit_message_context,
-    fit_prompt_context,
-)
-
 from .schemas import (
-    FailureCatalogPromptEntry,
     FailureClassificationDecision,
     FailureTodo,
     NonDebuggableFailure,
@@ -46,26 +38,15 @@ from .schemas import (
     SmokeRoundPlan,
 )
 
-
-_LOOKUP_TOOL_NAME = "lookup_failure_history"
-
-
 class PlannerMemory(Protocol):
     """Describe the read/write memory operations owned by Planner runtime."""
 
-    def list_operation_failures(
+    def find_failure_candidates(
         self,
         operation_key: str,
-    ) -> list[FailureCatalogEntry]:
-        """Return the compact historical catalog included in the first prompt."""
-        ...
-
-    def lookup_failure_history(
-        self,
-        operation_key: str,
-        failure_ids: list[str],
-    ) -> list[FailureHistory]:
-        """Resolve validated durable Failure IDs for the read-only memory tool."""
+        observations: list[FailureRetrievalObservation],
+    ) -> list[FailureCandidate]:
+        """Return only plausible operation-scoped Failures for current cases."""
         ...
 
     def record_plan(self, write: PlanMemoryWrite) -> RecordedPlan:
@@ -107,39 +88,45 @@ class SmokePlanAgent:
     ) -> SmokeRoundPlan:
         """Classify all failed observations and persist only a valid final Plan.
 
-        Every LLM response—including a response that asks for memory—consumes
-        one output.  The memory tool itself is read-only.  Persistence occurs
-        exactly once, after DTO and semantic validation have both succeeded.
+        Runtime retrieves a bounded candidate set before the first output, so a
+        normal classification needs one model response and Planner exposes no
+        memory tool. Persistence occurs exactly once, after DTO and semantic
+        validation have both succeeded.
         """
         if not 1 <= max_outputs <= 50:
             raise ValueError("max_outputs must be between 1 and 50")
         if not self.model.enabled:
             raise RuntimeError("The Operation Smoke Plan model is not configured")
 
-        catalog = self.memory.list_operation_failures(request.operation_key)
-        catalog_prompt, failure_id_by_ref = _catalog_aliases(catalog)
-        fitted = fit_prompt_context(
-            required={
-                **request.model_dump(mode="json"),
-                "failure_catalog": [
-                    item.model_dump(mode="json") for item in catalog_prompt
-                ],
-            },
-            history=[],
-            model=self.model,
-        )
-        messages = [
-            LLMMessage(role="system", content=self.system_prompt),
-            LLMMessage(
-                role="user",
-                content=json.dumps(
-                    fitted.payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    default=str,
-                ),
-            ),
+        retrieval_observations = [
+            _retrieval_observation(code, request.coded_cases[code])
+            for code in request.failed_case_codes
         ]
+        candidates = self.memory.find_failure_candidates(
+            request.operation_key,
+            retrieval_observations,
+        )
+        candidates = candidates[:24]
+        failure_id_by_ref = {
+            f"F{index}": candidate.failure_id
+            for index, candidate in enumerate(candidates, start=1)
+        }
+        rendered = _planner_context_text(
+            request=request,
+            candidates=candidates,
+        )
+        context = AgentContext(
+            system=self.system_prompt,
+            user=rendered.text,
+            limits=ContextLimits(
+                system_chars=2_500,
+                initial_user_chars=18_000,
+                feedback_chars=4_000,
+                conversation_chars=24_000,
+                required_output_tokens=self.model.max_tokens,
+            ),
+            metrics=rendered.metrics,
+        )
         last_errors: list[str] = []
 
         with self.tracing_runtime.span(
@@ -149,78 +136,27 @@ class SmokePlanAgent:
                 "operation_key": request.operation_key,
                 "round_number": request.round_number,
                 "failed_case_count": len(request.failed_case_codes),
-                "catalog_size": len(catalog),
+                "candidate_count": len(candidates),
             },
         ) as span:
+            for name, value in context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
             for output_number in range(1, max_outputs + 1):
                 response = self.client.invoke(
                     LLMRequest(
                         provider=self.model.provider,
                         model=self.model.model,
-                        messages=fit_message_context(
-                            messages,
-                            model=self.model,
-                        ).messages,
+                        messages=context.messages_for_request(self.model),
                         temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
-                        tools=[_memory_tool_spec()],
-                        tool_choice="auto",
+                        tools=[],
+                        tool_choice="none",
                         timeout_seconds=self.model.timeout_seconds,
                         reasoning=self.model.reasoning,
                         metadata={"role": "operation_smoke_plan"},
                     )
                 )
-
-                if response.tool_calls:
-                    errors = _memory_tool_errors(
-                        response,
-                        valid_refs=set(failure_id_by_ref),
-                    )
-                    if errors:
-                        _append_correction(messages, response, errors)
-                        last_errors = errors
-                        continue
-                    messages.append(
-                        LLMMessage(
-                            role="assistant",
-                            content="",
-                            tool_calls=response.tool_calls,
-                        )
-                    )
-                    for call in response.tool_calls:
-                        refs = list(call.arguments["failure_refs"])
-                        histories = self._lookup_histories(
-                            operation_key=request.operation_key,
-                            refs=refs,
-                            failure_id_by_ref=failure_id_by_ref,
-                        )
-                        messages.append(
-                            LLMMessage(
-                                role="tool",
-                                name=_LOOKUP_TOOL_NAME,
-                                tool_call_id=call.id,
-                                content=json.dumps(
-                                    {
-                                        "failures": [
-                                            _history_for_prompt(
-                                                ref=ref,
-                                                history=history,
-                                            )
-                                            for ref, history in zip(
-                                                refs,
-                                                histories,
-                                                strict=True,
-                                            )
-                                        ]
-                                    },
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                    default=str,
-                                ),
-                            )
-                        )
-                    continue
 
                 decision, errors = _parse_decision(
                     response,
@@ -236,7 +172,10 @@ class SmokePlanAgent:
                     )
                 if errors or decision is None:
                     last_errors = errors or ["The Plan output could not be used."]
-                    _append_correction(messages, response, last_errors)
+                    context.append_assistant(response)
+                    context.append_feedback(
+                        _correction_text(last_errors)
+                    )
                     continue
 
                 plan = self._record_and_expand(
@@ -245,6 +184,8 @@ class SmokePlanAgent:
                     failure_id_by_ref=failure_id_by_ref,
                     outputs_used=output_number,
                 )
+                for name, value in context.metrics.trace_attributes().items():
+                    span.set_attribute(name, value)
                 span.set_output(
                     {
                         "status": plan.status,
@@ -262,28 +203,10 @@ class SmokePlanAgent:
                 ),
                 outputs_used=max_outputs,
             )
+            for name, value in context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
             span.set_output(exhausted.model_dump(mode="json"))
             return exhausted
-
-    def _lookup_histories(
-        self,
-        *,
-        operation_key: str,
-        refs: list[str],
-        failure_id_by_ref: dict[str, str],
-    ) -> list[FailureHistory]:
-        """Resolve validated temporary aliases and trace the read-only lookup."""
-        with self.tracing_runtime.span(
-            "SmokePlanAgent.lookup_failure_history",
-            kind="TOOL",
-            input_value={"failure_refs": refs},
-        ) as span:
-            histories = self.memory.lookup_failure_history(
-                operation_key,
-                [failure_id_by_ref[ref] for ref in refs],
-            )
-            span.set_output({"failure_count": len(histories)})
-            return histories
 
     def _record_and_expand(
         self,
@@ -367,97 +290,99 @@ class SmokePlanAgent:
 
 
 def _system_prompt() -> str:
-    """Explain Planner's semantic role and the temporary-reference boundary."""
+    """Explain the one-output classification task and candidate limitations."""
     return (
-        "Classify every failed case in one Operation Smoke batch. Group "
-        "semantically identical observations, reuse a catalog Failure through "
-        "its F-number when appropriate, and never create two classifications "
-        "for the same Failure. A case may support multiple Failures. Mark an "
-        "observation non_debuggable only with a concrete reason. You may call "
-        "lookup_failure_history with one or more supplied F-numbers. Do not "
-        "diagnose parameters or propose patches. Return exactly action, "
-        "classifications, and reason. Use action=no_debug only when no current "
-        "observation needs a Solve session."
+        "Classify every supplied failed C case. Group semantically identical "
+        "observations; split independent Failures. Historical F candidates are "
+        "a ranked subset, not a complete directory. Reuse F only when its "
+        "meaning matches; otherwise set failure_ref to null. Lack of a candidate "
+        "never makes a case non_debuggable. Cover every failed C code; one C may "
+        "support multiple Failures, but one F may appear at most once. Mark "
+        "non_debuggable only with a concrete reason. Do not diagnose parameters "
+        "or propose patches. Planner has no tools. Return one SmokePlanDecision "
+        "JSON object containing only action, classifications, and reason. Each "
+        "classification contains item_id, failure_ref, summary, case_codes, "
+        "disposition, and disposition_reason. Use "
+        "action=no_debug only when every classification is non_debuggable."
     )
 
 
-def _catalog_aliases(
-    catalog: list[FailureCatalogEntry],
-) -> tuple[list[FailureCatalogPromptEntry], dict[str, str]]:
-    """Create stable request-local aliases without exposing database IDs."""
-    prompt: list[FailureCatalogPromptEntry] = []
-    mapping: dict[str, str] = {}
-    for index, item in enumerate(catalog, start=1):
-        ref = f"F{index}"
-        mapping[ref] = item.failure_id
-        prompt.append(
-            FailureCatalogPromptEntry(
-                failure_ref=ref,
-                summary=item.summary,
-                observation_count=item.observation_count,
-                investigation_count=item.investigation_count,
-                applied_patch_count=item.applied_patch_count,
-            )
-        )
-    return prompt, mapping
-
-
-def _memory_tool_spec() -> ToolSpec:
-    """Describe the only read-only capability available to Planner."""
-    return ToolSpec(
-        name=_LOOKUP_TOOL_NAME,
-        description=(
-            "Read complete Observation, Investigation, Parameter, conflict, "
-            "and applied-Patch history for supplied Failure references."
-        ),
-        kind="local_function",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "failure_refs": {
-                    "type": "array",
-                    "items": {"type": "string", "pattern": r"^F[1-9][0-9]*$"},
-                    "minItems": 1,
-                    "uniqueItems": True,
-                }
-            },
-            "required": ["failure_refs"],
-            "additionalProperties": False,
-        },
-        read_only=True,
-        risk_level="low",
-    )
-
-
-def _memory_tool_errors(
-    response: LLMResponse,
+def _planner_context_text(
     *,
-    valid_refs: set[str],
-) -> list[str]:
-    """Reject mixed, forged, malformed, or duplicate memory-tool requests."""
-    errors: list[str] = []
-    if response.parsed_json is not None or (
-        response.content is not None and response.content.strip()
-    ):
-        errors.append("Do not mix memory tool calls with a Plan decision.")
-    for call in response.tool_calls:
-        if call.name != _LOOKUP_TOOL_NAME:
-            errors.append(f"Unknown Planner tool: {call.name}")
-            continue
-        refs = call.arguments.get("failure_refs")
-        if (
-            not isinstance(refs, list)
-            or not refs
-            or any(not isinstance(ref, str) for ref in refs)
-        ):
-            errors.append("failure_refs must be a non-empty string array.")
-            continue
-        if len(refs) != len(set(refs)):
-            errors.append("failure_refs must be unique.")
-        for ref in refs:
-            if ref not in valid_refs:
-                errors.append(f"{ref} was not supplied in the Failure catalog.")
-    return errors
+    request: SmokePlanRequest,
+    candidates: list[FailureCandidate],
+):
+    """Render current failures and compact candidate cards without JSON dumps."""
+    writer = CompactTextWriter(max_value_chars=800)
+    writer.section("TASK")
+    writer.record(
+        "operation",
+        operation_key=request.operation_key,
+        round=request.round_number,
+    )
+    writer.detail("batch", _batch_statistics(request))
+
+    writer.section("CURRENT FAILURES", untrusted=True)
+    for code in request.failed_case_codes:
+        case = request.coded_cases[code]
+        response = _mapping(case.get("response"))
+        writer.record(
+            code,
+            kind=case.get("failure") or case.get("error") or "failed-case",
+            status=response.get("status_code"),
+            media=response.get("media_type"),
+            transport=response.get("error"),
+        )
+        request_evidence = _necessary_request_values(case)
+        if request_evidence:
+            writer.detail("input", request_evidence)
+        response_evidence = {
+            key: response[key]
+            for key in ("error", "error_code", "message", "body")
+            if key in response
+        }
+        if response_evidence:
+            writer.detail("response", response_evidence)
+
+    writer.section("HISTORICAL CANDIDATES")
+    for index, candidate in enumerate(candidates, start=1):
+        ref = f"F{index}"
+        writer.record(
+            ref,
+            matches=candidate.matched_case_codes,
+            summary=candidate.summary,
+            reasons=candidate.match_reasons,
+            observations=candidate.observation_count,
+            investigations=candidate.investigation_count,
+            patches=candidate.applied_patch_count,
+            last_round=candidate.last_seen_round,
+            required=False,
+        )
+        for investigation in candidate.recent_investigations:
+            writer.record(
+                "recent",
+                round=investigation.round_number,
+                outcome=investigation.outcome,
+                cause=investigation.root_cause,
+                solution=investigation.solution,
+                parameters=[
+                    parameter.input_node_id
+                    for parameter in investigation.parameters
+                ],
+                patch_revision=(
+                    investigation.applied_patch.generator_revision
+                    if investigation.applied_patch is not None
+                    else None
+                ),
+                required=False,
+            )
+    writer.record(
+        "candidate-window",
+        returned=len(candidates),
+        maximum=24,
+        truncated=len(candidates) == 24,
+    )
+    return writer.render(max_chars=18_000)
 
 
 def _parse_decision(
@@ -551,51 +476,135 @@ def _observation_write(
     )
 
 
-def _history_for_prompt(*, ref: str, history: FailureHistory) -> dict:
-    """Remove storage identities and label a history with its temporary alias."""
-    payload = history.model_dump(mode="json")
-    payload.pop("failure_id", None)
-    # Investigation IDs exist only to join durable rows; Planner reasons from
-    # their chronological content and never needs those database keys.
-    for investigation in payload["investigations"]:
-        investigation.pop("investigation_id", None)
-    payload["failure_ref"] = ref
-    return payload
+def _retrieval_observation(
+    code: str,
+    case: dict,
+) -> FailureRetrievalObservation:
+    """Project one failed Batch case into deterministic retrieval signals."""
+    response = _mapping(case.get("response"))
+    failure_kind = str(
+        case.get("failure")
+        or case.get("error")
+        or response.get("error")
+        or "failed case"
+    )
+    transport_error = response.get("error")
+    if transport_error is None and case.get("response") is None:
+        transport_error = case.get("error")
+    error_text = " ".join(
+        str(response[key])
+        for key in ("error_code", "message", "error", "body")
+        if response.get(key) not in (None, "")
+    )
+    keywords = sorted(_discriminative_terms(f"{failure_kind} {error_text}"))
+    return FailureRetrievalObservation(
+        case_code=code,
+        failure_kind=failure_kind,
+        transport_error=(
+            str(transport_error) if transport_error is not None else None
+        ),
+        status_code=_status_code(response.get("status_code")),
+        media_type=(
+            str(response["media_type"])
+            if response.get("media_type") is not None
+            else None
+        ),
+        input_paths=sorted(_leaf_paths(_necessary_request_values(case))),
+        error_signature=error_text[:800] or None,
+        keywords=keywords,
+    )
 
 
-def _append_correction(
-    messages: list[LLMMessage],
-    response: LLMResponse,
-    errors: list[str],
-) -> None:
-    """Retain invalid output and precise repair instructions in conversation."""
-    messages.extend(
-        (
-            LLMMessage(
-                role="assistant",
-                content=json.dumps(
-                    response.parsed_json
-                    if response.parsed_json is not None
-                    else {
-                        "content": response.content,
-                        "tool_calls": [
-                            call.model_dump(mode="json")
-                            for call in response.tool_calls
-                        ],
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    default=str,
-                ),
-            ),
-            LLMMessage(
-                role="user",
-                content=(
-                    "Correct the complete Plan output:\n"
-                    + "\n".join(f"- {error}" for error in errors)
-                    + "\nYou may query supplied Failure references, or return "
-                    "one complete classification decision."
-                ),
-            ),
-        )
+def _batch_statistics(request: SmokePlanRequest) -> dict:
+    """Select only bounded aggregate fields from the Coordinator's Batch DTO."""
+    allowed = (
+        "run_id",
+        "success_rate",
+        "successful_cases",
+        "failed_cases",
+        "status_code_counts",
+    )
+    stats = {
+        key: request.batch[key]
+        for key in allowed
+        if key in request.batch
+    }
+    stats["failed_case_count"] = len(request.failed_case_codes)
+    stats["total_case_count"] = len(request.coded_cases)
+    return stats
+
+
+def _necessary_request_values(case: dict) -> dict:
+    """Keep only request inputs that can explain or reproduce the failure."""
+    request = _mapping(case.get("request"))
+    return {
+        key: request[key]
+        for key in ("path_parameters", "query", "headers", "body")
+        if key in request
+    }
+
+
+def _mapping(value: object) -> dict:
+    """Return dictionary evidence or an empty mapping for absent transport data."""
+    return value if isinstance(value, dict) else {}
+
+
+def _leaf_paths(value: object, prefix: str = "") -> set[str]:
+    """Return dotted semantic input paths without serializing their values."""
+    if isinstance(value, dict):
+        paths: set[str] = set()
+        for key, child in value.items():
+            root_key = {
+                "path_parameters": "path",
+                "query_parameters": "query",
+                "query": "query",
+                "headers": "header",
+                "body": "body",
+            }.get(str(key), str(key))
+            next_prefix = f"{prefix}.{root_key}" if prefix else root_key
+            paths.update(_leaf_paths(child, next_prefix))
+        return paths
+    if isinstance(value, list):
+        return {prefix} if prefix else set()
+    return {prefix} if prefix else set()
+
+
+def _discriminative_terms(value: str) -> set[str]:
+    """Extract useful error words while rejecting generic HTTP vocabulary."""
+    generic = {
+        "error",
+        "failed",
+        "failure",
+        "unexpected",
+        "status",
+        "response",
+        "request",
+        "invalid",
+        "application",
+        "json",
+    }
+    return {
+        term
+        for term in re.findall(r"[a-z0-9_./-]{3,}", value.casefold())
+        if term not in generic and not term.isdigit()
+    }
+
+
+def _status_code(value: object) -> int | None:
+    """Normalize an HTTP status while excluding booleans."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _correction_text(errors: list[str]) -> str:
+    """Render deterministic validation feedback as compact text."""
+    return (
+        "CORRECT COMPLETE PLAN\n"
+        + "\n".join(f"issue | {error}" for error in errors)
+        + "\nReturn one complete SmokePlanDecision JSON object. Planner has no tools."
     )

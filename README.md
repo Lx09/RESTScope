@@ -115,6 +115,14 @@ the runtime package does not register an offline fake provider.
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
 
+All five direct LLM decision sites construct messages through
+`restscope.context`. Workflow adapters first select typed facts, then
+`CompactTextWriter` encodes untrusted API, Memory, tool, and sample values as
+bounded line text. `AgentContext` preserves complete tool exchanges and newest
+validation feedback inside the role and model windows. Runtime evidence is not
+dumped into prompts as JSON; strict Agent outputs and provider tool protocols
+remain JSON.
+
 ## Local trace monitoring with Phoenix
 
 Phoenix tracing is optional and disabled by default. Install the tracing extra,
@@ -342,11 +350,12 @@ internally by Operation Smoke.
 1. A complete generated Batch establishes the current evidence and 2xx rate.
    The App-wide `RANDOM_SEED` is reused by Batch inputs, Constraint solving, and
    Patch samples.
-2. `SmokePlanAgent` sees the Batch and a compact catalog of stable Failures.
-   It may query complete Failure histories through a read-only memory tool.
-   Temporary `F*` and `C*` references exist only in that request. Every failed
-   case must be classified or explicitly marked non-debuggable; valid final
-   classifications are written by deterministic code.
+2. Runtime converts only failed cases into typed retrieval signals and ranks
+   same-operation historical Failures. `SmokePlanAgent` sees every failed
+   `C*` case plus at most 24 compact `F*` candidate cards; it has no memory
+   tool and normally needs one model output. Candidates are not a complete
+   directory, so Planner creates a new Failure when none is semantically
+   suitable. Valid final classifications are written by deterministic code.
 3. Each debug item gets a fresh `FailureSolveAgent`. Solve preloads the current
    Failure, may query other Failure history by semantic Parameter handle, and
    may use the current-operation HTTP probe. Before replacing a Parameter
@@ -368,9 +377,10 @@ complete Batch validates all applied changes together, and
 There is no Effect Agent, candidate Batch, rollback revision, or permanent
 `resolved` flag.
 
-The Planner has a 50-output workflow budget. Each Solve has a 50-output budget
-that also counts every nested Parameter Patch LLM output; one Patch tool call is
-capped at 20 outputs. Malformed replies and tool-requesting model outputs count.
+The Planner has a 50-output repair budget but no tools; its normal target is one
+output. Each Solve has a 50-output budget that also counts every nested
+Parameter Patch LLM output; one Patch tool call is capped at 20 outputs.
+Malformed replies and invalid tool-requesting model outputs count.
 Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Planner or
 Solve exhaustion is a technical error; one Patch-tool exhaustion is recoverable
 feedback within its Solve session.

@@ -55,6 +55,12 @@ a stable unique `scenario_id`, replace all input facts, and declare only the
 independent properties that should be scored. A missing expected property is
 reported as `not_applicable` and does not receive a numeric score.
 
+Plan Scenario `catalog` and `histories` describe the bounded candidate window
+returned before the model call; Planner no longer queries them with a tool.
+Solve still uses scripted Parameter Memory, HTTP Probe, and nested Patch tools.
+All three production Agents render Scenario facts through `restscope.context`,
+so prompt variants compare the same compact text path used by the App.
+
 An old trace explains why a Scenario matters but is not an answer oracle.
 Sanitize credentials, raw response bodies, and identifying target data before
 committing a Scenario. Keep the original export under ignored

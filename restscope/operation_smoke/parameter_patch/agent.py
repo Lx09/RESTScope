@@ -14,10 +14,9 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from restscope.operation_smoke.prompt_context import fit_message_context
+from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
-    LLMMessage,
     LLMModelConfig,
     LLMRequest,
     LLMResponse,
@@ -112,12 +111,21 @@ class ParameterPatchAgent:
             config=config,
             reference_options=list(reference_options or []),
             model=self.model,
+            active_constraints=active_constraints,
             system_prompt=self.system_prompt,
         )
-        messages = [
-            LLMMessage(role="system", content=prompt.system),
-            LLMMessage(role="user", content=prompt.user),
-        ]
+        context = AgentContext(
+            system=prompt.system,
+            user=prompt.user,
+            limits=ContextLimits(
+                system_chars=7_000,
+                initial_user_chars=18_000,
+                feedback_chars=12_000,
+                conversation_chars=36_000,
+                required_output_tokens=self.model.max_tokens,
+            ),
+            metrics=prompt.metrics,
+        )
         validated: tuple[
             GeneratorPatchDraft,
             list[dict[str, Any]],
@@ -141,15 +149,14 @@ class ParameterPatchAgent:
                 "restscope.patch.sample_count": case_count,
             },
         ) as span:
+            for name, value in context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
             for output_number in range(1, max_outputs + 1):
                 response = self.client.invoke(
                     LLMRequest(
                         provider=self.model.provider,
                         model=self.model.model,
-                        messages=fit_message_context(
-                            messages,
-                            model=self.model,
-                        ).messages,
+                        messages=context.messages_for_request(self.model),
                         temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
@@ -183,13 +190,17 @@ class ParameterPatchAgent:
                                 outputs_used=output_number,
                                 attempt_history=list(attempt_history),
                             )
+                            for name, value in context.metrics.trace_attributes().items():
+                                span.set_attribute(name, value)
                             span.set_output(
                                 {
                                     "status": outcome.status,
                                     "outputs_used": outcome.outputs_used,
                                     "sample_count": len(samples),
-                                    "samples": samples,
-                                    "reference_pool_values": pool_values,
+                                    "reference_pool_count": sum(
+                                        len(values)
+                                        for values in pool_values.values()
+                                    ),
                                 }
                             )
                             return outcome
@@ -224,57 +235,27 @@ class ParameterPatchAgent:
                         except (KeyError, TypeError, ValueError) as exc:
                             errors = [str(exc)]
                         else:
-                            messages.extend(
-                                (
-                                    LLMMessage(
-                                        role="assistant",
-                                        content=_response_json(response),
-                                    ),
-                                    LLMMessage(
-                                        role="user",
-                                        content=(
-                                            "The complete Patch passed "
-                                            "executable validation. Review these "
-                                            f"exactly {case_count} generated "
-                                            "parameter value groups against the "
-                                            "root cause, desired behavior, and "
-                                            "acceptance criteria:\n"
-                                            + json.dumps(
-                                                {
-                                                    "parameter_value_groups": samples,
-                                                    "reference_pool_values": pool_values,
-                                                },
-                                                ensure_ascii=False,
-                                                separators=(",", ":"),
-                                                default=str,
-                                            )
-                                            + "\nReturn action=accept, or action="
-                                            "propose with one complete replacement."
-                                        ),
-                                    ),
+                            context.append_assistant(response)
+                            context.append_feedback(
+                                _sample_feedback(
+                                    task=task,
+                                    samples=samples,
+                                    pool_values=pool_values,
+                                    active_constraint_count=len(active_constraints),
+                                    patch_constraint_count=len(patch.constraints),
                                 )
                             )
                             continue
 
                 latest_errors = errors or ["The Patch output could not be used."]
-                messages.extend(
-                    (
-                        LLMMessage(
-                            role="assistant",
-                            content=_response_json(response),
-                        ),
-                        LLMMessage(
-                            role="user",
-                            content=(
-                                "The previous output could not be used:\n"
-                                + "\n".join(
-                                    f"- {error}"
-                                    for error in latest_errors[:_MAX_ERRORS]
-                                )
-                                + "\nReturn one complete corrected JSON object."
-                            ),
-                        ),
+                context.append_assistant(response)
+                context.append_feedback(
+                    "PATCH OUTPUT INVALID\n"
+                    + "\n".join(
+                        f"issue | {error}"
+                        for error in latest_errors[:_MAX_ERRORS]
                     )
+                    + "\nReturn one complete corrected ParameterPatchDecision JSON object."
                 )
 
             failure = ParameterPatchFailure(
@@ -284,7 +265,16 @@ class ParameterPatchAgent:
                 errors=latest_errors[:_MAX_ERRORS],
                 attempt_history=list(attempt_history),
             )
-            span.set_output(failure.model_dump(mode="json"))
+            for name, value in context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
+            span.set_output(
+                {
+                    "status": failure.status,
+                    "reason": failure.reason,
+                    "outputs_used": failure.outputs_used,
+                    "error_count": len(failure.errors),
+                }
+            )
             return failure
 
     def _parse(
@@ -523,18 +513,85 @@ def _reference_pool_values(
     return values
 
 
-def _response_json(response: LLMResponse) -> str:
-    """Serialize the model's prior output for in-conversation correction."""
-    value = (
-        response.parsed_json
-        if response.parsed_json is not None
-        else response.content
-        if response.content is not None
-        else {}
+def _sample_feedback(
+    *,
+    task: ParameterPatchTask,
+    samples: list[dict[str, Any]],
+    pool_values: dict[str, list[Any]],
+    active_constraint_count: int,
+    patch_constraint_count: int,
+) -> str:
+    """Render exact affected values plus compact compatibility summaries.
+
+    Samples remain request-shaped runtime objects internally. Only this typed
+    table reaches the model, which makes absence distinct from null and avoids
+    hiding a type change inside JSON punctuation.
+    """
+    writer = CompactTextWriter(max_value_chars=600)
+    writer.section("VALIDATION PASSED")
+    writer.record(
+        "result",
+        samples=len(samples),
+        active_constraints=active_constraint_count,
+        patch_constraints=patch_constraint_count,
+        constraints_satisfied=True,
     )
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        default=str,
+    headers = ["sample"]
+    for handle in task.affected_inputs:
+        headers.extend((f"{handle}.present", f"{handle}.value"))
+    rows: list[list[Any]] = []
+    for index, sample in enumerate(samples, start=1):
+        row: list[Any] = [f"S{index}"]
+        values = sample["values"]
+        present = sample["present"]
+        for handle in task.affected_inputs:
+            is_present = bool(present[handle])
+            row.extend(
+                (
+                    is_present,
+                    values[handle]
+                    if is_present
+                    else CompactTextWriter.ABSENT,
+                )
+            )
+        rows.append(row)
+    writer.table(headers, rows)
+
+    writer.section("SAMPLE SUMMARY")
+    for handle in task.affected_inputs:
+        observed = [
+            sample["values"][handle]
+            for sample in samples
+            if sample["present"][handle]
+        ]
+        writer.record(
+            handle,
+            present_count=len(observed),
+            absent_count=len(samples) - len(observed),
+            types=sorted({type(value).__name__ for value in observed}),
+            minimum=_numeric_boundary(observed, minimum=True),
+            maximum=_numeric_boundary(observed, minimum=False),
+        )
+
+    writer.section("REFERENCE POOLS", untrusted=True)
+    if not pool_values:
+        writer.record("none", count=0)
+    for alias, values in pool_values.items():
+        writer.detail(alias, {"values": values})
+    writer.text(
+        "next",
+        "Return action=accept, or propose one complete replacement.",
     )
+    return writer.render(max_chars=12_000).text
+
+
+def _numeric_boundary(values: list[Any], *, minimum: bool) -> Any:
+    """Return a numeric range endpoint without treating booleans as integers."""
+    numbers = [
+        value
+        for value in values
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    ]
+    if not numbers:
+        return CompactTextWriter.ABSENT
+    return min(numbers) if minimum else max(numbers)

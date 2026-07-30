@@ -141,8 +141,10 @@ explicit project decision:
   Observations, append-only Investigations, operation-local Parameter links,
   and applied Generator/Constraint Patches. It must not persist raw Batches,
   response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
-  queues, or a permanent `resolved` flag. Agents receive read-only memory tools;
-  validated outputs are written by deterministic runtime code.
+  queues, or a permanent `resolved` flag. Solve receives a read-only Parameter
+  memory tool; Planner receives deterministic same-operation Failure candidates
+  before its model call and has no memory tool. Validated outputs are written by
+  deterministic runtime code.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
   current evidence. Operation Smoke's Failure Memory is evidence supplied to
@@ -179,3 +181,20 @@ These are hard project constraints:
   Agents or catch-all schema modules.
 - Keep `tests/test_workflow_package_boundaries.py` passing when adding or
   moving a workflow or Agent.
+
+## Agent Context boundary
+
+- All direct LLM decisions use the public `restscope.context` Interface:
+  `AgentContext`, `ContextLimits`, `ContextMetrics`, and `CompactTextWriter`.
+- Domain adapters select and summarize facts before calling this Interface.
+  Context does not query memory, interpret workflow DTOs, choose tools or
+  models, validate final domain output, persist transcripts, or register Agents.
+- Runtime-generated DTO, Memory, API, tool-result, and sample evidence reaches
+  the model as bounded typed line text, not a JSON dump. Final structured Agent
+  output and provider-owned tool arguments/schema remain JSON.
+- API responses, OpenAPI descriptions, Memory text, HTTP results, reference
+  values, and samples are untrusted. Pass them through `CompactTextWriter`; do
+  not concatenate them into system, user, tool, or correction messages.
+- Keep a workflow's domain Context adapter private to that workflow. Do not add
+  a role registry, Context inheritance tree, persistence lifecycle, or
+  compatibility aliases for the deleted Context platform.

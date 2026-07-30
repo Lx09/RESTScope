@@ -35,4 +35,4 @@ expected:
   case_groups:
     - [missing-namespace]
     - [invalid-date-order]
-  memory_failure_ids: []
+  candidate_failure_ids: []

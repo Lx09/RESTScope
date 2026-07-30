@@ -19,7 +19,9 @@ from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.memory import (
     FailureCatalogEntry,
+    FailureCandidate,
     FailureHistory,
+    FailureRetrievalObservation,
     PlanMemoryWrite,
     RecordedFailure,
     RecordedPlan,
@@ -46,7 +48,7 @@ class PlanExpectation(BaseModel):
 
     status: str | None = None
     case_groups: list[list[str]] | None = None
-    memory_failure_ids: list[str] | None = None
+    candidate_failure_ids: list[str] | None = None
     reused_failure_ids: list[str] | None = None
     non_debuggable_case_ids: list[str] | None = None
 
@@ -100,57 +102,73 @@ class TemporaryPlanMemory:
         self.calls: list[dict[str, Any]] = []
         self.write: PlanMemoryWrite | None = None
 
-    def list_operation_failures(
+    def find_failure_candidates(
         self,
         operation_key: str,
-    ) -> list[FailureCatalogEntry]:
-        """Return the scenario catalog and record accidental cross-operation use."""
+        observations: list[FailureRetrievalObservation],
+    ) -> list[FailureCandidate]:
+        """Return scenario-declared candidates with compact history projections.
+
+        Scenario authors control which historical records retrieval should make
+        visible. The production retrieval algorithm has separate deterministic
+        tests; this Adapter isolates evaluation of Planner's semantic response
+        to that candidate window.
+        """
         self.calls.append(
-            {"tool": "list_operation_failures", "operation_key": operation_key}
+            {
+                "tool": "find_failure_candidates",
+                "operation_key": operation_key,
+                "case_codes": [item.case_code for item in observations],
+                "failure_ids": [item.failure_id for item in self.catalog],
+            }
         )
         if operation_key != self.request.operation_key:
             return []
-        return list(self.catalog)
-
-    def lookup_failure_history(
-        self,
-        operation_key: str,
-        failure_ids: list[str],
-    ) -> list[FailureHistory]:
-        """Resolve configured histories, returning safe empty histories if absent.
-
-        A missing scripted history is an evaluation input problem, not a reason
-        to crash the Agent conversation.  The empty structured value lets the
-        model revise its decision and leaves an ``unconfigured`` marker in the
-        task output for a code evaluator or human trace review.
-        """
-        missing = [
-            failure_id
-            for failure_id in failure_ids
-            if failure_id not in self.histories
-        ]
-        self.calls.append(
-            {
-                "tool": "lookup_failure_history",
-                "operation_key": operation_key,
-                "failure_ids": list(failure_ids),
-                "unconfigured": missing,
-            }
-        )
-        catalog_by_id = {item.failure_id: item for item in self.catalog}
         return [
-            self.histories.get(
-                failure_id,
-                FailureHistory(
-                    failure_id=failure_id,
-                    summary=(
-                        catalog_by_id[failure_id].summary
-                        if failure_id in catalog_by_id
-                        else "Unconfigured evaluation history."
-                    ),
+            FailureCandidate(
+                failure_id=item.failure_id,
+                summary=item.summary,
+                matched_case_codes=[
+                    observation.case_code for observation in observations
+                ],
+                match_reasons=["scenario-declared-candidate"],
+                observation_count=item.observation_count,
+                investigation_count=item.investigation_count,
+                applied_patch_count=item.applied_patch_count,
+                last_seen_round=max(
+                    [
+                        *[
+                            observation.round_number
+                            for observation in self.histories.get(
+                                item.failure_id,
+                                FailureHistory(
+                                    failure_id=item.failure_id,
+                                    summary=item.summary,
+                                ),
+                            ).observations
+                        ],
+                        *[
+                            investigation.round_number
+                            for investigation in self.histories.get(
+                                item.failure_id,
+                                FailureHistory(
+                                    failure_id=item.failure_id,
+                                    summary=item.summary,
+                                ),
+                            ).investigations
+                        ],
+                        0,
+                    ]
                 ),
+                recent_investigations=self.histories.get(
+                    item.failure_id,
+                    FailureHistory(
+                        failure_id=item.failure_id,
+                        summary=item.summary,
+                    ),
+                ).investigations[-2:],
             )
-            for failure_id in failure_ids
+            for item in self.catalog
         ]
 
     def record_plan(self, write: PlanMemoryWrite) -> RecordedPlan:
@@ -320,25 +338,25 @@ def plan_case_groups_evaluator(
     )
 
 
-@create_evaluator(name="plan_memory_lookup", kind="code")
-def plan_memory_lookup_evaluator(
+@create_evaluator(name="plan_candidate_retrieval", kind="code")
+def plan_candidate_retrieval_evaluator(
     output: dict[str, Any],
     expected: dict[str, Any],
 ) -> Score:
-    """Check the durable Failure IDs actually requested through Memory."""
-    wanted = expected.get("memory_failure_ids")
+    """Check the candidate window supplied to Planner before its model call."""
+    wanted = expected.get("candidate_failure_ids")
     if wanted is None:
-        return _not_applicable("plan_memory_lookup")
+        return _not_applicable("plan_candidate_retrieval")
     actual = [
         failure_id
         for call in output.get("tool_calls", [])
-        if call.get("tool") == "lookup_failure_history"
+        if call.get("tool") == "find_failure_candidates"
         for failure_id in call.get("failure_ids", [])
     ]
     return _binary_score(
-        "plan_memory_lookup",
+        "plan_candidate_retrieval",
         set(actual) == set(wanted),
-        f"Expected lookups {wanted!r}; observed {actual!r}.",
+        f"Expected candidates {wanted!r}; observed {actual!r}.",
     )
 
 
@@ -398,7 +416,7 @@ SUITE = EvaluationSuite(
         runtime_error_evaluator,
         plan_status_evaluator,
         plan_case_groups_evaluator,
-        plan_memory_lookup_evaluator,
+        plan_candidate_retrieval_evaluator,
         plan_reused_failures_evaluator,
         plan_nondebuggable_evaluator,
     ),

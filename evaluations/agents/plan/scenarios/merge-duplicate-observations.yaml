@@ -34,4 +34,4 @@ expected:
   status: planned
   case_groups:
     - [missing-project-a, missing-project-b]
-  memory_failure_ids: []
+  candidate_failure_ids: []

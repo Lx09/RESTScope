@@ -6,6 +6,11 @@
 > client retry branch were removed during the approved safe-slimming work. See
 > [`docs/tasks/llm-safe-slimming.md`](tasks/llm-safe-slimming.md) for the active
 > decision and verification record.
+>
+> The `ContextPackage`, policy registry, source-ref, persistence, and request
+> factory sections below are also historical. The current message-construction
+> contract is the four-name `restscope.context` facade documented in
+> [`docs/tasks/project-agent-context.md`](tasks/project-agent-context.md).
 
 ## 1. 设计目标
 

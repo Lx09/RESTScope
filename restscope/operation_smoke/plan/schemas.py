@@ -1,10 +1,10 @@
 """Define the Planner boundary for one complete Operation Smoke Batch.
 
-Planner receives bounded failed-case evidence from the Coordinator.  Historical
-database identities never enter the prompt: runtime replaces them with
-request-local Failure references such as ``F1``.  The Agent may inspect selected
-histories with its read-only tool, then deterministic code records the validated
-classification and expands it into independent Failure work items for Solve.
+Planner receives bounded failed-case evidence from the Coordinator. Runtime
+retrieval selects a small same-operation candidate window and replaces database
+identities with request-local Failure references such as ``F1``. Planner has no
+tools; deterministic code records its validated classification and expands it
+into independent Failure work items for Solve.
 """
 
 from __future__ import annotations
@@ -34,16 +34,6 @@ class SmokePlanRequest(_Model):
     batch: dict[str, Any]
     coded_cases: dict[str, dict[str, Any]]
     failed_case_codes: list[str]
-
-
-class FailureCatalogPromptEntry(_Model):
-    """Expose a compact historical Failure without revealing its database ID."""
-
-    failure_ref: str = Field(pattern=r"^F[1-9][0-9]*$")
-    summary: str
-    observation_count: int = Field(ge=0)
-    investigation_count: int = Field(ge=0)
-    applied_patch_count: int = Field(ge=0)
 
 
 class FailureClassificationDecision(_Model):

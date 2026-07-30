@@ -48,6 +48,7 @@ def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
         assert (package / "agent.py").is_file()
         assert (package / "schemas.py").is_file()
     assert not (OPERATION_SMOKE_ROOT / "effect").exists()
+    assert not (OPERATION_SMOKE_ROOT / "prompt_context" / "__init__.py").exists()
 
 
 def test_current_sources_do_not_restore_retired_agent_names_or_paths() -> None:

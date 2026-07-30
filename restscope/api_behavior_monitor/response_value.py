@@ -8,13 +8,14 @@ import json
 import re
 from typing import Any, Literal
 
+from restscope.context import AgentContext, ContextLimits
 from restscope.llm import (
     LLMClient,
-    LLMMessage,
     LLMModelConfig,
     LLMRequest,
     OutputValidator,
 )
+from restscope.observability import TracingRuntime
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import SchemaIR
 
@@ -106,11 +107,18 @@ class ResponseValueTracker:
         client: LLMClient | None = None,
         model: LLMModelConfig | None = None,
         validator: OutputValidator | None = None,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
+        """Bind catalogs and optional semantic-selection collaborators.
+
+        ``tracing_runtime`` records only Context sizes and selection summaries;
+        the model-visible evidence itself remains on the existing LLM span.
+        """
         self.catalog = catalog
         self.client = client
         self.model = model
         self.validator = validator or OutputValidator()
+        self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def register(
         self,
@@ -385,23 +393,49 @@ class ResponseValueTracker:
                 for index, candidate in enumerate(bounded, start=1)
             ],
         )
-        response = self.client.invoke(
-            LLMRequest(
-                provider=self.model.provider,
-                model=self.model.model,
-                messages=[
-                    LLMMessage(role="system", content=prompt.system),
-                    LLMMessage(role="user", content=prompt.user),
-                ],
-                temperature=self.model.temperature,
-                max_tokens=self.model.max_tokens,
-                response_format="json",
-                tool_choice="none",
-                timeout_seconds=self.model.timeout_seconds,
-                reasoning=self.model.reasoning,
-                metadata={"role": "api_behavior_monitor"},
-            )
+        context = AgentContext(
+            system=prompt.system,
+            user=prompt.user,
+            limits=ContextLimits(
+                system_chars=1_600,
+                initial_user_chars=16_000,
+                feedback_chars=3_000,
+                conversation_chars=20_000,
+                required_output_tokens=512,
+            ),
+            metrics=prompt.metrics,
         )
+        messages = context.messages_for_request(self.model)
+        with self.tracing_runtime.span(
+            "ResponseValueTracker.select_sources",
+            kind="CHAIN",
+            input_value={"candidate_count": len(bounded)},
+        ) as span:
+            for name, value in context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
+            response = self.client.invoke(
+                LLMRequest(
+                    provider=self.model.provider,
+                    model=self.model.model,
+                    messages=messages,
+                    temperature=self.model.temperature,
+                    max_tokens=self.model.max_tokens,
+                    response_format="json",
+                    tool_choice="none",
+                    timeout_seconds=self.model.timeout_seconds,
+                    reasoning=self.model.reasoning,
+                    metadata={"role": "api_behavior_monitor"},
+                )
+            )
+            span.set_output(
+                {
+                    "selected_count": (
+                        len(response.parsed_json.get("sources", []))
+                        if isinstance(response.parsed_json, dict)
+                        else 0
+                    )
+                }
+            )
         validation = self.validator.validate(
             response=response,
             output_model=ResponseSourceSelectionDecision,

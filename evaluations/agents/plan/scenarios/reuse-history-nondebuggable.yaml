@@ -59,6 +59,6 @@ expected:
   status: planned
   case_groups:
     - [known-missing-project]
-  memory_failure_ids: [known-missing-project-failure]
+  candidate_failure_ids: [known-missing-project-failure]
   reused_failure_ids: [known-missing-project-failure]
   non_debuggable_case_ids: [connection-reset]

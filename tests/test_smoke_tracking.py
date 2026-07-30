@@ -309,12 +309,8 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
     class EmptyMemory:
         """Keep this trace test focused on the Planner's LLM span."""
 
-        def list_operation_failures(self, operation_key):
-            del operation_key
-            return []
-
-        def lookup_failure_history(self, operation_key, failure_ids):
-            del operation_key, failure_ids
+        def find_failure_candidates(self, operation_key, observations):
+            del operation_key, observations
             return []
 
         def record_plan(self, write):
