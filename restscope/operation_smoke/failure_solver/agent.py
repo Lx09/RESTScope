@@ -441,10 +441,11 @@ class FailureSolveSession:
             return exhausted
 
     def _tool_specs(self) -> list[ToolSpec]:
-        """Return the three capabilities scoped to this Investigation."""
+        """Return capabilities whose schemas expose this operation's handles."""
+        semantic_handles = sorted(self.semantic_inputs.node_by_handle)
         return [
-            _parameter_memory_tool_spec(),
-            _patch_tool_spec(),
+            _parameter_memory_tool_spec(semantic_handles),
+            _patch_tool_spec(semantic_handles),
             self.http_probe.tool_spec(self.config),
         ]
 
@@ -815,24 +816,32 @@ def _system_prompt() -> str:
         "Investigate exactly one Operation Smoke Failure. Decide which semantic "
         "request inputs caused it and how to resolve it. You may query Parameter "
         "memory, probe only the current HTTP operation, and call "
-        "generate_parameter_patch multiple times. Before requesting a Patch for "
-        "an input, query that input's history and ensure the new Generator also "
-        "serves earlier related Failures. If requirements cannot coexist, return "
-        "conflict and do not apply anything. A Patch tool result is only a local "
-        "candidate; finish with apply_patch(candidate_ref), no_patch, or conflict. "
-        "Every terminal decision must include trigger_conditions, root_cause, "
-        "solution, evidence_source, and Parameter cause summaries. Do not invent "
-        "candidate references or database IDs."
+        "generate_parameter_patch multiple times. Call exactly one tool per model "
+        "output; never combine parallel tool calls. For Parameter tools, copy only "
+        "the exact dotted semantic handles enumerated by their input schemas. "
+        "Internal slash-separated input_node_id values are not semantic handles. "
+        "Before requesting a Patch for an input, query that input's history and "
+        "ensure the new Generator also serves earlier related Failures. Probe HTTP "
+        "only when current Batch and memory evidence cannot distinguish the root "
+        "cause. If requirements cannot coexist, return conflict and do not apply "
+        "anything. A Patch tool result is only a local candidate; finish with "
+        "apply_patch(candidate_ref), no_patch, or conflict. Every terminal decision "
+        "must include trigger_conditions, root_cause, solution, evidence_source, "
+        "and Parameter cause summaries. Do not invent candidate references or "
+        "database IDs."
     )
 
 
-def _parameter_memory_tool_spec() -> ToolSpec:
-    """Describe Solve's read-only Parameter-history lookup."""
+def _parameter_memory_tool_spec(
+    semantic_handles: list[str],
+) -> ToolSpec:
+    """Describe history lookup with exact handles valid for this operation."""
     return ToolSpec(
         name=_MEMORY_TOOL_NAME,
         description=(
             "Read prior Failures, causes, conflicts, and applied Patches for one "
-            "or more semantic inputs in this operation."
+            "or more semantic inputs in this operation. Copy handles exactly from "
+            "the schema enum."
         ),
         kind="local_function",
         input_schema={
@@ -840,7 +849,10 @@ def _parameter_memory_tool_spec() -> ToolSpec:
             "properties": {
                 "input_handles": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "string",
+                        "enum": semantic_handles,
+                    },
                     "minItems": 1,
                     "uniqueItems": True,
                 }
@@ -853,13 +865,16 @@ def _parameter_memory_tool_spec() -> ToolSpec:
     )
 
 
-def _patch_tool_spec() -> ToolSpec:
-    """Describe the structured requirement accepted by Parameter Patch Agent."""
+def _patch_tool_spec(
+    semantic_handles: list[str],
+) -> ToolSpec:
+    """Describe Patch requirements with operation-valid semantic handles."""
     return ToolSpec(
         name=_PATCH_TOOL_NAME,
         description=(
             "Ask Parameter Patch Agent to build and locally validate a Generator "
-            "or cross-Parameter Constraint candidate. This tool has no side effects."
+            "or cross-Parameter Constraint candidate. This tool has no side effects. "
+            "Copy affected input handles exactly from the schema enum."
         ),
         kind="local_function",
         input_schema={
@@ -868,7 +883,10 @@ def _patch_tool_spec() -> ToolSpec:
                 "root_cause": {"type": "string", "minLength": 1},
                 "affected_inputs": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "string",
+                        "enum": semantic_handles,
+                    },
                     "minItems": 1,
                     "uniqueItems": True,
                 },

@@ -47,6 +47,87 @@ class StubClient:
         return self.responses.pop(0)
 
 
+class ToolContractAwareClient:
+    """Model the shortest Solve path only when its tool contract is discoverable.
+
+    This deterministic client stands in for the behavior seen in Phoenix Evals.
+    It does not know RESTScope's private semantic-handle convention. It can
+    choose one valid tool at a time only when the system instruction states that
+    protocol and each Parameter tool schema lists the accepted handles.
+    """
+
+    def __init__(self) -> None:
+        """Start with no requests or tool-contract knowledge."""
+        self.requests = []
+
+    def invoke(self, request):
+        """Choose the next tool from information visible in the LLM request."""
+        self.requests.append(request)
+        system_prompt = request.messages[0].content
+        tools_by_name = {tool.name: tool for tool in request.tools}
+        memory_results = [
+            message
+            for message in request.messages
+            if message.role == "tool"
+            and message.name == "lookup_parameter_history"
+        ]
+        patch_results = [
+            message
+            for message in request.messages
+            if message.role == "tool"
+            and message.name == "generate_parameter_patch"
+        ]
+
+        if patch_results:
+            return LLMResponse(
+                provider="stub",
+                model="think-model",
+                parsed_json=_terminal("apply_patch", candidate_ref="P1"),
+            )
+
+        if memory_results:
+            patch_schema = tools_by_name["generate_parameter_patch"].input_schema
+            allowed_handles = patch_schema["properties"]["affected_inputs"][
+                "items"
+            ].get("enum")
+            handle = (
+                allowed_handles[0]
+                if allowed_handles
+                else "path/projectId"
+            )
+            return _patch_call_with_handle(handle)
+
+        memory_schema = tools_by_name["lookup_parameter_history"].input_schema
+        allowed_handles = memory_schema["properties"]["input_handles"][
+            "items"
+        ].get("enum")
+        if "exactly one tool" in system_prompt.lower() and allowed_handles:
+            return _memory_call_with_handle(allowed_handles[0])
+
+        # Phoenix showed DeepSeek repeatedly choosing both independent reads
+        # when the one-tool rule and accepted semantic handles were hidden.
+        return LLMResponse(
+            provider="stub",
+            model="think-model",
+            tool_calls=[
+                ToolCall(
+                    id=f"probe-{len(self.requests)}",
+                    name="restscope.http.request",
+                    arguments={
+                        "method": "GET",
+                        "path": "/projects/{projectId}",
+                        "path_parameters": {"projectId": 5},
+                    },
+                ),
+                ToolCall(
+                    id=f"memory-{len(self.requests)}",
+                    name="lookup_parameter_history",
+                    arguments={"input_handles": ["path/projectId"]},
+                ),
+            ],
+        )
+
+
 class StubProbe:
     """Provide optional current-operation HTTP evidence without network access."""
 
@@ -191,6 +272,15 @@ def _request():
 
 def _memory_call(call_id: str = "memory-1") -> LLMResponse:
     """Request history for the semantic path input."""
+    return _memory_call_with_handle("path.projectId", call_id=call_id)
+
+
+def _memory_call_with_handle(
+    handle: str,
+    *,
+    call_id: str = "memory-1",
+) -> LLMResponse:
+    """Request Parameter history using one handle visible to the model."""
     return LLMResponse(
         provider="stub",
         model="think-model",
@@ -198,7 +288,7 @@ def _memory_call(call_id: str = "memory-1") -> LLMResponse:
             ToolCall(
                 id=call_id,
                 name="lookup_parameter_history",
-                arguments={"input_handles": ["path.projectId"]},
+                arguments={"input_handles": [handle]},
             )
         ],
     )
@@ -210,6 +300,20 @@ def _patch_call(
     maximum: int = 100,
 ) -> LLMResponse:
     """Request an integer-like bounded Generator task from Patch Agent."""
+    return _patch_call_with_handle(
+        "path.projectId",
+        call_id=call_id,
+        maximum=maximum,
+    )
+
+
+def _patch_call_with_handle(
+    handle: str,
+    *,
+    call_id: str = "patch-1",
+    maximum: int = 100,
+) -> LLMResponse:
+    """Request a bounded Generator for one model-visible semantic handle."""
     return LLMResponse(
         provider="stub",
         model="think-model",
@@ -219,7 +323,7 @@ def _patch_call(
                 name="generate_parameter_patch",
                 arguments={
                     "root_cause": "The unrestricted identifier is rejected.",
-                    "affected_inputs": ["path.projectId"],
+                    "affected_inputs": [handle],
                     "desired_behavior": (
                         f"Generate accepted identifiers no greater than {maximum}."
                     ),
@@ -428,3 +532,21 @@ def test_patch_output_budget_is_part_of_solve_budget() -> None:
 
     assert outcome.status == "solve_budget_exhausted"
     assert outcome.outputs_used == 4
+
+
+def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
+    """Scenario: a model can discover exact handles and call one tool per output."""
+    client = ToolContractAwareClient()
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([_validated_patch("known-project")]),
+            StubPatchApplication(),
+        ),
+        max_outputs=5,
+    ).advance()
+
+    assert outcome.status == "applied_patch"
+    assert outcome.outputs_used == 5
+    assert len(client.requests) == 3

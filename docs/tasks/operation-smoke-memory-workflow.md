@@ -106,3 +106,49 @@ operation is present in the live OpenAPI input.
   names only to assert that they cannot be restored.
 - The work remains unstaged and uncommitted. Commit, merge, and worktree/branch
   cleanup still require separate authorization.
+
+## 2026-07-30 Phoenix Evals tool-recognition follow-up
+
+Status: Implemented and locally verified; live Eval rerun not authorized
+
+### Evidence
+
+- The persisted Phoenix volume contains two Solve experiments for the same
+  dataset version and prompt hash.
+- The failing run consumed 12 Solve outputs, repeated one HTTP probe, skipped
+  Parameter memory and Parameter Patch, returned `no_patch`, and scored zero on
+  all four applicable Solve behavior checks.
+- The passing repeat still consumed 20 total outputs. Its trace shows repeated
+  guesses of `path/projectId` and `projectId` before discovering the accepted
+  semantic handle `path.projectId`.
+- Runtime allowed exactly one tool call per output, but the system prompt did
+  not state that rule. Parameter tool schemas accepted generic strings and did
+  not enumerate the current operation's valid semantic handles.
+
+### Localized fix
+
+- Failure Solve now states the one-tool-per-output protocol and distinguishes
+  dotted semantic handles from slash-separated internal node identities.
+- Parameter-memory and Parameter-Patch tool schemas enumerate the exact
+  semantic handles valid for the current operation.
+- The prompt tells Solve to use HTTP only when current Batch and memory evidence
+  cannot distinguish the root cause.
+- No public DTO, database record, persistence boundary, dependency, or workflow
+  package boundary changed.
+
+### Verification
+
+- Red/green feedback loop:
+  `uv run pytest -q
+  tests/test_failure_solver_agent.py::test_solve_tool_contract_exposes_the_shortest_valid_tool_path`
+  changed from `solve_budget_exhausted` to `1 passed`.
+- Focused Failure Solve, DeepSeek, and Plan/Solve tests:
+  `uv run pytest -q tests/test_failure_solver_agent.py
+  tests/test_llm_deepseek.py tests/test_operation_smoke_plan_solve.py`
+  → `26 passed`.
+- Full suite: `467 passed, 5 skipped, 3 failed`. Two failures are the recorded
+  pre-existing baselines. The third is caused by the preserved, pre-existing
+  untracked `tests/test_gitlab_smoke_e2e_live.py` containing retired package
+  names that the boundary test intentionally scans.
+- A new live DeepSeek/Phoenix Eval would contact an external model and may incur
+  cost, so it remains unrun pending explicit authorization.
