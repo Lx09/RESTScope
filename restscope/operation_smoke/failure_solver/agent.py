@@ -9,13 +9,12 @@ effects until the model returns ``apply_patch`` with a valid candidate reference
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
-    LLMMessage,
     LLMModelConfig,
     LLMRequest,
     LLMResponse,
@@ -41,10 +40,6 @@ from restscope.operation_smoke.parameter_patch import (
     ParameterPatchFailure,
     ParameterPatchTask,
     ValidatedParameterPatch,
-)
-from restscope.operation_smoke.prompt_context import (
-    fit_message_context,
-    fit_prompt_context,
 )
 from restscope.testing import (
     OperationGeneratorConfig,
@@ -281,31 +276,26 @@ class FailureSolveSession:
             for item in request.reference_options
         ]
 
-        prompt_request = request.model_dump(
-            mode="json",
-            exclude={"todo": {"failure_id"}},
+        rendered = _solve_context_text(
+            request=request,
+            config=config,
+            active_constraints=active_constraints,
+            failure_history=failure_history,
+            semantic_inputs=self.semantic_inputs,
+            reference_options=self.reference_options,
         )
-        prompt_request["failure_history"] = _failure_history_for_prompt(
-            failure_history,
-            handle_by_node=self.semantic_inputs.handle_by_node,
-        )
-        fitted = fit_prompt_context(
-            required=prompt_request,
-            history=[],
-            model=model,
-        )
-        self.messages = [
-            LLMMessage(role="system", content=system_prompt),
-            LLMMessage(
-                role="user",
-                content=json.dumps(
-                    fitted.payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    default=str,
-                ),
+        self.context = AgentContext(
+            system=system_prompt,
+            user=rendered.text,
+            limits=ContextLimits(
+                system_chars=3_500,
+                initial_user_chars=24_000,
+                feedback_chars=8_000,
+                conversation_chars=48_000,
+                required_output_tokens=model.max_tokens,
             ),
-        ]
+            metrics=rendered.metrics,
+        )
 
     def advance(self) -> FailureSolveOutcome:
         """Run until a terminal conclusion or the shared output budget ends.
@@ -324,6 +314,8 @@ class FailureSolveSession:
                 "max_outputs": self.max_outputs,
             },
         ) as span:
+            for name, value in self.context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
             while self.outputs_used < self.max_outputs:
                 next_output = self.outputs_used + 1
                 checkpoint = (
@@ -331,25 +323,17 @@ class FailureSolveSession:
                     and next_output < self.max_outputs
                 )
                 if checkpoint:
-                    self.messages.append(
-                        LLMMessage(
-                            role="user",
-                            content=(
-                                "Continuation checkpoint: return action=continue "
-                                "with a genuinely new next_step, or finish with "
-                                "apply_patch, no_patch, or conflict. Tools are "
-                                "unavailable for this output."
-                            ),
-                        )
+                    self.context.append_feedback(
+                        "CONTINUATION CHECKPOINT\n"
+                        "Return action=continue with a genuinely new next_step, "
+                        "or finish with apply_patch, no_patch, or conflict. "
+                        "Tools are unavailable for this output."
                     )
                 response = self.client.invoke(
                     LLMRequest(
                         provider=self.model.provider,
                         model=self.model.model,
-                        messages=fit_message_context(
-                            self.messages,
-                            model=self.model,
-                        ).messages,
+                        messages=self.context.messages_for_request(self.model),
                         temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
@@ -365,29 +349,15 @@ class FailureSolveSession:
                 if response.tool_calls:
                     errors = self._tool_errors(response, checkpoint=checkpoint)
                     if errors:
-                        _append_correction(self.messages, response, errors)
+                        self._append_correction(response, errors)
                         continue
                     call = response.tool_calls[0]
-                    self.messages.append(
-                        LLMMessage(
-                            role="assistant",
-                            content="",
-                            tool_calls=[call],
-                        )
-                    )
+                    self.context.append_assistant(response)
                     result = self._execute_tool(call)
-                    self.messages.append(
-                        LLMMessage(
-                            role="tool",
-                            name=result.name,
-                            tool_call_id=result.tool_call_id,
-                            content=json.dumps(
-                                result.model_dump(mode="json", exclude_none=True),
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                                default=str,
-                            ),
-                        )
+                    self.context.append_tool_result(
+                        result.name,
+                        result.tool_call_id,
+                        _tool_result_text(result),
                     )
                     continue
 
@@ -400,37 +370,22 @@ class FailureSolveSession:
                         )
                     )
                 if errors or decision is None:
-                    _append_correction(
-                        self.messages,
+                    self._append_correction(
                         response,
                         errors or ["The Solve output could not be used."],
                     )
                     continue
                 if decision.action == "continue":
-                    self.messages.extend(
-                        (
-                            LLMMessage(
-                                role="assistant",
-                                content=json.dumps(
-                                    decision.model_dump(
-                                        mode="json",
-                                        exclude_none=True,
-                                    ),
-                                    separators=(",", ":"),
-                                ),
-                            ),
-                            LLMMessage(
-                                role="user",
-                                content=(
-                                    "Continue with the stated next_step. The "
-                                    "scoped tools are available again."
-                                ),
-                            ),
-                        )
+                    self.context.append_assistant(response)
+                    self.context.append_feedback(
+                        "Continue with the stated next_step. The scoped tools "
+                        "are available again."
                     )
                     continue
 
                 outcome = self._persist_terminal(decision)
+                for name, value in self.context.metrics.trace_attributes().items():
+                    span.set_attribute(name, value)
                 span.set_output(
                     {
                         "status": outcome.status,
@@ -445,8 +400,23 @@ class FailureSolveSession:
                 outputs_used=self.outputs_used,
                 reason="The Failure Solve output budget was exhausted.",
             )
+            for name, value in self.context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
             span.set_output(exhausted.model_dump(mode="json"))
             return exhausted
+
+    def _append_correction(
+        self,
+        response: LLMResponse,
+        errors: list[str],
+    ) -> None:
+        """Retain the model output and add compact deterministic repair guidance."""
+        self.context.append_assistant(response)
+        self.context.append_feedback(
+            "SOLVE OUTPUT INVALID\n"
+            + "\n".join(f"issue | {error}" for error in errors)
+            + "\nContinue with one valid tool call or one complete terminal JSON decision."
+        )
 
     def _tool_specs(self) -> list[ToolSpec]:
         """Return capabilities whose schemas expose this operation's handles."""
@@ -539,6 +509,35 @@ class FailureSolveSession:
                 self.request.operation_key,
                 node_ids,
             )
+            rendered = _parameter_history_text(
+                handles=handles,
+                histories=histories,
+                config=self.config,
+                handle_by_node=self.semantic_inputs.handle_by_node,
+            )
+            if rendered.text.startswith("CLIPPED MESSAGE"):
+                span.set_output(
+                    {
+                        "status": "history_too_large",
+                        "parameter_count": len(histories),
+                    }
+                )
+                return ToolResult(
+                    tool_call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    content=(
+                        "PARAMETER HISTORY UNAVAILABLE | "
+                        "code=history_too_large | patching-blocked=bool:true"
+                    ),
+                    error={
+                        "code": "history_too_large",
+                        "message": (
+                            "Compatibility-critical Patch/conflict history "
+                            "exceeds the safe feedback budget."
+                        ),
+                    },
+                )
             prompt_histories = [
                 _parameter_history_for_prompt(
                     handle=handle,
@@ -554,6 +553,7 @@ class FailureSolveSession:
             tool_call_id=call.id,
             name=call.name,
             status="succeeded",
+            content=rendered.text,
             structured={"parameters": prompt_histories},
         )
 
@@ -601,6 +601,11 @@ class FailureSolveSession:
                     tool_call_id=call.id,
                     name=call.name,
                     status="failed",
+                    content=(
+                        "PATCH TOOL FAILED | "
+                        f"code={result.reason} | outputs=int:{result.outputs_used} | "
+                        f'message="{_single_line("; ".join(result.errors))}"'
+                    ),
                     error={
                         "code": result.reason,
                         "message": "; ".join(result.errors)
@@ -643,6 +648,7 @@ class FailureSolveSession:
                 tool_call_id=call.id,
                 name=call.name,
                 status="succeeded",
+                content=_patch_candidate_text(candidate),
                 structured=candidate.model_dump(mode="json"),
             )
 
@@ -819,23 +825,29 @@ class FailureSolveSession:
 
 
 def _system_prompt() -> str:
-    """Describe Solve's decision authority and durable safety rules."""
+    """Describe the short evidence → history → candidate → terminal protocol."""
     return (
-        "Investigate exactly one Operation Smoke Failure. Decide which semantic "
-        "request inputs caused it and how to resolve it. You may query Parameter "
-        "memory, probe only the current HTTP operation, and call "
-        "generate_parameter_patch multiple times. Call exactly one tool per model "
-        "output; never combine parallel tool calls. For Parameter tools, copy only "
-        "the exact dotted semantic handles enumerated by their input schemas. "
-        "Internal slash-separated input_node_id values are not semantic handles. "
-        "Before requesting a Patch for an input, query that input's history and "
-        "ensure the new Generator also serves earlier related Failures. Probe HTTP "
-        "only when current Batch and memory evidence cannot distinguish the root "
-        "cause. If requirements cannot coexist, return conflict and do not apply "
-        "anything. A Patch tool result is only a local candidate; finish with "
-        "apply_patch(candidate_ref), no_patch, or conflict. Every terminal decision "
-        "must include trigger_conditions, root_cause, solution, evidence_source, "
-        "and Parameter cause summaries. Do not invent candidate references or "
+        "Investigate exactly one Operation Smoke Failure.\n"
+        "STAGES\n"
+        "1. Read current cases and the preloaded Failure history.\n"
+        "2. Before patching an input, call lookup_parameter_history for it.\n"
+        "3. Probe the current HTTP operation only when evidence cannot distinguish "
+        "the root cause.\n"
+        "4. Call generate_parameter_patch with the confirmed root cause and "
+        "testable Generator/Constraint requirements.\n"
+        "5. Return one terminal FailureSolveDecision JSON.\n"
+        "RULES\n"
+        "One output calls exactly one tool or returns one decision, never both. "
+        "Copy dotted semantic handles exactly from the tool schema enum; internal "
+        "slash-separated input_node_id is never a handle. A replacement must "
+        "remain compatible with prior applied Patches and conflicts. If it cannot, "
+        "return conflict. generate_parameter_patch has no side effects and returns "
+        "a session-local P ref. apply_patch is not a tool: it is the final decision "
+        "action and must use a supplied P ref. Other terminal actions are no_patch "
+        "and conflict. Every terminal decision includes trigger_conditions, "
+        "root_cause, solution, evidence_source, parameters, and conflict_reason "
+        "when applicable; each Parameter contains input_handle and cause_summary. "
+        "Use candidate_ref only for apply_patch. Do not invent aliases or "
         "database IDs."
     )
 
@@ -914,23 +926,267 @@ def _patch_tool_spec(
     )
 
 
-def _failure_history_for_prompt(
+def _solve_context_text(
+    *,
+    request: FailureSolveRequest,
+    config: OperationGeneratorConfig,
+    active_constraints: list[CompiledConstraintPatch],
+    failure_history: FailureHistory,
+    semantic_inputs,
+    reference_options: list[AvailableReferenceOption],
+):
+    """Render only the Todo's cases, active inputs, and concise Failure memory."""
+    writer = CompactTextWriter(max_value_chars=800)
+    writer.section("TASK")
+    writer.record(
+        request.todo.todo_id,
+        operation=request.operation_key,
+        method=config.snapshot.method,
+        path=config.snapshot.path,
+        round=request.round_number,
+        failure=request.todo.failure,
+    )
+
+    writer.section("CURRENT FAILURE CASES", untrusted=True)
+    for index, case in enumerate(request.todo.cases, start=1):
+        response = case.get("response")
+        response = response if isinstance(response, dict) else {}
+        writer.record(
+            f"C{index}",
+            case_id=case.get("case_id"),
+            kind=case.get("failure") or case.get("error") or "failed-case",
+            status=response.get("status_code"),
+            media=response.get("media_type"),
+            transport=response.get("error"),
+        )
+        request_values = case.get("request")
+        if isinstance(request_values, dict):
+            writer.detail(
+                "input",
+                {
+                    key: request_values[key]
+                    for key in ("path_parameters", "query", "headers", "body")
+                    if key in request_values
+                },
+            )
+        response_values = {
+            key: response[key]
+            for key in ("error_code", "message", "error", "body")
+            if key in response
+        }
+        if response_values:
+            writer.detail("response", response_values)
+
+    config_by_node = {item.input_node_id: item for item in config.configs}
+    nodes_by_id = {
+        item.input_node_id: item for item in config.snapshot.input_nodes
+    }
+    writer.section("SEMANTIC INPUTS", untrusted=True)
+    for handle, node_id in semantic_inputs.node_by_handle.items():
+        node = nodes_by_id[node_id]
+        generator = config_by_node[node_id]
+        writer.record(
+            handle,
+            is_required=node.required,
+            schema=(
+                node.schema_contract.model_dump(
+                    mode="python",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
+                if node.schema_contract is not None
+                else None
+            ),
+            inclusion_probability=generator.inclusion_probability,
+            generator=generator.strategy.model_dump(mode="python"),
+        )
+
+    writer.section("ACTIVE CONSTRAINTS", untrusted=True)
+    if not active_constraints:
+        writer.record("none", count=0)
+    for constraint in active_constraints:
+        writer.record(
+            constraint.constraint_id,
+            kind=constraint.kind,
+            expression=_semantic_constraint(
+                constraint.constraint.model_dump(mode="python"),
+                semantic_inputs.handle_by_node,
+            ),
+        )
+
+    writer.section("REFERENCE ALIASES", untrusted=True)
+    if not reference_options:
+        writer.record("none", count=0)
+    for index, option in enumerate(reference_options, start=1):
+        writer.record(
+            f"R{index}",
+            input=semantic_inputs.handle_by_node.get(
+                option.input_node_id,
+                "<inactive-input>",
+            ),
+            kind=option.kind,
+            values=option.value_count,
+            resource=option.canonical_resource,
+            value_name=option.value_name,
+        )
+
+    _write_failure_history(
+        writer,
+        failure_history,
+        handle_by_node=semantic_inputs.handle_by_node,
+    )
+    return writer.render(max_chars=24_000)
+
+
+def _write_failure_history(
+    writer: CompactTextWriter,
     history: FailureHistory,
     *,
     handle_by_node,
-) -> dict:
-    """Remove database identities and translate Parameter IDs to handles."""
-    payload = history.model_dump(mode="json")
-    payload.pop("failure_id", None)
-    for investigation in payload["investigations"]:
-        investigation.pop("investigation_id", None)
-        for parameter in investigation["parameters"]:
-            node_id = parameter.pop("input_node_id")
-            parameter["input_handle"] = handle_by_node.get(
-                node_id,
-                "<inactive-input>",
+) -> None:
+    """Write compatibility-critical outcomes and aggregate old no-Patch noise."""
+    writer.section("CURRENT FAILURE MEMORY", untrusted=True)
+    outcomes: dict[str, int] = {}
+    for investigation in history.investigations:
+        outcomes[investigation.outcome] = outcomes.get(investigation.outcome, 0) + 1
+    writer.record(
+        "summary",
+        failure=history.summary,
+        observations=len(history.observations),
+        investigations=len(history.investigations),
+        outcomes=outcomes,
+    )
+
+    detailed_ids = {
+        item.investigation_id
+        for item in history.investigations[-5:]
+    }
+    older_no_patch: dict[str, int] = {}
+    for investigation in history.investigations:
+        handles = [
+            handle_by_node.get(parameter.input_node_id, "<inactive-input>")
+            for parameter in investigation.parameters
+        ]
+        compatibility_critical = investigation.outcome in {
+            "applied_patch",
+            "conflict",
+        }
+        if compatibility_critical or investigation.investigation_id in detailed_ids:
+            writer.record(
+                f"round-{investigation.round_number}",
+                outcome=investigation.outcome,
+                trigger=investigation.trigger_conditions,
+                root_cause=investigation.root_cause,
+                solution=investigation.solution,
+                parameters=handles,
+                conflict=investigation.conflict_reason,
+                patch_revision=(
+                    investigation.applied_patch.generator_revision
+                    if investigation.applied_patch is not None
+                    else None
+                ),
             )
-    return payload
+            if investigation.applied_patch is not None:
+                writer.detail(
+                    "patch",
+                    {
+                        "before": investigation.applied_patch.before_generators,
+                        "after": investigation.applied_patch.after_generators,
+                    },
+                )
+        else:
+            signature = (
+                ",".join(sorted(handles)) or "no-parameter"
+            ) + "|" + investigation.root_cause.casefold()[:120]
+            older_no_patch[signature] = older_no_patch.get(signature, 0) + 1
+    for signature, count in sorted(older_no_patch.items()):
+        writer.record(
+            "older-no-patch",
+            signature=signature,
+            count=count,
+            required=False,
+        )
+
+
+def _parameter_history_text(
+    *,
+    handles: list[str],
+    histories: list[ParameterHistory],
+    config: OperationGeneratorConfig,
+    handle_by_node,
+):
+    """Render applied/conflict facts first and old no-Patch records optionally."""
+    writer = CompactTextWriter(max_value_chars=800)
+    config_by_node = {item.input_node_id: item for item in config.configs}
+    for handle, history in zip(handles, histories, strict=True):
+        writer.section(f"PARAMETER {handle}", untrusted=True)
+        current = config_by_node.get(history.input_node_id)
+        writer.record(
+            "current",
+            generator=(
+                current.strategy.model_dump(mode="python")
+                if current is not None
+                else None
+            ),
+            inclusion_probability=(
+                current.inclusion_probability
+                if current is not None
+                else None
+            ),
+            related_failures=len(history.failures),
+        )
+        recent_no_patch: list[tuple[str, Any]] = []
+        for failure in history.failures:
+            writer.text("failure", failure.summary)
+            for investigation in failure.investigations:
+                item = (
+                    investigation.root_cause,
+                    investigation,
+                )
+                if investigation.outcome in {"applied_patch", "conflict"}:
+                    writer.record(
+                        f"round-{investigation.round_number}",
+                        outcome=investigation.outcome,
+                        cause=investigation.root_cause,
+                        solution=investigation.solution,
+                        conflict=investigation.conflict_reason,
+                        parameters=[
+                            handle_by_node.get(
+                                parameter.input_node_id,
+                                "<inactive-input>",
+                            )
+                            for parameter in investigation.parameters
+                        ],
+                        patch_revision=(
+                            investigation.applied_patch.generator_revision
+                            if investigation.applied_patch is not None
+                            else None
+                        ),
+                    )
+                    if investigation.applied_patch is not None:
+                        writer.detail(
+                            "patch",
+                            {
+                                "before": investigation.applied_patch.before_generators,
+                                "after": investigation.applied_patch.after_generators,
+                            },
+                        )
+                else:
+                    recent_no_patch.append(item)
+        for cause, investigation in recent_no_patch[-5:]:
+            writer.record(
+                f"no-patch-round-{investigation.round_number}",
+                cause=cause,
+                solution=investigation.solution,
+                required=False,
+            )
+        if len(recent_no_patch) > 5:
+            writer.record(
+                "older-no-patch",
+                count=len(recent_no_patch) - 5,
+                required=False,
+            )
+    return writer.render(max_chars=8_000)
 
 
 def _parameter_history_for_prompt(
@@ -956,6 +1212,155 @@ def _parameter_history_for_prompt(
     return payload
 
 
+def _semantic_constraint(value: Any, handle_by_node) -> Any:
+    """Translate internal Constraint input IDs before text reaches Solve."""
+    if isinstance(value, list):
+        return [
+            _semantic_constraint(item, handle_by_node)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    output = {
+        key: _semantic_constraint(item, handle_by_node)
+        for key, item in value.items()
+        if key != "input_node_id"
+    }
+    if "input_node_id" in value:
+        output["input"] = handle_by_node.get(
+            value["input_node_id"],
+            "<inactive-input>",
+        )
+    return output
+
+
+def _tool_result_text(result: ToolResult) -> str:
+    """Project any scoped tool result into bounded text for the Solve model."""
+    if result.content and result.name in {_MEMORY_TOOL_NAME, _PATCH_TOOL_NAME}:
+        return result.content
+    writer = CompactTextWriter(max_value_chars=1_200)
+    writer.section(
+        "HTTP PROBE" if result.status == "succeeded" else "TOOL FAILURE",
+        untrusted=True,
+    )
+    writer.record(
+        result.name,
+        status=result.status,
+        error_code=(
+            result.error.get("code")
+            if isinstance(result.error, dict)
+            else None
+        ),
+        error_message=(
+            result.error.get("message")
+            if isinstance(result.error, dict)
+            else None
+        ),
+    )
+    if isinstance(result.structured, dict):
+        structured = result.structured
+        writer.record(
+            "response",
+            status=structured.get("status_code") or structured.get("status"),
+            media=structured.get("media_type"),
+            headers=sorted(
+                (structured.get("headers") or {}).keys()
+                if isinstance(structured.get("headers"), dict)
+                else []
+            ),
+            transport=structured.get("transport_error"),
+        )
+        if structured.get("body") is not None:
+            writer.text("body", structured["body"])
+        remaining = {
+            key: value
+            for key, value in structured.items()
+            if key
+            not in {
+                "status_code",
+                "status",
+                "media_type",
+                "headers",
+                "transport_error",
+                "body",
+            }
+        }
+        if remaining:
+            writer.detail("result", remaining)
+    elif result.structured is not None:
+        writer.text("result", result.structured)
+    if result.content:
+        writer.text("body", result.content)
+    return writer.render(max_chars=8_000).text
+
+
+def _patch_candidate_text(candidate: PatchCandidate) -> str:
+    """Summarize a validated local Patch without dumping its DTO or all samples."""
+    writer = CompactTextWriter(max_value_chars=600)
+    writer.section("PATCH CANDIDATE")
+    affected = sorted(
+        {
+            *candidate.before_generators,
+            *candidate.after_generators,
+        }
+    )
+    writer.record(
+        candidate.candidate_ref,
+        affected_inputs=affected,
+        patch_outputs=candidate.patch_outputs,
+        sample_count=len(candidate.samples),
+        constraint_count=len(candidate.patch.constraints),
+    )
+    for handle in affected:
+        writer.record(
+            handle,
+            before=candidate.before_generators.get(handle),
+            after=candidate.after_generators.get(handle),
+        )
+    for index, sample in enumerate(candidate.samples[:3], start=1):
+        writer.detail(f"sample-{index}", sample)
+    if len(candidate.samples) > 3:
+        writer.record(
+            "remaining-samples",
+            count=len(candidate.samples) - 3,
+            summary=_sample_value_summary(candidate.samples[3:]),
+        )
+    return writer.render(max_chars=8_000).text
+
+
+def _sample_value_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe omitted candidate values by type and presence only."""
+    summary: dict[str, Any] = {}
+    handles = {
+        handle
+        for sample in samples
+        for handle in (sample.get("values") or {})
+    }
+    for handle in sorted(handles):
+        values = [
+            sample["values"][handle]
+            for sample in samples
+            if (sample.get("present") or {}).get(handle)
+        ]
+        numeric = [
+            value
+            for value in values
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        summary[handle] = {
+            "present": len(values),
+            "types": sorted({type(value).__name__ for value in values}),
+            "minimum": min(numeric) if numeric else None,
+            "maximum": max(numeric) if numeric else None,
+        }
+    return summary
+
+
+def _single_line(value: str) -> str:
+    """Keep a short technical error inside one compact record."""
+    return value.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+
+
 def _generator_summary(
     config: OperationGeneratorConfig,
     *,
@@ -972,41 +1377,3 @@ def _generator_summary(
         ].model_dump(mode="json")
         for handle in affected_inputs
     }
-
-
-def _append_correction(
-    messages: list[LLMMessage],
-    response: LLMResponse,
-    errors: list[str],
-) -> None:
-    """Keep invalid output and focused correction guidance in-session."""
-    messages.extend(
-        (
-            LLMMessage(
-                role="assistant",
-                content=json.dumps(
-                    response.parsed_json
-                    if response.parsed_json is not None
-                    else {
-                        "content": response.content,
-                        "tool_calls": [
-                            call.model_dump(mode="json")
-                            for call in response.tool_calls
-                        ],
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    default=str,
-                ),
-            ),
-            LLMMessage(
-                role="user",
-                content=(
-                    "The previous Solve output could not be used:\n"
-                    + "\n".join(f"- {error}" for error in errors)
-                    + "\nContinue with one valid tool call or one complete "
-                    "terminal decision."
-                ),
-            ),
-        )
-    )

@@ -71,6 +71,7 @@ def build_api_behavior_monitor_coordinator(
             catalog=response_value_catalog,
             client=client,
             model=model,
+            tracing_runtime=runtime,
         ),
         tracing_runtime=runtime,
     )

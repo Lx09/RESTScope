@@ -1,6 +1,10 @@
 # Operation Smoke Phoenix Evals
 
-Status: Implemented and verified; intentionally uncommitted
+Status: Implemented, verified, and merged into local `main`
+
+Subsequent note: `docs/tasks/project-agent-context.md` replaces the original
+model-facing prompt projections and Planner memory-tool assumption. The
+Phoenix Dataset/Experiment structure remains active.
 
 ## Objective
 

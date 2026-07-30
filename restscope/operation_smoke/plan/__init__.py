@@ -2,7 +2,6 @@
 
 from .agent import SmokePlanAgent
 from .schemas import (
-    FailureCatalogPromptEntry,
     FailureTodo,
     NonDebuggableFailure,
     SmokePlanRequest,
@@ -10,7 +9,6 @@ from .schemas import (
 )
 
 __all__ = [
-    "FailureCatalogPromptEntry",
     "FailureTodo",
     "NonDebuggableFailure",
     "SmokePlanAgent",

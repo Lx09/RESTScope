@@ -219,10 +219,20 @@ Constructs one Solve-owned Patch candidate. It compiles model output into
 testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and requires the same Agent to review them.
 
-### `restscope/operation_smoke/prompt_context/`
+### `restscope/context/`
 
-Applies the shared model-window reserve, current-evidence priority, recent
-history loading, older-history summaries, and marked head/tail clipping.
+The project-level message-construction Module used by every direct LLM
+decision. `CompactTextWriter` turns already-selected DTO, Memory, tool, and
+sample facts into typed line text while escaping untrusted values.
+`AgentContext` keeps the system/task pair, complete tool-call groups, newest
+feedback, explicit clipping, and numeric trace metrics inside each role's
+budget. It knows no Operation Smoke, Behavior Monitor, database, or Agent
+registry concepts.
+
+Workflow-specific code remains responsible for selecting and interpreting
+domain facts. No model-facing runtime evidence is produced by dumping a DTO or
+Memory object as JSON; strict JSON remains the final Agent output and provider
+tool protocol.
 
 ### `restscope/api_behavior_monitor/`
 
@@ -300,7 +310,8 @@ For a failed Batch that receives an applied Patch:
 
 ```text
 OperationExecutionReport
-  -> SmokePlanAgent (C* cases and F* memory references)
+  -> structured same-operation Failure retrieval
+  -> SmokePlanAgent (all failed C* cases and <=24 F* candidates; no tools)
   -> stable Failure
   -> fresh FailureSolveAgent
   -> optional Parameter-memory and HTTP tools

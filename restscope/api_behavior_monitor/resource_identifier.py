@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import json
 import re
 from typing import Any
 
+from restscope.context import AgentContext, ContextLimits
 from restscope.llm import (
     LLMClient,
-    LLMMessage,
     LLMModelConfig,
     LLMRequest,
     LLMResponse,
@@ -651,34 +650,20 @@ class ResourceIdentifierTracker:
             resource_name=resource_name,
             candidates=batches[0],
         )
-        first_messages = _prompt_messages(first_prompt)
+        first_context = _prompt_context(first_prompt)
         selection, errors, response = self._invoke_selection(
-            first_messages,
+            first_context,
             first_prompt,
         )
         if errors:
-            repair_messages = [
-                *first_messages,
-                LLMMessage(
-                    role="assistant",
-                    content=json.dumps(
-                        response.parsed_json
-                        if response.parsed_json is not None
-                        else response.content,
-                        ensure_ascii=False,
-                    ),
-                ),
-                LLMMessage(
-                    role="user",
-                    content=(
-                        "Your previous JSON could not be used.\n"
-                        + "\n".join(f"- {error}" for error in errors[:10])
-                        + "\nReturn one corrected JSON object."
-                    ),
-                ),
-            ]
+            first_context.append_assistant(response)
+            first_context.append_feedback(
+                "Your previous JSON could not be used.\n"
+                + "\n".join(f"- {error}" for error in errors[:10])
+                + "\nReturn one corrected JSON object."
+            )
             repaired, repair_errors, _response = self._invoke_selection(
-                repair_messages,
+                first_context,
                 first_prompt,
             )
             if repair_errors or repaired is None:
@@ -699,9 +684,9 @@ class ResourceIdentifierTracker:
             resource_name=resource_name,
             candidates=batches[1],
         )
-        second_messages = _prompt_messages(second_prompt)
+        second_context = _prompt_context(second_prompt)
         second, second_errors, _response = self._invoke_selection(
-            second_messages,
+            second_context,
             second_prompt,
         )
         if second_errors or second is None:
@@ -714,7 +699,7 @@ class ResourceIdentifierTracker:
 
     def _invoke_selection(
         self,
-        messages: list[LLMMessage],
+        context: AgentContext,
         prompt: IdentifierPrompt,
     ) -> tuple[
         IdentifierSelectionDecision | None,
@@ -733,7 +718,24 @@ class ResourceIdentifierTracker:
                 "resource_monitor_model_not_configured",
                 "The resource_monitor FAST model is not configured",
             )
-        response = self.client.invoke(self._selection_request(messages))
+        llm_request = self._selection_request(context)
+        with self.tracing_runtime.span(
+            "ResourceIdentifierTracker.select_identifier",
+            kind="CHAIN",
+            input_value={"candidate_count": len(prompt.candidate_aliases)},
+        ) as span:
+            for name, value in context.metrics.trace_attributes().items():
+                span.set_attribute(name, value)
+            response = self.client.invoke(llm_request)
+            span.set_output(
+                {
+                    "has_identifier": bool(
+                        isinstance(response.parsed_json, dict)
+                        and response.parsed_json.get("identifier")
+                    ),
+                    "tool_call_count": len(response.tool_calls),
+                }
+            )
         validation = self.validator.validate(
             response=response,
             output_model=IdentifierSelectionDecision,
@@ -751,12 +753,12 @@ class ResourceIdentifierTracker:
 
     def _selection_request(
         self,
-        messages: list[LLMMessage],
+        context: AgentContext,
     ) -> LLMRequest:
         return LLMRequest(
             provider=self.model.provider,
             model=self.model.model,
-            messages=messages,
+            messages=context.messages_for_request(self.model),
             temperature=self.model.temperature,
             max_tokens=self.model.max_tokens,
             response_format="json",
@@ -1356,11 +1358,20 @@ def _selection_prompt(
     )
 
 
-def _prompt_messages(prompt: IdentifierPrompt) -> list[LLMMessage]:
-    return [
-        LLMMessage(role="system", content=prompt.system),
-        LLMMessage(role="user", content=prompt.user),
-    ]
+def _prompt_context(prompt: IdentifierPrompt) -> AgentContext:
+    """Create the bounded one- or two-output identifier-selection session."""
+    return AgentContext(
+        system=prompt.system,
+        user=prompt.user,
+        limits=ContextLimits(
+            system_chars=1_600,
+            initial_user_chars=8_000,
+            feedback_chars=3_000,
+            conversation_chars=12_000,
+            required_output_tokens=512,
+        ),
+        metrics=prompt.metrics,
+    )
 
 
 def _selected_field(

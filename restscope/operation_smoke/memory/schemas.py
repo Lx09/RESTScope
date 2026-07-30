@@ -162,13 +162,49 @@ class FailureCatalogEntry(_MemoryModel):
     applied_patch_count: int = Field(ge=0)
 
 
+class FailureRetrievalObservation(_MemoryModel):
+    """Describe one current failed case using only deterministic search signals.
+
+    Planner creates this projection before reading memory.  It contains no
+    success case and no complete response body; the Memory Module uses it to
+    find plausible existing Failures for the same operation.
+    """
+
+    case_code: str = Field(pattern=r"^C[1-9][0-9]*$")
+    failure_kind: str = Field(min_length=1)
+    transport_error: str | None = None
+    status_code: int | None = None
+    media_type: str | None = None
+    input_paths: list[str] = Field(default_factory=list)
+    error_signature: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+
+
 class FailureHistory(_MemoryModel):
-    """Complete structured history returned by the Planner memory tool."""
+    """Complete structured history used by Solve and candidate retrieval."""
 
     failure_id: str
     summary: str
     observations: list[FailureObservationMemory] = Field(default_factory=list)
     investigations: list[InvestigationMemory] = Field(default_factory=list)
+
+
+class FailureCandidate(_MemoryModel):
+    """Return one ranked historical Failure with concise match evidence.
+
+    Database identity remains runtime-only. Planner later replaces it with an
+    ``F`` alias before constructing the model prompt.
+    """
+
+    failure_id: str
+    summary: str
+    matched_case_codes: list[str]
+    match_reasons: list[str]
+    observation_count: int = Field(ge=0)
+    investigation_count: int = Field(ge=0)
+    applied_patch_count: int = Field(ge=0)
+    last_seen_round: int = Field(ge=0)
+    recent_investigations: list[InvestigationMemory] = Field(default_factory=list)
 
 
 class ParameterHistory(_MemoryModel):

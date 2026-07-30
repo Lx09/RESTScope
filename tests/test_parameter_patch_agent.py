@@ -123,7 +123,15 @@ def test_patch_uses_case_count_for_dynamic_samples_then_accepts() -> None:
         sample["values"]["path.projectId"] == "known-project"
         for sample in outcome.samples
     )
-    assert "exactly 3 generated" in client.requests[1].messages[-1].content
+    feedback = client.requests[1].messages[-1].content
+    assert "samples=int:3" in feedback
+    assert "path.projectId.present" in feedback
+    assert "path.projectId.value" in feedback
+    assert '{"' not in feedback
+    initial = client.requests[0].messages[1].content
+    assert "PATCH REQUIREMENT" in initial
+    assert "CURRENT GENERATORS" in initial
+    assert '{"' not in initial
 
 
 def test_patch_cannot_change_input_outside_solve_requirement() -> None:

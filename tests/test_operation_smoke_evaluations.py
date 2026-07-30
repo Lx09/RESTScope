@@ -117,8 +117,8 @@ def test_dataset_sync_uses_stable_ids_references_and_scenario_splits() -> None:
 def test_plan_code_evaluators_report_one_zero_and_not_applicable() -> None:
     """Scenario: each declared property is scored without an aggregate result."""
     from evaluations.agents.plan.suite import (
+        plan_candidate_retrieval_evaluator,
         plan_case_groups_evaluator,
-        plan_memory_lookup_evaluator,
         plan_status_evaluator,
     )
 
@@ -146,7 +146,7 @@ def test_plan_code_evaluators_report_one_zero_and_not_applicable() -> None:
             "expected": {"case_groups": [["case-a"], ["case-b"]]},
         }
     )[0]
-    lookup = plan_memory_lookup_evaluator.evaluate(
+    lookup = plan_candidate_retrieval_evaluator.evaluate(
         {"output": output, "expected": {}}
     )[0]
 
@@ -238,7 +238,8 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
         call["tool"] == "restscope.http.request"
         for call in output["tool_calls"]
     )
-    assert "path/projectId" in client.requests[0].messages[1].content
+    assert "path.projectId" in client.requests[0].messages[1].content
+    assert "path/projectId" not in client.requests[0].messages[1].content
 
 
 def test_patch_task_runs_real_compile_sampling_and_review() -> None:

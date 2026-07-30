@@ -4,6 +4,14 @@ RESTScope explores an API through generated requests, classifies observed
 failures, and evolves input generators from evidence gathered during one App
 lifetime.
 
+## Agent Context
+
+Agent Context is the short-lived, model-facing message view for one LLM
+decision. It is not Operation Smoke Memory and is never stored. A workflow
+first selects typed domain facts; `CompactTextWriter` encodes them as safe,
+compact text, and `AgentContext` keeps the initial task plus bounded tool and
+validation exchanges. Final Agent decisions still use strict JSON.
+
 ## Operation Smoke Language
 
 **Failure Observation**:

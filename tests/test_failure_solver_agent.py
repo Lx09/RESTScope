@@ -435,6 +435,15 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert application.calls[0]["patch"].updates[0].strategy.value == "known-project"
     assert patch_factory.created[0].calls[0]["random_seed"] == 731
     assert patch_factory.created[0].calls[0]["task"].prior_attempts
+    initial_prompt = client.requests[0].messages[1].content
+    assert "CURRENT FAILURE CASES" in initial_prompt
+    assert "path.projectId" in initial_prompt
+    assert "run-2" not in initial_prompt
+    assert "current_batch" not in initial_prompt
+    assert '{"' not in initial_prompt
+    memory_feedback = client.requests[1].messages[-1].content
+    assert memory_feedback.startswith("PARAMETER path.projectId")
+    assert '{"' not in memory_feedback
 
 
 def test_patch_tool_requires_parameter_history_before_generation() -> None:

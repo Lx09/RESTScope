@@ -1,171 +1,91 @@
-"""Skill-style instructions for the Parameter Patch Agent."""
+"""Build the compact domain context for one Parameter Patch Agent session.
+
+Failure Solve has already identified a root cause and selected affected semantic
+inputs.  This module projects only those Generators, active Constraints,
+reference aliases, and compatibility facts into safe text.  The common Context
+Module later manages the growing propose/validation/accept conversation.
+"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
-from restscope.operation_smoke.prompt_context import fit_prompt_context
+from restscope.context import CompactTextWriter, ContextMetrics
 from restscope.llm import LLMModelConfig
 from restscope.testing import OperationGeneratorConfig, build_semantic_input_map
 
-from .schemas import AvailableReferenceOption, ParameterPatchTask
+from .schemas import (
+    AvailableReferenceOption,
+    CompiledConstraintPatch,
+    ParameterPatchTask,
+)
 
 
 EXPERT_SYSTEM_PROMPT = """
-Purpose
-You are the Generator and Constraint construction expert for one confirmed
-Operation Smoke failure requirement. Translate the supplied root cause and
-desired behavior into one
-complete, locally valid parameter patch. Do not diagnose a new root cause and
-do not change the supplied target inputs or requirements.
+PURPOSE
+Convert one confirmed Failure requirement into the smallest complete Generator
+and/or Constraint replacement. Do not diagnose a new cause or change target
+inputs.
 
-When to use
-Use a Generator when an individual input needs a different value distribution,
-range, format, presence probability, observed identifier, or response value.
-Use a Constraint when multiple inputs must be present or valued together. Use
-both when each input needs a useful domain and their joint assignments must
-obey a relationship.
+PROTOCOL
+Use propose → runtime compile/sample → accept. Return strict
+ParameterPatchDecision JSON only. propose includes action and a complete patch;
+patch contains changes and constraints. A later propose replaces the earlier
+proposal. accept contains action only and is valid only after successful sample
+feedback. Never mix prose with the decision.
 
-Output protocol
-Return JSON only. A proposal has this complete shape:
-{"action":"propose","patch":{"changes":[...],"constraints":[...]}}
-Every propose output is a complete replacement for every earlier proposal.
-Each changes entry has fields: input, optional inclusion_probability, optional
-strategy, and optional reference. inclusion_probability must be between 0 and 1.
-Use at most one of strategy and reference, and change at least one field. input
-must be one supplied semantic input. reference must be one supplied R alias.
-Each constraints entry has exactly one expression field. Return
-{"action":"accept"} only after the runtime has returned local samples for the
-latest proposal. The sample object contains request-shaped values and an
-explicit present map; review both, plus every supplied reference_pool_values
-entry. Never include a patch with accept.
+GENERATOR SIGNATURES
+constant | value
+choice | values(non-empty); weights?(same length, non-negative, some positive)
+integer_range | minimum:int; maximum:int; inclusive
+number_range | minimum:number; maximum:number; inclusive
+random_string | min_length:int; max_length:int; alphabet(non-empty when needed)
+regex | pattern(Python search, <=2000 chars); min_length; max_length
+boolean | true_probability:0..1
+format | format:uuid|date|date-time|email
+array | min_items:int; max_items:int
+variant | branch_weights(non-empty, frozen branch count)
+object | system-managed; never construct
+request_body | system-managed; never construct
+resource_identifier | system-selected through supplied R alias only
+response_value | system-selected through supplied R alias only
 
-Generator directory: exact fields, variants, and limits
-- constant fields: type, value. Shape:
-  {"type":"constant","value":<any JSON value>}.
-- choice fields: type, values, optional weights. values is non-empty. weights,
-  when present, has the same length, contains non-negative numbers, and has at
-  least one positive number. Shape:
-  {"type":"choice","values":[...],"weights":[...]}, or omit weights.
-- integer_range fields: type, minimum, maximum. Both bounds are integers,
-  minimum <= maximum, and both endpoints are inclusive.
-- number_range fields: type, minimum, maximum. Both bounds are numbers and
-  minimum <= maximum.
-- random_string fields: type, min_length, max_length, alphabet. Length bounds
-  are non-negative and min_length <= max_length. alphabet must be non-empty
-  whenever max_length > 0.
-- regex fields: type, pattern, min_length, max_length. pattern is a valid Python
-  regular expression no longer than 2000 characters. Length bounds are between
-  0 and 10000 inclusive, and min_length <= max_length. Matching uses search
-  semantics, so use ^ and $ when the whole value must match.
-- boolean fields: type, true_probability. true_probability is between 0 and 1.
-- format fields: type, format. format is exactly one of uuid, date, date-time,
-  or email.
-- object fields: type. object is a structural object node.
-- array fields: type, min_items, max_items. Bounds are non-negative and
-  min_items <= max_items.
-- variant fields: type, branch_weights. The list is non-empty, its length
-  matches the frozen oneOf/anyOf branch count, weights are non-negative, and at
-  least one weight is positive.
-- resource_identifier fields: type, resource. It selects an observed identifier
-  for a canonical resource.
-- response_value fields: type, value_name. It selects an observed value from a
-  named response monitor.
-- request_body fields: type. request_body is the structural request-body node.
-object and request_body are system-managed and must never be proposed.
-resource_identifier and response_value are also system-selected: request them
-only by putting a supplied R alias in the change's reference field. Never emit
-their direct strategy shape, invent a resource/value name, database identifier,
-or raw input_node_id.
+Each change names one supplied semantic input and may set
+inclusion_probability, strategy, or reference. strategy and reference are
+mutually exclusive. Use only supplied R aliases; never emit raw input_node_id.
 
-Constraint directory: exact recursive shapes and limits
-Value expressions are:
-- input_value fields: type, input. Shape:
-  {"type":"input_value","input":"query.limit"}.
-- literal fields: type, value. Shape:
-  {"type":"literal","value":10}.
-- arithmetic fields: type, operator, left, right. operator is one of +, -, *,
-  or /, and left/right are value expressions.
-Boolean expressions are:
-- present fields: type, input. It tests whether the semantic input is included.
-- compare fields: type, operator, left, right. operator is one of ==, !=, <,
-  <=, >, or >=; left/right are value expressions.
-- matches fields: type, value, pattern. value is a string value expression and
-  pattern is a valid regular expression no longer than 2000 characters.
-- implies fields: type, condition, consequence. Both children are boolean
-  expressions.
-- cardinality fields: type, expressions, minimum, maximum. expressions has
-  1-100 boolean expressions; 0 <= minimum <= maximum <= expression count.
-- and/or fields: type, expressions. type is "and" or "or"; expressions has
-  1-100 boolean expressions.
-- not fields: type, expression. expression is one boolean expression.
-A proposal contains at most 20 top-level constraints. All present/input_value
-references use a supplied semantic input in the input field. Never use
-input_node_id. Arithmetic and ordered comparisons must use compatible numeric
-types; matches must use a string-compatible value.
+CONSTRAINT SIGNATURES
+value: input_value(input) | literal(value) |
+  arithmetic(operator:+|-|*|/, left:value, right:value)
+boolean: present(input) |
+  compare(operator:==|!=|<|<=|>|>=, left:value, right:value) |
+  matches(value, pattern) |
+  implies(condition:boolean, consequence:boolean) |
+  cardinality(expressions:1..100, minimum, maximum) |
+  and/or(expressions:1..100) | not(expression:boolean)
+Each top-level constraint has exactly expression. Use at most 20. Ordered
+comparisons and arithmetic require compatible numeric values; matches requires
+a string-compatible value.
 
-Construction steps
-1. Read the immutable Failure Solve Patch requirement.
-2. Select the smallest Generator, Constraint, or combined change satisfying
-   every requirement.
-3. Return action=propose with the entire patch, never an incremental edit.
-4. The runtime validates input scope, schemas, constraints, provisional
-   compatibility, and generates the requested number of parameter value groups.
-5. Review values, present flags, and reference pool values supplied by the
-   runtime. Return action=accept only after they satisfy every task requirement.
-   Otherwise return a complete replacement patch.
-
-Minimal examples
-Exact value:
-{"action":"propose","patch":{"changes":[{"input":"query.limit",
-"strategy":{"type":"constant","value":10}}],"constraints":[]}}
-Range and inclusion:
-{"action":"propose","patch":{"changes":[{"input":"query.limit",
-"inclusion_probability":1,"strategy":{"type":"integer_range","minimum":1,
-"maximum":100}}],"constraints":[]}}
-Regex text:
-{"action":"propose","patch":{"changes":[{"input":"query.code","strategy":
-{"type":"regex","pattern":"^[A-Z]{3}$","min_length":3,"max_length":3}}],
-"constraints":[]}}
-Observed identifier:
-{"action":"propose","patch":{"changes":[{"input":"path.projectId",
-"reference":"R1"}],"constraints":[]}}
-Relationship:
-{"action":"propose","patch":{"changes":[],"constraints":[{"expression":
-{"type":"implies","condition":{"type":"present","input":"query.end"},
-"consequence":{"type":"present","input":"query.start"}}}]}}
-Arithmetic relationship:
-{"action":"propose","patch":{"changes":[],"constraints":[{"expression":
-{"type":"compare","operator":"<=","left":{"type":"input_value",
-"input":"query.start"},"right":{"type":"arithmetic","operator":"-",
-"left":{"type":"input_value","input":"query.end"},"right":{"type":"literal",
-"value":1}}}}]}}
-Cardinality:
-{"action":"propose","patch":{"changes":[],"constraints":[{"expression":
-{"type":"cardinality","expressions":[{"type":"present","input":"query.a"},
-{"type":"present","input":"query.b"}],"minimum":0,"maximum":1}}]}}
-Acceptance after samples:
-{"action":"accept"}
-
-Restrictions
-Use only supplied semantic inputs and R aliases. Do not call tools, send HTTP,
-write the catalog, persist state, or emit prose.
+REVIEW
+propose must cover only affected inputs and every stated requirement. The
+runtime validates DTO shape, schema compatibility, references, Constraints,
+and samples. Before accept, inspect every affected input, presence flag,
+representative sample, range/type summary, supplied reference-pool value, and
+Constraint result. If any requirement is not met, propose one complete
+replacement. Do not call tools, send HTTP, persist state, or emit prose.
 """.strip()
 
 
 @dataclass(slots=True, frozen=True)
 class ParameterPatchPrompt:
-    """
-    Carry validated prompt data across one isolated Solve-owned Patch attempt.
+    """Carry one compact prompt plus runtime-only reference alias mapping."""
 
-    The annotated fields form the contract; validation rejects missing, extra, or
-    incorrectly typed values at the boundary.
-    """
     system: str
     user: str
     reference_by_alias: dict[str, AvailableReferenceOption]
+    metrics: ContextMetrics
 
 
 def build_parameter_patch_prompt(
@@ -174,24 +94,39 @@ def build_parameter_patch_prompt(
     config: OperationGeneratorConfig,
     reference_options: list[AvailableReferenceOption],
     model: LLMModelConfig,
+    active_constraints: list[CompiledConstraintPatch] | None = None,
     system_prompt: str | None = None,
 ) -> ParameterPatchPrompt:
-    """
-    Build the complete prompt for one Solve-owned Patch requirement.
+    """Build the bounded initial task without serializing DTOs as JSON.
 
-    The annotated arguments and return type define the data boundary used by callers.
+    Args:
+        task: Solve-owned root cause, affected inputs, and acceptance contract.
+        config: Current operation Generator configuration.
+        reference_options: Populated observed-value sources available now.
+        model: Model configuration retained for a stable builder interface; the
+            shared AgentContext applies its actual window later.
+        active_constraints: Current operation relationships that a replacement
+            must continue to satisfy.
+        system_prompt: Complete evaluation-only instruction replacement.
+
+    Returns:
+        Compact prompt text plus an alias map used only by deterministic Patch
+        compilation.
     """
+    del model  # Window fitting belongs to AgentContext, not this domain adapter.
     semantic = build_semantic_input_map(config)
     configs = {item.input_node_id: item for item in config.configs}
     current = {
         handle: {
-            "inclusion_probability": (
-                configs[node_id].inclusion_probability
-            ),
-            "strategy": configs[node_id].strategy.model_dump(mode="json"),
+            "inclusion_probability": configs[node_id].inclusion_probability,
+            "strategy": configs[node_id].strategy.model_dump(mode="python"),
         }
         for handle, node_id in semantic.node_by_handle.items()
         if handle in task.affected_inputs
+    }
+    target_node_ids = {
+        semantic.node_by_handle[handle]
+        for handle in task.affected_inputs
     }
     references = {
         f"R{index}": option
@@ -199,44 +134,110 @@ def build_parameter_patch_prompt(
             [
                 option
                 for option in reference_options
-                if option.input_node_id
-                in {
-                    semantic.node_by_handle[handle]
-                    for handle in task.affected_inputs
-                }
+                if option.input_node_id in target_node_ids
             ],
             start=1,
         )
     }
-    reference_view = [
-        {
-            "alias": alias,
-            "input": semantic.handle_by_node[option.input_node_id],
-            "kind": option.kind,
-            "value_count": option.value_count,
-        }
-        for alias, option in references.items()
-    ]
-    task_card: dict[str, Any] = {
-        "task": task.model_dump(
-            mode="json",
-            exclude={"prior_attempts"},
-        ),
-        "current_generation": current,
-        "reference_sources": reference_view,
-    }
-    fitted = fit_prompt_context(
-        required=task_card,
-        history=task.prior_attempts,
-        model=model,
+
+    writer = CompactTextWriter(max_value_chars=800)
+    writer.section("PATCH REQUIREMENT")
+    writer.record(
+        task.todo_id,
+        failure=task.failure,
+        root_cause=task.root_cause,
+        affected_inputs=task.affected_inputs,
     )
+    writer.text("desired_behavior", task.desired_behavior)
+    writer.text("acceptance_criteria", task.acceptance_criteria)
+
+    writer.section("CURRENT GENERATORS", untrusted=True)
+    for handle in task.affected_inputs:
+        writer.record(handle, **current[handle])
+
+    writer.section("ACTIVE CONSTRAINTS", untrusted=True)
+    constraints = list(active_constraints or [])
+    if not constraints:
+        writer.record("none", count=0)
+    for constraint in constraints:
+        writer.record(
+            constraint.constraint_id,
+            kind=constraint.kind,
+            expression=_semantic_constraint(
+                constraint.constraint.model_dump(mode="python"),
+                semantic.handle_by_node,
+            ),
+        )
+
+    writer.section("REFERENCE ALIASES", untrusted=True)
+    if not references:
+        writer.record("none", count=0)
+    for alias, option in references.items():
+        writer.record(
+            alias,
+            input=semantic.handle_by_node[option.input_node_id],
+            kind=option.kind,
+            value_count=option.value_count,
+            resource=option.canonical_resource,
+            value_name=option.value_name,
+            producers=option.producer_operation_keys,
+        )
+
+    writer.section("PRIOR COMPATIBILITY", untrusted=True)
+    if not task.prior_attempts:
+        writer.record("none", count=0)
+    for index, attempt in enumerate(task.prior_attempts, start=1):
+        writer.record(
+            f"H{index}",
+            required=False,
+            **_bounded_history_fields(attempt),
+        )
+    rendered = writer.render(max_chars=18_000)
     return ParameterPatchPrompt(
         system=system_prompt or EXPERT_SYSTEM_PROMPT,
-        user=json.dumps(
-            fitted.payload,
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        ),
+        user=rendered.text,
         reference_by_alias=references,
+        metrics=rendered.metrics,
     )
+
+
+def _bounded_history_fields(value: dict[str, Any]) -> dict[str, Any]:
+    """Keep compatibility facts while dropping transcript-like historical noise."""
+    preferred = (
+        "outcome",
+        "failure",
+        "root_cause",
+        "solution",
+        "conflict_reason",
+        "affected_inputs",
+        "before_generators",
+        "after_generators",
+    )
+    selected = {key: value[key] for key in preferred if key in value}
+    if selected:
+        return selected
+    # Evaluation scenarios may use a concise custom compatibility record. The
+    # writer still bounds and escapes every field.
+    return dict(list(value.items())[:12])
+
+
+def _semantic_constraint(value: Any, handle_by_node) -> Any:
+    """Replace runtime node IDs with the semantic handles shown to the model."""
+    if isinstance(value, list):
+        return [
+            _semantic_constraint(item, handle_by_node)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    output = {
+        key: _semantic_constraint(item, handle_by_node)
+        for key, item in value.items()
+        if key != "input_node_id"
+    }
+    if "input_node_id" in value:
+        output["input"] = handle_by_node.get(
+            value["input_node_id"],
+            "<inactive-input>",
+        )
+    return output
