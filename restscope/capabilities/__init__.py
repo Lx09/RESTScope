@@ -7,6 +7,10 @@ from .tool_context import ToolContext, ToolContextError
 from .tool_executor import ToolExecutor
 from .tool_policy import ToolPolicy
 from .http_request import HTTP_REQUEST_TOOL_NAME, register_http_request_tool
+from .openapi_lookup import (
+    OPENAPI_LOOKUP_TOOL_NAME,
+    register_openapi_lookup_tool,
+)
 from .tool_registry import ToolRegistry
 from .tool_selector import ToolSelector
 from .tool_sources import (
@@ -29,6 +33,8 @@ __all__ = [
     "ToolPolicy",
     "HTTP_REQUEST_TOOL_NAME",
     "register_http_request_tool",
+    "OPENAPI_LOOKUP_TOOL_NAME",
+    "register_openapi_lookup_tool",
     "ToolRegistry",
     "ToolSelector",
     "ToolSourceError",

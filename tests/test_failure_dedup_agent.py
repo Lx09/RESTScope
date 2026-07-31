@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from restscope.llm import LLMModelConfig, LLMResponse
+from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
 from restscope.operation_smoke.failure_dedup import (
     FailureDedupAgent,
     FailureDeduplicator,
@@ -14,17 +14,22 @@ from restscope.operation_smoke.memory import RecordedFailure, RecordedFailures
 class StubClient:
     """Return scripted JSON decisions and retain model requests for inspection."""
 
-    def __init__(self, responses: list[dict]) -> None:
+    def __init__(self, responses: list[dict | LLMResponse]) -> None:
         self.responses = list(responses)
         self.requests = []
 
     def invoke(self, request):
         """Return the next provider-neutral response."""
         self.requests.append(request)
-        return LLMResponse(
-            provider="stub",
-            model="dedup-model",
-            parsed_json=self.responses.pop(0),
+        response = self.responses.pop(0)
+        return (
+            response
+            if isinstance(response, LLMResponse)
+            else LLMResponse(
+                provider="stub",
+                model="dedup-model",
+                parsed_json=response,
+            )
         )
 
 
@@ -59,44 +64,85 @@ def _model() -> LLMModelConfig:
     )
 
 
-def _case(case_id: str, status: int, message: str, name: str) -> dict:
-    """Build one bounded Batch case with JSON HTTP evidence."""
-    return {
-        "case_id": case_id,
-        "generated_test_case": {
-            "path_parameters": {},
-            "query_parameters": {},
-            "header_parameters": {"Authorization": "secret"},
-            "cookie_parameters": {},
-            "body_present": True,
-            "body": {"name": name},
-        },
-        "request": {"path": "/projects", "headers": {"Authorization": "secret"}},
-        "response": {
-            "status_code": status,
-            "media_type": "application/json",
-            "body": f'{{"message": "{message}"}}',
-        },
-    }
+def _runtime():
+    """Build the real global OpenAPI tool boundary used by Dedup."""
+    from restscope.capabilities import ToolContext, build_capabilities
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Dedup", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "namespace_id": {"type": "integer"},
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"201": {"description": "created"}},
+                    }
+                }
+            },
+        }
+    )
+    runtime = build_capabilities()
+    runtime.tool_executor.bind_context(
+        ToolContext(ir=ir, baseline_schema_source={})
+    )
+    return runtime
 
 
-def _structured_case(case_id: str, body: dict, name: str) -> dict:
-    """Build a failed case whose JSON error uses a field-keyed mapping."""
-    case = _case(case_id, 400, "placeholder", name)
-    import json
+def _catalog(*cases: tuple[int, str, str]):
+    """Record failed Catalog cases and return the run-local store."""
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogTestCaseDraft,
+        HTTPFailure,
+        TestCaseCatalog,
+    )
 
-    case["response"]["body"] = json.dumps(body)
-    return case
+    catalog = TestCaseCatalog(
+        valid_parameters={"body", "body.name", "body.namespace_id"}
+    )
+    for status, message, name in cases:
+        catalog.record(
+            CatalogTestCaseDraft(
+                parameters={"body.name": name},
+                response_body={"message": message},
+                failure=HTTPFailure(
+                    status_code=status,
+                    messages=[f"HTTP {status}: {message}"],
+                ),
+            )
+        )
+    return catalog
 
 
-def _request(cases: list[dict]) -> FailureDedupRequest:
-    """Build one current-round request with one semantic input."""
+def _request(case_ids: list[str]) -> FailureDedupRequest:
+    """Identify current-round failures by their run-local Catalog references."""
     return FailureDedupRequest(
         operation_key="POST /projects",
         round_number=1,
         batch_run_id="run-1",
-        semantic_parameters=["body.name"],
-        cases=cases,
+        case_ids=case_ids,
+    )
+
+
+def _agent(client: StubClient) -> FailureDedupAgent:
+    """Build Dedup with the same global capability executor as production."""
+    return FailureDedupAgent(
+        client=client,
+        model=_model(),
+        tool_executor=_runtime().tool_executor,
     )
 
 
@@ -104,24 +150,24 @@ def test_exact_duplicate_bypasses_llm_and_keeps_first_test_case() -> None:
     """Formatting-identical messages need no semantic model decision."""
     client = StubClient([])
     memory = StubMemory()
+    catalog = _catalog(
+        (400, "name already exists", "first"),
+        (400, "name already exists", "second"),
+    )
     module = FailureDeduplicator(
-        agent=FailureDedupAgent(client=client, model=_model()),
+        agent=_agent(client),
         memory=memory,
     )
 
     result = module.deduplicate(
-        _request(
-            [
-                _case("case-first", 400, "name already exists", "first"),
-                _case("case-second", 400, "name   already exists", "second"),
-            ]
-        ),
+        _request(["TC1", "TC2"]),
+        catalog=catalog,
         max_outputs=3,
     )
 
     assert result.status == "bypassed"
     assert result.outputs_used == 0
-    assert result.todos[0].test_case["case_id"] == "case-first"
+    assert result.todos[0].test_case_id == "TC1"
     assert result.todos[0].suspected_parameters is None
     assert client.requests == []
     assert len(memory.writes[0].failures[0].observations) == 1
@@ -129,8 +175,33 @@ def test_exact_duplicate_bypasses_llm_and_keeps_first_test_case() -> None:
 
 def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     """Several messages may merge, but only the earliest case reaches Solve."""
-    client = StubClient(
-        [
+    client = StubClient([
+        LLMResponse(
+            provider="stub",
+            model="dedup-model",
+            tool_calls=[
+                ToolCall(
+                    id="lookup-1",
+                    name="openapi.lookup_operation",
+                    arguments={"operation_key": "POST /projects"},
+                )
+            ],
+        ),
+        LLMResponse(
+            provider="stub",
+            model="dedup-model",
+            tool_calls=[
+                ToolCall(
+                    id="catalog-1",
+                    name="query_test_case_catalog",
+                    arguments={
+                        "action": "parameter_value",
+                        "case_ids": ["TC1", "TC2"],
+                        "name": "body.name",
+                    },
+                )
+            ],
+        ),
             {
                 "failures": [
                     {
@@ -143,28 +214,28 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
                     }
                 ],
                 "reason": "Both conditions are caused by body.name.",
-            }
-        ]
-    )
+            },
+    ])
     memory = StubMemory()
+    catalog = _catalog(
+        (400, "name already exists", "a"),
+        (409, "name conflicts", "b"),
+    )
     module = FailureDeduplicator(
-        agent=FailureDedupAgent(client=client, model=_model()),
+        agent=_agent(client),
         memory=memory,
     )
 
     result = module.deduplicate(
-        _request(
-            [
-                _case("case-a", 400, "name already exists", "a"),
-                _case("case-b", 409, "name conflicts", "b"),
-            ]
-        ),
-        max_outputs=3,
+        _request(["TC1", "TC2"]),
+        catalog=catalog,
+        max_outputs=4,
     )
 
     assert result.status == "deduplicated"
+    assert result.outputs_used == 3
     assert len(result.todos) == 1
-    assert result.todos[0].test_case["case_id"] == "case-a"
+    assert result.todos[0].test_case_id == "TC1"
     assert result.todos[0].suspected_parameters == ["body.name"]
     assert (
         memory.writes[0].failures[0].observations[0].trigger
@@ -176,10 +247,10 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
         if message.content
     )
     assert "## Failure Observations — UNTRUSTED" in prompt
-    assert "```json" in prompt
-    assert '"test_case"' in prompt
-    assert "case-a" not in prompt
-    assert "Authorization\": \"[redacted]" in prompt
+    assert "TC1" in prompt
+    assert "HTTP 400: name already exists" in prompt
+    assert "body.name" not in prompt
+    assert "```json" not in prompt
     assert "fingerprint_ref" not in prompt.casefold()
     assert "item_id" not in prompt
 
@@ -210,26 +281,43 @@ def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:
         ]
     )
     memory = StubMemory()
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogTestCaseDraft,
+        HTTPFailure,
+        TestCaseCatalog,
+    )
+
+    catalog = TestCaseCatalog(
+        valid_parameters={"body", "body.name", "body.namespace_id"}
+    )
+    catalog.record(
+        CatalogTestCaseDraft(
+            parameters={"body.name": "duplicate"},
+            response_body={"message": {"name": ["has already been taken"]}},
+            failure=HTTPFailure(
+                status_code=400,
+                messages=["HTTP 400: name: has already been taken"],
+            ),
+        )
+    )
+    catalog.record(
+        CatalogTestCaseDraft(
+            parameters={"body.namespace_id": 999},
+            response_body={"message": {"namespace_id": ["is invalid"]}},
+            failure=HTTPFailure(
+                status_code=400,
+                messages=["HTTP 400: namespace_id: is invalid"],
+            ),
+        )
+    )
     module = FailureDeduplicator(
-        agent=FailureDedupAgent(client=client, model=_model()),
+        agent=_agent(client),
         memory=memory,
     )
 
     result = module.deduplicate(
-        _request(
-            [
-                _structured_case(
-                    "case-name",
-                    {"message": {"name": ["has already been taken"]}},
-                    "duplicate",
-                ),
-                _structured_case(
-                    "case-namespace",
-                    {"message": {"namespace_id": ["is invalid"]}},
-                    "new",
-                ),
-            ]
-        ),
+        _request(["TC1", "TC2"]),
+        catalog=catalog,
         max_outputs=2,
     )
 
@@ -275,18 +363,18 @@ def test_invalid_coverage_receives_markdown_correction_and_full_retry() -> None:
         ]
     )
     memory = StubMemory()
+    catalog = _catalog(
+        (400, "name already exists", "a"),
+        (409, "name conflicts", "b"),
+    )
     module = FailureDeduplicator(
-        agent=FailureDedupAgent(client=client, model=_model()),
+        agent=_agent(client),
         memory=memory,
     )
 
     result = module.deduplicate(
-        _request(
-            [
-                _case("case-a", 400, "name already exists", "a"),
-                _case("case-b", 409, "name conflicts", "b"),
-            ]
-        ),
+        _request(["TC1", "TC2"]),
+        catalog=catalog,
         max_outputs=2,
     )
 

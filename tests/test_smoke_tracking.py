@@ -254,7 +254,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
         resource.parent.span_id == monitor.context.span_id
         for monitor, resource in zip(monitors, resources, strict=True)
     )
-    run_id = result.batch_reports[0].run_id
+    run_id = result.batch_run_ids[0]
     assert batch_span.attributes["restscope.test.run_id"] == run_id
     assert all(case.attributes["restscope.test.run_id"] == run_id for case in cases)
     assert all(
@@ -270,6 +270,13 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
     """Semantic Dedup model calls are tagged with the independent role."""
     del tmp_path
     from restscope.operation_smoke.failure_dedup import FailureDedupAgent
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogTestCaseDraft,
+        HTTPFailure,
+        TestCaseCatalog,
+    )
+    from restscope.capabilities import ToolContext, build_capabilities
+    from restscope.openapi_parser import OpenAPIParser
     from restscope.llm import (
         LLMClient,
         LLMModelConfig,
@@ -302,6 +309,47 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
     registry.register(DedupProvider())
     runtime, exporter = _recording_runtime()
 
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Dedup trace", "version": "1"},
+            "paths": {
+                "/items": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"}
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"400": {"description": "bad"}},
+                    }
+                }
+            },
+        }
+    )
+    capabilities = build_capabilities(tracing_runtime=runtime)
+    capabilities.tool_executor.bind_context(
+        ToolContext(ir=ir, baseline_schema_source={})
+    )
+    catalog = TestCaseCatalog(valid_parameters={"body", "body.name"})
+    for message in ("first", "second"):
+        catalog.record(
+            CatalogTestCaseDraft(
+                parameters={"body.name": message},
+                response_body={"message": message},
+                failure=HTTPFailure(
+                    status_code=400,
+                    messages=[message],
+                ),
+            )
+        )
     agent = FailureDedupAgent(
         client=LLMClient(registry, tracing_runtime=runtime),
         model=LLMModelConfig(
@@ -310,15 +358,17 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
             model="think",
             enabled=True,
         ),
+        tool_executor=capabilities.tool_executor,
         tracing_runtime=runtime,
     )
     result, outputs, corrections, errors = agent.deduplicate(
         operation_key="POST /items",
         semantic_parameters=["body.name"],
         observations=[
-            {"message": "first", "test_case": {"request": {}, "response": {}}},
-            {"message": "second", "test_case": {"request": {}, "response": {}}},
+            {"message": "first", "case_id": "TC1"},
+            {"message": "second", "case_id": "TC2"},
         ],
+        catalog=catalog,
         max_outputs=1,
     )
     runtime.close()

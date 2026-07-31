@@ -205,17 +205,16 @@ def _coverage(report: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for operation_key in LIVE_OPERATION_KEYS:
         operation_attempts = attempts.get(operation_key, [])
-        batches = [
-            batch
+        batch_run_ids = [
+            run_id
             for attempt in operation_attempts
-            for batch in attempt.smoke_result.batch_reports
+            for run_id in attempt.smoke_result.batch_run_ids
         ]
         rows.append(
             {
                 "operation_key": operation_key,
                 "attempt_count": len(operation_attempts),
-                "batch_count": len(batches),
-                "case_count": sum(len(batch.cases) for batch in batches),
+                "batch_count": len(batch_run_ids),
                 "statuses": [
                     attempt.smoke_result.status
                     for attempt in operation_attempts
@@ -364,10 +363,10 @@ def test_gitlab_projects_operations_complete_batches_without_technical_errors() 
     )
     assert all(row["attempt_count"] == 1 for row in coverage)
     assert all(row["batch_count"] >= 1 for row in coverage)
-    assert all(
-        row["case_count"] >= EXPECTED_CASES_PER_BATCH
-        for row in coverage
-    )
+    assert sum(
+        span["name"] == "RESTScopeTestCase.execute"
+        for span in spans
+    ) >= len(LIVE_OPERATION_KEYS) * EXPECTED_CASES_PER_BATCH
     assert all(row["statuses"] == ["passed"] for row in coverage)
     assert all(not row["failure_kinds"] for row in coverage)
 

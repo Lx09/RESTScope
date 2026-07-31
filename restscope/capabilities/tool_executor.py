@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from restscope.capabilities.tool_call_validator import ToolCallValidator
@@ -60,20 +61,39 @@ class ToolExecutor:
         """Remove App-bound context during shutdown so it cannot be reused."""
         self._tool_context = None
 
-    def execute(self, *, tool_call: ToolCall, role: str, state: dict) -> ToolResult:
+    def execute(
+        self,
+        *,
+        tool_call: ToolCall,
+        role: str,
+        state: dict,
+        result_transform: Callable[[ToolResult], ToolResult] | None = None,
+        trace_input: Any | None = None,
+    ) -> ToolResult:
         """
         Execute one bounded unit of work in the policy-controlled model tool boundary.
 
         The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
+        data needed for this call. ``result_transform`` is a trusted workflow
+        hook that can capture internal evidence and replace the result before
+        redaction, tracing, or model delivery. Operation Smoke uses it to store
+        a failed Probe body in its run-local Catalog while exposing only a
+        compact ``TC*`` summary. ``trace_input`` lets that security boundary
+        replace model-supplied request values with non-sensitive metadata.
         """
         with self.tracing_runtime.span(
             tool_call.name,
             kind="TOOL",
-            input_value={"arguments": tool_call.arguments, "role": role},
+            input_value=(
+                trace_input
+                if trace_input is not None
+                else {"arguments": tool_call.arguments, "role": role}
+            ),
             attributes={"tool.name": tool_call.name},
         ) as span:
             raw_result = self._execute(tool_call=tool_call, role=role, state=state)
+            if result_transform is not None:
+                raw_result = result_transform(raw_result)
             result = ToolResult.model_validate(
                 self.tracing_runtime.redactor.redact(raw_result)
             )

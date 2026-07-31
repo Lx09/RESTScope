@@ -12,10 +12,12 @@ round starts with a complete Batch under all accepted changes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import Protocol
 
 from restscope.capabilities.tool_context import ToolContext
+from restscope.capabilities.openapi_lookup import operation_parameter_handles
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.failure_solver import (
     FailureSolveAgentFactory,
@@ -29,18 +31,17 @@ from restscope.operation_smoke.failure_dedup import (
     FailureDeduplicator,
     FailureDedupRequest,
 )
+from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
 from restscope.testing import (
+    BatchExecutionResult,
     ConstraintSet,
     GeneratorConfigCatalog,
-    OperationExecutionReport,
     OperationGeneratorConfig,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
-    SmokeExecutionOutcome,
     build_semantic_input_map,
 )
 
-from .evidence import build_batch_evidence
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
     OperationSmokeFailureKind,
@@ -64,8 +65,9 @@ class SmokeBatchRunner(Protocol):
         case_count: int,
         seed: int,
         constraints: ConstraintSet | None,
-    ) -> SmokeExecutionOutcome:
-        """Execute one full Batch and return both its report and private evidence."""
+        case_id_factory: Callable[[], str] | None = None,
+    ) -> BatchExecutionResult:
+        """Execute one full Batch and return Catalog-ready Test Cases."""
         ...
 
 
@@ -130,9 +132,7 @@ class OperationSmokeCoordinator:
                     "stop_reason": result.stop_reason,
                     "success_rate": result.success_rate,
                     "round_count": len(result.rounds),
-                    "batch_run_ids": [
-                        report.run_id for report in result.batch_reports
-                    ],
+                    "batch_run_ids": result.batch_run_ids,
                 }
             )
             if result.status == "errored":
@@ -155,7 +155,7 @@ class OperationSmokeCoordinator:
                 request=request,
                 current=None,
                 success_rate=0,
-                reports=[],
+                batch_run_ids=[],
                 rounds=[],
                 failure_kind="operation_error",
                 error=ValueError(
@@ -177,37 +177,47 @@ class OperationSmokeCoordinator:
             request.operation_key,
             {},
         )
-        reports: list[OperationExecutionReport] = []
+        batch_run_ids: list[str] = []
         rounds: list[SmokeRoundSummary] = []
         success_rate = 0.0
         dedup_outputs_used = 0
+        semantic = build_semantic_input_map(current)
+        operation = context.ir.operations.get(request.operation_key)
+        catalog = TestCaseCatalog(
+            valid_parameters=(
+                operation_parameter_handles(operation)
+                if operation is not None
+                else semantic.node_by_handle
+            ),
+        )
 
         try:
             while True:
                 _assert_reference_invariants(current, self.reference_values)
-                report, private = _run_smoke_batch(
-                    self.batch_runner,
-                    context=context,
+                batch = self.batch_runner.run_smoke_batch(
+                    context,
                     operation_key=request.operation_key,
                     case_count=request.case_count,
                     seed=self.random_seed,
                     constraints=_combined_constraints(
                         list(constraints.values())
                     ),
+                    case_id_factory=catalog.issue_case_id,
                 )
-                reports.append(report)
-                if report.config_revision != current.revision:
+                batch_run_ids.append(batch.run_id)
+                for case in batch.cases:
+                    catalog.record(case)
+                if batch.config_revision != current.revision:
                     raise RuntimeError(
-                        "Batch report revision does not match active Generator config"
+                        "Batch revision does not match active Generator config"
                     )
-                batch = build_batch_evidence(report, private)
-                success_rate = _success_rate(report)
+                success_rate = batch.success_rate
                 if success_rate >= request.success_rate_threshold:
                     return _passed_result(
                         request=request,
                         current=current,
                         success_rate=success_rate,
-                        reports=reports,
+                        batch_run_ids=batch_run_ids,
                         rounds=rounds,
                         stop_reason="success_rate_reached",
                         reason=(
@@ -217,15 +227,18 @@ class OperationSmokeCoordinator:
                     )
 
                 round_number = len(rounds) + 1
-                semantic = build_semantic_input_map(current)
                 dedup = self.failure_deduplicator.deduplicate(
                     FailureDedupRequest(
                         operation_key=request.operation_key,
                         round_number=round_number,
-                        batch_run_id=report.run_id,
-                        semantic_parameters=sorted(semantic.node_by_handle),
-                        cases=list(batch["cases"]),
+                        batch_run_id=batch.run_id,
+                        case_ids=[
+                            case.case_id
+                            for case in batch.cases
+                            if case.failure is not None
+                        ],
                     ),
+                    catalog=catalog,
                     max_outputs=(
                         request.max_dedup_outputs - dedup_outputs_used
                     ),
@@ -236,7 +249,7 @@ class OperationSmokeCoordinator:
                     rounds.append(
                         SmokeRoundSummary(
                             round_number=round_number,
-                            batch_run_id=report.run_id,
+                            batch_run_id=batch.run_id,
                             dedup_status=dedup.status,
                             dedup_outputs=dedup.outputs_used,
                             failure_count=0,
@@ -246,7 +259,7 @@ class OperationSmokeCoordinator:
                         request=request,
                         current=current,
                         success_rate=success_rate,
-                        reports=reports,
+                        batch_run_ids=batch_run_ids,
                         rounds=rounds,
                         failure_kind="dedup_budget_exhausted",
                         error=RuntimeError(dedup.reason),
@@ -282,6 +295,7 @@ class OperationSmokeCoordinator:
                                     for option in reference_options
                                 ],
                             ),
+                            catalog=catalog,
                             config=current,
                             active_constraints=list(constraints.values()),
                             case_count=request.case_count,
@@ -309,7 +323,7 @@ class OperationSmokeCoordinator:
                         rounds.append(
                             SmokeRoundSummary(
                                 round_number=round_number,
-                                batch_run_id=report.run_id,
+                                batch_run_id=batch.run_id,
                                 dedup_status=dedup.status,
                                 dedup_outputs=dedup.outputs_used,
                                 failure_count=len(dedup.todos),
@@ -320,7 +334,7 @@ class OperationSmokeCoordinator:
                             request=request,
                             current=current,
                             success_rate=success_rate,
-                            reports=reports,
+                            batch_run_ids=batch_run_ids,
                             rounds=rounds,
                             failure_kind="solve_budget_exhausted",
                             error=RuntimeError(
@@ -369,7 +383,7 @@ class OperationSmokeCoordinator:
                 rounds.append(
                     SmokeRoundSummary(
                         round_number=round_number,
-                        batch_run_id=report.run_id,
+                        batch_run_id=batch.run_id,
                         dedup_status=dedup.status,
                         dedup_outputs=dedup.outputs_used,
                         failure_count=len(dedup.todos),
@@ -381,7 +395,7 @@ class OperationSmokeCoordinator:
                         request=request,
                         current=current,
                         success_rate=success_rate,
-                        reports=reports,
+                        batch_run_ids=batch_run_ids,
                         rounds=rounds,
                         stop_reason="no_patch_applied",
                         reason=(
@@ -396,7 +410,7 @@ class OperationSmokeCoordinator:
                 request=request,
                 current=current,
                 success_rate=success_rate,
-                reports=reports,
+                batch_run_ids=batch_run_ids,
                 rounds=rounds,
                 failure_kind="operation_error",
                 error=exc,
@@ -408,7 +422,7 @@ def _passed_result(
     request: OperationSmokeRequest,
     current: OperationGeneratorConfig,
     success_rate: float,
-    reports: list[OperationExecutionReport],
+    batch_run_ids: list[str],
     rounds: list[SmokeRoundSummary],
     stop_reason,
     reason: str,
@@ -420,7 +434,7 @@ def _passed_result(
         success_rate=success_rate,
         required_success_rate=request.success_rate_threshold,
         active_config_revision=current.revision,
-        batch_reports=reports,
+        batch_run_ids=batch_run_ids,
         rounds=rounds,
         stop_reason=stop_reason,
         reason=reason,
@@ -432,7 +446,7 @@ def _errored_result(
     request: OperationSmokeRequest,
     current: OperationGeneratorConfig | None,
     success_rate: float,
-    reports: list[OperationExecutionReport],
+    batch_run_ids: list[str],
     rounds: list[SmokeRoundSummary],
     failure_kind: OperationSmokeFailureKind,
     error: Exception,
@@ -444,22 +458,11 @@ def _errored_result(
         success_rate=success_rate,
         required_success_rate=request.success_rate_threshold,
         active_config_revision=current.revision if current is not None else 1,
-        batch_reports=reports,
+        batch_run_ids=batch_run_ids,
         rounds=rounds,
         failure_kind=failure_kind,
         error={"type": type(error).__name__, "message": str(error)},
     )
-
-
-def _success_rate(report: OperationExecutionReport) -> float:
-    """Compute the sole pass metric from every outcome in a complete Batch."""
-    successes = sum(
-        count
-        for status, count in report.status_code_counts.items()
-        if status.isdigit() and 200 <= int(status) < 300
-    )
-    total = sum(report.status_code_counts.values()) + report.error_count
-    return successes / total if total else 0.0
 
 
 def _operation_context(
@@ -554,26 +557,3 @@ def _combined_constraints(
         for expression in patch.constraint.constraints
     ]
     return ConstraintSet(constraints=expressions) if expressions else None
-
-
-def _run_smoke_batch(
-    runner: SmokeBatchRunner,
-    *,
-    context: ToolContext,
-    operation_key: str,
-    case_count: int,
-    seed: int,
-    constraints: ConstraintSet | None,
-) -> tuple[OperationExecutionReport, dict[str, object]]:
-    """Call the narrow Batch Interface and index private case evidence."""
-    outcome = runner.run_smoke_batch(
-        context,
-        operation_key=operation_key,
-        case_count=case_count,
-        seed=seed,
-        constraints=constraints,
-    )
-    return (
-        outcome.report,
-        {item.case_id: item for item in outcome.case_evidence},
-    )

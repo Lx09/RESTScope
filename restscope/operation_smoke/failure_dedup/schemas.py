@@ -8,7 +8,7 @@ group the remainder, persists validated Failures, and returns one
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -20,13 +20,12 @@ class _Model(BaseModel):
 
 
 class FailureDedupRequest(_Model):
-    """Supply one complete Batch and the semantic Parameters in its operation."""
+    """Identify failed Catalog cases from one complete Batch round."""
 
     operation_key: str = Field(min_length=1)
     round_number: int = Field(ge=1)
     batch_run_id: str = Field(min_length=1)
-    semantic_parameters: list[str]
-    cases: list[dict[str, Any]]
+    case_ids: list[str] = Field(min_length=1)
 
 
 class FailureGroupDecision(_Model):
@@ -55,7 +54,7 @@ class FailureTodo(_Model):
     todo_id: str
     failure_id: str
     failure: str
-    test_case: dict[str, Any]
+    test_case_id: str = Field(pattern=r"^TC[1-9][0-9]*$")
     suspected_parameters: list[str] | None = None
 
 

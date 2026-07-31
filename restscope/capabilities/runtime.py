@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
 from restscope.capabilities.http_request import register_http_request_tool
+from restscope.capabilities.openapi_lookup import register_openapi_lookup_tool
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_call_validator import ToolCallValidator
 from restscope.capabilities.tool_executor import ToolExecutor
@@ -77,6 +78,7 @@ def build_capabilities(
         tool_registry,
         transport=target_http_transport,
     )
+    register_openapi_lookup_tool(tool_registry)
     if api_behavior_monitor_coordinator is not None:
         from restscope.api_behavior_monitor import register_resource_lookup_tool
 

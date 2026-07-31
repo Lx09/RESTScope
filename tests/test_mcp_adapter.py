@@ -262,6 +262,7 @@ def test_build_capabilities_registers_all_explicit_sources_without_presets() -> 
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
         "restscope.http.request",
+        "openapi.lookup_operation",
         "mcp.example.inspect",
     ]
     assert "presets" not in inspect.signature(
@@ -305,6 +306,7 @@ def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
     assert runtime.skill_registry.get("testing_strategy").name == "testing_strategy"
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
         "restscope.http.request",
+        "openapi.lookup_operation",
         "mcp.example.inspect",
     ]
     assert all(tool.kind != "skill" for tool in runtime.tool_registry.list_specs())
@@ -323,7 +325,8 @@ def test_build_capabilities_defaults_to_builtin_tools_only() -> None:
     runtime = build_capabilities()
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request"
+        "restscope.http.request",
+        "openapi.lookup_operation",
     ]
     assert runtime.tool_executor is not None
 

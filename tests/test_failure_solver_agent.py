@@ -149,8 +149,9 @@ class StubProbe:
             return f"{tool_call.name} is not the HTTP probe"
         return None
 
-    def execute(self, *, config, tool_call):
+    def execute(self, *, config, tool_call, catalog):
         """Return one bounded status observation."""
+        del catalog
         self.executed.append(tool_call.id)
         return ToolResult(
             tool_call_id=tool_call.id,
@@ -246,7 +247,7 @@ def _model() -> LLMModelConfig:
 
 
 def _request():
-    """Build one stable Failure with expanded current Batch evidence."""
+    """Build one stable Failure with one representative Catalog reference."""
     from restscope.operation_smoke.failure_solver import FailureSolveRequest
 
     return FailureSolveRequest(
@@ -256,30 +257,38 @@ def _request():
             "todo_id": "T1",
             "failure_id": "db-failure-1",
             "failure": "Project identifier is rejected.",
-            "test_case": {
-                    "case_id": "case-a",
-                    "generated_test_case": {
-                        "path_parameters": {"projectId": "missing"},
-                        "query_parameters": {"min_access_level": 25},
-                        "header_parameters": {"X-Scenario": "generated"},
-                        "cookie_parameters": {},
-                        "body": None,
-                        "body_present": False,
-                    },
-                    "request": {
-                        "path": "/projects/missing",
-                        "query_items": [["min_access_level", "25"]],
-                        "headers": {
-                            "Authorization": "[redacted]",
-                            "X-Scenario": "generated",
-                        },
-                    },
-                    "response": {"status_code": 404},
-                },
+            "test_case_id": "TC1",
         },
         operation={"method": "GET", "path": "/projects/{projectId}"},
         generator_config={"revision": 1},
     )
+
+
+def _catalog():
+    """Create the shared run-local Catalog visible to one Solve session."""
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogTestCaseDraft,
+        HTTPFailure,
+        TestCaseCatalog,
+    )
+
+    catalog = TestCaseCatalog(
+        valid_parameters={"path.projectId", "query.region"}
+    )
+    catalog.record(
+        CatalogTestCaseDraft(
+            parameters={
+                "path.projectId": "missing",
+                "query.region": "us-east",
+            },
+            response_body={"message": "project missing"},
+            failure=HTTPFailure(
+                status_code=404,
+                messages=["HTTP 404: project missing"],
+            ),
+        )
+    )
+    return catalog
 
 
 def _memory_call(call_id: str = "memory-1") -> LLMResponse:
@@ -409,6 +418,7 @@ def _start(agent, **kwargs):
     """Start with the shared seed and empty active Constraint set."""
     return agent.start(
         _request(),
+        catalog=_catalog(),
         config=smoke_config(),
         active_constraints=[],
         case_count=2,
@@ -448,12 +458,12 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert patch_factory.created[0].calls[0]["random_seed"] == 731
     assert patch_factory.created[0].calls[0]["task"].prior_attempts
     initial_prompt = client.requests[0].messages[1].content
-    assert "## Current Failure Test Case — UNTRUSTED" in initial_prompt
-    assert "```json" in initial_prompt
+    assert "representative_case=string:\"TC1\"" in initial_prompt
+    assert "catalog=string:\"TC1\"" in initial_prompt
     assert "path.projectId" in initial_prompt
-    assert '"projectId": "missing"' in initial_prompt
-    assert '"min_access_level": 25' in initial_prompt
-    assert '"X-Scenario": "generated"' in initial_prompt
+    assert "missing" not in initial_prompt
+    assert "min_access_level" not in initial_prompt
+    assert "X-Scenario" not in initial_prompt
     assert "Authorization" not in initial_prompt
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
@@ -662,8 +672,8 @@ def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
     assert len(client.requests) == 3
 
 
-def test_mutating_failure_solve_does_not_receive_an_http_probe_tool() -> None:
-    """DELETE investigations may reason from evidence but cannot probe targets."""
+def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> None:
+    """DELETE investigations may probe only their exact current operation."""
     client = StubClient([_terminal("no_patch")])
     config = smoke_config()
     config = config.model_copy(
@@ -694,6 +704,7 @@ def test_mutating_failure_solve_does_not_receive_an_http_probe_tool() -> None:
         StubPatchApplication(),
     ).start(
         request,
+        catalog=_catalog(),
         config=config,
         active_constraints=[],
         case_count=2,
@@ -705,6 +716,8 @@ def test_mutating_failure_solve_does_not_receive_an_http_probe_tool() -> None:
     } == {
         "lookup_parameter_history",
         "generate_parameter_patch",
+        "query_test_case_catalog",
+        "restscope.http.request",
     }
 
 
@@ -738,6 +751,7 @@ def test_solve_reference_cards_distinguish_response_sources() -> None:
         StubPatchApplication(),
     ).start(
         request,
+        catalog=_catalog(),
         config=smoke_config(),
         active_constraints=[],
         case_count=2,

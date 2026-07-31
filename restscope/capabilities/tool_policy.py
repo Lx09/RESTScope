@@ -11,6 +11,9 @@ class ToolPolicy:
 
     MCP_READ_ROLES = {"planner", "result_analyst"}
     ROLE_ALLOWLISTS = {
+        "operation_smoke_failure_dedup": {
+            "openapi.lookup_operation",
+        },
         "planner": {
             "artifact.read_summary",
             "openapi.lookup_operation",

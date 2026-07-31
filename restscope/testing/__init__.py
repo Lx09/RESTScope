@@ -36,9 +36,8 @@ from .constraint_solver import (
     solve_input_overrides,
 )
 from .execution import (
+    BatchExecutionResult,
     OperationTestingService,
-    SmokeCaseExecutionEvidence,
-    SmokeExecutionOutcome,
     TestingExecutionError,
 )
 from .models import (
@@ -52,7 +51,6 @@ from .models import (
     OperationTestSnapshot,
     ParameterSnapshot,
     SchemaSnapshot,
-    OperationExecutionReport,
     PreparedTestRequest,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
@@ -91,9 +89,7 @@ __all__ = [
     "OperationTestSnapshot",
     "ParameterSnapshot",
     "SchemaSnapshot",
-    "SmokeCaseExecutionEvidence",
-    "SmokeExecutionOutcome",
-    "OperationExecutionReport",
+    "BatchExecutionResult",
     "OperationTestingService",
     "PreparedTestRequest",
     "ReferenceValueProvider",

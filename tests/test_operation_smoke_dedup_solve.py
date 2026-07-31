@@ -106,8 +106,8 @@ def test_failure_solve_http_probe_atomically_preflights_strict_arguments() -> No
     assert "unexpected" in error
 
 
-def test_failure_solve_http_probe_rejects_mutating_operations() -> None:
-    """A forged DELETE probe is denied even when no Agent tool was exposed."""
+def test_failure_solve_http_probe_allows_the_exact_mutating_operation() -> None:
+    """Solve may investigate its current DELETE operation without crossing scope."""
     probe = CurrentOperationHTTPProbe(executor=object())
     config = smoke_config()
     config = config.model_copy(
@@ -131,4 +131,103 @@ def test_failure_solve_http_probe_rejects_mutating_operations() -> None:
         ),
     )
 
-    assert error == "HTTP probes are unavailable for mutating operations"
+    assert error is None
+
+
+def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body() -> None:
+    """An attempted probe becomes immediately queryable through its new TC ref."""
+    import httpx
+
+    from restscope.capabilities import ToolContext, build_capabilities
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogQuery,
+        TestCaseCatalog,
+    )
+
+    config = smoke_config()
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Probe", "version": "1"},
+            "paths": {
+                "/projects/{projectId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "projectId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"404": {"description": "missing"}},
+                    }
+                }
+            },
+        }
+    )
+    transport = TargetHTTPTransport(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    404,
+                    headers={"Content-Type": "application/json"},
+                    json={"message": "project missing"},
+                )
+            ),
+            **kwargs,
+        )
+    )
+    runtime = build_capabilities(target_http_transport=transport)
+    runtime.tool_executor.bind_context(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={},
+            base_url="https://api.example.test",
+        )
+    )
+    catalog = TestCaseCatalog(
+        valid_parameters={"path.projectId", "query.region"}
+    )
+
+    result = CurrentOperationHTTPProbe(runtime.tool_executor).execute(
+        config=config,
+        tool_call=ToolCall(
+            id="probe-1",
+            name="restscope.http.request",
+            arguments={
+                "method": "GET",
+                "path": "/projects/known",
+            },
+        ),
+        catalog=catalog,
+    )
+
+    assert result.status == "succeeded"
+    assert result.structured == {
+        "case_id": "TC1",
+        "status_code": 404,
+        "failure": {
+            "kind": "http",
+            "status_code": 404,
+            "messages": ["HTTP 404: project missing"],
+            "body_truncated": False,
+        },
+    }
+    assert "body" not in result.structured
+    assert catalog.query(
+        CatalogQuery(
+            action="parameter_value",
+            case_ids=["TC1"],
+            name="path.projectId",
+        )
+    )["cases"]["TC1"]["value"] == "known"
+    assert catalog.query(
+        CatalogQuery(
+            action="response_field_value",
+            case_ids=["TC1"],
+            name="body.message",
+        )
+    )["cases"]["TC1"]["value"] == "project missing"

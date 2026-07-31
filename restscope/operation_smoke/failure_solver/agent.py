@@ -2,8 +2,8 @@
 
 Failure Solve is the Agent that decides which Parameters caused a Failure and
 whether a Generator Patch should be applied. It can read Parameter history,
-probe the current operation only when the HTTP method is read-only, and run a
-fresh Parameter Patch Agent. Patch candidates remain session-local and have no
+probe the exact current operation, and run a fresh Parameter Patch Agent. Patch
+candidates remain session-local and have no
 side effects until the model returns ``apply_patch`` with a valid candidate
 reference.
 """
@@ -13,8 +13,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from restscope.capabilities import HTTP_REQUEST_TOOL_NAME
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
-from restscope.http_transport import is_sensitive_header
 from restscope.llm import (
     LLMClient,
     LLMModelConfig,
@@ -43,6 +43,13 @@ from restscope.operation_smoke.parameter_patch import (
     ParameterPatchTask,
     ValidatedParameterPatch,
 )
+from restscope.operation_smoke.test_case_catalog import (
+    CATALOG_QUERY_TOOL_NAME,
+    TestCaseCatalog,
+    catalog_query_tool_spec,
+    execute_catalog_query,
+    tool_result_json,
+)
 from restscope.testing import (
     OperationGeneratorConfig,
     ReferenceValueProvider,
@@ -60,9 +67,6 @@ from .schemas import (
 
 _MEMORY_TOOL_NAME = "lookup_parameter_history"
 _PATCH_TOOL_NAME = "generate_parameter_patch"
-_READ_ONLY_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-
 class HTTPProbe(Protocol):
     """Describe the HTTP capability restricted to the current operation."""
 
@@ -84,8 +88,9 @@ class HTTPProbe(Protocol):
         *,
         config: OperationGeneratorConfig,
         tool_call: ToolCall,
+        catalog: TestCaseCatalog,
     ) -> ToolResult:
-        """Execute a previously scope-checked diagnostic request."""
+        """Execute and record a previously scope-checked diagnostic request."""
         ...
 
 
@@ -175,6 +180,7 @@ class FailureSolveAgent:
         self,
         request: FailureSolveRequest,
         *,
+        catalog: TestCaseCatalog,
         config: OperationGeneratorConfig,
         active_constraints: list[CompiledConstraintPatch],
         case_count: int,
@@ -210,6 +216,7 @@ class FailureSolveAgent:
             validator=self.validator,
             tracing_runtime=self.tracing_runtime,
             request=request,
+            catalog=catalog,
             config=config,
             active_constraints=active_constraints,
             case_count=case_count,
@@ -239,6 +246,7 @@ class FailureSolveSession:
         validator: OutputValidator,
         tracing_runtime: TracingRuntime,
         request: FailureSolveRequest,
+        catalog: TestCaseCatalog,
         config: OperationGeneratorConfig,
         active_constraints: list[CompiledConstraintPatch],
         case_count: int,
@@ -261,6 +269,7 @@ class FailureSolveSession:
         self.validator = validator
         self.tracing_runtime = tracing_runtime
         self.request = request
+        self.catalog = catalog
         self.config = config
         self.active_constraints = list(active_constraints)
         self.case_count = case_count
@@ -286,6 +295,7 @@ class FailureSolveSession:
             failure_history=failure_history,
             semantic_inputs=self.semantic_inputs,
             reference_options=self.reference_options,
+            catalog_range=catalog.case_range,
         )
         self.context = AgentContext(
             system=system_prompt,
@@ -360,7 +370,15 @@ class FailureSolveSession:
                     self.context.append_tool_result(
                         result.name,
                         result.tool_call_id,
-                        _tool_result_text(result),
+                        (
+                            tool_result_json(result)
+                            if result.name
+                            in {
+                                CATALOG_QUERY_TOOL_NAME,
+                                HTTP_REQUEST_TOOL_NAME,
+                            }
+                            else _tool_result_text(result)
+                        ),
                     )
                     continue
 
@@ -435,11 +453,9 @@ class FailureSolveSession:
         specs = [
             _parameter_memory_tool_spec(semantic_handles),
             _patch_tool_spec(semantic_handles),
+            catalog_query_tool_spec(),
+            self.http_probe.tool_spec(self.config),
         ]
-        # Diagnostic traffic must never add mutations beyond the bounded Smoke
-        # batch that the user explicitly requested.
-        if self.config.snapshot.method.upper() in _READ_ONLY_HTTP_METHODS:
-            specs.append(self.http_probe.tool_spec(self.config))
         return specs
 
     def _tool_errors(
@@ -491,6 +507,10 @@ class FailureSolveSession:
                         "Query Parameter memory before generating a Patch for: "
                         + ", ".join(missing_queries)
                     )
+        elif call.name == CATALOG_QUERY_TOOL_NAME:
+            # Pydantic validation happens in the local tool so malformed calls
+            # become structured feedback instead of an Agent exception.
+            pass
         else:
             probe_error = self.http_probe.validate(
                 config=self.config,
@@ -506,7 +526,17 @@ class FailureSolveSession:
             return self._execute_memory_tool(call)
         if call.name == _PATCH_TOOL_NAME:
             return self._execute_patch_tool(call)
-        return self.http_probe.execute(config=self.config, tool_call=call)
+        if call.name == CATALOG_QUERY_TOOL_NAME:
+            return execute_catalog_query(
+                catalog=self.catalog,
+                tool_call=call,
+                tracing_runtime=self.tracing_runtime,
+            )
+        return self.http_probe.execute(
+            config=self.config,
+            tool_call=call,
+            catalog=self.catalog,
+        )
 
     def _execute_memory_tool(self, call: ToolCall) -> ToolResult:
         """Resolve semantic handles, query related Failures, and hide row IDs."""
@@ -847,11 +877,13 @@ Investigate exactly one Operation Smoke Failure.
 
 # Stages
 
-1. Read the current test case and preloaded Failure history.
-2. Before patching an input, call `lookup_parameter_history`.
-3. Probe HTTP only when existing evidence cannot distinguish the root cause.
-4. Call `generate_parameter_patch` with confirmed, testable requirements.
-5. Return one terminal `FailureSolveDecision` JSON object.
+1. Read the representative `TC*` reference and preloaded Failure history.
+2. Query `query_test_case_catalog` for exact request values, response fields,
+   or Failure Messages needed from any currently listed `TC*`.
+3. Before patching an input, call `lookup_parameter_history`.
+4. Probe HTTP only when existing evidence cannot distinguish the root cause.
+5. Call `generate_parameter_patch` with confirmed, testable requirements.
+6. Return one terminal `FailureSolveDecision` JSON object.
 
 # Rules
 
@@ -860,6 +892,8 @@ Investigate exactly one Operation Smoke Failure.
 - Slash-separated `input_node_id` values are not semantic handles.
 - A replacement must remain compatible with prior Patches and conflicts.
 - `generate_parameter_patch` has no side effects and returns a session `P` ref.
+- A successful HTTP probe returns a new `TC*`; query the Catalog for details.
+- HTTP probes may mutate the exact current operation and are not rolled back.
 - `apply_patch` is a final decision action, not a tool.
 - Other terminal actions are `no_patch` and `conflict`.
 - Use `candidate_ref` only with `apply_patch`.
@@ -949,8 +983,9 @@ def _solve_context_text(
     failure_history: FailureHistory,
     semantic_inputs,
     reference_options: list[AvailableReferenceOption],
+    catalog_range: str,
 ):
-    """Render the Todo's one HTTP case, active inputs, and concise Memory."""
+    """Render the representative case reference, active inputs, and Memory."""
     writer = CompactTextWriter(max_value_chars=800)
     writer.section("TASK")
     writer.record(
@@ -960,23 +995,8 @@ def _solve_context_text(
         path=config.snapshot.path,
         round=request.round_number,
         failure=request.todo.failure,
-    )
-
-    writer.section("Current Failure Test Case", untrusted=True)
-    case = request.todo.test_case
-    response = case.get("response")
-    response = response if isinstance(response, dict) else {}
-    writer.json_block(
-        "HTTP request and response",
-        {
-            "request": _failure_request_values(case),
-            "response": response,
-            **(
-                {"transport_error": case["transport_error"]}
-                if case.get("transport_error") is not None
-                else {}
-            ),
-        },
+        representative_case=request.todo.test_case_id,
+        catalog=catalog_range,
     )
 
     config_by_node = {item.input_node_id: item for item in config.configs}
@@ -1043,53 +1063,6 @@ def _solve_context_text(
         handle_by_node=semantic_inputs.handle_by_node,
     )
     return writer.render(max_chars=24_000)
-
-
-def _failure_request_values(case: dict) -> dict:
-    """Project one case's Generator choices without transport credentials.
-
-    Args:
-        case: App-lifetime Batch evidence for one executed request.
-
-    Returns:
-        A compact mapping of generated path, query, safe header, cookie, and
-        optional body inputs. Legacy request-shaped evidence remains supported
-        for older in-memory callers. The source case is not changed.
-    """
-    generated = case.get("generated_test_case")
-    if isinstance(generated, dict):
-        header_parameters = generated.get("header_parameters")
-        header_parameters = (
-            header_parameters
-            if isinstance(header_parameters, dict)
-            else {}
-        )
-        values = {
-            "path_parameters": generated.get("path_parameters", {}),
-            "query": generated.get("query_parameters", {}),
-            "headers": {
-                name: value
-                for name, value in header_parameters.items()
-                if not is_sensitive_header(name)
-            },
-            "cookies": generated.get("cookie_parameters", {}),
-        }
-        if generated.get("body_present"):
-            values["body"] = generated.get("body")
-        return {
-            key: value
-            for key, value in values.items()
-            if value not in ({}, [], None)
-        }
-
-    request_values = case.get("request")
-    if not isinstance(request_values, dict):
-        return {}
-    return {
-        key: request_values[key]
-        for key in ("path_parameters", "query", "headers", "body")
-        if key in request_values
-    }
 
 
 def _write_failure_history(
