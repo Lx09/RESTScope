@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from restscope.capabilities import ToolExecutor
+from restscope.capabilities.openapi_lookup import OPENAPI_LOOKUP_TOOL_NAME
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -17,8 +19,18 @@ from restscope.llm import (
     LLMRequest,
     LLMResponse,
     OutputValidator,
+    ToolCall,
+    ToolResult,
+    ToolSpec,
 )
 from restscope.observability import TracingRuntime
+from restscope.operation_smoke.test_case_catalog import (
+    CATALOG_QUERY_TOOL_NAME,
+    TestCaseCatalog,
+    catalog_query_tool_spec,
+    execute_catalog_query,
+    tool_result_json,
+)
 
 from .prompts import SYSTEM_PROMPT
 from .schemas import FailureDedupDecision
@@ -32,6 +44,7 @@ class FailureDedupAgent:
         *,
         client: LLMClient,
         model: LLMModelConfig,
+        tool_executor: ToolExecutor,
         system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
@@ -39,6 +52,7 @@ class FailureDedupAgent:
         """Store stateless collaborators used by each isolated Dedup call."""
         self.client = client
         self.model = model
+        self.tool_executor = tool_executor
         self.system_prompt = system_prompt or SYSTEM_PROMPT
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
@@ -49,6 +63,7 @@ class FailureDedupAgent:
         operation_key: str,
         semantic_parameters: list[str],
         observations: list[dict[str, Any]],
+        catalog: TestCaseCatalog,
         max_outputs: int,
     ) -> tuple[FailureDedupDecision | None, int, int, list[str]]:
         """Return a valid complete classification or report budget exhaustion.
@@ -67,7 +82,6 @@ class FailureDedupAgent:
 
         rendered = _input_text(
             operation_key=operation_key,
-            semantic_parameters=semantic_parameters,
             observations=observations,
         )
         context = AgentContext(
@@ -83,6 +97,7 @@ class FailureDedupAgent:
             metrics=rendered.metrics,
         )
         last_errors: list[str] = []
+        correction_count = 0
 
         with self.tracing_runtime.span(
             "FailureDedupAgent.deduplicate",
@@ -101,13 +116,34 @@ class FailureDedupAgent:
                         temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
-                        tools=[],
-                        tool_choice="none",
+                        tools=self._tool_specs(),
+                        tool_choice="auto",
                         timeout_seconds=self.model.timeout_seconds,
                         reasoning=self.model.reasoning,
                         metadata={"role": "operation_smoke_failure_dedup"},
                     )
                 )
+                if response.tool_calls:
+                    errors = _tool_call_errors(response)
+                    if errors:
+                        correction_count += 1
+                        last_errors = errors
+                        context.append_feedback(_correction_text(errors))
+                        continue
+                    call = response.tool_calls[0]
+                    context.append_assistant(response)
+                    result = self._execute_tool(
+                        call=call,
+                        operation_key=operation_key,
+                        catalog=catalog,
+                    )
+                    context.append_tool_result(
+                        result.name,
+                        result.tool_call_id,
+                        tool_result_json(result),
+                    )
+                    continue
+
                 decision, errors = _parse_decision(
                     response,
                     validator=self.validator,
@@ -128,14 +164,15 @@ class FailureDedupAgent:
                         {
                             "failure_count": len(canonical.failures),
                             "outputs_used": output_number,
-                            "correction_count": output_number - 1,
+                            "correction_count": correction_count,
                         }
                     )
-                    return canonical, output_number, output_number - 1, []
+                    return canonical, output_number, correction_count, []
 
                 last_errors = errors or [
                     "The response was not a usable FailureDedupDecision."
                 ]
+                correction_count += 1
                 context.append_assistant(response)
                 context.append_feedback(_correction_text(last_errors))
 
@@ -143,28 +180,92 @@ class FailureDedupAgent:
                 {
                     "status": "dedup_budget_exhausted",
                     "outputs_used": max_outputs,
-                    "correction_count": max_outputs,
+                    "correction_count": correction_count,
                 }
             )
-            return None, max_outputs, max_outputs, last_errors
+            return None, max_outputs, correction_count, last_errors
+
+    def _tool_specs(self) -> list[ToolSpec]:
+        """Offer one global OpenAPI lookup and the current run's Catalog query."""
+        return [
+            self.tool_executor.registry.get_spec(OPENAPI_LOOKUP_TOOL_NAME),
+            catalog_query_tool_spec(),
+        ]
+
+    def _execute_tool(
+        self,
+        *,
+        call: ToolCall,
+        operation_key: str,
+        catalog: TestCaseCatalog,
+    ) -> ToolResult:
+        """Run one validated tool without exposing another operation's Schema."""
+        if call.name == CATALOG_QUERY_TOOL_NAME:
+            return execute_catalog_query(
+                catalog=catalog,
+                tool_call=call,
+                tracing_runtime=self.tracing_runtime,
+            )
+        if call.name == OPENAPI_LOOKUP_TOOL_NAME:
+            if call.arguments.get("operation_key") != operation_key:
+                return ToolResult(
+                    tool_call_id=call.id,
+                    name=call.name,
+                    status="denied",
+                    error={
+                        "code": "dedup_operation_scope",
+                        "message": (
+                            "operation_key must exactly match the current "
+                            "Failure Dedup operation"
+                        ),
+                    },
+                )
+            return self.tool_executor.execute(
+                tool_call=call,
+                role="operation_smoke_failure_dedup",
+                state={},
+            )
+        return ToolResult(
+            tool_call_id=call.id,
+            name=call.name,
+            status="denied",
+            error={
+                "code": "dedup_tool_not_allowed",
+                "message": f"Tool is not available to Failure Dedup: {call.name}",
+            },
+        )
 
 
 def _input_text(
     *,
     operation_key: str,
-    semantic_parameters: list[str],
     observations: list[dict[str, Any]],
 ):
-    """Render reviewed Markdown with HTTP request/response evidence as JSON."""
+    """Render only Failure Messages and representative Catalog references."""
     writer = CompactTextWriter(max_value_chars=4_096)
     writer.section("Operation")
     writer.text("operation", operation_key)
-    writer.section("Semantic Parameters")
-    for handle in semantic_parameters:
-        writer.text("parameter", handle)
     writer.section("Failure Observations", untrusted=True)
-    writer.json_block("Current Batch HTTP evidence", observations)
+    for observation in observations:
+        writer.record(
+            str(observation["case_id"]),
+            failure_message=str(observation["message"]),
+        )
     return writer.render(max_chars=24_000)
+
+
+def _tool_call_errors(response: LLMResponse) -> list[str]:
+    """Require exactly one known tool call and no simultaneous final JSON."""
+    if len(response.tool_calls) != 1:
+        return ["One output must contain exactly one tool call."]
+    if response.parsed_json is not None:
+        return ["Do not mix a tool call with a final JSON decision."]
+    if response.tool_calls[0].name not in {
+        OPENAPI_LOOKUP_TOOL_NAME,
+        CATALOG_QUERY_TOOL_NAME,
+    }:
+        return [f"Unknown Failure Dedup tool: {response.tool_calls[0].name}"]
+    return []
 
 
 def _parse_decision(
@@ -256,8 +357,9 @@ def _correction_text(errors: list[str]) -> str:
     writer.text(
         "instruction",
         "Return one complete replacement FailureDedupDecision JSON object. "
-        "Copy every supplied message exactly once, use only supplied semantic "
-        "Parameter handles, merge equal non-empty Parameter sets, and do not "
+        "Copy every supplied message exactly once, use only semantic Parameter "
+        "handles returned by OpenAPI lookup, merge equal non-empty Parameter "
+        "sets, and do not "
         "return IDs, fingerprints, test cases, prose, or a partial correction.",
     )
     return writer.render(max_chars=8_000).text

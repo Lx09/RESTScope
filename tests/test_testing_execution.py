@@ -118,16 +118,19 @@ def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
     return operation, catalog, service, context, requests
 
 
-def test_operation_testing_returns_cases_and_private_failure_body(
+def test_operation_testing_returns_catalog_cases_and_only_keeps_failure_body(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that operation testing reads only failure body and reports unique messages."""
+    """Scenario: Batch returns Catalog-ready cases without a parallel report."""
     import httpx
 
     from restscope.capabilities import ToolContext
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.execution import OperationTestingService
+    from restscope.testing.execution import (
+        OperationTestingService,
+        SMOKE_FAILURE_RESPONSE_BYTES,
+    )
 
     class UnreadableBody(httpx.SyncByteStream):
         def __iter__(self):
@@ -160,12 +163,18 @@ def test_operation_testing_returns_cases_and_private_failure_body(
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        status = 200 if len(requests) == 1 else 503
+        status = [200, 503, 302][len(requests) - 1]
         if status == 503:
             return httpx.Response(
                 status,
                 headers={"Content-Type": "application/json"},
                 json={"message": "dependency unavailable"},
+            )
+        if status == 302:
+            return httpx.Response(
+                status,
+                headers={"Content-Type": "application/json"},
+                json={"message": "redirect body is not retained"},
             )
         return httpx.Response(
             status,
@@ -187,45 +196,46 @@ def test_operation_testing_returns_cases_and_private_failure_body(
         headers={"Authorization": "Bearer runtime-secret"},
     )
 
-    outcome = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         context,
         operation_key=operation.operation_key,
-        case_count=2,
+        case_count=3,
         seed=42,
     )
-    report = outcome.report
 
-    assert len(requests) == 2
+    assert SMOKE_FAILURE_RESPONSE_BYTES == 10 * 1024 * 1024
+    assert len(requests) == 3
     assert all(request.headers["Authorization"] == "Bearer runtime-secret" for request in requests)
     assert all(str(request.url).startswith("https://api.example.test/v1/items/") for request in requests)
-    assert report.status == "completed"
-    assert report.seed == 42
-    assert report.config_revision == 1
-    assert report.status_code_counts == {"200": 1, "503": 1}
-    assert report.error_count == 0
-    assert report.observed_2xx is True
-    assert report.response_validation == "not_evaluated"
-    assert [case.response.status_code for case in report.cases] == [200, 503]
-    assert all(not hasattr(case.response, "body") for case in report.cases)
-    assert "failure_" + "report" not in type(report).model_fields
-    assert outcome.case_evidence[1].response_body == (
-        b'{"message":"dependency unavailable"}'
-    )
-    # Trusted authentication reaches the real request but never crosses the
-    # public Batch-result boundary consumed by traces and Dedup evidence.
-    assert "runtime-secret" not in report.model_dump_json()
-    assert all(
-        case.request.headers["Authorization"] == "[redacted]"
-        for case in report.cases
-    )
-    private = {
-        item.case_id: item for item in outcome.case_evidence
+    assert batch.seed == 42
+    assert batch.config_revision == 1
+    assert batch.operation_key == operation.operation_key
+    assert [case.case_id for case in batch.cases] == ["TC1", "TC2", "TC3"]
+    assert all(case.parameters["path.itemId"] >= 1 for case in batch.cases)
+
+    # A success still remains queryable by input value, but its potentially
+    # large response body is deliberately not retained.
+    assert batch.cases[0].response_body is None
+    assert batch.cases[0].failure is None
+
+    # A 4xx/5xx response keeps both the complete decoded body and a separately
+    # normalized Failure so Agents can ask for either fact.
+    assert batch.cases[1].response_body == {
+        "message": "dependency unavailable"
     }
-    assert private[report.cases[0].case_id].response_body is None
-    assert private[report.cases[1].case_id].response_body == (
-        b'{"message":"dependency unavailable"}'
-    )
-    assert not hasattr(report.cases[1], "response_body")
+    assert batch.cases[1].failure is not None
+    assert batch.cases[1].failure.model_dump() == {
+        "kind": "http",
+        "status_code": 503,
+        "messages": ["HTTP 503: dependency unavailable"],
+        "body_truncated": False,
+    }
+    # Redirects remain failed Test Cases but do not consume response-body
+    # storage intended only for actionable 4xx/5xx evidence.
+    assert batch.cases[2].response_body is None
+    assert batch.cases[2].failure is not None
+    assert batch.cases[2].failure.messages == ["HTTP 302 Found"]
+    assert not hasattr(batch, "report")
 
 
 def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema(
@@ -305,17 +315,15 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
         headers={},
     )
 
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         context,
         operation_key=operation.operation_key,
         seed=19,
-    ).report
+    )
 
     assert len(requests) == 1
     assert requests[0].url.params["mode"] == "ffffffff"
-    assert report.cases[0].generated_test_case.query_parameters == {
-        "mode": "ffffffff"
-    }
+    assert batch.cases[0].parameters["query.mode"] == "ffffffff"
 
 
 def test_smoke_execution_applies_constraints_and_traces_only_the_count(
@@ -351,19 +359,19 @@ def test_smoke_execution_applies_constraints_and_traces_only_the_count(
         }
     )
 
-    outcome = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         context,
         operation_key=operation.operation_key,
         case_count=2,
         seed=17,
         constraints=constraints,
-    ).report
+    )
 
     assert len(requests) == 2
     assert [request.url.params["mode"] for request in requests] == ["slow", "slow"]
     assert [
-        case.generated_test_case.query_parameters["mode"]
-        for case in outcome.cases
+        case.parameters["query.mode"]
+        for case in batch.cases
     ] == ["slow", "slow"]
     root_input = tracing.inputs[0]
     assert root_input["constraint_count"] == 1
@@ -572,7 +580,7 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
             )
         ),
     )
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
@@ -582,15 +590,15 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
         operation_key=operation.operation_key,
         case_count=2,
         seed=9,
-    ).report
+    )
 
     assert len(requests) == 2
-    assert report.status == "partial"
-    assert report.error_count == 1
-    assert report.cases[1].transport_error.code == "request_failed"
-    assert "failure_" + "report" not in type(report).model_fields
-    assert report.cases[1].transport_error.message.startswith(
-        "HTTP request failed"
+    assert batch.success_count == 1
+    assert batch.cases[1].failure is not None
+    assert batch.cases[1].failure.kind == "transport"
+    assert batch.cases[1].failure.code == "request_failed"
+    assert batch.cases[1].failure.messages[0].startswith(
+        "TRANSPORT request_failed: HTTP request failed"
     )
 
 
@@ -634,8 +642,8 @@ def test_testing_transport_overrides_ordinary_context_headers_but_not_context_co
     )
 
 
-def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(tmp_path: Path) -> None:
-    """Scenario: verify that execution report preserves sensitive named values in the rendered path."""
+def test_batch_preserves_sensitive_named_values_only_as_catalog_parameters(tmp_path: Path) -> None:
+    """A sent path value remains queryable without reviving request reports."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -701,7 +709,7 @@ def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(
         ),
     )
 
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
@@ -710,11 +718,11 @@ def test_execution_report_preserves_sensitive_named_values_in_the_rendered_path(
         ),
         operation_key=operation.operation_key,
         seed=1,
-    ).report
+    )
 
     assert sent_paths == [f"/users/{secret}"]
-    assert report.cases[0].request.path == f"/users/{secret}"
-    assert secret in report.model_dump_json()
+    assert batch.cases[0].parameters["path.password"] == secret
+    assert not hasattr(batch.cases[0], "request")
 
 
 def test_transport_preflight_validates_every_case_before_the_first_request(tmp_path: Path) -> None:

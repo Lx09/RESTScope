@@ -28,11 +28,14 @@ The core loop is:
    target API.
 7. **Observe responses.** The API Behavior Monitor checks response contracts
    and learns narrowly approved identifier and response-value evidence.
-8. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
-   Agent groups remaining messages by complete suspected Parameter set.
-9. **Investigate one Failure.** Failure Solve may query Parameter history or
+8. **Index Test Cases.** One run-local Catalog retains every sent request's
+   semantic Parameter values and only failed response bodies.
+9. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
+   Agent discovers OpenAPI Parameters and queries selected `TC*` cases before
+   grouping messages by complete suspected Parameter set.
+10. **Investigate one Failure.** Failure Solve may query Test Cases, Parameter history or
    use an HTTP probe restricted to the current operation.
-10. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
+11. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
     internal tool. A selected Patch and its Investigation commit atomically.
     Every Failure item finishes before the next complete Batch measures the result.
 
@@ -101,8 +104,10 @@ maximum”, or “exactly one of these fields is included”.
 ### Request-local references
 
 Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
-Dedup receives exact messages and HTTP JSON without item IDs or Fingerprint
-references. Database primary keys never enter model prompts.
+Dedup receives exact messages and representative `TC*` references without
+item IDs or Fingerprint references. It uses a global OpenAPI lookup and a
+run-local exact Catalog query instead of receiving full HTTP JSON. Database
+primary keys never enter model prompts.
 
 ### Failure Observation, Failure, and Investigation
 
@@ -181,7 +186,7 @@ Owns deterministic request generation and execution.
 - `constraints.py` defines the expression language.
 - `constraint_solver.py` finds assignments that satisfy those expressions.
 - `serialization.py` turns generated values into an HTTP-shaped request.
-- `execution.py` sends batches and records bounded evidence.
+- `execution.py` sends batches and returns Catalog-ready Test Cases.
 - `catalog.py` persists approved Generator configuration revisions.
 
 ### `restscope/supervisor/`
@@ -191,13 +196,14 @@ evidence; it does not load a persisted static plan.
 
 ### `restscope/operation_smoke/`
 
-Owns thin coordination, bounded current-Batch evidence, structured Failure
+Owns thin coordination, a run-local Test Case Catalog, structured Failure
 Memory, public round summaries, and reference adaptation.
 
 Important files:
 
 - `coordinator.py`: complete-batch and fixed-todo orchestration.
-- `evidence.py`: complete App-only case evidence for current-round Dedup.
+- `test_case_catalog/`: `TC*` identity, bounded response retention, exact
+  queries, and the Agent-local Catalog tool.
 - `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
 - `references.py`: observed-value options exposed as model-safe `R` aliases.
@@ -304,19 +310,20 @@ RESTScopeApp
   -> serialize generated values
   -> TargetHTTPTransport
   -> APIBehaviorMonitorCoordinator
-  -> OperationExecutionReport
+  -> BatchExecutionResult
+  -> TestCaseCatalog
 ```
 
 For a failed Batch that receives an applied Patch:
 
 ```text
-OperationExecutionReport
+BatchExecutionResult + TestCaseCatalog
   -> exact normalized-message Fingerprint deduplication
   -> one Fingerprint: deterministic bypass
   -> several Fingerprints: FailureDedupAgent groups by suspected Parameters
-  -> one representative test case per current-round Failure
+  -> one representative TC* per current-round Failure
   -> fresh FailureSolveAgent
-  -> optional Parameter-memory and HTTP tools
+  -> optional Catalog, Parameter-memory, and HTTP tools
   -> internal ParameterPatchAgent tool
   -> compile + solve + case_count local samples
   -> Solve selects a session-local P* candidate

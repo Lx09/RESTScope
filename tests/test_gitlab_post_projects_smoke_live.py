@@ -345,7 +345,7 @@ def test_gitlab_post_projects_reaches_the_smoke_success_threshold() -> None:
     assert smoke.status == "passed"
     assert smoke.stop_reason == "success_rate_reached"
     assert smoke.success_rate >= smoke.required_success_rate == 0.8
-    assert smoke.batch_reports
+    assert smoke.batch_run_ids
 
     names = Counter(span["name"] for span in spans)
     assert names["RESTScopeApp.run"] == 1

@@ -198,7 +198,7 @@ def test_smoke_batch_uses_persisted_snapshot_when_current_ir_is_different(
         ),
     )
     current_ir = OpenAPIParser.parse(_spec(path="/replacement", title="Changed"))
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         ToolContext(
             ir=current_ir,
             baseline_schema_source={
@@ -212,9 +212,9 @@ def test_smoke_batch_uses_persisted_snapshot_when_current_ir_is_different(
         operation_key="POST /orders/{orderId}",
         case_count=1,
         seed=3,
-    ).report
+    )
 
-    assert report.status == "completed"
+    assert batch.success_count == 1
     assert len(requested_urls) == 1
     assert requested_urls[0].startswith("https://api.example.test/v1/orders/")
     assert "/replacement" not in requested_urls[0]

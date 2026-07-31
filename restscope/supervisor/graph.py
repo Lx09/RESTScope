@@ -293,7 +293,7 @@ class RESTScopeMainGraph:
                             "failure_kind": attempt.failure_kind,
                             "smoke_status": attempt.smoke_result.status,
                             "batch_count": len(
-                                attempt.smoke_result.batch_reports
+                                attempt.smoke_result.batch_run_ids
                             ),
                         }
                     )

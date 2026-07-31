@@ -1,12 +1,19 @@
-"""Generate and execute bounded batches against the App-bound target."""
+"""Generate and execute bounded Test Case batches against the App-bound target.
+
+The service freezes Generator configuration, prepares every request before the
+first network call, then executes the requests sequentially. Its output is a
+``BatchExecutionResult``: the concrete request parameters and outcome of each
+case, ready to enter Operation Smoke's run-local Test Case Catalog. It does not
+build a second reporting representation.
+"""
 
 from __future__ import annotations
 
-from collections import Counter
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import json
 import secrets
-import time
-from typing import Any, Mapping
+from typing import Any
 from uuid import uuid4
 
 from restscope.capabilities.tool_context import ToolContext
@@ -16,51 +23,59 @@ from restscope.http_transport import (
     TargetHTTPTransport,
     TargetHTTPTransportError,
     TargetResponseOperationContext,
-    is_sensitive_header,
 )
 from restscope.observability import TracingRuntime
+from restscope.operation_smoke.test_case_catalog import (
+    CatalogTestCase,
+    parse_http_failure,
+    parse_transport_failure,
+)
 
 from .catalog import GeneratorConfigCatalog
 from .constraints import ConstraintSet, ConstraintValidationError
 from .constraint_solver import ConstraintSolveError
-from .generation import generate_test_case
+from .generation import (
+    generate_test_case,
+    project_generated_input_value,
+)
 from .models import (
     GeneratedTestCase,
-    OperationExecutionStatus,
-    OperationExecutionReport,
-    PreparedRequestSummary,
+    OperationTestSnapshot,
     PreparedTestRequest,
-    BehaviorMonitorWarningSummary,
-    ResponseSummary,
-    ResponseValidationStatus,
-    TestCaseExecutionReport,
-    TransportErrorSummary,
 )
 from .ports import ReferenceValueProvider
+from .semantics import build_semantic_input_map
 from .serialization import serialize_test_case
 
 
 BEHAVIOR_MONITOR_RESPONSE_BYTES = 1024 * 1024
-SMOKE_FAILURE_RESPONSE_BYTES = 1024 * 1024
+SMOKE_FAILURE_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
-class SmokeCaseExecutionEvidence:
-    """Private response evidence retained only for one Smoke diagnosis."""
+class BatchExecutionResult:
+    """Return one prepared-and-executed batch without constructing a report.
 
-    case_id: str
-    response_body: bytes | None = None
-    response_body_truncated: bool = False
-    response_encoding: str | None = None
-    behavior_monitor: Mapping[str, Any] | None = None
+    ``cases`` contains every attempted request, including successes and
+    transport failures. A Coordinator can record those immutable cases in its
+    run-local Catalog without translating a second evidence structure.
+    """
 
+    run_id: str
+    operation_key: str
+    seed: int
+    config_revision: int
+    cases: tuple[CatalogTestCase, ...]
 
-@dataclass(frozen=True, slots=True)
-class SmokeExecutionOutcome:
-    """Public report plus private, App-lifetime-only diagnosis evidence."""
+    @property
+    def success_count(self) -> int:
+        """Count HTTP 2xx cases, represented by the absence of a Failure."""
+        return sum(case.failure is None for case in self.cases)
 
-    report: OperationExecutionReport
-    case_evidence: tuple[SmokeCaseExecutionEvidence, ...]
+    @property
+    def success_rate(self) -> float:
+        """Return the 0-to-1 success fraction for this non-empty batch."""
+        return self.success_count / len(self.cases)
 
 
 class TestingExecutionError(RuntimeError):
@@ -102,16 +117,17 @@ class OperationTestingService:
         case_count: int = 1,
         seed: int | None = None,
         constraints: ConstraintSet | None = None,
-    ) -> SmokeExecutionOutcome:
-        """Execute one complete Smoke batch and retain its private evidence.
+        case_id_factory: Callable[[], str] | None = None,
+    ) -> BatchExecutionResult:
+        """Execute one complete Smoke batch and return Catalog-ready cases.
 
         ``operation_key`` selects the frozen operation snapshot. ``case_count`` and
         ``seed`` control deterministic generation, while optional runtime
         ``constraints`` express relationships learned during the current App
-        lifetime. The returned outcome contains both the public-shaped execution
-        report and bounded response evidence needed by Failure Dedup and
-        Investigation. Generation or serialization failures abort before any request is
-        sent; transport failures are recorded per case.
+        lifetime. ``case_id_factory`` lets a run-level Catalog assign identities
+        continuously across Batch rounds and Solve probes. Generation or
+        serialization failures abort before any request is sent; transport
+        failures are recorded per case.
         """
 
         return self._run_smoke_batch_traced(
@@ -120,6 +136,7 @@ class OperationTestingService:
             case_count=case_count,
             seed=seed,
             constraints=constraints,
+            case_id_factory=case_id_factory,
         )
 
     def _run_smoke_batch_traced(
@@ -131,7 +148,8 @@ class OperationTestingService:
         case_count: int,
         seed: int | None,
         constraints: ConstraintSet | None,
-    ) -> SmokeExecutionOutcome:
+        case_id_factory: Callable[[], str] | None,
+    ) -> BatchExecutionResult:
         """
         Trace deterministic request generation, constraint solving, and execution.
 
@@ -167,35 +185,24 @@ class OperationTestingService:
                 case_count=case_count,
                 seed=seed,
                 constraints=constraints,
+                case_id_factory=case_id_factory,
             )
-            report = outcome.report
             span.set_output(
                 {
-                    "run_id": report.run_id,
-                    "status": report.status,
-                    "config_revision": report.config_revision,
-                    "status_code_counts": report.status_code_counts,
-                    "error_count": report.error_count,
-                    "observed_2xx": report.observed_2xx,
-                    "response_validation": report.response_validation,
-                    "behavior_monitor_warning_count": (
-                        report.behavior_monitor_warning_count
-                    ),
+                    "run_id": outcome.run_id,
+                    "config_revision": outcome.config_revision,
+                    "case_count": len(outcome.cases),
+                    "success_count": outcome.success_count,
                 }
             )
-            span.set_attribute("restscope.test.run_id", report.run_id)
+            span.set_attribute("restscope.test.run_id", outcome.run_id)
             span.set_attribute(
                 "restscope.generator.config_revision",
-                report.config_revision,
-            )
-            span.set_attribute("restscope.test.status", report.status)
-            span.set_attribute(
-                "restscope.test.error_count",
-                report.error_count,
+                outcome.config_revision,
             )
             span.set_attribute(
                 "restscope.test.observed_2xx",
-                report.observed_2xx,
+                outcome.success_count > 0,
             )
             return outcome
 
@@ -208,7 +215,8 @@ class OperationTestingService:
         case_count: int = 1,
         seed: int | None = None,
         constraints: ConstraintSet | None = None,
-    ) -> SmokeExecutionOutcome:
+        case_id_factory: Callable[[], str] | None = None,
+    ) -> BatchExecutionResult:
         """Perform fail-before-send preflight, then execute prepared cases."""
         if not 1 <= case_count <= 20:
             raise TestingExecutionError(
@@ -250,62 +258,44 @@ class OperationTestingService:
 
         # Network execution begins only after preflight succeeds for every case.
         run_id = f"test_run_{uuid4().hex}"
-        reports: list[TestCaseExecutionReport] = []
-        smoke_evidence: list[SmokeCaseExecutionEvidence] = []
+        if case_id_factory is None:
+            next_case_number = 1
+
+            def case_id_factory() -> str:
+                """Assign simple identities when no shared Catalog owns the run."""
+                nonlocal next_case_number
+                case_id = f"TC{next_case_number}"
+                next_case_number += 1
+                return case_id
+
+        semantic_inputs = build_semantic_input_map(config)
+        cases: list[CatalogTestCase] = []
         for case_index, (generated, request, target_request) in enumerate(
             prepared
         ):
-            case_report, case_smoke_evidence = (
+            cases.append(
                 self._execute_case(
                     context,
                     run_id=run_id,
+                    case_id=case_id_factory(),
                     case_index=case_index,
                     generated=generated,
                     request=request,
                     target_request=target_request,
+                    parameters=_project_sent_parameters(
+                        config.snapshot,
+                        generated,
+                        semantic_inputs.handle_by_node,
+                    ),
                 )
             )
-            reports.append(case_report)
-            smoke_evidence.append(case_smoke_evidence)
 
-        status_counts = Counter(
-            str(case.response.status_code)
-            for case in reports
-            if case.response is not None
-        )
-        error_count = sum(case.transport_error is not None for case in reports)
-        warning_count = sum(
-            len(case.behavior_monitor_warnings) for case in reports
-        )
-        response_validation = _response_validation(reports)
-        status: OperationExecutionStatus = (
-            "completed"
-            if error_count == 0
-            else "errored"
-            if error_count == len(reports)
-            else "partial"
-        )
-        report = OperationExecutionReport(
+        return BatchExecutionResult(
             run_id=run_id,
             operation_key=operation_key,
             seed=run_seed,
             config_revision=config.revision,
-            status=status,
-            response_validation=response_validation,
-            cases=reports,
-            status_code_counts=dict(status_counts),
-            error_count=error_count,
-            observed_2xx=any(
-                case.response is not None and 200 <= case.response.status_code < 300
-                for case in reports
-            ),
-            behavior_monitor_warning_count=warning_count,
-        )
-        return SmokeExecutionOutcome(
-            report=OperationExecutionReport.model_validate(
-                self.tracing_runtime.redactor.redact(report)
-            ),
-            case_evidence=tuple(smoke_evidence),
+            cases=tuple(cases),
         )
 
     def _execute_case(
@@ -313,36 +303,26 @@ class OperationTestingService:
         context: ToolContext,
         *,
         run_id: str,
+        case_id: str,
         case_index: int,
         generated: GeneratedTestCase,
         request: PreparedTestRequest,
         target_request: PreparedTargetRequest,
-    ) -> tuple[
-        TestCaseExecutionReport,
-        SmokeCaseExecutionEvidence,
-    ]:
-        """
-        Execute case for deterministic request generation, constraint solving, and
-        execution.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
-        case_id = f"{run_id}_case_{case_index + 1}"
-        request_summary = _request_summary(
-            request,
-            target_request=target_request,
-        )
-        started = time.perf_counter()
-        response_summary: ResponseSummary | None = None
-        error_summary: TransportErrorSummary | None = None
-        monitor_warnings: list[BehaviorMonitorWarningSummary] = []
-        response_validation: ResponseValidationStatus = "not_evaluated"
-        smoke_evidence = SmokeCaseExecutionEvidence(case_id=case_id)
+        parameters: dict[str, Any],
+    ) -> CatalogTestCase:
+        """Execute one prepared request and retain only Catalog-approved facts."""
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
             kind="TOOL",
-            input_value=request_summary,
+            input_value={
+                "operation_key": generated.operation_key,
+                "run_id": run_id,
+                "case_id": case_id,
+                "method": request.method,
+                "path_template": self.config_catalog.require_operation(
+                    generated.operation_key
+                ).snapshot.path,
+            },
             attributes={
                 "restscope.operation.key": generated.operation_key,
                 "restscope.test.run_id": run_id,
@@ -376,121 +356,116 @@ class OperationTestingService:
                         ).snapshot.path,
                     ),
                 )
-                elapsed = (time.perf_counter() - started) * 1000
                 media_type = (
                     response.headers.get("content-type", "")
                     .split(";", 1)[0]
                     .strip()
                     or None
                 )
-                raw_length = response.headers.get("content-length")
-                response_summary = ResponseSummary(
+                response_body = _decode_failure_body(
+                    response.body,
+                    media_type=media_type,
+                    encoding=response.encoding,
+                ) if 400 <= response.status_code < 600 else None
+                failure = parse_http_failure(
                     status_code=response.status_code,
                     reason_phrase=response.reason_phrase,
                     media_type=media_type,
-                    content_length=(
-                        int(raw_length)
-                        if raw_length and raw_length.isdigit()
-                        else None
-                    ),
-                    latency_ms=elapsed,
+                    response_body=response_body,
+                    body_truncated=response.body_truncated,
                 )
-                if response.processor_result is not None:
-                    response_validation = (
-                        response.processor_result.response_validation
-                    )
-                    monitor_warnings = [
-                        BehaviorMonitorWarningSummary(
-                            code=warning.code,
-                            message=warning.message,
-                            issues=list(warning.issues),
-                        )
-                        for warning in response.processor_result.warnings
-                    ]
-                smoke_evidence = SmokeCaseExecutionEvidence(
+                result = CatalogTestCase(
                     case_id=case_id,
-                    response_body=(
-                        response.body
-                        if not 200 <= response.status_code < 300
-                        else None
-                    ),
-                    response_body_truncated=response.body_truncated,
-                    response_encoding=response.encoding,
-                    behavior_monitor=(
-                        response.processor_result.details
-                        if response.processor_result is not None
-                        else None
-                    ),
+                    parameters=parameters,
+                    response_body=response_body,
+                    failure=failure,
                 )
-                span.set_output(response_summary)
+                span.set_output(
+                    {
+                        "case_id": case_id,
+                        "status_code": response.status_code,
+                        "failed": failure is not None,
+                        "body_retained": response_body is not None,
+                        "body_truncated": response.body_truncated,
+                    }
+                )
+                return result
             except TargetHTTPTimeout:
-                error_summary = TransportErrorSummary(
+                failure = parse_transport_failure(
                     code="request_timeout",
                     message="HTTP request timed out",
                 )
-                span.mark_error(error_summary.message)
+                span.mark_error(failure.messages[0])
             except TargetHTTPTransportError as exc:
-                error_summary = TransportErrorSummary(
+                failure = parse_transport_failure(
                     code=exc.code,
                     message=str(exc),
                 )
-                span.mark_error(error_summary.message)
+                span.mark_error(failure.messages[0])
 
-        return (
-            TestCaseExecutionReport(
-                case_id=case_id,
-                generated_test_case=generated,
-                request=request_summary,
-                response=response_summary,
-                transport_error=error_summary,
-                behavior_monitor_warnings=monitor_warnings,
-                response_validation=response_validation,
-            ),
-            smoke_evidence,
+        return CatalogTestCase(
+            case_id=case_id,
+            parameters=parameters,
+            response_body=None,
+            failure=failure,
         )
 
 
-def _request_summary(
-    request: PreparedTestRequest,
-    *,
-    target_request: PreparedTargetRequest,
-) -> PreparedRequestSummary:
-    """Build public request evidence without copying trusted credentials.
+def _project_sent_parameters(
+    operation: OperationTestSnapshot,
+    generated: GeneratedTestCase,
+    handle_by_node: Mapping[str, str],
+) -> dict[str, Any]:
+    """Project every actually present semantic input from one generated case.
 
-    ``target_request`` contains the real merged headers sent over the wire.
-    Authentication, Cookies, API keys, CSRF tokens, and similarly named
-    secrets remain available only to the transport; reports, Dedup evidence,
-    and case spans receive a visible redaction marker instead.
+    The Generator stores values by internal node identity, while Agents use
+    stable handles such as ``query.page`` and ``body.name``. Missing optional
+    values are omitted here; the Catalog can still answer a valid lookup with
+    ``present: false`` because it knows the operation's complete handle set.
     """
-    return PreparedRequestSummary(
-        method=request.method,
-        path=request.path,
-        query_items=list(request.query_items),
-        headers={
-            name: (
-                "[redacted]"
-                if is_sensitive_header(name)
-                else value
+    parameters: dict[str, Any] = {}
+    for input_node_id, handle in handle_by_node.items():
+        try:
+            parameters[handle] = project_generated_input_value(
+                operation,
+                generated,
+                input_node_id=input_node_id,
             )
-            for name, value in target_request.headers.items()
-        },
-        body_size_bytes=len(request.content or b""),
-    )
+        except KeyError:
+            continue
+    return parameters
 
 
-def _response_validation(
-    cases: list[TestCaseExecutionReport],
-) -> ResponseValidationStatus:
-    statuses = [
-        case.response_validation
-        for case in cases
-        if case.response is not None
-    ]
-    if not statuses or all(status == "not_evaluated" for status in statuses):
-        return "not_evaluated"
-    if any(status == "partial" for status in statuses):
-        return "partial"
-    return "evaluated"
+def _decode_failure_body(
+    body: bytes | None,
+    *,
+    media_type: str | None,
+    encoding: str | None,
+) -> Any | None:
+    """Decode one retained 4xx/5xx body without losing arbitrary byte content."""
+    if body is None:
+        return None
+    normalized_media = (media_type or "").lower()
+    text_encoding = encoding or "utf-8"
+    if normalized_media == "application/json" or normalized_media.endswith(
+        "+json"
+    ):
+        try:
+            return json.loads(body.decode(text_encoding))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            # A malformed or size-truncated JSON response is still valuable
+            # evidence. Preserve readable text when possible and raw bytes
+            # otherwise instead of silently replacing it with ``None``.
+            try:
+                return body.decode(text_encoding)
+            except UnicodeDecodeError:
+                return body
+    if normalized_media.startswith("text/"):
+        try:
+            return body.decode(text_encoding)
+        except UnicodeDecodeError:
+            return body
+    return body
 
 
 def _target_query_items(

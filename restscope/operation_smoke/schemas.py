@@ -13,9 +13,6 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from restscope.testing import OperationExecutionReport
-
-
 class _PublicModel(BaseModel):
     """Make public Smoke contracts immutable and reject removed old fields."""
 
@@ -101,7 +98,7 @@ class OperationSmokeResult(_PublicModel):
     success_rate: float = Field(ge=0, le=1)
     required_success_rate: float = Field(ge=0, le=1)
     active_config_revision: int = Field(ge=1)
-    batch_reports: list[OperationExecutionReport] = Field(default_factory=list)
+    batch_run_ids: list[str] = Field(default_factory=list)
     rounds: list[SmokeRoundSummary] = Field(default_factory=list)
     stop_reason: OperationSmokeStopReason | None = None
     reason: str | None = None

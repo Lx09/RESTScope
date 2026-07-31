@@ -45,7 +45,6 @@ class _SmokeCoordinator:
 
     def run(self, context, request):
         from restscope.operation_smoke import OperationSmokeResult
-        from restscope.testing import OperationExecutionReport
 
         del context
         self.requests.append(request)
@@ -61,21 +60,11 @@ class _SmokeCoordinator:
             if status == "dedup_budget_exhausted"
             else status
         )
-        reports = []
-        if result_status == "passed":
-            reports.append(
-                OperationExecutionReport(
-                    run_id=f"run_{len(self.requests)}",
-                    operation_key=request.operation_key,
-                    seed=1,
-                    config_revision=1,
-                    status="completed",
-                    cases=[],
-                    status_code_counts={"200": 1},
-                    error_count=0,
-                    observed_2xx=True,
-                )
-            )
+        batch_run_ids = (
+            [f"run_{len(self.requests)}"]
+            if result_status == "passed"
+            else []
+        )
         return OperationSmokeResult(
             status=result_status,
             operation_key=request.operation_key,
@@ -88,7 +77,7 @@ class _SmokeCoordinator:
                 if status in passed_stop_reasons
                 else None
             ),
-            batch_reports=reports,
+            batch_run_ids=batch_run_ids,
             failure_kind=(
                 "dedup_budget_exhausted"
                 if status == "dedup_budget_exhausted"

@@ -269,6 +269,7 @@ def test_build_capabilities_with_mcp_host_discovers_all_servers_by_default() -> 
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
         "restscope.http.request",
+        "openapi.lookup_operation",
         "mcp.example.inspect",
         "mcp.example.mutate",
         "mcp.secondary.inspect",
@@ -277,9 +278,10 @@ def test_build_capabilities_with_mcp_host_discovers_all_servers_by_default() -> 
     assert [
         tool.name
         for tool in runtime.tool_selector.select_for_role(role="planner", state={})
-    ] == [
-        "restscope.http.request",
-        "mcp.example.inspect",
+        ] == [
+            "restscope.http.request",
+            "openapi.lookup_operation",
+            "mcp.example.inspect",
         "mcp.secondary.inspect",
     ]
 
@@ -326,6 +328,7 @@ def test_build_capabilities_with_mcp_host_can_filter_generic_server_names() -> N
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
         "restscope.http.request",
+        "openapi.lookup_operation",
         "mcp.secondary.inspect",
     ]
 
@@ -340,7 +343,8 @@ def test_build_capabilities_with_empty_mcp_host_keeps_builtin_tools() -> None:
     )
 
     assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request"
+        "restscope.http.request",
+        "openapi.lookup_operation",
     ]
 
 

@@ -582,11 +582,22 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     )
     runtime.close()
 
-    rendered_result = result.report.model_dump_json()
+    rendered_result = json.dumps(
+        {
+            "run_id": result.run_id,
+            "operation_key": result.operation_key,
+            "seed": result.seed,
+            "config_revision": result.config_revision,
+            "cases": [
+                case.model_dump(mode="json")
+                for case in result.cases
+            ],
+        }
+    )
     assert "runtime-secret" not in rendered_result
     assert "runtime-csrf-secret" not in rendered_result
-    assert '"Authorization":"[redacted]"' in rendered_result
-    assert '"X-CSRF-Token":"[redacted]"' in rendered_result
+    assert "Authorization" not in rendered_result
+    assert "X-CSRF-Token" not in rendered_result
     assert "generated-secret" in rendered_result
     spans = list(exporter.get_finished_spans())
     batch = next(
@@ -600,6 +611,6 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     rendered_spans = json.dumps([dict(span.attributes) for span in spans], default=str)
     assert "runtime-secret" not in rendered_spans
     assert "runtime-csrf-secret" not in rendered_spans
-    assert "generated-secret" in rendered_spans
+    assert "generated-secret" not in rendered_spans
     assert "llm-api-key" not in rendered_result
     assert "llm-api-key" not in rendered_spans

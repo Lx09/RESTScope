@@ -12,37 +12,24 @@ input:
     operation_key: POST /projects
     round_number: 1
     batch_run_id: eval-run-1
-    semantic_parameters: [body.name, body.namespace_id]
-    cases:
-      - case_id: case-a
-        generated_test_case:
-          path_parameters: {}
-          query_parameters: {}
-          header_parameters: {}
-          cookie_parameters: {}
-          body_present: true
-          body: {name: existing}
-        request: {path: /projects}
-        response:
-          status_code: 400
-          media_type: application/json
-          body: '{"message":"name already exists"}'
-      - case_id: case-b
-        generated_test_case:
-          path_parameters: {}
-          query_parameters: {}
-          header_parameters: {}
-          cookie_parameters: {}
-          body_present: true
-          body: {name: reserved}
-        request: {path: /projects}
-        response:
-          status_code: 409
-          media_type: application/json
-          body: '{"message":"name conflicts"}'
+    case_ids: [TC1, TC2]
+  valid_parameters: [body, body.name, body.namespace_id]
+  catalog_cases:
+    - parameters: {body.name: existing}
+      response_body: {message: name already exists}
+      failure:
+        kind: http
+        status_code: 400
+        messages: ["HTTP 400: name already exists"]
+    - parameters: {body.name: reserved}
+      response_body: {message: name conflicts}
+      failure:
+        kind: http
+        status_code: 409
+        messages: ["HTTP 409: name conflicts"]
   max_outputs: 3
 expected:
   status: deduplicated
   failure_count: 1
   parameter_sets: [[body.name]]
-  representative_case_ids: [case-a]
+  representative_case_ids: [TC1]

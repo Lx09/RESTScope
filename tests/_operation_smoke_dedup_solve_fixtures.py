@@ -57,60 +57,30 @@ def smoke_config():
 
 
 def smoke_report(*, long_value: str | None = None):
-    from restscope.testing import (
-        GeneratedNodeValue,
-        GeneratedTestCase,
-        OperationExecutionReport,
+    """Build one Catalog-ready failed Batch for workflow tests."""
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogTestCase,
+        HTTPFailure,
     )
-    from restscope.testing.models import (
-        PreparedRequestSummary,
-        ResponseSummary,
-        TestCaseExecutionReport,
-    )
+    from restscope.testing import BatchExecutionResult
 
     value = long_value or "random-123"
-    case = TestCaseExecutionReport(
-        case_id="case_1",
-        generated_test_case=GeneratedTestCase(
-            operation_key="GET /projects/{projectId}",
-            case_index=0,
-            path_parameters={"projectId": value},
-            query_parameters={},
-            header_parameters={},
-            cookie_parameters={},
-            generated_values=[
-                GeneratedNodeValue(
-                    input_node_id="path/projectId",
-                    instance_path="path/projectId",
-                    value=value,
-                )
-            ],
-            omitted_input_node_ids=["query/region"],
-        ),
-        request=PreparedRequestSummary(
-            method="GET",
-            path=f"/projects/{value}",
-            query_items=[],
-            headers={"Authorization": "must-not-enter-the-prompt"},
-            body_size_bytes=0,
-        ),
-        response=ResponseSummary(
-            status_code=404,
-            reason_phrase="Not Found",
-            media_type="application/json",
-            latency_ms=1,
-        ),
-    )
-    return OperationExecutionReport(
+    return BatchExecutionResult(
         run_id="run_1",
         operation_key="GET /projects/{projectId}",
         seed=1,
         config_revision=3,
-        status="completed",
-        cases=[case],
-        status_code_counts={"404": 1},
-        error_count=0,
-        observed_2xx=False,
+        cases=(
+            CatalogTestCase(
+                case_id="TC1",
+                parameters={"path.projectId": value},
+                response_body={"message": "project missing"},
+                failure=HTTPFailure(
+                    status_code=404,
+                    messages=["HTTP 404: project missing"],
+                ),
+            ),
+        ),
     )
 
 

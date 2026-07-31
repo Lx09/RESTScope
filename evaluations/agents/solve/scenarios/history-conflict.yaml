@@ -15,12 +15,7 @@ input:
       todo_id: T3
       failure_id: failure-requires-large-project-id
       failure: This endpoint example succeeds only with projectId above 1000.
-      test_case:
-        case_id: large-project-required
-        failure: unexpected status
-        request:
-          path_parameters: {projectId: 50}
-        response: {status_code: 404}
+      test_case_id: TC1
     operation: {method: GET, path: "/projects/{projectId}"}
     generator_config: {}
   config:
@@ -50,6 +45,13 @@ input:
     summary: This endpoint example succeeds only with projectId above 1000.
     observations: []
     investigations: []
+  catalog_cases:
+    - parameters: {path.projectId: 50}
+      response_body: {message: project missing}
+      failure:
+        kind: http
+        status_code: 404
+        messages: ["HTTP 404: project missing"]
   parameter_histories:
     - input_node_id: path/projectId
       failures:

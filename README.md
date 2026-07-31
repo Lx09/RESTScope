@@ -290,11 +290,13 @@ IR. Invalid or truncated JSON stays pending for the next matching response;
 the evolved IR and first-observation registry are not persisted.
 
 Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
-tracking. Non-2xx bodies remain bounded App-lifetime evidence for Failure
-Dedup, but never become reusable input values and are not persisted. The Batch
-report contains generated/request values, redacted headers, response metadata,
-transport errors, API Behavior Monitor warnings, and `response_validation`;
-it does not interpret, summarize, or deduplicate Failures.
+tracking. Batch execution returns concrete Test Cases instead of building a
+parallel report. Every attempted case enters one run-local `TestCaseCatalog`
+with its actually sent semantic Parameter values. Successful responses keep no
+body. A 4xx/5xx response keeps a decoded body up to 10 MiB plus its separately
+normalized Failure; redirects and transport errors keep only bounded Failure
+facts. The Catalog is released when the operation's Smoke run ends and is
+never persisted.
 
 `restscope.http.request` is a high-risk, non-read-only model capability that
 can trigger side effects on the bound target. Failure Solve receives a further
@@ -351,13 +353,21 @@ internally by Operation Smoke.
 2. `FailureDeduplicator` extracts normalized error-message Fingerprints and
    keeps only the first test case for each exact Fingerprint. One Fingerprint
    bypasses the LLM. With several Fingerprints, `FailureDedupAgent` groups them
-   by equal complete suspected causal Parameter sets. It reads no history.
-   Deterministic validation and Markdown correction run before Memory is
-   written. Every current-round Failure carries exactly one test case.
+   by equal complete suspected causal Parameter sets. Its initial Markdown
+   context contains only the operation, each Failure Message, and a
+   representative `TC*` reference. It discovers Parameters through
+   `openapi.lookup_operation` and queries exact case values through
+   `query_test_case_catalog`; native structured tool results are compact JSON.
+   It reads no Failure history. Deterministic validation and Markdown
+   correction run before Memory is written. Every current-round Failure
+   carries exactly one representative `TC*`.
 3. Each debug item gets a fresh `FailureSolveAgent`. Solve preloads the current
    Failure, may query other Failure history by semantic Parameter handle, and
-   may use the current-operation HTTP probe. Before replacing a Parameter
-   Generator it must inspect that Parameter's earlier Failure/Patch history.
+   may query any currently known `TC*`. Its current-operation HTTP probe supports
+   GET, HEAD, OPTIONS, POST, PUT, PATCH, and DELETE. Every attempted Probe adds
+   another `TC*`; mutating Probes are not rolled back. Before replacing a
+   Parameter Generator it must inspect that Parameter's earlier Failure/Patch
+   history.
 4. Solve calls a fresh FAST `ParameterPatchAgent` as an internal tool.
    Structured root cause, affected inputs, desired behavior, and acceptance
    criteria are compiled into Generator/Constraint changes. DTO, Schema,
@@ -374,8 +384,9 @@ complete Batch validates all applied changes together, and
 There is no Effect Agent, candidate Batch, rollback revision, or permanent
 `resolved` flag.
 
-Dedup has a shared 50-output correction budget and normally uses zero or one
-output. Each Solve has a 50-output budget that also counts every nested
+Dedup has a shared 50-output budget. One Fingerprint uses zero outputs; several
+normally require an OpenAPI lookup, optional Catalog reads, and one final
+decision. Each Solve has a 50-output budget that also counts every nested
 Parameter Patch LLM output; one Patch tool call is capped at 20 outputs.
 Malformed replies and invalid tool-requesting model outputs count.
 Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Dedup or
@@ -386,8 +397,8 @@ The database keeps only structured Failure knowledge and applied Patches.
 Rejected session candidates, raw Batches/responses, HTTP transcripts, and LLM
 transcripts are not persisted. Accepted Constraints remain executable for the
 current App and are also present inside the structured Applied Patch record.
-Public results contain bounded Batch, round, Investigation, and applied-Patch
-summaries.
+Public results contain Batch run IDs plus bounded round, Investigation, and
+applied-Patch summaries. Request/response reports are intentionally absent.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.

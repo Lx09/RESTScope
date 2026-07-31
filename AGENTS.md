@@ -142,9 +142,12 @@ explicit project decision:
   and applied Generator/Constraint Patches. It must not persist raw Batches,
   response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
   queues, or a permanent `resolved` flag. Solve receives a read-only Parameter
-  memory tool. Failure Dedup uses only the current Batch, reads no Memory, and
-  writes validated single-Observation Failures through deterministic runtime
-  code.
+  memory tool. Failure Dedup uses only the current run's in-memory Test Case
+  Catalog, may query the global read-only OpenAPI operation capability, reads
+  no Failure Memory, and writes validated single-Observation Failures through
+  deterministic runtime code. The Test Case Catalog stores every Batch and
+  Solve Probe case only until `OperationSmokeCoordinator.run` returns; it must
+  never be persisted.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
   current evidence. Operation Smoke Memory is evidence for Solve, not a

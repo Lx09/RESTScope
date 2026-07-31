@@ -104,7 +104,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
         response_content=b'{"id":7}',
     )
 
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -116,9 +116,9 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
         ),
         operation_key="GET /users/{userId}",
         seed=1,
-    ).report
+    )
 
-    assert report.status == "completed"
+    assert batch.success_count == 1
     assert len(processor.calls) == 1
     observation, context = processor.calls[0]
     assert observation.body == b'{"id":7}'
@@ -127,7 +127,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
     assert context.operation_method == "GET"
     assert context.operation_path == "/users/{userId}"
     assert context.ir is ir
-    assert report.cases[0].behavior_monitor_warnings == []
+    assert batch.cases[0].failure is None
 
 
 def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> None:
@@ -212,6 +212,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     import httpx
 
     from restscope.operation_smoke.failure_solver import CurrentOperationHTTPProbe
+    from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
     from restscope.capabilities import (
         ToolCallValidator,
         ToolContext,
@@ -292,6 +293,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
             name="restscope.http.request",
             arguments={"method": "GET", "path": "/users/me"},
         ),
+        catalog=TestCaseCatalog(valid_parameters={"path.userId"}),
     )
     unscoped = executor.execute(
         tool_call=ToolCall(
@@ -355,7 +357,7 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
         response_content=content,
     )
 
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -367,15 +369,13 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
         ),
         operation_key="GET /users/{userId}",
         seed=1,
-    ).report
+    )
 
     observation, _context = processor.calls[0]
     assert len(observation.body) == 1024 * 1024
     assert observation.body_truncated is True
-    assert report.cases[0].response is not None
-    assert report.cases[0].behavior_monitor_warnings[0].code == (
-        "resource_monitor_body_truncated"
-    )
+    assert batch.cases[0].failure is None
+    assert processor.warning.code == "resource_monitor_body_truncated"
 
 
 def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
@@ -392,7 +392,7 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
         status_code=404,
     )
 
-    report = service.run_smoke_batch(
+    batch = service.run_smoke_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -404,10 +404,11 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
         ),
         operation_key="GET /users/{userId}",
         seed=1,
-    ).report
+    )
 
-    assert report.cases[0].response is not None
-    assert report.cases[0].response.status_code == 404
+    assert batch.cases[0].failure is not None
+    assert batch.cases[0].failure.status_code == 404
+    assert batch.cases[0].response_body == {"error": "missing"}
     assert len(processor.calls) == 1
     observation, context = processor.calls[0]
     assert observation.status_code == 404

@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from evaluations.models import DatasetExample, EvaluationSuite, ScenarioProvenance
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
+from restscope.capabilities import ToolContext, build_capabilities
+from restscope.openapi_parser import OpenAPIParser
 from restscope.operation_smoke.failure_dedup import (
     FailureDedupAgent,
     FailureDeduplicator,
@@ -23,6 +25,10 @@ from restscope.operation_smoke.failure_dedup import (
 )
 from restscope.operation_smoke.failure_dedup.prompts import SYSTEM_PROMPT
 from restscope.operation_smoke.memory import RecordedFailure, RecordedFailures
+from restscope.operation_smoke.test_case_catalog import (
+    CatalogTestCaseDraft,
+    TestCaseCatalog,
+)
 
 
 class DedupScenarioInput(BaseModel):
@@ -30,6 +36,8 @@ class DedupScenarioInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     request: FailureDedupRequest
+    valid_parameters: list[str]
+    catalog_cases: list[CatalogTestCaseDraft]
     max_outputs: int = Field(default=50, ge=1, le=50)
 
 
@@ -106,11 +114,26 @@ def build_task(
     def task(input: dict[str, Any]) -> dict[str, Any]:
         scenario = DedupScenarioInput.model_validate(input)
         memory = TemporaryFailureMemory()
+        catalog = TestCaseCatalog(
+            valid_parameters=scenario.valid_parameters
+        )
+        for case in scenario.catalog_cases:
+            catalog.record(case)
+        capability_runtime = build_capabilities(
+            tracing_runtime=tracing_runtime
+        )
+        capability_runtime.tool_executor.bind_context(
+            ToolContext(
+                ir=_evaluation_ir(),
+                baseline_schema_source={},
+            )
+        )
         try:
             result = FailureDeduplicator(
                 agent=FailureDedupAgent(
                     client=client,
                     model=model,
+                    tool_executor=capability_runtime.tool_executor,
                     system_prompt=system_prompt,
                     tracing_runtime=tracing_runtime,
                 ),
@@ -118,6 +141,7 @@ def build_task(
                 tracing_runtime=tracing_runtime,
             ).deduplicate(
                 scenario.request,
+                catalog=catalog,
                 max_outputs=scenario.max_outputs,
             )
             return {
@@ -139,6 +163,38 @@ def build_task(
             }
 
     return task
+
+
+def _evaluation_ir():
+    """Build the sanitized OpenAPI contract shared by initial Dedup scenarios."""
+    return OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Dedup evaluation", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "namespace_id": {
+                                                "type": "integer"
+                                            },
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"400": {"description": "bad request"}},
+                    }
+                }
+            },
+        }
+    )
 
 
 def _not_applicable(name: str) -> Score:
@@ -212,7 +268,7 @@ def representative_cases_evaluator(
         return _not_applicable("representative_cases")
     todos = (output.get("result") or {}).get("todos", [])
     actual = sorted(
-        str((item.get("test_case") or {}).get("case_id"))
+        str(item.get("test_case_id"))
         for item in todos
     )
     return _binary(

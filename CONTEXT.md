@@ -30,8 +30,15 @@ semantic classification.
 _Avoid_: Failure ID, case ID
 
 **Representative Test Case**:
-The earliest current-Batch case retained for a Failure and passed to Solve.
+The earliest current-Batch case retained for a Failure. Solve receives its
+run-local `TC*` reference and queries exact facts only when needed.
 _Avoid_: Batch, case group
+
+**Test Case Catalog**:
+An in-memory index shared by every Batch, Dedup call, and Solve Probe during
+one operation Smoke run. It stores sent Parameter values for all cases and
+response bodies only for 4xx/5xx cases. It is never written to the database.
+_Avoid_: Batch report, persistent test history
 
 **Investigation**:
 One Solve session that records its trigger conditions, parameter attribution,
@@ -65,9 +72,9 @@ _Avoid_: Candidate, resolved Patch
   samples.
 
 Models never receive database primary keys or Fingerprint references. Solve
-sees semantic input handles such as
-`body.project.startDate`; Patch candidates use Solve-session `P*` references.
-Runtime code maps and validates each reference.
+sees semantic input handles such as `body.project.startDate`; Dedup and Solve
+use run-local `TC1`, `TC2`, … references; Patch candidates use Solve-session
+`P*` references. Runtime code maps and validates each reference.
 
 There is no permanent “resolved” state. A later complete Batch may show that a
 previous Patch helped, did nothing, or interacted with another change; Memory

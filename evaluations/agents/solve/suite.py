@@ -40,6 +40,12 @@ from restscope.operation_smoke.parameter_patch import (
     ParameterPatchFailure,
     ValidatedParameterPatch,
 )
+from restscope.operation_smoke.test_case_catalog import (
+    CatalogTestCaseDraft,
+    TestCaseCatalog,
+    parse_http_failure,
+    parse_transport_failure,
+)
 from restscope.testing import (
     OperationGeneratorConfig,
     build_semantic_input_map,
@@ -55,6 +61,7 @@ class SolveScenarioInput(BaseModel):
     request: FailureSolveRequest
     config: OperationGeneratorConfig
     failure_history: FailureHistory
+    catalog_cases: list[CatalogTestCaseDraft]
     parameter_histories: list[ParameterHistory] = Field(default_factory=list)
     probe_results: list[ToolResult] = Field(default_factory=list)
     patch_results: list[
@@ -234,6 +241,7 @@ class ScriptedHTTPProbe:
         *,
         config: OperationGeneratorConfig,
         tool_call: ToolCall,
+        catalog: TestCaseCatalog,
     ) -> ToolResult:
         """Replay one configured result or return a structured missing-script error."""
         del config
@@ -244,7 +252,7 @@ class ScriptedHTTPProbe:
             }
         )
         if not self.results:
-            return ToolResult(
+            scripted = ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
                 status="failed",
@@ -253,11 +261,65 @@ class ScriptedHTTPProbe:
                     "message": "This scenario did not configure another probe.",
                 },
             )
-        scripted = self.results.pop(0)
+        else:
+            scripted = self.results.pop(0).model_copy(
+                update={
+                    "tool_call_id": tool_call.id,
+                    "name": tool_call.name,
+                }
+            )
+        structured = (
+            scripted.structured
+            if isinstance(scripted.structured, dict)
+            else {}
+        )
+        status_code = structured.get("status_code")
+        parameters = {
+            f"path.{name}": value
+            for name, value in (
+                tool_call.arguments.get("path_parameters") or {}
+            ).items()
+        }
+        if scripted.status == "succeeded" and isinstance(status_code, int):
+            body = structured.get("body") if 400 <= status_code < 600 else None
+            failure = parse_http_failure(
+                status_code=status_code,
+                reason_phrase=str(structured.get("reason_phrase") or ""),
+                media_type=str(structured.get("media_type") or ""),
+                response_body=body,
+                body_truncated=False,
+            )
+        else:
+            body = None
+            error = scripted.error or {}
+            failure = parse_transport_failure(
+                code=str(error.get("code") or scripted.status),
+                message=str(error.get("message") or "scripted probe failed"),
+            )
+        case = catalog.record(
+            CatalogTestCaseDraft(
+                parameters=parameters,
+                response_body=body,
+                failure=failure,
+            )
+        )
         return scripted.model_copy(
             update={
                 "tool_call_id": tool_call.id,
                 "name": tool_call.name,
+                "structured": {
+                    "case_id": case.case_id,
+                    **(
+                        {"status_code": status_code}
+                        if isinstance(status_code, int)
+                        else {}
+                    ),
+                    "failure": (
+                        failure.model_dump(mode="json")
+                        if failure is not None
+                        else None
+                    ),
+                },
             }
         )
 
@@ -376,6 +438,12 @@ def build_task(
         )
         calls: list[dict[str, Any]] = []
         memory = TemporarySolveMemory(scenario, calls)
+        semantic = build_semantic_input_map(scenario.config)
+        catalog = TestCaseCatalog(
+            valid_parameters=semantic.node_by_handle,
+        )
+        for case in scenario.catalog_cases:
+            catalog.record(case)
         try:
             with tracing_runtime.span(
                 "evaluations.operation_smoke.solve",
@@ -402,6 +470,7 @@ def build_task(
                     tracing_runtime=tracing_runtime,
                 ).start(
                     request,
+                    catalog=catalog,
                     config=scenario.config,
                     active_constraints=scenario.active_constraints,
                     case_count=scenario.case_count,

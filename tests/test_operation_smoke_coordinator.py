@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import replace
 
 from restscope.capabilities import ToolContext
 from restscope.openapi_parser import OpenAPIParser
@@ -25,19 +25,34 @@ from tests._operation_smoke_dedup_solve_fixtures import smoke_config, smoke_repo
 
 
 def _report(run_id: str, *, status_code: int, revision: int):
-    """Build one complete single-case Batch report."""
+    """Build one complete single-case Batch result."""
+    from restscope.operation_smoke.test_case_catalog import HTTPFailure
+
     base = smoke_report()
-    response = base.cases[0].response.model_copy(
-        update={"status_code": status_code}
+    failure = (
+        None
+        if 200 <= status_code < 300
+        else HTTPFailure(
+            status_code=status_code,
+            messages=[f"HTTP {status_code}: project missing"],
+        )
     )
-    return base.model_copy(
-        update={
-            "run_id": run_id,
-            "config_revision": revision,
-            "cases": [base.cases[0].model_copy(update={"response": response})],
-            "status_code_counts": {str(status_code): 1},
-            "observed_2xx": 200 <= status_code < 300,
-        }
+    return replace(
+        base,
+        run_id=run_id,
+        config_revision=revision,
+        cases=(
+            base.cases[0].model_copy(
+                update={
+                    "response_body": (
+                        None
+                        if failure is None
+                        else {"message": "project missing"}
+                    ),
+                    "failure": failure,
+                }
+            ),
+        ),
     )
 
 
@@ -64,20 +79,19 @@ class StubRunner:
         self.events = events
 
     def run_smoke_batch(self, context, **arguments):
-        del context, arguments
-        report = self.reports.pop(0)
-        self.events.append(f"batch:{report.run_id}")
-        return SimpleNamespace(
-            report=report,
-            case_evidence=(
-                SimpleNamespace(
-                    case_id="case_1",
-                    response_body=b'{"message":"project missing"}',
-                    response_body_truncated=False,
-                    response_encoding="utf-8",
+        del context
+        batch = self.reports.pop(0)
+        case_id_factory = arguments["case_id_factory"]
+        batch = replace(
+            batch,
+            cases=(
+                batch.cases[0].model_copy(
+                    update={"case_id": case_id_factory()}
                 ),
             ),
         )
+        self.events.append(f"batch:{batch.run_id}")
+        return batch
 
 
 class StubDeduplicator:
@@ -88,7 +102,8 @@ class StubDeduplicator:
         self.events = events
         self.requests = []
 
-    def deduplicate(self, request, *, max_outputs):
+    def deduplicate(self, request, *, catalog, max_outputs):
+        del catalog
         self.events.append(f"dedup:{request.round_number}")
         self.requests.append((request, max_outputs))
         return self.results.pop(0)
@@ -181,7 +196,7 @@ def _todo(todo_id: str) -> FailureTodo:
         todo_id=todo_id,
         failure_id=f"db-{todo_id}",
         failure=f"Failure {todo_id}",
-        test_case={"case_id": "case_1", "response": {"status_code": 404}},
+        test_case_id="TC1",
         suspected_parameters=["path.projectId"],
     )
 
