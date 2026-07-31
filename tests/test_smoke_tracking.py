@@ -183,9 +183,9 @@ def _smoke_runtime(tmp_path: Path):
         reference_values=references,
     )
 
-    class UnexpectedPlan:
-        def plan(self, *args, **kwargs):
-            raise AssertionError("a successful batch must not invoke Plan")
+    class UnexpectedDedup:
+        def deduplicate(self, *args, **kwargs):
+            raise AssertionError("a successful batch must not invoke Dedup")
 
     class UnexpectedFactory:
         def create(self):
@@ -194,7 +194,7 @@ def _smoke_runtime(tmp_path: Path):
     smoke = OperationSmokeCoordinator(
         config_catalog=catalog,
         batch_runner=testing,
-        plan_agent=UnexpectedPlan(),
+        failure_deduplicator=UnexpectedDedup(),
         failure_solver_factory=UnexpectedFactory(),
         reference_values=references,
         tracing_runtime=runtime,
@@ -264,12 +264,12 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     )
 
 
-def test_smoke_plan_uses_the_new_role_in_llm_trace(
+def test_failure_dedup_uses_its_role_in_llm_trace(
     tmp_path: Path,
 ) -> None:
-    """Plan model calls are tagged with the independent Plan role."""
+    """Semantic Dedup model calls are tagged with the independent role."""
     del tmp_path
-    from restscope.operation_smoke.plan import SmokePlanAgent, SmokePlanRequest
+    from restscope.operation_smoke.failure_dedup import FailureDedupAgent
     from restscope.llm import (
         LLMClient,
         LLMModelConfig,
@@ -279,7 +279,7 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
     )
     from restscope.llm.providers.base import BaseLLMProvider
 
-    class PlanProvider(BaseLLMProvider):
+    class DedupProvider(BaseLLMProvider):
         name = "stub"
 
         def invoke(self, request: LLMRequest) -> LLMResponse:
@@ -287,74 +287,44 @@ def test_smoke_plan_uses_the_new_role_in_llm_trace(
                 provider=self.name,
                 model=request.model,
                 parsed_json={
-                    "action": "no_debug",
-                    "classifications": [
+                    "failures": [
                         {
-                            "item_id": "T1",
-                            "failure_ref": None,
-                            "summary": "The response cannot be debugged here.",
-                            "case_codes": ["C1"],
-                            "disposition": "non_debuggable",
-                            "disposition_reason": "The trace test has no target.",
+                            "summary": "Two name errors.",
+                            "suspected_parameters": ["body.name"],
+                            "messages": ["first", "second"],
                         }
                     ],
-                    "reason": "History contains no new work.",
+                    "reason": "Both involve body.name.",
                 },
             )
 
     registry = LLMProviderRegistry()
-    registry.register(PlanProvider())
+    registry.register(DedupProvider())
     runtime, exporter = _recording_runtime()
 
-    class EmptyMemory:
-        """Keep this trace test focused on the Planner's LLM span."""
-
-        def find_failure_candidates(self, operation_key, observations):
-            del operation_key, observations
-            return []
-
-        def record_plan(self, write):
-            from restscope.operation_smoke.memory import (
-                RecordedFailure,
-                RecordedPlan,
-            )
-
-            return RecordedPlan(
-                failures=[
-                    RecordedFailure(
-                        failure_id=f"failure-{index}",
-                        summary=item.summary,
-                    )
-                    for index, item in enumerate(
-                        write.classifications,
-                        start=1,
-                    )
-                ]
-            )
-
-    planner = SmokePlanAgent(
+    agent = FailureDedupAgent(
         client=LLMClient(registry, tracing_runtime=runtime),
         model=LLMModelConfig(
-            role="operation_smoke_plan",
+            role="operation_smoke_failure_dedup",
             provider="stub",
             model="think",
             enabled=True,
         ),
-        memory=EmptyMemory(),
+        tracing_runtime=runtime,
     )
-    result = planner.plan(
-        SmokePlanRequest(
-            operation_key="GET /items",
-            round_number=1,
-            batch_run_id="run_failure",
-            batch={"run_id": "run_failure"},
-            coded_cases={"C1": {"case_id": "case_1"}},
-            failed_case_codes=["C1"],
-        )
+    result, outputs, corrections, errors = agent.deduplicate(
+        operation_key="POST /items",
+        semantic_parameters=["body.name"],
+        observations=[
+            {"message": "first", "test_case": {"request": {}, "response": {}}},
+            {"message": "second", "test_case": {"request": {}, "response": {}}},
+        ],
+        max_outputs=1,
     )
     runtime.close()
 
     spans = list(exporter.get_finished_spans())
     llm_span = next(span for span in spans if span.name == "LLMClient.invoke")
-    assert result.status == "no_debug"
+    assert result is not None
+    assert (outputs, corrections, errors) == (1, 0, [])
     assert llm_span.attributes["llm.model_name"] == "think"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tests._operation_smoke_plan_solve_fixtures import smoke_config
+from tests._operation_smoke_dedup_solve_fixtures import smoke_config
 
 
 class StubReferenceCoordinator:

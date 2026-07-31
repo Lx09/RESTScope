@@ -15,15 +15,14 @@ input:
       todo_id: T2
       failure_id: failure-transient-project
       failure: One known project returned a transient server error.
-      cases:
-        - case_id: transient-project-error
-          failure: unexpected status
-          request:
-            path_parameters: {projectId: 7}
-          response: {status_code: 500}
+      test_case:
+        case_id: transient-project-error
+        failure: unexpected status
+        request:
+          path_parameters: {projectId: 7}
+        response: {status_code: 500}
     operation: {method: GET, path: "/projects/{projectId}"}
     generator_config: {}
-    current_batch: {status_code_counts: {"500": 1}}
   config:
     operation_key: GET /projects/{projectId}
     revision: 1

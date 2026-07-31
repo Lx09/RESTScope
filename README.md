@@ -118,10 +118,11 @@ do not execute tools or write database rows.
 All five direct LLM decision sites construct messages through
 `restscope.context`. Workflow adapters first select typed facts, then
 `CompactTextWriter` encodes untrusted API, Memory, tool, and sample values as
-bounded line text. `AgentContext` preserves complete tool exchanges and newest
-validation feedback inside the role and model windows. Runtime evidence is not
-dumped into prompts as JSON; strict Agent outputs and provider tool protocols
-remain JSON.
+bounded Markdown. Bounded HTTP request/response evidence is rendered as JSON
+inside safe Markdown fences so a complete test case stays easy to inspect.
+`AgentContext` preserves complete tool exchanges and newest validation feedback
+inside the role and model windows. Strict Agent outputs and provider tool
+protocols also remain JSON.
 
 ## Local trace monitoring with Phoenix
 
@@ -180,7 +181,7 @@ credentials are redacted.
 ## Phoenix Evals for Operation Smoke Agents
 
 The developer-only [`evaluations/`](evaluations/README.md) directory evaluates
-Plan, Solve, and Parameter Patch independently with native Phoenix Datasets,
+Failure Dedup, Failure Solve, and Parameter Patch independently with native Phoenix Datasets,
 Experiments, and code evaluators. Repository YAML Scenarios are synchronized by
 stable ID, and each Scenario/repetition receives fresh temporary Memory and
 scripted tools. Experiment runs call the real configured DeepSeek model and
@@ -289,14 +290,11 @@ IR. Invalid or truncated JSON stays pending for the next matching response;
 the evolved IR and first-observation registry are not persisted.
 
 Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
-tracking. Non-2xx bodies are also reused to build the batch failure report, but
-never become reusable input values and are not persisted. The report contains
-generated/request values, merged non-sensitive target headers, `[redacted]`
-markers for sensitive target headers, response metadata, transport errors, API
-Behavior Monitor warnings, a first-seen list of at most 100 exact unique
-failure messages with case associations, and a `response_validation` state of
-`evaluated`, `partial`, or `not_evaluated`. Exact configured THINK, FAST, and
-Phoenix API key values are also replaced.
+tracking. Non-2xx bodies remain bounded App-lifetime evidence for Failure
+Dedup, but never become reusable input values and are not persisted. The Batch
+report contains generated/request values, redacted headers, response metadata,
+transport errors, API Behavior Monitor warnings, and `response_validation`;
+it does not interpret, summarize, or deduplicate Failures.
 
 `restscope.http.request` is a high-risk, non-read-only model capability that
 can trigger side effects on the bound target. Failure Solve receives a further
@@ -350,12 +348,12 @@ internally by Operation Smoke.
 1. A complete generated Batch establishes the current evidence and 2xx rate.
    The App-wide `RANDOM_SEED` is reused by Batch inputs, Constraint solving, and
    Patch samples.
-2. Runtime converts only failed cases into typed retrieval signals and ranks
-   same-operation historical Failures. `SmokePlanAgent` sees every failed
-   `C*` case plus at most 24 compact `F*` candidate cards; it has no memory
-   tool and normally needs one model output. Candidates are not a complete
-   directory, so Planner creates a new Failure when none is semantically
-   suitable. Valid final classifications are written by deterministic code.
+2. `FailureDeduplicator` extracts normalized error-message Fingerprints and
+   keeps only the first test case for each exact Fingerprint. One Fingerprint
+   bypasses the LLM. With several Fingerprints, `FailureDedupAgent` groups them
+   by equal complete suspected causal Parameter sets. It reads no history.
+   Deterministic validation and Markdown correction run before Memory is
+   written. Every current-round Failure carries exactly one test case.
 3. Each debug item gets a fresh `FailureSolveAgent`. Solve preloads the current
    Failure, may query other Failure history by semantic Parameter handle, and
    may use the current-operation HTTP probe. Before replacing a Parameter
@@ -369,19 +367,18 @@ internally by Operation Smoke.
    first action changes Generator state. The new revision, Investigation,
    Parameter links, and Applied Patch memory commit in one transaction.
 
-Every item in the fixed Plan finishes before another Batch is allowed. If no
-Patch was applied, Smoke passes with `no_patch_applied`; if Planner says no
-debug work remains, it passes with `planner_no_debug`. Otherwise the next
+Every item in the fixed Dedup result finishes before another Batch is allowed.
+If no Patch was applied, Smoke passes with `no_patch_applied`. Otherwise the next
 complete Batch validates all applied changes together, and
 `success_rate_reached` stops at the configured threshold (80% by default).
 There is no Effect Agent, candidate Batch, rollback revision, or permanent
 `resolved` flag.
 
-The Planner has a 50-output repair budget but no tools; its normal target is one
+Dedup has a shared 50-output correction budget and normally uses zero or one
 output. Each Solve has a 50-output budget that also counts every nested
 Parameter Patch LLM output; one Patch tool call is capped at 20 outputs.
 Malformed replies and invalid tool-requesting model outputs count.
-Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Planner or
+Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Dedup or
 Solve exhaustion is a technical error; one Patch-tool exhaustion is recoverable
 feedback within its Solve session.
 

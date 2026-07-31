@@ -139,7 +139,7 @@ class PatchApplication(Protocol):
 
 
 class FailureSolveAgent:
-    """Create one isolated LLM Investigation for one Planner Failure."""
+    """Create one isolated LLM Investigation for one deduplicated Failure."""
 
     def __init__(
         self,
@@ -841,30 +841,30 @@ class FailureSolveSession:
 
 def _system_prompt() -> str:
     """Describe the short evidence → history → candidate → terminal protocol."""
-    return (
-        "Investigate exactly one Operation Smoke Failure.\n"
-        "STAGES\n"
-        "1. Read current cases and the preloaded Failure history.\n"
-        "2. Before patching an input, call lookup_parameter_history for it.\n"
-        "3. Probe the current HTTP operation only when evidence cannot distinguish "
-        "the root cause.\n"
-        "4. Call generate_parameter_patch with the confirmed root cause and "
-        "testable Generator/Constraint requirements.\n"
-        "5. Return one terminal FailureSolveDecision JSON.\n"
-        "RULES\n"
-        "One output calls exactly one tool or returns one decision, never both. "
-        "Copy dotted semantic handles exactly from the tool schema enum; internal "
-        "slash-separated input_node_id is never a handle. A replacement must "
-        "remain compatible with prior applied Patches and conflicts. If it cannot, "
-        "return conflict. generate_parameter_patch has no side effects and returns "
-        "a session-local P ref. apply_patch is not a tool: it is the final decision "
-        "action and must use a supplied P ref. Other terminal actions are no_patch "
-        "and conflict. Every terminal decision includes trigger_conditions, "
-        "root_cause, solution, evidence_source, parameters, and conflict_reason "
-        "when applicable; each Parameter contains input_handle and cause_summary. "
-        "Use candidate_ref only for apply_patch. Do not invent aliases or "
-        "database IDs."
-    )
+    return """# Role
+
+Investigate exactly one Operation Smoke Failure.
+
+# Stages
+
+1. Read the current test case and preloaded Failure history.
+2. Before patching an input, call `lookup_parameter_history`.
+3. Probe HTTP only when existing evidence cannot distinguish the root cause.
+4. Call `generate_parameter_patch` with confirmed, testable requirements.
+5. Return one terminal `FailureSolveDecision` JSON object.
+
+# Rules
+
+- One output calls exactly one tool or returns one decision, never both.
+- Copy semantic handles exactly from tool-schema enums.
+- Slash-separated `input_node_id` values are not semantic handles.
+- A replacement must remain compatible with prior Patches and conflicts.
+- `generate_parameter_patch` has no side effects and returns a session `P` ref.
+- `apply_patch` is a final decision action, not a tool.
+- Other terminal actions are `no_patch` and `conflict`.
+- Use `candidate_ref` only with `apply_patch`.
+- Do not invent aliases or database IDs.
+"""
 
 
 def _parameter_memory_tool_spec(
@@ -950,7 +950,7 @@ def _solve_context_text(
     semantic_inputs,
     reference_options: list[AvailableReferenceOption],
 ):
-    """Render only the Todo's cases, active inputs, and concise Failure memory."""
+    """Render the Todo's one HTTP case, active inputs, and concise Memory."""
     writer = CompactTextWriter(max_value_chars=800)
     writer.section("TASK")
     writer.record(
@@ -962,31 +962,22 @@ def _solve_context_text(
         failure=request.todo.failure,
     )
 
-    writer.section("CURRENT FAILURE CASES", untrusted=True)
-    for index, case in enumerate(request.todo.cases, start=1):
-        response = case.get("response")
-        response = response if isinstance(response, dict) else {}
-        writer.record(
-            f"C{index}",
-            case_id=case.get("case_id"),
-            kind=case.get("failure") or case.get("error") or "failed-case",
-            status=response.get("status_code"),
-            media=response.get("media_type"),
-            transport=response.get("error"),
-        )
-        request_values = _failure_request_values(case)
-        if request_values:
-            writer.detail(
-                "input",
-                request_values,
-            )
-        response_values = {
-            key: response[key]
-            for key in ("error_code", "message", "error", "body")
-            if key in response
-        }
-        if response_values:
-            writer.detail("response", response_values)
+    writer.section("Current Failure Test Case", untrusted=True)
+    case = request.todo.test_case
+    response = case.get("response")
+    response = response if isinstance(response, dict) else {}
+    writer.json_block(
+        "HTTP request and response",
+        {
+            "request": _failure_request_values(case),
+            "response": response,
+            **(
+                {"transport_error": case["transport_error"]}
+                if case.get("transport_error") is not None
+                else {}
+            ),
+        },
+    )
 
     config_by_node = {item.input_node_id: item for item in config.configs}
     nodes_by_id = {
@@ -1321,35 +1312,7 @@ def _tool_result_text(result: ToolResult) -> str:
         ),
     )
     if isinstance(result.structured, dict):
-        structured = result.structured
-        writer.record(
-            "response",
-            status=structured.get("status_code") or structured.get("status"),
-            media=structured.get("media_type"),
-            headers=sorted(
-                (structured.get("headers") or {}).keys()
-                if isinstance(structured.get("headers"), dict)
-                else []
-            ),
-            transport=structured.get("transport_error"),
-        )
-        if structured.get("body") is not None:
-            writer.text("body", structured["body"])
-        remaining = {
-            key: value
-            for key, value in structured.items()
-            if key
-            not in {
-                "status_code",
-                "status",
-                "media_type",
-                "headers",
-                "transport_error",
-                "body",
-            }
-        }
-        if remaining:
-            writer.detail("result", remaining)
+        writer.json_block("HTTP probe result", result.structured)
     elif result.structured is not None:
         writer.text("result", result.structured)
     if result.content:

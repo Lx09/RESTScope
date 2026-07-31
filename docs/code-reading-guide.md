@@ -28,13 +28,13 @@ The core loop is:
    target API.
 7. **Observe responses.** The API Behavior Monitor checks response contracts
    and learns narrowly approved identifier and response-value evidence.
-8. **Classify Failure Observations.** Planner associates every failed case with
-   a stable Failure, using read-only Memory lookups when history is useful.
+8. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
+   Agent groups remaining messages by complete suspected Parameter set.
 9. **Investigate one Failure.** Failure Solve may query Parameter history or
    use an HTTP probe restricted to the current operation.
 10. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
     internal tool. A selected Patch and its Investigation commit atomically.
-    Every Plan item finishes before the next complete Batch measures the result.
+    Every Failure item finishes before the next complete Batch measures the result.
 
 Most state used in steps 4–10 is deliberately temporary. RESTScope does not
 persist plans, Agent conversations, hypotheses, queues, or evolved OpenAPI
@@ -100,16 +100,16 @@ maximum”, or “exactly one of these fields is included”.
 
 ### Request-local references
 
-`C1`, `C2`, … identify current Batch cases and `F1`, `F2`, … identify historical
-Failures inside one Planner request. Solve uses `P1`, `P2`, … for Patch
-candidates created in its own session. Runtime code validates and resolves
-these references; database primary keys never enter model prompts.
+Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
+Dedup receives exact messages and HTTP JSON without item IDs or Fingerprint
+references. Database primary keys never enter model prompts.
 
 ### Failure Observation, Failure, and Investigation
 
-A Failure Observation is concrete evidence from one Batch. A Failure is
-Planner's stable semantic category linking observations across rounds. An
-Investigation is one independent Solve session, including trigger conditions,
+A Failure Observation is the one representative test case retained for a
+current-round Failure. A Failure groups messages with the same complete
+suspected causal Parameter set. An Investigation is one independent Solve
+session, including trigger conditions,
 Parameter attribution, root cause, proposed solution, and terminal outcome.
 An Applied Patch is recorded only when Solve selects a validated session
 candidate and the Generator revision commits.
@@ -130,8 +130,8 @@ Read these files in order:
 4. `restscope/testing/execution.py` — turns generated cases into real HTTP
    results.
 5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds, fixed
-   Plan dispatch, and explicit stop conditions.
-6. `restscope/operation_smoke/plan/agent.py` and
+   Failure dispatch, and explicit stop conditions.
+6. `restscope/operation_smoke/failure_dedup/agent.py` and
    `restscope/operation_smoke/failure_solver/agent.py` — failure todo management and one
    continuous investigation.
 7. `restscope/operation_smoke/parameter_patch/agent.py` and
@@ -197,15 +197,15 @@ Memory, public round summaries, and reference adaptation.
 Important files:
 
 - `coordinator.py`: complete-batch and fixed-todo orchestration.
-- `evidence.py`: complete App-only case evidence and Plan-only code mapping.
+- `evidence.py`: complete App-only case evidence for current-round Dedup.
 - `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
 - `references.py`: observed-value options exposed as model-safe `R` aliases.
 
-### `restscope/operation_smoke/plan/`
+### `restscope/operation_smoke/failure_dedup/`
 
-Creates an ordered fixed-round Failure snapshot from a complete Batch and
-stable Failure memory. It does not diagnose causes or Parameters.
+Owns exact normalized-message deduplication, LLM Parameter-set grouping,
+correction, representative-case selection, and validated Failure recording.
 
 ### `restscope/operation_smoke/failure_solver/`
 
@@ -223,7 +223,8 @@ testing types, validates Generator schemas and Constraints, generates
 
 The project-level message-construction Module used by every direct LLM
 decision. `CompactTextWriter` turns already-selected DTO, Memory, tool, and
-sample facts into typed line text while escaping untrusted values.
+sample facts into bounded Markdown while escaping untrusted values. HTTP
+request/response evidence uses safe JSON blocks inside that Markdown.
 `AgentContext` keeps the system/task pair, complete tool-call groups, newest
 feedback, explicit clipping, and numeric trace metrics inside each role's
 budget. It knows no Operation Smoke, Behavior Monitor, database, or Agent
@@ -279,7 +280,7 @@ data.
 Provides the developer-only Phoenix Evals entrypoint for the three Operation
 Smoke Agents. `registry.py` is the one-line-per-suite registry; `core.py` owns
 only Dataset synchronization, prompt selection, and Experiment metadata.
-`agents/plan/`, `agents/solve/`, and `agents/patch/` each own their Scenario
+`agents/dedup/`, `agents/solve/`, and `agents/patch/` each own their Scenario
 DTO, temporary collaborators, Phoenix task, code evaluators, and YAML evidence.
 These Modules reuse production Agents but never import a database Adapter or
 send target HTTP requests.
@@ -310,16 +311,17 @@ For a failed Batch that receives an applied Patch:
 
 ```text
 OperationExecutionReport
-  -> structured same-operation Failure retrieval
-  -> SmokePlanAgent (all failed C* cases and <=24 F* candidates; no tools)
-  -> stable Failure
+  -> exact normalized-message Fingerprint deduplication
+  -> one Fingerprint: deterministic bypass
+  -> several Fingerprints: FailureDedupAgent groups by suspected Parameters
+  -> one representative test case per current-round Failure
   -> fresh FailureSolveAgent
   -> optional Parameter-memory and HTTP tools
   -> internal ParameterPatchAgent tool
   -> compile + solve + case_count local samples
   -> Solve selects a session-local P* candidate
   -> atomic Generator + Investigation + Applied Patch write
-  -> remaining Plan items
+  -> remaining Dedup items
   -> next complete Batch
 ```
 

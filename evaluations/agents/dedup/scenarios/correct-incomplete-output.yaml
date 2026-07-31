@@ -1,0 +1,34 @@
+scenario_id: dedup-correct-incomplete-output
+title: Correct an incomplete grouping response
+provenance:
+  kind: trace
+  source: artifacts/phoenix-exports/restscope-project-swagger-smoke-20260727T010238Z-9712a1cf
+  trace_id: sanitized-project-create
+  span_ids: [sanitized-plan]
+  rationale: Real Agent traces showed structured-output repair was necessary.
+tags: [acceptance, correction]
+input:
+  request:
+    operation_key: POST /projects
+    round_number: 1
+    batch_run_id: eval-run-3
+    semantic_parameters: [body.name, body.namespace_id]
+    cases:
+      - case_id: case-a
+        request: {path: /projects}
+        response:
+          status_code: 400
+          media_type: application/json
+          body: '{"message":"name is invalid"}'
+      - case_id: case-b
+        request: {path: /projects}
+        response:
+          status_code: 404
+          media_type: application/json
+          body: '{"message":"namespace is invalid"}'
+  max_outputs: 3
+expected:
+  status: deduplicated
+  failure_count: 2
+  parameter_sets: [[body.name], [body.namespace_id]]
+  representative_case_ids: [case-a, case-b]

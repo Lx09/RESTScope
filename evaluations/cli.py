@@ -25,7 +25,7 @@ from evaluations.registry import SUITES
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ROLES = {
-    "plan": "operation_smoke_plan",
+    "dedup": "operation_smoke_failure_dedup",
     "solve": "operation_smoke_failure_solve",
     "patch": "parameter_patch_agent",
 }

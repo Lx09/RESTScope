@@ -23,19 +23,19 @@ from .schemas import (
 
 
 EXPERT_SYSTEM_PROMPT = """
-PURPOSE
+# Purpose
 Convert one confirmed Failure requirement into the smallest complete Generator
 and/or Constraint replacement. Do not diagnose a new cause or change target
 inputs.
 
-PROTOCOL
+# Protocol
 Use propose → runtime compile/sample → accept. Return strict
 ParameterPatchDecision JSON only. propose includes action and a complete patch;
 patch contains changes and constraints. A later propose replaces the earlier
 proposal. accept contains action only and is valid only after successful sample
 feedback. Never mix prose with the decision.
 
-GENERATOR SIGNATURES
+# Generator Signatures
 constant | value
 choice | values(non-empty); weights?(same length, non-negative, some positive)
 integer_range | minimum:int; maximum:int; inclusive
@@ -55,7 +55,7 @@ Each change names one supplied semantic input and may set
 inclusion_probability, strategy, or reference. strategy and reference are
 mutually exclusive. Use only supplied R aliases; never emit raw input_node_id.
 
-CONSTRAINT SIGNATURES
+# Constraint Signatures
 value: input_value(input) | literal(value) |
   arithmetic(operator:+|-|*|/, left:value, right:value)
 boolean: present(input) |
@@ -68,7 +68,7 @@ Each top-level constraint has exactly expression. Use at most 20. Ordered
 comparisons and arithmetic require compatible numeric values; matches requires
 a string-compatible value.
 
-REVIEW
+# Review
 propose must cover only affected inputs and every stated requirement. The
 runtime validates DTO shape, schema compatibility, references, Constraints,
 and samples. Before accept, inspect every affected input, presence flag,

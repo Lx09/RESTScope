@@ -218,9 +218,9 @@ class SqlAlchemyResponseValueCatalogUnitOfWork:
 class SqlAlchemySmokeMemoryUnitOfWork:
     """Own one atomic transaction for Operation Smoke knowledge.
 
-    Planner uses this boundary to record validated Failure classifications.
+    Failure Dedup uses this boundary to record validated Failure groups.
     Failure Solve also uses it to change Generator state and write the matching
-    Investigation in the same database transaction.  Exposing both repositories
+    Investigation in the same database transaction. Exposing both repositories
     on one session prevents a configuration from changing without an
     explanation, or an Applied Patch record from existing without its change.
     """

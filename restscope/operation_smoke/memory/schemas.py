@@ -1,10 +1,11 @@
 """Define structured Operation Smoke knowledge written and read during one App.
 
-These models are the Memory Interface shared by Planner, Failure Solve, and the
-SQLAlchemy Adapter.  Write models contain only bounded summaries and necessary
-input values; full Batch evidence, response bodies, and model transcripts never
-cross this seam.  Read models deliberately assemble the relationships that an
-Agent needs so callers do not understand database tables or joins.
+These models are the Memory Interface shared by Failure Dedup, Failure Solve,
+and the SQLAlchemy Adapter. Write models contain only bounded summaries and
+necessary input values; full Batch evidence, response bodies, and model
+transcripts never cross this seam. Read models deliberately assemble the
+relationships that an Agent needs so callers do not understand database tables
+or joins.
 """
 
 from __future__ import annotations
@@ -29,32 +30,28 @@ class FailureObservationWrite(_MemoryModel):
     necessary_values: dict[str, Any] = Field(default_factory=dict)
 
 
-class FailureClassificationWrite(_MemoryModel):
-    """Classify current Observations as a new or existing semantic Failure."""
+class FailureWrite(_MemoryModel):
+    """Write one new current-round Failure and its representative Observation."""
 
-    failure_id: str | None = None
     summary: str = Field(min_length=1)
     observations: list[FailureObservationWrite] = Field(default_factory=list)
-    disposition: Literal["planned", "non_debuggable"] = "planned"
-    disposition_reason: str | None = Field(default=None, min_length=1)
+    suspected_parameters: list[str] | None = None
 
     @model_validator(mode="after")
-    def validate_disposition_reason(self) -> "FailureClassificationWrite":
-        """Require an explicit reason whenever Planner declines debug work."""
-        if self.disposition == "non_debuggable" and not self.disposition_reason:
-            raise ValueError("non_debuggable requires disposition_reason")
-        if self.disposition == "planned" and not self.observations:
-            raise ValueError("planned Failure requires at least one Observation")
+    def validate_observation(self) -> "FailureWrite":
+        """Require the single representative evidence approved for each Failure."""
+        if len(self.observations) != 1:
+            raise ValueError("each Failure requires exactly one Observation")
         return self
 
 
-class PlanMemoryWrite(_MemoryModel):
-    """Record one validated Planner classification for a complete Batch."""
+class FailureBatchWrite(_MemoryModel):
+    """Record validated current-round Failures after Dedup succeeds."""
 
     operation_key: str = Field(min_length=1)
     round_number: int = Field(ge=1)
     batch_run_id: str = Field(min_length=1)
-    classifications: list[FailureClassificationWrite]
+    failures: list[FailureWrite]
 
 
 class RecordedFailure(_MemoryModel):
@@ -64,8 +61,8 @@ class RecordedFailure(_MemoryModel):
     summary: str
 
 
-class RecordedPlan(_MemoryModel):
-    """Return stable identities in the same order as Planner classifications."""
+class RecordedFailures(_MemoryModel):
+    """Return stable identities in the same order as the Dedup Failures."""
 
     failures: list[RecordedFailure]
 
@@ -148,63 +145,13 @@ class FailureObservationMemory(_MemoryModel):
     trigger: str
     response_summary: dict[str, Any]
     necessary_values: dict[str, Any]
-    disposition: Literal["planned", "non_debuggable"]
-    disposition_reason: str | None = None
-
-
-class FailureCatalogEntry(_MemoryModel):
-    """Compact Planner directory entry for one stable semantic Failure."""
-
-    failure_id: str
-    summary: str
-    observation_count: int = Field(ge=0)
-    investigation_count: int = Field(ge=0)
-    applied_patch_count: int = Field(ge=0)
-
-
-class FailureRetrievalObservation(_MemoryModel):
-    """Describe one current failed case using only deterministic search signals.
-
-    Planner creates this projection before reading memory.  It contains no
-    success case and no complete response body; the Memory Module uses it to
-    find plausible existing Failures for the same operation.
-    """
-
-    case_code: str = Field(pattern=r"^C[1-9][0-9]*$")
-    failure_kind: str = Field(min_length=1)
-    transport_error: str | None = None
-    status_code: int | None = None
-    media_type: str | None = None
-    input_paths: list[str] = Field(default_factory=list)
-    error_signature: str | None = None
-    keywords: list[str] = Field(default_factory=list)
-
-
 class FailureHistory(_MemoryModel):
-    """Complete structured history used by Solve and candidate retrieval."""
+    """Complete structured history used by Solve."""
 
     failure_id: str
     summary: str
     observations: list[FailureObservationMemory] = Field(default_factory=list)
     investigations: list[InvestigationMemory] = Field(default_factory=list)
-
-
-class FailureCandidate(_MemoryModel):
-    """Return one ranked historical Failure with concise match evidence.
-
-    Database identity remains runtime-only. Planner later replaces it with an
-    ``F`` alias before constructing the model prompt.
-    """
-
-    failure_id: str
-    summary: str
-    matched_case_codes: list[str]
-    match_reasons: list[str]
-    observation_count: int = Field(ge=0)
-    investigation_count: int = Field(ge=0)
-    applied_patch_count: int = Field(ge=0)
-    last_seen_round: int = Field(ge=0)
-    recent_investigations: list[InvestigationMemory] = Field(default_factory=list)
 
 
 class ParameterHistory(_MemoryModel):

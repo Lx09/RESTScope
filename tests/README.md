@@ -34,8 +34,8 @@ assertion.
 | `test_openapi_*` | Parsing multiple OpenAPI versions into normalized IR, operation matching, input-node construction, and document projection. |
 | `test_testing_generation.py` | Seeded Generator behavior and construction of path, query, header, cookie, and request-body values. |
 | `test_testing_constraints.py`, `test_testing_constraint_solver.py` | Constraint schema, semantic validation, normalization, partial evaluation, bounded solving, and request-tree consistency. |
-| `test_testing_execution.py`, `test_testing_failure_reporting.py` | Fail-before-send preflight, real batch reports, transport failures, and bounded diagnostic evidence. |
-| `test_operation_smoke_coordinator.py`, `test_operation_smoke_*` | Complete-Batch coordination, Failure Memory, and Plan/Solve/Patch behavior. |
+| `test_testing_execution.py`, `test_failure_dedup_agent.py` | Fail-before-send preflight, case-only Batch results, exact Failure deduplication, correction, and bounded diagnostic evidence. |
+| `test_operation_smoke_coordinator.py`, `test_operation_smoke_*` | Complete-Batch coordination, Failure Memory, and Dedup/Solve/Patch behavior. |
 | `test_workflow_package_boundaries.py` | Workflow locality, child-Agent seams, and deliberately small public facades. |
 | `test_parameter_patch_agent.py` | Patch trust boundary, ten-sample self-review, attempt limits, and group isolation. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |

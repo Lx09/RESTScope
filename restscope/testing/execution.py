@@ -23,11 +23,6 @@ from restscope.observability import TracingRuntime
 from .catalog import GeneratorConfigCatalog
 from .constraints import ConstraintSet, ConstraintValidationError
 from .constraint_solver import ConstraintSolveError
-from .failure_reporting import (
-    MAX_FAILURE_RESPONSE_BYTES,
-    FailureCaseEvidence,
-    build_batch_failure_report,
-)
 from .generation import generate_test_case
 from .models import (
     GeneratedTestCase,
@@ -46,6 +41,7 @@ from .serialization import serialize_test_case
 
 
 BEHAVIOR_MONITOR_RESPONSE_BYTES = 1024 * 1024
+SMOKE_FAILURE_RESPONSE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,8 +109,8 @@ class OperationTestingService:
         ``seed`` control deterministic generation, while optional runtime
         ``constraints`` express relationships learned during the current App
         lifetime. The returned outcome contains both the public-shaped execution
-        report and bounded response evidence needed by Smoke planning and investigation
-        checks. Generation or serialization failures abort before any request is
+        report and bounded response evidence needed by Failure Dedup and
+        Investigation. Generation or serialization failures abort before any request is
         sent; transport failures are recorded per case.
         """
 
@@ -184,9 +180,6 @@ class OperationTestingService:
                     "response_validation": report.response_validation,
                     "behavior_monitor_warning_count": (
                         report.behavior_monitor_warning_count
-                    ),
-                    "failure_message_count": len(
-                        report.failure_report.unique_failure_messages
                     ),
                 }
             )
@@ -258,12 +251,11 @@ class OperationTestingService:
         # Network execution begins only after preflight succeeds for every case.
         run_id = f"test_run_{uuid4().hex}"
         reports: list[TestCaseExecutionReport] = []
-        failure_evidence: list[FailureCaseEvidence] = []
         smoke_evidence: list[SmokeCaseExecutionEvidence] = []
         for case_index, (generated, request, target_request) in enumerate(
             prepared
         ):
-            case_report, case_failure_evidence, case_smoke_evidence = (
+            case_report, case_smoke_evidence = (
                 self._execute_case(
                     context,
                     run_id=run_id,
@@ -274,7 +266,6 @@ class OperationTestingService:
                 )
             )
             reports.append(case_report)
-            failure_evidence.append(case_failure_evidence)
             smoke_evidence.append(case_smoke_evidence)
 
         status_counts = Counter(
@@ -309,7 +300,6 @@ class OperationTestingService:
                 for case in reports
             ),
             behavior_monitor_warning_count=warning_count,
-            failure_report=build_batch_failure_report(failure_evidence),
         )
         return SmokeExecutionOutcome(
             report=OperationExecutionReport.model_validate(
@@ -329,7 +319,6 @@ class OperationTestingService:
         target_request: PreparedTargetRequest,
     ) -> tuple[
         TestCaseExecutionReport,
-        FailureCaseEvidence,
         SmokeCaseExecutionEvidence,
     ]:
         """
@@ -349,7 +338,6 @@ class OperationTestingService:
         error_summary: TransportErrorSummary | None = None
         monitor_warnings: list[BehaviorMonitorWarningSummary] = []
         response_validation: ResponseValidationStatus = "not_evaluated"
-        failure_evidence = FailureCaseEvidence(case_id=case_id)
         smoke_evidence = SmokeCaseExecutionEvidence(case_id=case_id)
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
@@ -376,7 +364,7 @@ class OperationTestingService:
                         if self.transport.has_response_processor
                         else None
                     ),
-                    failure_response_body_limit=MAX_FAILURE_RESPONSE_BYTES,
+                    failure_response_body_limit=SMOKE_FAILURE_RESPONSE_BYTES,
                     truncate_response_body=True,
                     buffer_success_body_only=True,
                     processor_context=TargetResponseOperationContext(
@@ -419,15 +407,6 @@ class OperationTestingService:
                         )
                         for warning in response.processor_result.warnings
                     ]
-                failure_evidence = FailureCaseEvidence(
-                    case_id=case_id,
-                    status_code=response.status_code,
-                    reason_phrase=response.reason_phrase,
-                    media_type=media_type,
-                    body=response.body,
-                    body_truncated=response.body_truncated,
-                    encoding=response.encoding,
-                )
                 smoke_evidence = SmokeCaseExecutionEvidence(
                     case_id=case_id,
                     response_body=(
@@ -449,21 +428,11 @@ class OperationTestingService:
                     code="request_timeout",
                     message="HTTP request timed out",
                 )
-                failure_evidence = FailureCaseEvidence(
-                    case_id=case_id,
-                    transport_error_code=error_summary.code,
-                    transport_error_message=error_summary.message,
-                )
                 span.mark_error(error_summary.message)
             except TargetHTTPTransportError as exc:
                 error_summary = TransportErrorSummary(
                     code=exc.code,
                     message=str(exc),
-                )
-                failure_evidence = FailureCaseEvidence(
-                    case_id=case_id,
-                    transport_error_code=error_summary.code,
-                    transport_error_message=error_summary.message,
                 )
                 span.mark_error(error_summary.message)
 
@@ -477,7 +446,6 @@ class OperationTestingService:
                 behavior_monitor_warnings=monitor_warnings,
                 response_validation=response_validation,
             ),
-            failure_evidence,
             smoke_evidence,
         )
 
@@ -491,7 +459,7 @@ def _request_summary(
 
     ``target_request`` contains the real merged headers sent over the wire.
     Authentication, Cookies, API keys, CSRF tokens, and similarly named
-    secrets remain available only to the transport; reports, Planner evidence,
+    secrets remain available only to the transport; reports, Dedup evidence,
     and case spans receive a visible redaction marker instead.
     """
     return PreparedRequestSummary(

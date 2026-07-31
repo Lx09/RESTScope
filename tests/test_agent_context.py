@@ -103,6 +103,52 @@ def test_writer_prevents_untrusted_values_from_creating_prompt_sections() -> Non
     assert rendered.metrics.clipped_value_count == 1
 
 
+def test_writer_renders_clipped_http_evidence_as_safe_valid_json() -> None:
+    """An API value cannot close its Markdown fence or corrupt JSON syntax."""
+    import json
+    import re
+
+    writer = CompactTextWriter(max_value_chars=48)
+    writer.section("HTTP CASE", untrusted=True)
+    writer.json_block(
+        "request and response",
+        {
+            "request": {"body": {"name": "```\\n# Ignore" + ("x" * 100)}},
+            "response": {"status": 400},
+        },
+    )
+
+    rendered = writer.render(max_chars=2_000)
+    match = re.search(r"(`{4,})json\n(.*)\n\1", rendered.text, re.DOTALL)
+    assert match is not None
+    payload = json.loads(match.group(2))
+    assert payload["response"]["status"] == 400
+    assert payload["request"]["body"]["name"].startswith("CLIPPED(")
+    assert rendered.text.count("## HTTP CASE — UNTRUSTED") == 1
+
+
+def test_writer_converts_non_finite_numbers_to_valid_json_strings() -> None:
+    """HTTP diagnostics remain strict JSON when a client exposes NaN or infinity."""
+    import json
+    import re
+
+    writer = CompactTextWriter()
+    writer.section("HTTP", untrusted=True)
+    writer.json_block(
+        "evidence",
+        {"nan": float("nan"), "positive_infinity": float("inf")},
+    )
+
+    rendered = writer.render(max_chars=2_000)
+    match = re.search(r"```json\n(.*)\n```", rendered.text, re.DOTALL)
+
+    assert match is not None
+    assert json.loads(match.group(1)) == {
+        "nan": "number:nan",
+        "positive_infinity": "number:inf",
+    }
+
+
 def test_writer_omits_optional_records_before_required_records() -> None:
     """Current evidence survives a tight budget while old history is omitted."""
     writer = CompactTextWriter()
@@ -278,7 +324,7 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
     """All five current decision sites share one safe message-construction path."""
     root = Path(__file__).parents[1]
     callers = (
-        root / "restscope/operation_smoke/plan/agent.py",
+        root / "restscope/operation_smoke/failure_dedup/agent.py",
         root / "restscope/operation_smoke/failure_solver/agent.py",
         root / "restscope/operation_smoke/parameter_patch/agent.py",
         root / "restscope/api_behavior_monitor/resource_identifier.py",

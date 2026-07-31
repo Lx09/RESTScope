@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from restscope.operation_smoke.failure_solver import CurrentOperationHTTPProbe
 from restscope.operation_smoke import OperationSmokeRequest
 from restscope.llm import ToolCall
-from tests._operation_smoke_plan_solve_fixtures import smoke_config
+from tests._operation_smoke_dedup_solve_fixtures import smoke_config
 
 
 def test_operation_smoke_request_uses_large_output_budgets() -> None:
@@ -17,7 +17,7 @@ def test_operation_smoke_request_uses_large_output_budgets() -> None:
         operation_key="GET /projects/{projectId}"
     )
 
-    assert request.max_plan_outputs == 50
+    assert request.max_dedup_outputs == 50
     assert request.max_solve_outputs_per_todo == 50
     assert request.max_patch_outputs == 20
     assert request.continuation_interval == 10

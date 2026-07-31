@@ -38,7 +38,7 @@ def test_workflows_replace_the_retired_agent_category_package() -> None:
 def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
     """Scenario: each LLM role remains a named package inside its workflow."""
     for package_name in (
-        "plan",
+        "failure_dedup",
         "failure_solver",
         "parameter_patch",
     ):
@@ -48,6 +48,7 @@ def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
         assert (package / "agent.py").is_file()
         assert (package / "schemas.py").is_file()
     assert not (OPERATION_SMOKE_ROOT / "effect").exists()
+    assert not (OPERATION_SMOKE_ROOT / "plan").exists()
     assert not (OPERATION_SMOKE_ROOT / "prompt_context" / "__init__.py").exists()
 
 
@@ -123,7 +124,7 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
         "ParameterPatchAgent",
         "ResourceIdentifierTracker",
         "SmokeEffectAgent",
-        "SmokePlanAgent",
+        "FailureDedupAgent",
         "build_api_behavior_monitor_coordinator",
         "build_operation_smoke_coordinator",
     }
@@ -132,7 +133,7 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
 
 def test_cross_role_imports_use_the_target_role_facade() -> None:
     """Scenario: one Agent never reaches into another Agent's implementation file."""
-    role_names = {"plan", "failure_solver", "parameter_patch"}
+    role_names = {"failure_dedup", "failure_solver", "parameter_patch"}
     violations: list[str] = []
 
     for path in OPERATION_SMOKE_ROOT.rglob("*.py"):

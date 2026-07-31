@@ -17,7 +17,7 @@ from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
     GeneratorPatchDraft,
 )
-from restscope.operation_smoke.plan import FailureTodo
+from restscope.operation_smoke.failure_dedup import FailureTodo
 
 
 class _Model(BaseModel):
@@ -34,7 +34,6 @@ class FailureSolveRequest(_Model):
     todo: FailureTodo
     operation: dict[str, Any]
     generator_config: dict[str, Any]
-    current_batch: dict[str, Any]
     reference_options: list[dict[str, Any]] = Field(default_factory=list)
 
 

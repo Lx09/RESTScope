@@ -8,7 +8,10 @@ from restscope.operation_smoke.failure_solver import (
 )
 from restscope.operation_smoke.parameter_patch import ParameterPatchAgentFactory
 from restscope.operation_smoke.memory import SmokeMemory, SmokePatchApplication
-from restscope.operation_smoke.plan import SmokePlanAgent
+from restscope.operation_smoke.failure_dedup import (
+    FailureDedupAgent,
+    FailureDeduplicator,
+)
 from restscope.capabilities import ToolExecutor
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
@@ -35,11 +38,11 @@ def build_operation_smoke_coordinator(
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> OperationSmokeCoordinator:
-    """Build Planner, Solve, Patch, and their shared App-lifetime Memory.
+    """Build Dedup, Solve, Patch, and their shared App-lifetime Memory.
 
-    Planner and Solve receive the same deep Memory Interface.  Patch application
-    receives the same Unit of Work factory, allowing its Generator revision and
-    Investigation record to commit atomically.
+    Dedup writes current Failures while Solve reads histories through the same
+    deep Memory Interface. Patch application receives the same Unit of Work
+    factory so Generator revision and Investigation commit atomically.
     """
     if tool_executor is None:
         raise ValueError(
@@ -65,9 +68,12 @@ def build_operation_smoke_coordinator(
     return OperationSmokeCoordinator(
         config_catalog=config_catalog,
         batch_runner=batch_runner,
-        plan_agent=SmokePlanAgent(
-            client=client,
-            model=selector.select("operation_smoke_plan"),
+        failure_deduplicator=FailureDeduplicator(
+            agent=FailureDedupAgent(
+                client=client,
+                model=selector.select("operation_smoke_failure_dedup"),
+                tracing_runtime=runtime,
+            ),
             memory=memory,
             tracing_runtime=runtime,
         ),

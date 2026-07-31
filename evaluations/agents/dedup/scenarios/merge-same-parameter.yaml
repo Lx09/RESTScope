@@ -1,0 +1,48 @@
+scenario_id: dedup-merge-same-parameter
+title: Merge distinct messages caused by the same body parameter
+provenance:
+  kind: trace
+  source: artifacts/phoenix-exports/restscope-project-swagger-smoke-20260727T010238Z-9712a1cf
+  trace_id: sanitized-project-create
+  span_ids: [sanitized-plan]
+  rationale: Two project-create errors varied in wording but implicated the name input.
+tags: [acceptance, parameter-grouping]
+input:
+  request:
+    operation_key: POST /projects
+    round_number: 1
+    batch_run_id: eval-run-1
+    semantic_parameters: [body.name, body.namespace_id]
+    cases:
+      - case_id: case-a
+        generated_test_case:
+          path_parameters: {}
+          query_parameters: {}
+          header_parameters: {}
+          cookie_parameters: {}
+          body_present: true
+          body: {name: existing}
+        request: {path: /projects}
+        response:
+          status_code: 400
+          media_type: application/json
+          body: '{"message":"name already exists"}'
+      - case_id: case-b
+        generated_test_case:
+          path_parameters: {}
+          query_parameters: {}
+          header_parameters: {}
+          cookie_parameters: {}
+          body_present: true
+          body: {name: reserved}
+        request: {path: /projects}
+        response:
+          status_code: 409
+          media_type: application/json
+          body: '{"message":"name conflicts"}'
+  max_outputs: 3
+expected:
+  status: deduplicated
+  failure_count: 1
+  parameter_sets: [[body.name]]
+  representative_case_ids: [case-a]

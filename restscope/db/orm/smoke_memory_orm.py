@@ -1,9 +1,9 @@
 """Map structured Operation Smoke memory to normalized relational tables.
 
 The mappings deliberately keep Failure, Observation, Investigation, Parameter,
-and Applied Patch as separate concepts.  This makes both required query
-directions efficient: Planner starts from an operation's Failures, while Solve
-starts from an exact operation Parameter.
+and Applied Patch as separate concepts. Failure Dedup writes new current-round
+groups, while Solve reads from an exact operation Parameter and appends the
+Investigation result.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from ..base import Base, CreatedAtMixin
 
 
 class SmokeFailureORM(CreatedAtMixin, Base):
-    """Store one stable Planner Failure classification for one operation."""
+    """Store one current-round Dedup Failure for one operation."""
 
     __tablename__ = "smoke_failures"
 
@@ -70,8 +70,6 @@ class SmokeFailureObservationORM(Base):
         nullable=False,
         index=True,
     )
-    disposition: Mapped[str] = mapped_column(String, nullable=False)
-    disposition_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SmokeParameterORM(CreatedAtMixin, Base):

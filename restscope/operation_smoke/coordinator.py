@@ -1,9 +1,9 @@
-"""Coordinate complete Batch rounds around three LLM-owned decisions.
+"""Coordinate complete Batch rounds around Dedup and Solve decisions.
 
 The Coordinator owns ordering and stop conditions, not semantic diagnosis.  A
 round always executes in this order:
 
-``complete Batch → Planner → every Failure Solve item → next complete Batch``.
+``complete Batch → Failure Dedup → every Failure Solve item → next complete Batch``.
 
 Parameter Patch validation happens inside each Solve session.  No Effect Agent
 or candidate Batch exists: a Patch's real effect is observed only when the next
@@ -25,7 +25,10 @@ from restscope.operation_smoke.parameter_patch import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
 )
-from restscope.operation_smoke.plan import SmokePlanAgent, SmokePlanRequest
+from restscope.operation_smoke.failure_dedup import (
+    FailureDeduplicator,
+    FailureDedupRequest,
+)
 from restscope.testing import (
     ConstraintSet,
     GeneratorConfigCatalog,
@@ -34,9 +37,10 @@ from restscope.testing import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
     SmokeExecutionOutcome,
+    build_semantic_input_map,
 )
 
-from .evidence import build_batch_evidence, build_plan_case_map
+from .evidence import build_batch_evidence
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
     OperationSmokeFailureKind,
@@ -73,7 +77,7 @@ class OperationSmokeCoordinator:
         *,
         config_catalog: GeneratorConfigCatalog,
         batch_runner: SmokeBatchRunner,
-        plan_agent: SmokePlanAgent,
+        failure_deduplicator: FailureDeduplicator,
         failure_solver_factory: FailureSolveAgentFactory,
         reference_values: BehaviorMonitorReferenceValues,
         random_seed: int = 0,
@@ -88,7 +92,7 @@ class OperationSmokeCoordinator:
         """
         self.config_catalog = config_catalog
         self.batch_runner = batch_runner
-        self.plan_agent = plan_agent
+        self.failure_deduplicator = failure_deduplicator
         self.failure_solver_factory = failure_solver_factory
         self.reference_values = reference_values
         self.random_seed = random_seed
@@ -176,7 +180,7 @@ class OperationSmokeCoordinator:
         reports: list[OperationExecutionReport] = []
         rounds: list[SmokeRoundSummary] = []
         success_rate = 0.0
-        planner_outputs_used = 0
+        dedup_outputs_used = 0
 
         try:
             while True:
@@ -212,47 +216,30 @@ class OperationSmokeCoordinator:
                         ),
                     )
 
-                # The Planner budget is shared by every round in this workflow.
-                # We always run the Batch first so the final accepted Patch is
-                # measured even if no Planner output remains afterward.
-                if planner_outputs_used >= request.max_plan_outputs:
-                    return _errored_result(
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        rounds=rounds,
-                        failure_kind="plan_budget_exhausted",
-                        error=RuntimeError(
-                            "The Planner output budget was exhausted."
-                        ),
-                    )
-
                 round_number = len(rounds) + 1
-                coded_cases, failed_codes = build_plan_case_map(batch)
-                plan = self.plan_agent.plan(
-                    SmokePlanRequest(
+                semantic = build_semantic_input_map(current)
+                dedup = self.failure_deduplicator.deduplicate(
+                    FailureDedupRequest(
                         operation_key=request.operation_key,
                         round_number=round_number,
                         batch_run_id=report.run_id,
-                        batch=batch,
-                        coded_cases=coded_cases,
-                        failed_case_codes=failed_codes,
+                        semantic_parameters=sorted(semantic.node_by_handle),
+                        cases=list(batch["cases"]),
                     ),
                     max_outputs=(
-                        request.max_plan_outputs - planner_outputs_used
+                        request.max_dedup_outputs - dedup_outputs_used
                     ),
                 )
-                planner_outputs_used += plan.outputs_used
+                dedup_outputs_used += dedup.outputs_used
 
-                if plan.status == "plan_budget_exhausted":
+                if dedup.status == "dedup_budget_exhausted":
                     rounds.append(
                         SmokeRoundSummary(
                             round_number=round_number,
                             batch_run_id=report.run_id,
-                            plan_status=plan.status,
-                            plan_outputs=plan.outputs_used,
-                            non_debuggable_count=len(plan.non_debuggable),
+                            dedup_status=dedup.status,
+                            dedup_outputs=dedup.outputs_used,
+                            failure_count=0,
                         )
                     )
                     return _errored_result(
@@ -261,35 +248,16 @@ class OperationSmokeCoordinator:
                         success_rate=success_rate,
                         reports=reports,
                         rounds=rounds,
-                        failure_kind="plan_budget_exhausted",
-                        error=RuntimeError(plan.reason),
-                    )
-                if plan.status == "no_debug":
-                    rounds.append(
-                        SmokeRoundSummary(
-                            round_number=round_number,
-                            batch_run_id=report.run_id,
-                            plan_status=plan.status,
-                            plan_outputs=plan.outputs_used,
-                            non_debuggable_count=len(plan.non_debuggable),
-                        )
-                    )
-                    return _passed_result(
-                        request=request,
-                        current=current,
-                        success_rate=success_rate,
-                        reports=reports,
-                        rounds=rounds,
-                        stop_reason="planner_no_debug",
-                        reason=plan.reason,
+                        failure_kind="dedup_budget_exhausted",
+                        error=RuntimeError(dedup.reason),
                     )
 
                 todo_summaries: list[TodoRunSummary] = []
                 applied_count = 0
-                # ``plan.todos`` is a fixed snapshot.  Even after one Patch,
+                # ``dedup.todos`` is a fixed snapshot. Even after one Patch,
                 # remaining Failures are investigated against the updated
-                # Generator state; no intermediate Batch interrupts the Plan.
-                for todo in plan.todos:
+                # Generator state; no intermediate Batch interrupts the round.
+                for todo in dedup.todos:
                     reference_options = _available_reference_options(
                         self.reference_values,
                         context=context,
@@ -309,7 +277,6 @@ class OperationSmokeCoordinator:
                                 generator_config=current.model_dump(
                                     mode="json"
                                 ),
-                                current_batch=batch,
                                 reference_options=[
                                     option.model_dump(mode="json")
                                     for option in reference_options
@@ -343,11 +310,9 @@ class OperationSmokeCoordinator:
                             SmokeRoundSummary(
                                 round_number=round_number,
                                 batch_run_id=report.run_id,
-                                plan_status=plan.status,
-                                plan_outputs=plan.outputs_used,
-                                non_debuggable_count=len(
-                                    plan.non_debuggable
-                                ),
+                                dedup_status=dedup.status,
+                                dedup_outputs=dedup.outputs_used,
+                                failure_count=len(dedup.todos),
                                 todos=todo_summaries,
                             )
                         )
@@ -405,9 +370,9 @@ class OperationSmokeCoordinator:
                     SmokeRoundSummary(
                         round_number=round_number,
                         batch_run_id=report.run_id,
-                        plan_status=plan.status,
-                        plan_outputs=plan.outputs_used,
-                        non_debuggable_count=len(plan.non_debuggable),
+                        dedup_status=dedup.status,
+                        dedup_outputs=dedup.outputs_used,
+                        failure_count=len(dedup.todos),
                         todos=todo_summaries,
                     )
                 )
@@ -420,7 +385,7 @@ class OperationSmokeCoordinator:
                         rounds=rounds,
                         stop_reason="no_patch_applied",
                         reason=(
-                            "Every planned Investigation completed, but none "
+                            "Every deduplicated Investigation completed, but none "
                             "produced an applicable Patch."
                         ),
                     )
@@ -448,7 +413,7 @@ def _passed_result(
     stop_reason,
     reason: str,
 ) -> OperationSmokeResult:
-    """Build one of the three explicit successful terminal results."""
+    """Build one of the two explicit successful terminal results."""
     return OperationSmokeResult(
         status="passed",
         operation_key=request.operation_key,
