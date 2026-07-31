@@ -144,10 +144,12 @@ def build_operation_snapshot(
     media_type_node_ids: dict[str, str] = {}
     media_type_encodings: dict[str, dict[str, Any]] = {}
     supported_media_types: list[str] = []
+    excluded_body_paths: set[str] = set()
     if operation.request_body is not None:
         for media_type, media in operation.request_body.contents.items():
             normalized = media_type.strip().lower()
-            node = node_by_path[f"body/{_segment(normalized)}"]
+            media_path = f"body/{_segment(normalized)}"
+            node = node_by_path[media_path]
             media_type_encodings[normalized] = dict(media.encoding)
             if _is_supported_media_contract(
                 normalized,
@@ -156,6 +158,21 @@ def build_operation_snapshot(
             ):
                 media_type_node_ids[normalized] = node.input_node_id
                 supported_media_types.append(normalized)
+                if normalized == "multipart/form-data":
+                    # Optional file properties are intentionally invisible to
+                    # generation. Their OpenAPI schema remains available in
+                    # the parser IR, but no Generator or Patch can select them.
+                    excluded_body_paths.update(
+                        candidate.canonical_path
+                        for candidate in operation.input_nodes.values()
+                        if (
+                            candidate.canonical_path.startswith(
+                                f"{media_path}/"
+                            )
+                            and candidate.schema is not None
+                            and candidate.schema.format in {"binary", "byte"}
+                        )
+                    )
     supported_media_types.sort(key=_media_type_priority)
     supported_body_paths = {
         f"body/{_segment(media_type)}"
@@ -179,6 +196,11 @@ def build_operation_snapshot(
                 or node.canonical_path.startswith(f"{path}/")
                 for path in supported_body_paths
             )
+        )
+        and not any(
+            node.canonical_path == path
+            or node.canonical_path.startswith(f"{path}/")
+            for path in excluded_body_paths
         )
     ]
     unsupported_schema_nodes: dict[str, list[str]] = {}
@@ -733,9 +755,42 @@ def _is_supported_media_contract(
         return True
     if value == "application/x-www-form-urlencoded":
         return _ir_has_type(schema, "object") or bool(schema.properties)
+    if value == "multipart/form-data":
+        return (
+            _ir_is_object_contract(schema)
+            and not _ir_has_required_file(schema)
+        )
     if value.startswith("text/"):
         return _ir_has_type(schema, "string")
     return False
+
+
+def _ir_has_required_file(schema: SchemaIR) -> bool:
+    """Return whether an unavoidable schema branch requires binary content.
+
+    Optional file properties are safe to omit and are removed from the frozen
+    input tree. A binary root, a required binary property, or a required array
+    item cannot be represented by RESTScope's non-file multipart serializer.
+    Composed object branches fail closed when any branch makes such a file
+    unavoidable.
+    """
+
+    if schema.format in {"binary", "byte"}:
+        return True
+    for name in schema.required:
+        child = schema.properties.get(name)
+        if child is not None and _ir_has_required_file(child):
+            return True
+    if (
+        schema.items is not None
+        and (schema.min_items or 0) > 0
+        and _ir_has_required_file(schema.items)
+    ):
+        return True
+    return any(
+        _ir_has_required_file(branch)
+        for branch in (*schema.all_of, *schema.any_of, *schema.one_of)
+    )
 
 
 def _ir_is_object_contract(schema: SchemaIR) -> bool:
@@ -755,7 +810,9 @@ def _media_type_priority(value: str) -> tuple[int, str]:
         return 1, value
     if value == "application/x-www-form-urlencoded":
         return 2, value
-    return 3, value
+    if value == "multipart/form-data":
+        return 3, value
+    return 4, value
 
 
 def _deduplicate_reasons(

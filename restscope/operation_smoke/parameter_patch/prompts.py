@@ -30,10 +30,12 @@ inputs.
 
 # Protocol
 Use propose → runtime compile/sample → accept. Return strict
-ParameterPatchDecision JSON only. propose includes action and a complete patch;
-patch contains changes and constraints. A later propose replaces the earlier
-proposal. accept contains action only and is valid only after successful sample
-feedback. Never mix prose with the decision.
+ParameterPatchDecision JSON only. ``action`` and ``patch`` are top-level
+fields: a proposal is ``action="propose"`` plus one complete ``patch``; an
+acceptance is only ``action="accept"`` with no ``patch``. Never wrap either
+decision under a ``propose`` or ``accept`` property. ``patch`` contains changes
+and constraints. A later proposal replaces the earlier proposal. Acceptance is
+valid only after successful sample feedback. Never mix prose with the decision.
 
 # Generator Signatures
 constant | value
@@ -53,7 +55,9 @@ response_value | system-selected through supplied R alias only
 
 Each change names one supplied semantic input and may set
 inclusion_probability, strategy, or reference. strategy and reference are
-mutually exclusive. Use only supplied R aliases; never emit raw input_node_id.
+mutually exclusive. A response-value or resource-identifier change places the
+supplied R alias in ``reference`` beside ``input`` and omits ``strategy``.
+Use only supplied R aliases; never emit raw input_node_id.
 
 # Constraint Signatures
 value: input_value(input) | literal(value) |

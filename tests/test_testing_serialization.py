@@ -185,6 +185,155 @@ def test_openapi_serializer_supports_text_form_and_swagger_collection_formats() 
     assert form.content == b"tag=a&tag=b&ok=true"
 
 
+def test_openapi_serializer_builds_deterministic_non_file_multipart_body() -> None:
+    """Multipart object fields become stable text or JSON form-data parts."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratedTestCase
+    from restscope.testing.serialization import serialize_test_case
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Multipart", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "multipart/form-data": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "count": {"type": "integer"},
+                                            "enabled": {"type": "boolean"},
+                                            "tags": {
+                                                "type": "array",
+                                                "items": {"type": "string"},
+                                            },
+                                            "settings": {"type": "object"},
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {"201": {"description": "created"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /projects"]
+    case = GeneratedTestCase(
+        operation_key=operation.operation_key,
+        case_index=0,
+        media_type="multipart/form-data",
+        path_parameters={},
+        query_parameters={},
+        header_parameters={},
+        cookie_parameters={},
+        body={
+            "name": "demo",
+            "count": 3,
+            "enabled": True,
+            "tags": ["api", "smoke"],
+            "settings": {"archived": False},
+        },
+        body_present=True,
+        generated_values=[],
+        omitted_input_node_ids=[],
+    )
+
+    first = serialize_test_case(_snapshot(operation), case)
+    second = serialize_test_case(_snapshot(operation), case)
+
+    assert first == second
+    content_type = first.headers["Content-Type"]
+    assert content_type.startswith("multipart/form-data; boundary=")
+    boundary = content_type.removeprefix("multipart/form-data; boundary=")
+    assert boundary.startswith("restscope-")
+    body = first.content.decode()
+    assert body.startswith(f"--{boundary}\r\n")
+    assert body.endswith(f"--{boundary}--\r\n")
+    assert body.count(f"--{boundary}\r\n") == 5
+    assert (
+        'Content-Disposition: form-data; name="count"\r\n'
+        "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        "3\r\n"
+    ) in body
+    assert (
+        'Content-Disposition: form-data; name="enabled"\r\n'
+        "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        "true\r\n"
+    ) in body
+    assert (
+        'Content-Disposition: form-data; name="tags"\r\n'
+        "Content-Type: application/json\r\n\r\n"
+        '["api","smoke"]\r\n'
+    ) in body
+    assert (
+        'Content-Disposition: form-data; name="settings"\r\n'
+        "Content-Type: application/json\r\n\r\n"
+        '{"archived":false}\r\n'
+    ) in body
+
+
+def test_multipart_serializer_rejects_file_values_and_header_injection() -> None:
+    """File payloads and CR/LF field names cannot enter multipart wire headers."""
+    import pytest
+
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing import GeneratedTestCase
+    from restscope.testing.serialization import (
+        SerializationError,
+        serialize_test_case,
+    )
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Multipart safety", "version": "1"},
+            "paths": {
+                "/submit": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "multipart/form-data": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        },
+                        "responses": {"204": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["POST /submit"]
+
+    def body_case(body):
+        return GeneratedTestCase(
+            operation_key=operation.operation_key,
+            case_index=0,
+            media_type="multipart/form-data",
+            path_parameters={},
+            query_parameters={},
+            header_parameters={},
+            cookie_parameters={},
+            body=body,
+            body_present=True,
+            generated_values=[],
+            omitted_input_node_ids=[],
+        )
+
+    with pytest.raises(SerializationError, match="file values"):
+        serialize_test_case(_snapshot(operation), body_case({"avatar": b"png"}))
+    with pytest.raises(SerializationError, match="CR or LF"):
+        serialize_test_case(
+            _snapshot(operation),
+            body_case({"safe\r\nX-Injected: yes": "value"}),
+        )
+
+
 def test_allow_reserved_query_values_are_preserved_by_target_url_preparation() -> None:
     """Scenario: verify that allow reserved query values are preserved by target url preparation."""
     from restscope.http_transport import build_target_url

@@ -43,6 +43,7 @@ assertion.
 | `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, policy, operation scope, execution, and MCP adaptation. |
 | `test_observability*`, `test_phoenix_tracing_contract.py` | Redaction and trace hierarchy/attributes without changing business behavior. |
 | `test_gitlab_post_projects_smoke_live.py` | Opt-in one-operation GitLab acceptance: real project creation, 80% Smoke threshold, and Phoenix trace coverage. |
+| `test_gitlab_projects_operations_live.py` | Opt-in five-operation GitLab Projects acceptance: every collection/item operation reaches Batch without technical failure; caller enforces a ten-minute deadline. |
 | `test_*_live.py`, `test_project_swagger_smoke_e2e_live.py` | Opt-in checks against real local services or providers; these are not ordinary offline tests. |
 
 ## Fakes, stubs, and fixtures

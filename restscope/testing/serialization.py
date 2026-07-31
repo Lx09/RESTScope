@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -75,8 +76,8 @@ def serialize_test_case(
     if case.body_present or case.body is not None:
         if not case.media_type:
             raise SerializationError("Request body has no media type")
-        headers["Content-Type"] = case.media_type
-        content = _serialize_body(case.media_type, case.body)
+        content, content_type = _serialize_body(case.media_type, case.body)
+        headers["Content-Type"] = content_type
 
     return PreparedTestRequest(
         method=operation.method.upper(),
@@ -179,27 +180,133 @@ def _serialize_cookie(parameter: ParameterSnapshot, value: Any) -> list[str]:
     return [f"{parameter.name}={_text(value)}"]
 
 
-def _serialize_body(media_type: str, body: Any) -> bytes:
+def _serialize_body(media_type: str, body: Any) -> tuple[bytes, str]:
+    """Return body bytes and the effective Content-Type header.
+
+    Most media types retain the OpenAPI value unchanged. Multipart is the
+    exception because its deterministic boundary is chosen while serializing
+    the generated object and must be attached to the outgoing header.
+    """
+
     normalized = media_type.split(";", 1)[0].strip().lower()
     if normalized == "application/json" or normalized.endswith("+json"):
         try:
-            return json.dumps(
-                body,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode()
+            return (
+                json.dumps(
+                    body,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode(),
+                media_type,
+            )
         except (TypeError, ValueError) as exc:
             raise SerializationError("Generated JSON request body is not serializable") from exc
     if normalized == "application/x-www-form-urlencoded":
         if not isinstance(body, dict):
             raise SerializationError("Form request body must be an object")
-        return urlencode(_form_items(body)).encode()
+        return urlencode(_form_items(body)).encode(), media_type
+    if normalized == "multipart/form-data":
+        return _serialize_multipart_body(body)
     if normalized.startswith("text/"):
         if not isinstance(body, str):
             raise SerializationError("Text request body must be a string")
-        return body.encode()
+        return body.encode(), media_type
     raise SerializationError(f"Unsupported request media type: {media_type}")
+
+
+def _serialize_multipart_body(body: Any) -> tuple[bytes, str]:
+    """Encode one non-file object as deterministic multipart form data.
+
+    Scalar parts use UTF-8 text because that is the interoperable OpenAPI
+    default. Arrays and objects remain typed by using compact JSON parts. File
+    values are deliberately rejected: this narrow capability exists for APIs
+    such as GitLab Projects whose multipart contract contains ordinary fields
+    plus optional file properties that the snapshot excludes.
+    """
+
+    if not isinstance(body, dict):
+        raise SerializationError("Multipart request body must be an object")
+
+    parts: list[tuple[str, str, bytes]] = []
+    for raw_name, value in sorted(body.items(), key=lambda item: str(item[0])):
+        if not isinstance(raw_name, str):
+            raise SerializationError("Multipart field names must be strings")
+        if "\r" in raw_name or "\n" in raw_name:
+            raise SerializationError(
+                "Multipart field names cannot contain CR or LF"
+            )
+        content_type, payload = _multipart_part(value)
+        parts.append((raw_name, content_type, payload))
+
+    boundary = _multipart_boundary(parts)
+    chunks: list[bytes] = []
+    for name, content_type, payload in parts:
+        # Quoted-string escaping keeps a literal quote or backslash inside the
+        # field name without letting it alter Content-Disposition parameters.
+        safe_name = name.replace("\\", "\\\\").replace('"', '\\"')
+        chunks.extend(
+            (
+                f"--{boundary}\r\n".encode(),
+                (
+                    "Content-Disposition: form-data; "
+                    f'name="{safe_name}"\r\n'
+                ).encode(),
+                f"Content-Type: {content_type}\r\n\r\n".encode(),
+                payload,
+                b"\r\n",
+            )
+        )
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return (
+        b"".join(chunks),
+        f"multipart/form-data; boundary={boundary}",
+    )
+
+
+def _multipart_part(value: Any) -> tuple[str, bytes]:
+    """Translate one supported field value into its part media type and bytes."""
+
+    if isinstance(value, bytes):
+        raise SerializationError("Multipart file values are unsupported")
+    if isinstance(value, (list, dict)):
+        try:
+            payload = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        except (TypeError, ValueError) as exc:
+            raise SerializationError(
+                "Multipart JSON field is not serializable"
+            ) from exc
+        return "application/json", payload
+    if value is None:
+        return "text/plain; charset=utf-8", b""
+    if isinstance(value, (str, bool, int, float)):
+        return "text/plain; charset=utf-8", _text(value).encode()
+    raise SerializationError(
+        f"Unsupported multipart field value: {type(value).__name__}"
+    )
+
+
+def _multipart_boundary(parts: list[tuple[str, str, bytes]]) -> str:
+    """Choose a reproducible boundary that cannot occur inside a part payload."""
+
+    digest = hashlib.sha256()
+    for name, content_type, payload in parts:
+        for item in (name.encode(), content_type.encode(), payload):
+            digest.update(len(item).to_bytes(8, "big"))
+            digest.update(item)
+    candidate = digest.hexdigest()
+    payloads = [payload for _, _, payload in parts]
+    while True:
+        boundary = f"restscope-{candidate[:32]}"
+        marker = boundary.encode()
+        if all(marker not in payload for payload in payloads):
+            return boundary
+        candidate = hashlib.sha256(candidate.encode()).hexdigest()
 
 
 def _legacy_collection(name: str, value: list[Any], collection_format: str) -> list[tuple[str, str]]:

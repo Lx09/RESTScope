@@ -24,6 +24,14 @@ class StubClient:
         )
 
 
+class StubReferenceValues:
+    """Expose one deterministic observed value at the external-value boundary."""
+
+    def values_for(self, strategy):
+        """Return the value expected by the reference-backed sample."""
+        return ["known-project"]
+
+
 def _model() -> LLMModelConfig:
     """Build the FAST role used by the Patch Agent."""
     return LLMModelConfig(
@@ -227,6 +235,108 @@ def test_patch_uses_case_count_for_dynamic_samples_then_accepts() -> None:
     assert '{"' not in initial
 
 
+def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> None:
+    """A malformed live-style wrapper receives an explicit top-level correction."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
+
+    nested_wrapper = {
+        "propose": {
+            "action": "propose",
+            "patch": _constant_patch()["patch"],
+        }
+    }
+    client = StubClient(
+        [nested_wrapper, _constant_patch(), {"action": "accept"}]
+    )
+
+    outcome = ParameterPatchAgent(client=client, model=_model()).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        max_outputs=3,
+    )
+
+    assert outcome.status == "validated"
+    assert outcome.outputs_used == 3
+    first_request = client.requests[0]
+    assert first_request.response_format == "json_schema"
+    assert first_request.json_schema_name == "ParameterPatchDecision"
+    assert first_request.json_schema
+    correction = client.requests[1].messages[-1].content
+    assert correction.startswith("## PATCH OUTPUT INVALID — UNTRUSTED")
+    assert "`action` and `patch` must be top-level fields" in correction
+    assert "Do not wrap the decision under `propose` or `accept`" in correction
+
+
+def test_patch_repairs_a_reference_alias_embedded_in_strategy() -> None:
+    """A supplied R alias belongs beside the semantic input, not in strategy."""
+    from restscope.operation_smoke.parameter_patch import (
+        AvailableReferenceOption,
+        ParameterPatchAgent,
+    )
+
+    option = AvailableReferenceOption(
+        option_id="ref-a",
+        input_node_id="path/projectId",
+        kind="response_value",
+        value_name="known_project_id",
+        compatible_scalar_type="string",
+        value_count=1,
+        producer_operation_keys=["GET /projects"],
+        producer_status_code="200",
+        producer_media_type="application/json",
+        source_field="id",
+        source_selector="$[].id",
+    )
+    invalid_reference = {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "strategy": {
+                        "type": "response_value",
+                        "reference": "R1",
+                    },
+                }
+            ],
+            "constraints": [],
+        },
+    }
+    valid_reference = {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "reference": "R1",
+                }
+            ],
+            "constraints": [],
+        },
+    }
+    client = StubClient(
+        [invalid_reference, valid_reference, {"action": "accept"}]
+    )
+
+    outcome = ParameterPatchAgent(client=client, model=_model()).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        reference_values=StubReferenceValues(),
+        reference_options=[option],
+        max_outputs=3,
+    )
+
+    assert outcome.status == "validated"
+    assert outcome.outputs_used == 3
+    assert outcome.patch.updates[0].strategy.type == "response_value"
+    correction = client.requests[1].messages[-1].content
+    assert "set `reference` beside `input` and omit `strategy`" in correction
+
+
 def test_variant_child_patch_requires_explicit_parent_branch_selection() -> None:
     """A child-only fix cannot pass while another branch remains reachable."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
@@ -352,6 +462,36 @@ def test_patch_output_budget_returns_complete_failure_to_solve() -> None:
     assert outcome.reason == "output_budget_exhausted"
     assert outcome.outputs_used == 2
     assert outcome.errors
+
+
+def test_patch_stops_after_three_equivalent_invalid_outputs() -> None:
+    """Repeated malformed decisions stop one tool session before its full budget."""
+    from restscope.operation_smoke.parameter_patch import (
+        ParameterPatchAgent,
+        ParameterPatchFailure,
+    )
+
+    repeated = {
+        "propose": {
+            "action": "propose",
+            "patch": _constant_patch()["patch"],
+        }
+    }
+    client = StubClient([repeated, repeated, repeated])
+
+    outcome = ParameterPatchAgent(client=client, model=_model()).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        max_outputs=20,
+    )
+
+    assert isinstance(outcome, ParameterPatchFailure)
+    assert outcome.reason == "repeated_invalid_output"
+    assert outcome.outputs_used == 3
+    assert len(outcome.attempt_history) == 3
+    assert len(client.requests) == 3
 
 
 def test_patch_keeps_constraint_compilation_as_executable_boundary() -> None:

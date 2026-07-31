@@ -403,6 +403,125 @@ def test_body_media_priority_and_encoding_contract_are_frozen(tmp_path: Path) ->
     )
 
 
+def test_non_file_multipart_is_enabled_and_omits_optional_binary_inputs(
+    tmp_path: Path,
+) -> None:
+    """A GitLab-style multipart object remains executable without file fields."""
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Multipart project", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "post": {
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "multipart/form-data": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["name"],
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "minLength": 3,
+                                            },
+                                            "avatar": {
+                                                "type": "string",
+                                                "format": "binary",
+                                            },
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {"201": {"description": "created"}},
+                    }
+                }
+            },
+        }
+    )
+    catalog, _ = _catalog(tmp_path)
+
+    catalog.initialize_once(ir)
+    stored = catalog.get_operation("POST /projects")
+
+    assert stored is not None
+    assert stored.enabled is True
+    assert stored.active_media_type == "multipart/form-data"
+    paths = {node.canonical_path for node in stored.snapshot.input_nodes}
+    assert "body/multipart~1form-data/properties/name" in paths
+    assert "body/multipart~1form-data/properties/avatar" not in paths
+    assert {
+        item.input_node_id for item in stored.configs
+    } == {
+        node.input_node_id for node in stored.snapshot.input_nodes
+    }
+
+
+@pytest.mark.parametrize(
+    ("schema", "encoding"),
+    [
+        (
+            {
+                "type": "object",
+                "required": ["avatar"],
+                "properties": {
+                    "avatar": {"type": "string", "format": "binary"}
+                },
+            },
+            None,
+        ),
+        ({"type": "string"}, None),
+        (
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+            {"name": {"contentType": "text/plain"}},
+        ),
+    ],
+)
+def test_multipart_rejects_required_files_non_objects_and_explicit_encoding(
+    tmp_path: Path,
+    schema: dict,
+    encoding: dict | None,
+) -> None:
+    """The narrow multipart capability fails closed outside non-file objects."""
+    from restscope.openapi_parser import OpenAPIParser
+
+    media: dict = {"schema": schema}
+    if encoding is not None:
+        media["encoding"] = encoding
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Unsupported multipart", "version": "1"},
+            "paths": {
+                "/upload": {
+                    "post": {
+                        "requestBody": {
+                            "content": {"multipart/form-data": media}
+                        },
+                        "responses": {"204": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    )
+    catalog, _ = _catalog(tmp_path)
+
+    catalog.initialize_once(ir)
+    stored = catalog.get_operation("POST /upload")
+
+    assert stored is not None
+    assert stored.enabled is False
+    assert stored.active_media_type is None
+    assert stored.snapshot.available_media_types == []
+
+
 @pytest.mark.parametrize(
     ("media_type", "schema"),
     [

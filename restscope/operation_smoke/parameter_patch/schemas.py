@@ -194,7 +194,7 @@ class ParameterPatchFailure(_Model):
 
     status: Literal["failed"] = "failed"
     todo_id: str
-    reason: Literal["output_budget_exhausted"]
+    reason: Literal["output_budget_exhausted", "repeated_invalid_output"]
     outputs_used: int = Field(ge=1, le=20)
     errors: list[str] = Field(default_factory=list, max_length=20)
     attempt_history: list[dict[str, Any]] = Field(default_factory=list)
