@@ -21,7 +21,7 @@ AttemptDisposition = Literal[
     "errored",
 ]
 OperationFailureKind = Literal[
-    "plan_budget_exhausted",
+    "dedup_budget_exhausted",
     "solve_budget_exhausted",
     "unsupported_operation",
     "operation_error",

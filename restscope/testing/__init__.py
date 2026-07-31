@@ -41,11 +41,7 @@ from .execution import (
     SmokeExecutionOutcome,
     TestingExecutionError,
 )
-from .failure_reporting import (
-    FailureCaseEvidence,
-)
 from .models import (
-    BatchFailureReport,
     GeneratorDisabledReason,
     GeneratedNodeValue,
     GeneratedTestCase,
@@ -56,7 +52,6 @@ from .models import (
     OperationTestSnapshot,
     ParameterSnapshot,
     SchemaSnapshot,
-    UniqueFailureMessage,
     OperationExecutionReport,
     PreparedTestRequest,
     ResourceIdentifierGenerator,
@@ -71,7 +66,6 @@ from .semantics import (
 __all__ = [
     "AndConstraint",
     "ArithmeticValue",
-    "BatchFailureReport",
     "CardinalityConstraint",
     "ComparePredicate",
     "ConstraintSet",
@@ -83,7 +77,6 @@ __all__ = [
     "GeneratorDisabledReason",
     "GeneratedNodeValue",
     "GeneratedTestCase",
-    "FailureCaseEvidence",
     "InputGeneratorConfig",
     "InputGeneratorPatch",
     "InputAssignment",
@@ -109,7 +102,6 @@ __all__ = [
     "OrConstraint",
     "PresentPredicate",
     "TestingExecutionError",
-    "UniqueFailureMessage",
     "classify_constraint",
     "evaluate_constraint_set",
     "expand_generator_patch_presence",

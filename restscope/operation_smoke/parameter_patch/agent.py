@@ -133,6 +133,8 @@ class ParameterPatchAgent:
         ] | None = None
         latest_errors: list[str] = []
         attempt_history: list[dict[str, Any]] = []
+        last_invalid_fingerprint: str | None = None
+        repeated_invalid_count = 0
 
         with self.tracing_runtime.span(
             "ParameterPatchAgent.run",
@@ -159,7 +161,13 @@ class ParameterPatchAgent:
                         messages=context.messages_for_request(self.model),
                         temperature=0,
                         max_tokens=self.model.max_tokens,
-                        response_format="json",
+                        # The provider receives the authoritative decision
+                        # schema as well as the human-readable prompt. DeepSeek
+                        # currently enforces JSON syntax itself and appends this
+                        # schema to its provider-owned instruction.
+                        response_format="json_schema",
+                        json_schema=ParameterPatchDecision.model_json_schema(),
+                        json_schema_name="ParameterPatchDecision",
                         tools=[],
                         tool_choice="none",
                         timeout_seconds=self.model.timeout_seconds,
@@ -175,6 +183,19 @@ class ParameterPatchAgent:
                     }
                 )
                 decision, errors = self._parse(response)
+                if decision is None:
+                    fingerprint = _invalid_output_fingerprint(response)
+                    if fingerprint == last_invalid_fingerprint:
+                        repeated_invalid_count += 1
+                    else:
+                        last_invalid_fingerprint = fingerprint
+                        repeated_invalid_count = 1
+                else:
+                    # Valid DTOs may still fail compilation or sampling, but
+                    # those failures describe a new executable candidate rather
+                    # than the repeated structural mistake guarded here.
+                    last_invalid_fingerprint = None
+                    repeated_invalid_count = 0
                 if decision is not None and not errors:
                     if decision.action == "accept":
                         if validated is None:
@@ -248,15 +269,27 @@ class ParameterPatchAgent:
                             continue
 
                 latest_errors = errors or ["The Patch output could not be used."]
-                context.append_assistant(response)
-                context.append_feedback(
-                    "PATCH OUTPUT INVALID\n"
-                    + "\n".join(
-                        f"issue | {error}"
-                        for error in latest_errors[:_MAX_ERRORS]
+                if repeated_invalid_count >= 3:
+                    failure = ParameterPatchFailure(
+                        todo_id=task.todo_id,
+                        reason="repeated_invalid_output",
+                        outputs_used=output_number,
+                        errors=latest_errors[:_MAX_ERRORS],
+                        attempt_history=list(attempt_history),
                     )
-                    + "\nReturn one complete corrected ParameterPatchDecision JSON object."
-                )
+                    for name, value in context.metrics.trace_attributes().items():
+                        span.set_attribute(name, value)
+                    span.set_output(
+                        {
+                            "status": failure.status,
+                            "reason": failure.reason,
+                            "outputs_used": failure.outputs_used,
+                            "error_count": len(failure.errors),
+                        }
+                    )
+                    return failure
+                context.append_assistant(response)
+                context.append_feedback(_invalid_output_feedback(latest_errors))
 
             failure = ParameterPatchFailure(
                 todo_id=task.todo_id,
@@ -299,6 +332,70 @@ class ParameterPatchAgent:
             ParameterPatchDecision.model_validate(result.validated_object),
             [],
         )
+
+
+def _invalid_output_feedback(errors: list[str]) -> str:
+    """Explain a rejected decision without letting model text alter Markdown.
+
+    Validation paths and messages may include fragments derived from the
+    previous model output. Encoding them through ``CompactTextWriter`` keeps
+    those fragments inside the evidence section while a separate trusted
+    section states the exact repair contract.
+    """
+
+    writer = CompactTextWriter(max_value_chars=800)
+    writer.section("PATCH OUTPUT INVALID", untrusted=True)
+    for index, error in enumerate(errors[:_MAX_ERRORS], start=1):
+        writer.text(f"issue {index}", error)
+    writer.section("REQUIRED DECISION SHAPE")
+    writer.text(
+        "top level",
+        "`action` and `patch` must be top-level fields.",
+    )
+    writer.text(
+        "wrapper",
+        "Do not wrap the decision under `propose` or `accept`.",
+    )
+    writer.text(
+        "proposal",
+        '`action` is "propose" and `patch` is the complete replacement.',
+    )
+    writer.text(
+        "acceptance",
+        '`action` is "accept" and `patch` is omitted.',
+    )
+    writer.text(
+        "reference",
+        "For an R alias, set `reference` beside `input` and omit `strategy`.",
+    )
+    writer.text(
+        "next",
+        "Return one complete corrected ParameterPatchDecision JSON object.",
+    )
+    return writer.render(max_chars=12_000).text
+
+
+def _invalid_output_fingerprint(response: LLMResponse) -> str:
+    """Identify semantically identical malformed decisions across retries.
+
+    Parsed JSON is serialized with stable key ordering so property order alone
+    does not evade the guard. If the provider could not parse JSON, the raw
+    content becomes the comparison value instead.
+    """
+
+    value = (
+        response.parsed_json
+        if response.parsed_json is not None
+        else response.content
+    )
+    normalized = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _compile_patch(

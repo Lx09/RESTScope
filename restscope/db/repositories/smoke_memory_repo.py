@@ -9,21 +9,20 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from restscope.operation_smoke.memory import (
     AppliedPatchMemory,
-    FailureCatalogEntry,
+    FailureBatchWrite,
     FailureHistory,
     FailureObservationMemory,
     InvestigationMemory,
     InvestigationParameterWrite,
     InvestigationWrite,
     ParameterHistory,
-    PlanMemoryWrite,
     RecordedFailure,
-    RecordedPlan,
+    RecordedFailures,
     SmokeMemoryReferenceError,
 )
 
@@ -45,14 +44,13 @@ class SqlAlchemySmokeMemoryRepository:
         """Bind the active transaction without committing it."""
         self.session = session
 
-    def record_plan(self, write: PlanMemoryWrite) -> RecordedPlan:
-        """Record classifications while reusing shared Observation rows."""
+    def record_failures(self, write: FailureBatchWrite) -> RecordedFailures:
+        """Record current-round Failures and their representative Observations."""
         recorded: list[RecordedFailure] = []
-        for classification in write.classifications:
-            failure = self._resolve_failure(
+        for failure_write in write.failures:
+            failure = self._create_failure(
                 operation_key=write.operation_key,
-                failure_id=classification.failure_id,
-                summary=classification.summary,
+                summary=failure_write.summary,
             )
             recorded.append(
                 RecordedFailure(
@@ -60,7 +58,7 @@ class SqlAlchemySmokeMemoryRepository:
                     summary=failure.summary,
                 )
             )
-            for observation in classification.observations:
+            for observation in failure_write.observations:
                 observation_row = self._resolve_observation(
                     write=write,
                     observation=observation,
@@ -78,12 +76,10 @@ class SqlAlchemySmokeMemoryRepository:
                             id=f"smoke_fol_{uuid4().hex}",
                             failure_id=failure.id,
                             observation_id=observation_row.id,
-                            disposition=classification.disposition,
-                            disposition_reason=classification.disposition_reason,
                         )
                     )
         self.session.flush()
-        return RecordedPlan(failures=recorded)
+        return RecordedFailures(failures=recorded)
 
     def record_investigation(self, write: InvestigationWrite) -> str:
         """Append one Investigation and its optional applied Patch."""
@@ -137,27 +133,6 @@ class SqlAlchemySmokeMemoryRepository:
             )
         self.session.flush()
         return investigation_id
-
-    def list_operation_failures(
-        self,
-        operation_key: str,
-    ) -> list[FailureCatalogEntry]:
-        """Return stable catalog order with counts computed by the Adapter."""
-        failures = self.session.scalars(
-            select(SmokeFailureORM)
-            .where(SmokeFailureORM.operation_key == operation_key)
-            .order_by(SmokeFailureORM.created_at, SmokeFailureORM.id)
-        ).all()
-        return [
-            FailureCatalogEntry(
-                failure_id=failure.id,
-                summary=failure.summary,
-                observation_count=self._count_observations(failure.id),
-                investigation_count=self._count_investigations(failure.id),
-                applied_patch_count=self._count_applied_patches(failure.id),
-            )
-            for failure in failures
-        ]
 
     def lookup_failure_history(
         self,
@@ -216,54 +191,13 @@ class SqlAlchemySmokeMemoryRepository:
             )
         return histories
 
-    def _count_observations(self, failure_id: str) -> int:
-        """Count linked Observations without loading their JSON projections."""
-        value = self.session.scalar(
-            select(func.count())
-            .select_from(SmokeFailureObservationORM)
-            .where(SmokeFailureObservationORM.failure_id == failure_id)
-        )
-        return int(value or 0)
-
-    def _count_investigations(self, failure_id: str) -> int:
-        """Count chronological Solve conclusions for the compact catalog."""
-        value = self.session.scalar(
-            select(func.count())
-            .select_from(SmokeInvestigationORM)
-            .where(SmokeInvestigationORM.failure_id == failure_id)
-        )
-        return int(value or 0)
-
-    def _count_applied_patches(self, failure_id: str) -> int:
-        """Count only durable Patches, never rejected session candidates."""
-        value = self.session.scalar(
-            select(func.count())
-            .select_from(SmokeAppliedPatchORM)
-            .join(
-                SmokeInvestigationORM,
-                SmokeInvestigationORM.id
-                == SmokeAppliedPatchORM.investigation_id,
-            )
-            .where(SmokeInvestigationORM.failure_id == failure_id)
-        )
-        return int(value or 0)
-
-    def _resolve_failure(
+    def _create_failure(
         self,
         *,
         operation_key: str,
-        failure_id: str | None,
         summary: str,
     ) -> SmokeFailureORM:
-        """Create a Failure or validate one request-local alias resolution."""
-        if failure_id is not None:
-            failure = self._require_failure(
-                operation_key=operation_key,
-                failure_id=failure_id,
-            )
-            # Planner may improve wording without changing semantic identity.
-            failure.summary = summary
-            return failure
+        """Create a new Failure; Dedup never reuses an earlier identity."""
         failure = SmokeFailureORM(
             id=f"smoke_failure_{uuid4().hex}",
             operation_key=operation_key,
@@ -358,10 +292,8 @@ class SqlAlchemySmokeMemoryRepository:
                 trigger=observation.trigger,
                 response_summary=dict(observation.response_summary),
                 necessary_values=dict(observation.necessary_values),
-                disposition=link.disposition,
-                disposition_reason=link.disposition_reason,
             )
-            for link, observation in link_rows
+            for _link, observation in link_rows
         ]
         investigations = self.session.scalars(
             select(SmokeInvestigationORM)

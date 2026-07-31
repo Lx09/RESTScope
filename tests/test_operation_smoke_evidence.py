@@ -1,4 +1,4 @@
-"""Protect complete evidence expansion and the Plan-only alias boundary."""
+"""Protect complete current-round evidence expansion for Failure Dedup."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ from types import SimpleNamespace
 from restscope.operation_smoke.coordinator import _operation_context
 from restscope.operation_smoke.evidence import (
     build_batch_evidence,
-    build_plan_case_map,
 )
 from restscope.testing.execution import SmokeCaseExecutionEvidence
-from tests._operation_smoke_plan_solve_fixtures import (
+from tests._operation_smoke_dedup_solve_fixtures import (
     smoke_config,
     smoke_report,
 )
@@ -43,15 +42,12 @@ def test_batch_evidence_contains_generated_request_response_and_body() -> None:
     assert case["response"]["body"] == '{"error":"project missing"}'
 
 
-def test_temporary_case_codes_exist_only_in_the_plan_projection() -> None:
-    """The complete evidence itself never depends on C-style aliases."""
+def test_batch_evidence_contains_only_case_results() -> None:
+    """Dedup receives cases directly and Batch owns no Failure interpretation."""
     batch = build_batch_evidence(smoke_report(), {})
 
-    coded, failed = build_plan_case_map(batch)
-
-    assert failed == ["C1"]
-    assert coded["C1"]["case_id"] == "case_1"
     assert "C1" not in str(batch)
+    assert "failure_" + "report" not in batch["run"]
 
 
 def test_failure_solve_operation_context_contains_complete_openapi_ir() -> None:

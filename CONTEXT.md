@@ -15,13 +15,23 @@ validation exchanges. Final Agent decisions still use strict JSON.
 ## Operation Smoke Language
 
 **Failure Observation**:
-A concrete failed case or error observed in one Batch Testing run.
+A single representative failed test case retained for one current-round
+Failure.
 _Avoid_: Failure, issue
 
 **Failure**:
-A stable semantic category maintained by Planner for one operation and linked
-to one or more Failure Observations across rounds.
+A current-round category whose observations have the same complete suspected
+causal Parameter set. Attribution remains provisional until Investigation.
 _Avoid_: Todo, error message
+
+**Failure Fingerprint**:
+The normalized error-message text used to remove exact duplicates before
+semantic classification.
+_Avoid_: Failure ID, case ID
+
+**Representative Test Case**:
+The earliest current-Batch case retained for a Failure and passed to Solve.
+_Avoid_: Batch, case group
 
 **Investigation**:
 One Solve session that records its trigger conditions, parameter attribution,
@@ -45,8 +55,8 @@ _Avoid_: Candidate, resolved Patch
 
 ## Relationships and identity
 
-- One Failure may collect Observations from many Batch rounds.
-- One Observation may support more than one Failure.
+- One Failure has exactly one representative Observation.
+- Every Batch round creates new Failure identities; Dedup does not reuse history.
 - One Investigation belongs to one Failure and may attribute several
   Parameters as causes.
 - One Parameter may appear in many Failures and Investigations.
@@ -54,8 +64,8 @@ _Avoid_: Candidate, resolved Patch
   Generator revision, before/after summaries, Constraints, and validation
   samples.
 
-Models never receive database primary keys. Planner sees request-local `F*`
-Failure references; Solve sees semantic input handles such as
+Models never receive database primary keys or Fingerprint references. Solve
+sees semantic input handles such as
 `body.project.startDate`; Patch candidates use Solve-session `P*` references.
 Runtime code maps and validates each reference.
 

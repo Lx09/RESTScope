@@ -1,10 +1,11 @@
 """Live acceptance loop for only GitLab's ``POST /projects`` operation.
 
 This opt-in test is intentionally separate from the offline suite because it
-creates real projects in the local ``gitlab-test`` container, calls the
-configured DeepSeek models, and exports traces to the local Phoenix service.
-It uses a one-operation OpenAPI document so neither the Supervisor nor an Agent
-can schedule a different GitLab endpoint. Successful projects are deliberately
+creates real projects in the local ``gitlab-test`` container and exports traces
+to the local Phoenix service. Configured DeepSeek models are available if a
+failed Batch reaches an Agent, but the successful first-Batch path deliberately
+calls no LLM. It uses a one-operation OpenAPI document so neither the Supervisor
+nor an Agent can schedule a different GitLab endpoint. Successful projects are
 left in the disposable container because cleanup would exercise a second API
 operation outside this test's authorization boundary.
 
@@ -331,9 +332,9 @@ def test_gitlab_post_projects_reaches_the_smoke_success_threshold() -> None:
     print(f"GitLab Smoke artifacts: {run_dir}")
     print(f"Phoenix project: {project_name}")
 
-    # This is stricter than the Supervisor's general passed state.  Planner
-    # no-debug and no-Patch terminal reasons do not satisfy the live request:
-    # the latest complete Batch itself must demonstrate at least 80% success.
+    # This is stricter than the Supervisor's general passed state. A no-Patch
+    # terminal result does not satisfy the live request: the latest complete
+    # Batch itself must demonstrate at least 80% success.
     assert report.operations[0].method.upper() == "POST"
     assert report.operations[0].path == "/projects"
     assert len(report.operations) == 1

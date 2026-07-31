@@ -1,9 +1,8 @@
-"""Build bounded in-memory Batch evidence for Planner and Failure Solve.
+"""Build bounded in-memory Batch evidence for Failure Dedup.
 
-Temporary case codes are created only for one Plan request. Every returned
-todo immediately contains expanded case objects. Planner and Solve can inspect
-current request inputs, generated values, and response evidence without placing
-the raw Batch in persistent Failure Memory.
+The public execution report contains request summaries and outcomes. Private
+response bodies are joined by case ID for the current round only, allowing the
+Deduplicator to create exact messages without persisting raw HTTP evidence.
 """
 
 from __future__ import annotations
@@ -64,37 +63,6 @@ def build_batch_evidence(
         ),
         "cases": cases,
     }
-
-
-def build_plan_case_map(
-    batch: dict[str, Any],
-) -> tuple[dict[str, dict[str, Any]], list[str]]:
-    """Create Plan-only codes and identify every currently failed case."""
-    cases = list(batch.get("cases", []))
-    coded = {
-        f"C{index}": case
-        for index, case in enumerate(cases, start=1)
-    }
-    failed_ids = {
-        case_id
-        for failure in batch["run"]["failure_report"][
-            "unique_failure_messages"
-        ]
-        for case_id in failure["case_ids"]
-    }
-    failed_codes: list[str] = []
-    for code, case in coded.items():
-        response = case.get("response") or {}
-        status = response.get("status_code")
-        failed = (
-            case.get("case_id") in failed_ids
-            or case.get("transport_error") is not None
-            or not isinstance(status, int)
-            or not 200 <= status < 300
-        )
-        if failed:
-            failed_codes.append(code)
-    return coded, failed_codes
 
 
 def _json_value(value: object | None) -> dict[str, Any]:

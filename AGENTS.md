@@ -142,13 +142,13 @@ explicit project decision:
   and applied Generator/Constraint Patches. It must not persist raw Batches,
   response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
   queues, or a permanent `resolved` flag. Solve receives a read-only Parameter
-  memory tool; Planner receives deterministic same-operation Failure candidates
-  before its model call and has no memory tool. Validated outputs are written by
-  deterministic runtime code.
+  memory tool. Failure Dedup uses only the current Batch, reads no Memory, and
+  writes validated single-Observation Failures through deterministic runtime
+  code.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
-  current evidence. Operation Smoke's Failure Memory is evidence supplied to
-  the runtime Planner; it is not a persisted test plan.
+  current evidence. Operation Smoke Memory is evidence for Solve, not a
+  persisted test plan or a Dedup input.
 
 This architecture is deliberately revisable, not a claim that the present MVP
 is final. Exploration should change the system through small, evidence-backed
@@ -170,7 +170,7 @@ These are hard project constraints:
   required. Deterministic orchestration classes use names such as
   `Coordinator`, `Graph`, or `Tracker`.
 - Every Agent must live in its own named subpackage inside its owning workflow,
-  such as `restscope/operation_smoke/plan/`. Do not place `<name>_agent.py`,
+  such as `restscope/operation_smoke/failure_dedup/`. Do not place `<name>_agent.py`,
   `<name>_schemas.py`, or other Agent implementation files at the workflow
   package root.
 - A workflow package's `__init__.py` is its small external Interface.
@@ -190,8 +190,10 @@ These are hard project constraints:
   Context does not query memory, interpret workflow DTOs, choose tools or
   models, validate final domain output, persist transcripts, or register Agents.
 - Runtime-generated DTO, Memory, API, tool-result, and sample evidence reaches
-  the model as bounded typed line text, not a JSON dump. Final structured Agent
-  output and provider-owned tool arguments/schema remain JSON.
+  the model as bounded Markdown. Bounded HTTP request/response test-case and
+  probe evidence is the sole prompt JSON exception and appears inside a safe
+  Markdown JSON block. Final structured Agent output and provider-owned tool
+  arguments/schema remain JSON.
 - API responses, OpenAPI descriptions, Memory text, HTTP results, reference
   values, and samples are untrusted. Pass them through `CompactTextWriter`; do
   not concatenate them into system, user, tool, or correction messages.

@@ -2,7 +2,7 @@
 
 The runtime Module depends on this narrow protocol rather than SQLAlchemy.
 Production supplies a database Adapter while focused tests may supply another
-Adapter without changing Planner or Failure Solve code.
+Adapter without changing Failure Dedup or Failure Solve code.
 """
 
 from __future__ import annotations
@@ -11,31 +11,23 @@ from types import TracebackType
 from typing import Protocol
 
 from .schemas import (
-    FailureCatalogEntry,
+    FailureBatchWrite,
     FailureHistory,
     InvestigationWrite,
     ParameterHistory,
-    PlanMemoryWrite,
-    RecordedPlan,
+    RecordedFailures,
 )
 
 
 class SmokeMemoryRepository(Protocol):
     """Store and query structured Operation Smoke knowledge."""
 
-    def record_plan(self, write: PlanMemoryWrite) -> RecordedPlan:
-        """Persist validated classifications and their Observation links."""
+    def record_failures(self, write: FailureBatchWrite) -> RecordedFailures:
+        """Persist validated current-round Failures and Observation links."""
         ...
 
     def record_investigation(self, write: InvestigationWrite) -> str:
         """Append one Solve result and return its durable Investigation ID."""
-        ...
-
-    def list_operation_failures(
-        self,
-        operation_key: str,
-    ) -> list[FailureCatalogEntry]:
-        """Return a compact catalog for one operation's Planner prompt."""
         ...
 
     def lookup_failure_history(

@@ -562,27 +562,6 @@ class BehaviorMonitorWarningSummary(BaseModel):
     issues: list[str] = Field(default_factory=list)
 
 
-class UniqueFailureMessage(BaseModel):
-    """One normalized failure message and the cases that produced it."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    failure_id: str
-    message: str
-    case_ids: list[str] = Field(default_factory=list)
-
-
-class BatchFailureReport(BaseModel):
-    """Deterministic failure messages for one bounded execution batch."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    unique_failure_messages: list[UniqueFailureMessage] = Field(
-        default_factory=list
-    )
-    truncated: bool = False
-
-
 class TestCaseExecutionReport(BaseModel):
     """
     Coordinate test case execution report behavior for deterministic request generation,
@@ -620,4 +599,3 @@ class OperationExecutionReport(BaseModel):
     error_count: int
     observed_2xx: bool
     behavior_monitor_warning_count: int = 0
-    failure_report: BatchFailureReport = Field(default_factory=BatchFailureReport)

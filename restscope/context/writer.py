@@ -9,6 +9,7 @@ initial user message or a tool result consumed by :class:`AgentContext`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
 import re
 from typing import Any, Iterable, Mapping, Sequence
@@ -34,6 +35,7 @@ class _Entry:
     section_index: int
     lines: tuple[str, ...]
     required: bool
+    must_remain_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -53,7 +55,7 @@ class _RenderedText:
 
 
 class CompactTextWriter:
-    """Construct a bounded line protocol from trusted structure and unsafe values.
+    """Construct bounded Markdown from trusted structure and unsafe values.
 
     ``ABSENT`` is a sentinel for a field that was not supplied.  It is distinct
     from ``None``, which means the field was supplied with a JSON-style null.
@@ -110,7 +112,7 @@ class CompactTextWriter:
             **fields: Flat scalar fields. Nested values are accepted but are
                 expanded to dotted paths.
         """
-        pieces = [_escape_label(record_label)]
+        pieces = [f"- {_escape_label(record_label)}"]
         for path, value in _flatten(fields):
             pieces.append(f"{path}={self._encode(value)}")
         self._add_entry((" | ".join(pieces),), required=required)
@@ -127,7 +129,7 @@ class CompactTextWriter:
             f"{path}={self._encode(value)}"
             for path, value in _flatten(values)
         ]
-        line = f"  {_escape_label(label)}"
+        line = f"  - {_escape_label(label)}"
         if parts:
             line += " | " + "; ".join(parts)
         self._add_entry((line,), required=required)
@@ -147,12 +149,19 @@ class CompactTextWriter:
         safe_headers = tuple(_escape_label(header) for header in headers)
         if not safe_headers:
             raise ValueError("table must contain at least one column")
-        lines = [" | ".join(safe_headers)]
+        lines = [
+            "| " + " | ".join(safe_headers) + " |",
+            "| " + " | ".join("---" for _ in safe_headers) + " |",
+        ]
         for row in rows:
             row_tuple = tuple(row)
             if len(row_tuple) != len(safe_headers):
                 raise ValueError("table row width must match headers")
-            lines.append(" | ".join(self._encode(value) for value in row_tuple))
+            lines.append(
+                "| "
+                + " | ".join(self._encode(value) for value in row_tuple)
+                + " |"
+            )
         self._add_entry(tuple(lines), required=required)
 
     def text(self, label: str, value: Any, *, required: bool = True) -> None:
@@ -160,6 +169,43 @@ class CompactTextWriter:
         self._add_entry(
             (f"{_escape_label(label)} | {self._encode(value)}",),
             required=required,
+        )
+
+    def json_block(
+        self,
+        label: str,
+        value: Any,
+        *,
+        required: bool = True,
+    ) -> None:
+        """Add untrusted HTTP evidence as valid JSON inside a safe Markdown fence.
+
+        Values are bounded recursively before serialization instead of slicing
+        the final JSON text. This keeps the block parseable. The fence is made
+        longer than every backtick run inside the JSON, so an API string cannot
+        close the block and inject a new Markdown section.
+        """
+        bounded = self._bounded_json(value)
+        payload = json.dumps(
+            bounded,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        longest_run = max(
+            (len(match.group(0)) for match in re.finditer(r"`+", payload)),
+            default=0,
+        )
+        fence = "`" * max(3, longest_run + 1)
+        self._add_entry(
+            (
+                f"### {_escape_label(label)}",
+                f"{fence}json",
+                payload,
+                fence,
+            ),
+            required=required,
+            must_remain_complete=True,
         )
 
     def render(self, max_chars: int) -> _RenderedText:
@@ -208,6 +254,10 @@ class CompactTextWriter:
                 # never by pretending the missing history was included.
                 text = _clip_message(text, max_chars - len(marker)) + marker
         if len(text) > max_chars:
+            if any(entry.must_remain_complete for entry in selected):
+                raise ValueError(
+                    "required JSON evidence exceeds the Context character budget"
+                )
             text = _clip_message(text, max_chars)
 
         metrics = ContextMetrics(
@@ -218,7 +268,13 @@ class CompactTextWriter:
         )
         return _RenderedText(text=text, metrics=metrics)
 
-    def _add_entry(self, lines: tuple[str, ...], *, required: bool) -> None:
+    def _add_entry(
+        self,
+        lines: tuple[str, ...],
+        *,
+        required: bool,
+        must_remain_complete: bool = False,
+    ) -> None:
         """Attach one entry to the current section or reject ambiguous output."""
         if self._active_section is None:
             raise RuntimeError("call section() before adding prompt content")
@@ -227,6 +283,7 @@ class CompactTextWriter:
                 section_index=self._active_section,
                 lines=lines,
                 required=required,
+                must_remain_complete=must_remain_complete,
             )
         )
 
@@ -237,7 +294,7 @@ class CompactTextWriter:
         for entry in entries:
             if entry.section_index != previous_section:
                 section = self._sections[entry.section_index]
-                heading = section.title
+                heading = f"## {section.title}"
                 if section.untrusted:
                     heading += " — UNTRUSTED"
                 if output:
@@ -246,6 +303,37 @@ class CompactTextWriter:
                 previous_section = entry.section_index
             output.extend(entry.lines)
         return "\n".join(output)
+
+    def _bounded_json(self, value: Any) -> Any:
+        """Return a JSON-safe tree whose individual strings obey value limits."""
+        if isinstance(value, Mapping):
+            return {
+                str(key): self._bounded_json(child)
+                for key, child in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [self._bounded_json(child) for child in value]
+        if isinstance(value, str):
+            if len(value) <= self.max_value_chars:
+                return value
+            self._clipped_values += 1
+            head_chars = max(8, (self.max_value_chars - 80) // 2)
+            tail_chars = max(8, self.max_value_chars - 80 - head_chars)
+            return (
+                "CLIPPED(type=string, "
+                f"chars={len(value)}, "
+                f"head={value[:head_chars]!r}, "
+                f"tail={value[-tail_chars:]!r})"
+            )
+        if value is self.ABSENT:
+            return "ABSENT"
+        if isinstance(value, float) and not math.isfinite(value):
+            # JSON permits no NaN or Infinity literal. Preserve the diagnostic
+            # value as text so HTTP evidence remains standards-compliant JSON.
+            return f"number:{value}"
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        return self._bounded_json(str(value))
 
     def _encode(self, value: Any) -> str:
         """Encode one scalar and account for any value-level clipping."""

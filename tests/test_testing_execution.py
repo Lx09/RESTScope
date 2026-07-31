@@ -118,7 +118,7 @@ def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
     return operation, catalog, service, context, requests
 
 
-def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
+def test_operation_testing_returns_cases_and_private_failure_body(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing reads only failure body and reports unique messages."""
@@ -207,18 +207,12 @@ def test_operation_testing_reads_only_failure_body_and_reports_unique_messages(
     assert report.response_validation == "not_evaluated"
     assert [case.response.status_code for case in report.cases] == [200, 503]
     assert all(not hasattr(case.response, "body") for case in report.cases)
-    assert report.failure_report.model_dump(mode="json") == {
-        "unique_failure_messages": [
-            {
-                "failure_id": "f1",
-                "message": "HTTP 503: dependency unavailable",
-                "case_ids": [report.cases[1].case_id],
-            }
-        ],
-        "truncated": False,
-    }
+    assert "failure_" + "report" not in type(report).model_fields
+    assert outcome.case_evidence[1].response_body == (
+        b'{"message":"dependency unavailable"}'
+    )
     # Trusted authentication reaches the real request but never crosses the
-    # public Batch-report boundary consumed by traces and Planner evidence.
+    # public Batch-result boundary consumed by traces and Dedup evidence.
     assert "runtime-secret" not in report.model_dump_json()
     assert all(
         case.request.headers["Authorization"] == "[redacted]"
@@ -369,7 +363,7 @@ def test_smoke_execution_applies_constraints_and_traces_only_the_count(
     assert [request.url.params["mode"] for request in requests] == ["slow", "slow"]
     assert [
         case.generated_test_case.query_parameters["mode"]
-        for case in outcome.report.cases
+        for case in outcome.cases
     ] == ["slow", "slow"]
     root_input = tracing.inputs[0]
     assert root_input["constraint_count"] == 1
@@ -594,11 +588,10 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
     assert report.status == "partial"
     assert report.error_count == 1
     assert report.cases[1].transport_error.code == "request_failed"
-    assert [
-        item.message for item in report.failure_report.unique_failure_messages
-    ] == [
-        "TRANSPORT request_failed: HTTP request failed (ConnectError)",
-    ]
+    assert "failure_" + "report" not in type(report).model_fields
+    assert report.cases[1].transport_error.message.startswith(
+        "HTTP request failed"
+    )
 
 
 def test_testing_transport_overrides_ordinary_context_headers_but_not_context_cookie() -> None:

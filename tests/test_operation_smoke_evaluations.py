@@ -9,10 +9,6 @@ from __future__ import annotations
 import pytest
 
 
-# The evaluation stack is intentionally a separate development dependency
-# group. The ordinary runtime suite skips this Module in a fresh minimal
-# environment; the dedicated verification command installs the group and runs
-# every contract below.
 pytest.importorskip(
     "phoenix.evals",
     reason="install the evaluation dependency group to run Phoenix Eval tests",
@@ -22,7 +18,7 @@ pytest.importorskip(
 class ScriptedLLMClient:
     """Return prepared provider-neutral outputs without calling DeepSeek."""
 
-    def __init__(self, responses):
+    def __init__(self, responses) -> None:
         """Copy responses because every test owns one finite conversation."""
         self.responses = list(responses)
         self.requests = []
@@ -46,71 +42,64 @@ def _evaluation_model(role: str):
     )
 
 
-def test_registry_loads_three_sanitized_scenarios_for_each_agent() -> None:
-    """Scenario: one registry exposes the three approved Agent evaluations."""
+def test_registry_loads_three_scenarios_for_every_agent() -> None:
+    """The explicit registry makes adding scenarios a file-only operation."""
     from evaluations.registry import SUITES
 
-    assert set(SUITES) == {"plan", "solve", "patch"}
-
+    assert set(SUITES) == {"dedup", "solve", "patch"}
     for agent_name, suite in SUITES.items():
         scenarios = suite.load_scenarios()
-
         assert len(scenarios) == 3
-        assert len({scenario.scenario_id for scenario in scenarios}) == 3
-        assert all(scenario.provenance.kind == "trace" for scenario in scenarios)
+        assert len({item.scenario_id for item in scenarios}) == 3
+        assert all(item.provenance.kind == "trace" for item in scenarios)
         assert all(
             "restscope-project-swagger-smoke-20260727T010238Z-9712a1cf"
-            in scenario.provenance.source
-            for scenario in scenarios
+            in item.provenance.source
+            for item in scenarios
         )
         assert all(
-            secret not in scenario.model_dump_json().lower()
-            for scenario in scenarios
+            secret not in item.model_dump_json().lower()
+            for item in scenarios
             for secret in ("authorization", "password", "api_key")
         ), agent_name
 
 
-def test_dataset_sync_uses_stable_ids_references_and_scenario_splits() -> None:
-    """Scenario: a repo suite mirrors directly into one Phoenix Dataset."""
+def test_dedup_dataset_uses_stable_repository_ids() -> None:
+    """Dataset sync mirrors the renamed Dedup suite without Planner examples."""
     from evaluations.core import sync_suite
     from evaluations.registry import SUITES
 
-    class RecordingDatasets:
-        """Capture the one Phoenix dataset call made by the shared runner."""
-
+    class Datasets:
         def __init__(self) -> None:
             self.calls = []
 
         def create_dataset(self, **kwargs):
-            """Return a compact dataset-like object after recording arguments."""
             self.calls.append(kwargs)
             return type(
                 "Dataset",
                 (),
                 {
-                    "name": kwargs["name"],
-                    "version_id": "version-1",
+                    "version_id": "v1",
                     "examples": kwargs["examples"],
                 },
             )()
 
-    datasets = RecordingDatasets()
-    client = type("Client", (), {"datasets": datasets})()
+    datasets = Datasets()
+    dataset = sync_suite(
+        type("Client", (), {"datasets": datasets})(),
+        SUITES["dedup"],
+    )
 
-    dataset = sync_suite(client, SUITES["plan"])
-
-    assert dataset.version_id == "version-1"
-    assert len(datasets.calls) == 1
-    call = datasets.calls[0]
-    assert call["name"] == "restscope-operation-smoke-plan"
-    assert [item["id"] for item in call["examples"]] == [
-        "plan-merge-duplicate-observations",
-        "plan-reuse-history-and-transport",
-        "plan-split-independent-failures",
+    assert dataset.version_id == "v1"
+    assert datasets.calls[0]["name"] == "restscope-operation-smoke-dedup"
+    assert [item["id"] for item in datasets.calls[0]["examples"]] == [
+        "dedup-correct-incomplete-output",
+        "dedup-merge-same-parameter",
+        "dedup-split-different-parameters",
     ]
-    first = call["examples"][0]
+    first = datasets.calls[0]["examples"][0]
     assert first["output"] == (
-        SUITES["plan"]
+        SUITES["dedup"]
         .load_scenarios()[0]
         .expected.model_dump(mode="json", exclude_none=True)
     )
@@ -119,20 +108,20 @@ def test_dataset_sync_uses_stable_ids_references_and_scenario_splits() -> None:
 
 
 def test_dataset_sync_rejects_a_result_that_still_contains_old_examples() -> None:
-    """Scenario: a full mirror cannot silently retain a pre-refactor example."""
+    """A synchronized Dedup version cannot retain a retired Planner example."""
     from evaluations.core import sync_suite
     from evaluations.registry import SUITES
 
     class StaleDatasets:
-        """Return the requested examples plus one old row Phoenix failed to delete."""
+        """Return requested examples plus one row that should have been deleted."""
 
         def create_dataset(self, **kwargs):
-            """Model an incomplete server-side update of the current version."""
+            """Model an incomplete server-side replacement."""
             stale_example = {
                 "id": "plan-retired-memory-tool-scenario",
                 "input": {"operation": "GET /retired"},
                 "output": {"memory_failure_ids": ["old-failure"]},
-                "metadata": {"source": "before-project-agent-context"},
+                "metadata": {"source": "before-failure-dedup"},
             }
             return type(
                 "Dataset",
@@ -146,21 +135,21 @@ def test_dataset_sync_rejects_a_result_that_still_contains_old_examples() -> Non
     client = type("Client", (), {"datasets": StaleDatasets()})()
 
     with pytest.raises(RuntimeError, match="unexpected example IDs"):
-        sync_suite(client, SUITES["plan"])
+        sync_suite(client, SUITES["dedup"])
 
 
 def test_dataset_sync_rejects_old_content_under_a_current_scenario_id() -> None:
-    """Scenario: a stable ID cannot hide a pre-refactor expected output."""
+    """A stable scenario ID cannot hide a pre-Dedup expected output."""
     from copy import deepcopy
 
     from evaluations.core import sync_suite
     from evaluations.registry import SUITES
 
     class StaleDatasets:
-        """Return current IDs while preserving one obsolete Planner field."""
+        """Return current IDs while preserving one obsolete Planner result."""
 
         def create_dataset(self, **kwargs):
-            """Model the stale Plan Dataset observed before this repair."""
+            """Model stale content returned in the new Dataset version."""
             examples = deepcopy(kwargs["examples"])
             examples[0]["output"] = {
                 "status": "planned",
@@ -176,53 +165,60 @@ def test_dataset_sync_rejects_old_content_under_a_current_scenario_id() -> None:
     client = type("Client", (), {"datasets": StaleDatasets()})()
 
     with pytest.raises(RuntimeError, match="stale example content"):
-        sync_suite(client, SUITES["plan"])
+        sync_suite(client, SUITES["dedup"])
 
 
-def test_plan_code_evaluators_report_one_zero_and_not_applicable() -> None:
-    """Scenario: each declared property is scored without an aggregate result."""
-    from evaluations.agents.plan.suite import (
-        plan_candidate_retrieval_evaluator,
-        plan_case_groups_evaluator,
-        plan_status_evaluator,
+def test_dedup_code_evaluators_return_one_zero_and_not_applicable() -> None:
+    """Independent code scores retain Phoenix's explicit 0/1/N/A contract."""
+    from evaluations.agents.dedup.suite import (
+        dedup_status_evaluator,
+        failure_count_evaluator,
+        parameter_sets_evaluator,
+        representative_cases_evaluator,
     )
 
     output = {
         "result": {
-            "status": "planned",
+            "status": "deduplicated",
             "todos": [
-                {
-                    "failure_id": "eval-new-1",
-                    "cases": [{"case_id": "case-a"}, {"case_id": "case-b"}],
-                }
+                {"suspected_parameters": ["body.name"]},
             ],
-            "non_debuggable": [],
         },
-        "tool_calls": [],
         "runtime_error": None,
     }
-
-    status = plan_status_evaluator.evaluate(
-        {"output": output, "expected": {"status": "planned"}}
+    status = dedup_status_evaluator.evaluate(
+        {"output": output, "expected": {"status": "deduplicated"}}
     )[0]
-    groups = plan_case_groups_evaluator.evaluate(
-        {
-            "output": output,
-            "expected": {"case_groups": [["case-a"], ["case-b"]]},
-        }
+    count = failure_count_evaluator.evaluate(
+        {"output": output, "expected": {"failure_count": 2}}
     )[0]
-    lookup = plan_candidate_retrieval_evaluator.evaluate(
+    parameters = parameter_sets_evaluator.evaluate(
         {"output": output, "expected": {}}
+    )[0]
+    representative = representative_cases_evaluator.evaluate(
+        {"output": output, "expected": {"representative_case_ids": ["case-a"]}}
     )[0]
 
     assert (status.score, status.label) == (1, "satisfied")
-    assert (groups.score, groups.label) == (0, "not_satisfied")
-    assert lookup.score is None
-    assert lookup.label == "not_applicable"
+    assert (count.score, count.label) == (0, "not_satisfied")
+    assert parameters.score is None
+    assert parameters.label == "not_applicable"
+    assert (representative.score, representative.label) == (0, "not_satisfied")
+
+
+def test_solve_scenarios_use_one_test_case_and_no_current_batch() -> None:
+    """Evaluation inputs match the production single-case Solve Interface."""
+    from evaluations.registry import SUITES
+
+    for scenario in SUITES["solve"].load_scenarios():
+        request = scenario.input.request
+        assert request.todo.test_case
+        assert not hasattr(request.todo, "cases")
+        assert not hasattr(request, "current_batch")
 
 
 def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() -> None:
-    """Scenario: Phoenix task runs real Solve logic with no DB or target HTTP."""
+    """Phoenix task runs real Solve logic with no database or target HTTP."""
     from evaluations.registry import SUITES
     from restscope.llm import LLMResponse, ToolCall
     from restscope.observability import TracingRuntime
@@ -308,7 +304,7 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
 
 
 def test_patch_task_runs_real_compile_sampling_and_review() -> None:
-    """Scenario: Patch evaluation uses production validation before acceptance."""
+    """Patch evaluation uses production validation before model acceptance."""
     from evaluations.registry import SUITES
     from restscope.llm import LLMResponse
     from restscope.observability import TracingRuntime
@@ -369,7 +365,7 @@ def test_patch_task_runs_real_compile_sampling_and_review() -> None:
 
 
 def test_run_syncs_filters_and_records_reproducible_experiment_metadata() -> None:
-    """Scenario: one selected Scenario becomes one native Phoenix Experiment."""
+    """One selected Dedup Scenario becomes one native Phoenix Experiment."""
     from evaluations.core import run_suite
     from evaluations.registry import SUITES
     from restscope.observability import TracingRuntime
@@ -399,7 +395,7 @@ def test_run_syncs_filters_and_records_reproducible_experiment_metadata() -> Non
             return type("Dataset", (), {"version_id": "version-9"})()
 
     class RecordingExperiments:
-        """Capture the native Phoenix run call without executing a task."""
+        """Capture the native Phoenix run call without executing the task."""
 
         def __init__(self) -> None:
             self.calls = []
@@ -419,19 +415,19 @@ def test_run_syncs_filters_and_records_reproducible_experiment_metadata() -> Non
         (),
         {"datasets": datasets, "experiments": experiments},
     )()
-    suite = SUITES["plan"]
+    suite = SUITES["dedup"]
 
     result = run_suite(
         phoenix_client=phoenix,
         suite=suite,
         llm_client=ScriptedLLMClient([]),
-        model=_evaluation_model("operation_smoke_plan"),
+        model=_evaluation_model("operation_smoke_failure_dedup"),
         tracing_runtime=TracingRuntime.disabled(),
         prompt_name="current",
         repetitions=3,
         seed=41,
         git_revision="1234567890abcdef",
-        scenario_id="plan-merge-duplicate-observations",
+        scenario_id="dedup-merge-same-parameter",
     )
 
     assert result["experiment_id"] == "experiment-1"
@@ -439,7 +435,7 @@ def test_run_syncs_filters_and_records_reproducible_experiment_metadata() -> Non
         {
             "dataset": suite.dataset_name,
             "version_id": "version-9",
-            "splits": ["plan-merge-duplicate-observations"],
+            "splits": ["dedup-merge-same-parameter"],
         }
     ]
     call = experiments.calls[0]
@@ -452,7 +448,7 @@ def test_run_syncs_filters_and_records_reproducible_experiment_metadata() -> Non
 
 
 def test_solve_and_patch_evaluators_keep_na_separate_from_zero() -> None:
-    """Scenario: later suites use the same explicit 1/0/N/A score semantics."""
+    """Solve and Patch preserve the same explicit 1/0/N/A score semantics."""
     from evaluations.agents.patch.suite import generators_evaluator
     from evaluations.agents.solve.suite import (
         application_evaluator,
@@ -511,22 +507,23 @@ def test_solve_and_patch_evaluators_keep_na_separate_from_zero() -> None:
     assert (patch_fail.score, patch_fail.label) == (0, "not_satisfied")
 
 
-def test_evaluation_modules_do_not_import_database_or_target_http_clients() -> None:
-    """Scenario: isolated Agent Evals cannot silently acquire live side effects."""
+def test_evaluation_modules_do_not_import_database_or_send_target_http() -> None:
+    """Temporary Adapters keep experiments isolated from production side effects."""
     from pathlib import Path
 
-    evaluation_root = Path(__file__).parents[1] / "evaluations"
+    root = Path(__file__).parents[1] / "evaluations"
     source = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in evaluation_root.rglob("*.py")
+        for path in root.rglob("*.py")
     )
-
     assert "restscope.db" not in source
-    assert "requests." not in source
+    assert "TargetHTTPTransport" not in source
+    assert "import requests" not in source
+    assert "from requests" not in source
 
 
 def test_loopback_phoenix_client_ignores_environment_http_proxy() -> None:
-    """Scenario: local Dataset traffic reaches Phoenix instead of a proxy."""
+    """Local Dataset traffic reaches Phoenix instead of an HTTP proxy."""
     from evaluations.cli import _client
     from restscope.restscope_config import TracingConfig
 
@@ -546,12 +543,12 @@ def test_loopback_phoenix_client_ignores_environment_http_proxy() -> None:
 
 
 def test_missing_llm_role_configuration_fails_before_an_experiment() -> None:
-    """Scenario: a globally unusable model is not mislabeled as one bad sample."""
+    """A globally unusable Dedup model is not mislabeled as one bad sample."""
     from evaluations.cli import _require_configured_model
     from restscope.llm import LLMModelConfig
 
     model = LLMModelConfig(
-        role="operation_smoke_plan",
+        role="operation_smoke_failure_dedup",
         provider="deepseek",
         model="",
         enabled=False,

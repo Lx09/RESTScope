@@ -52,14 +52,13 @@ class _SmokeCoordinator:
         status = self.statuses.pop(0)
         passed_stop_reasons = {
             "passed": "success_rate_reached",
-            "planner_no_debug": "planner_no_debug",
             "no_patch_applied": "no_patch_applied",
         }
         result_status = (
             "passed"
             if status in passed_stop_reasons
             else "errored"
-            if status == "plan_budget_exhausted"
+            if status == "dedup_budget_exhausted"
             else status
         )
         reports = []
@@ -91,8 +90,8 @@ class _SmokeCoordinator:
             ),
             batch_reports=reports,
             failure_kind=(
-                "plan_budget_exhausted"
-                if status == "plan_budget_exhausted"
+                "dedup_budget_exhausted"
+                if status == "dedup_budget_exhausted"
                 else "unsupported_operation"
                 if result_status == "unsupported"
                 else "operation_error"
@@ -219,30 +218,6 @@ def test_supervisor_exhausts_retries_without_interrupting_other_operations() -> 
         3,
     ]
     assert report.attempts[-1].failure_kind == "operation_error"
-    assert report.unattempted_operations == []
-
-
-def test_planner_no_debug_satisfies_operation_without_interrupting_others() -> None:
-    """A Planner no-debug result is a passed Operation Smoke outcome."""
-    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
-
-    smoke = _SmokeCoordinator(["planner_no_debug", "passed"])
-
-    report = RESTScopeMainGraph(
-        operation_smoke_coordinator=smoke,
-        tool_context=_context(),
-    ).run(RESTScopeRunRequest(max_operation_attempts=1))
-
-    assert (report.status, report.stop_reason) == ("passed", "completed")
-    assert [request.operation_key for request in smoke.requests] == [
-        "GET /first",
-        "POST /second",
-    ]
-    assert [attempt.disposition for attempt in report.attempts] == [
-        "satisfied",
-        "satisfied",
-    ]
-    assert report.attempts[0].smoke_result.stop_reason == "planner_no_debug"
     assert report.unattempted_operations == []
 
 

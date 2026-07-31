@@ -1,7 +1,7 @@
 # Operation Smoke Agent Evaluations
 
 This directory evaluates the three LLM decision components independently:
-`SmokePlanAgent`, `FailureSolveAgent`, and `ParameterPatchAgent`.
+`FailureDedupAgent`, `FailureSolveAgent`, and `ParameterPatchAgent`.
 
 The repository YAML files are the source of truth. A run synchronizes them into
 one Phoenix Dataset per Agent, starts a native Phoenix Experiment, invokes the
@@ -20,7 +20,7 @@ docker compose -f compose.phoenix.yaml up -d
 
 The existing `.env` supplies the THINK/FAST DeepSeek settings and Phoenix
 endpoint. Experiment runs always enable RESTScope tracing and use the Phoenix
-projects `restscope-evals-plan`, `restscope-evals-solve`, or
+projects `restscope-evals-dedup`, `restscope-evals-solve`, or
 `restscope-evals-patch`.
 
 ## Commands
@@ -30,11 +30,11 @@ projects `restscope-evals-plan`, `restscope-evals-solve`, or
 uv run --group evaluation python -m evaluations list
 
 # Synchronize one Dataset, or use "all".
-uv run --group evaluation python -m evaluations sync plan
+uv run --group evaluation python -m evaluations sync dedup
 
 # One cheap exploratory run.
-uv run --group evaluation python -m evaluations run plan \
-  --scenario plan-merge-duplicate-observations \
+uv run --group evaluation python -m evaluations run dedup \
+  --scenario dedup-merge-same-parameter \
   --prompt current --repetitions 1 --seed 0
 
 # A prompt comparison keeps all three repetitions.
@@ -55,9 +55,8 @@ a stable unique `scenario_id`, replace all input facts, and declare only the
 independent properties that should be scored. A missing expected property is
 reported as `not_applicable` and does not receive a numeric score.
 
-Plan Scenario `catalog` and `histories` describe the bounded candidate window
-returned before the model call; Planner no longer queries them with a tool.
-Solve still uses scripted Parameter Memory, HTTP Probe, and nested Patch tools.
+Dedup Scenarios contain current-Batch cases only. Solve still uses scripted
+Parameter Memory, HTTP Probe, and nested Patch tools.
 All three production Agents render Scenario facts through `restscope.context`,
 so prompt variants compare the same compact text path used by the App.
 

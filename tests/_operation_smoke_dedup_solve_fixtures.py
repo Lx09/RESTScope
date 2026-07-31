@@ -1,4 +1,4 @@
-"""Shared fixtures for Operation Smoke Plan & Solve tests."""
+"""Shared fixtures for Operation Smoke Dedup, Solve, and Patch tests."""
 
 from __future__ import annotations
 
@@ -58,11 +58,9 @@ def smoke_config():
 
 def smoke_report(*, long_value: str | None = None):
     from restscope.testing import (
-        BatchFailureReport,
         GeneratedNodeValue,
         GeneratedTestCase,
         OperationExecutionReport,
-        UniqueFailureMessage,
     )
     from restscope.testing.models import (
         PreparedRequestSummary,
@@ -113,15 +111,6 @@ def smoke_report(*, long_value: str | None = None):
         status_code_counts={"404": 1},
         error_count=0,
         observed_2xx=False,
-        failure_report=BatchFailureReport(
-            unique_failure_messages=[
-                UniqueFailureMessage(
-                    failure_id="f1",
-                    message="HTTP 404: Project not found",
-                    case_ids=["case_1"],
-                )
-            ]
-        ),
     )
 
 

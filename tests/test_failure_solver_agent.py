@@ -22,7 +22,7 @@ from restscope.operation_smoke.parameter_patch import (
 from restscope.testing import InputGeneratorPatch
 from restscope.testing.models import ConstantGenerator
 
-from tests._operation_smoke_plan_solve_fixtures import smoke_config
+from tests._operation_smoke_dedup_solve_fixtures import smoke_config
 
 
 class StubClient:
@@ -256,8 +256,7 @@ def _request():
             "todo_id": "T1",
             "failure_id": "db-failure-1",
             "failure": "Project identifier is rejected.",
-            "cases": [
-                {
+            "test_case": {
                     "case_id": "case-a",
                     "generated_test_case": {
                         "path_parameters": {"projectId": "missing"},
@@ -276,12 +275,10 @@ def _request():
                         },
                     },
                     "response": {"status_code": 404},
-                }
-            ],
+                },
         },
         operation={"method": "GET", "path": "/projects/{projectId}"},
         generator_config={"revision": 1},
-        current_batch={"run_id": "run-2", "status_code_counts": {"404": 1}},
     )
 
 
@@ -451,17 +448,18 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert patch_factory.created[0].calls[0]["random_seed"] == 731
     assert patch_factory.created[0].calls[0]["task"].prior_attempts
     initial_prompt = client.requests[0].messages[1].content
-    assert "CURRENT FAILURE CASES" in initial_prompt
+    assert "## Current Failure Test Case — UNTRUSTED" in initial_prompt
+    assert "```json" in initial_prompt
     assert "path.projectId" in initial_prompt
-    assert "path_parameters.projectId=string:\"missing\"" in initial_prompt
-    assert "query.min_access_level=int:25" in initial_prompt
-    assert "headers.X-Scenario=string:\"generated\"" in initial_prompt
+    assert '"projectId": "missing"' in initial_prompt
+    assert '"min_access_level": 25' in initial_prompt
+    assert '"X-Scenario": "generated"' in initial_prompt
     assert "Authorization" not in initial_prompt
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
     assert '{"' not in initial_prompt
     memory_feedback = client.requests[1].messages[-1].content
-    assert memory_feedback.startswith("PARAMETER path.projectId")
+    assert memory_feedback.startswith("## PARAMETER path.projectId — UNTRUSTED")
     assert '{"' not in memory_feedback
 
 

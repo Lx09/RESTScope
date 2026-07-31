@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
-from restscope.context import AgentContext, ContextLimits
+from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
     LLMModelConfig,
@@ -673,10 +673,19 @@ class ResourceIdentifierTracker:
         )
         if errors:
             first_context.append_assistant(response)
+            feedback = CompactTextWriter(max_value_chars=500)
+            feedback.section("Correction Required")
+            feedback.text("result", "The previous JSON could not be used.")
+            feedback.section("Problems", untrusted=True)
+            for error in errors[:10]:
+                feedback.text("problem", error)
+            feedback.section("Required Fix")
+            feedback.text(
+                "instruction",
+                "Return one complete corrected JSON object.",
+            )
             first_context.append_feedback(
-                "Your previous JSON could not be used.\n"
-                + "\n".join(f"- {error}" for error in errors[:10])
-                + "\nReturn one corrected JSON object."
+                feedback.render(max_chars=3_000).text
             )
             repaired, repair_errors, _response = self._invoke_selection(
                 first_context,

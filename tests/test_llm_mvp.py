@@ -59,7 +59,7 @@ def test_operation_smoke_phases_select_independent_models() -> None:
     )
 
     for role, expected_model in (
-        ("operation_smoke_plan", "thinking-model"),
+        ("operation_smoke_failure_dedup", "thinking-model"),
         ("operation_smoke_failure_solve", "thinking-model"),
         ("parameter_patch_agent", "fast-model"),
     ):
@@ -75,7 +75,7 @@ def test_llm_model_config_uses_large_context_defaults() -> None:
     from restscope.llm import LLMModelConfig
 
     model = LLMModelConfig(
-        role="operation_smoke_plan",
+        role="operation_smoke_failure_dedup",
         provider="stub",
         model="think",
     )

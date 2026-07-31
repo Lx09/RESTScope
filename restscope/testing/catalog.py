@@ -355,11 +355,43 @@ def prepare_accepted_generator_patch(
         current,
         current.active_media_type,
     )
+    nodes = {
+        node.input_node_id: node
+        for node in current.snapshot.input_nodes
+    }
+    configs_by_id = {item.input_node_id: item for item in updated}
+    selected_node_ids = _effective_node_ids(
+        _selected_node_ids(current, current.active_media_type),
+        nodes=nodes,
+        configs=configs_by_id,
+    )
+    invalid_containers = _container_configuration_errors(
+        nodes=nodes,
+        configs=configs_by_id,
+        selected_node_ids=selected_node_ids,
+    )
+    container_node_ids = {
+        node.input_node_id
+        for node in nodes.values()
+        if node.schema_contract is not None
+        and (
+            _has_type(node.schema_contract, "object")
+            or bool(node.schema_contract.properties)
+        )
+    }
     remaining_reasons.extend(
         reason
         for reason in current.disabled_reasons
         if reason.recoverable
         and reason.input_node_id not in patched_node_ids
+        # A container-level default failure can be repaired by changing one of
+        # its child Generators. Re-evaluate the complete accepted Generator set
+        # instead of requiring the Patch to redundantly target the parent.
+        and not (
+            reason.code == "default_generator_unavailable"
+            and reason.input_node_id in container_node_ids
+            and reason.input_node_id not in invalid_containers
+        )
     )
     # The same condition can come from the frozen contract and the previous
     # catalog.  Keep one readable reason rather than accumulating duplicates.
