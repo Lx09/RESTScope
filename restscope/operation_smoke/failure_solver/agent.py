@@ -67,6 +67,13 @@ from .schemas import (
 
 _MEMORY_TOOL_NAME = "lookup_parameter_history"
 _PATCH_TOOL_NAME = "generate_parameter_patch"
+_READ_ONLY_QUERY_TOOL_NAMES = {
+    _MEMORY_TOOL_NAME,
+    CATALOG_QUERY_TOOL_NAME,
+}
+_MAX_READ_ONLY_TOOL_CALLS_PER_OUTPUT = 8
+
+
 class HTTPProbe(Protocol):
     """Describe the HTTP capability restricted to the current operation."""
 
@@ -349,7 +356,13 @@ class FailureSolveSession:
                         messages=self.context.messages_for_request(self.model),
                         temperature=0,
                         max_tokens=self.model.max_tokens,
-                        response_format="json",
+                        # Tool calls remain provider-owned. When the model
+                        # returns a terminal decision instead, the authoritative
+                        # DTO schema prevents it from guessing wrapper names or
+                        # omitting the investigation fields required by Memory.
+                        response_format="json_schema",
+                        json_schema=FailureSolveDecision.model_json_schema(),
+                        json_schema_name="FailureSolveDecision",
                         tools=[] if checkpoint else self._tool_specs(),
                         tool_choice="none" if checkpoint else "auto",
                         timeout_seconds=self.model.timeout_seconds,
@@ -364,22 +377,29 @@ class FailureSolveSession:
                     if errors:
                         self._append_correction(response, errors)
                         continue
-                    call = response.tool_calls[0]
+
+                    # DeepSeek can return several independent lookup calls in
+                    # one assistant message.  They have already been validated
+                    # as a bounded, read-only group, so retain the whole group
+                    # and attach one provider-required result per call.  Patch
+                    # and HTTP tools never enter this branch as a group because
+                    # they may create work or mutate the target API.
                     self.context.append_assistant(response)
-                    result = self._execute_tool(call)
-                    self.context.append_tool_result(
-                        result.name,
-                        result.tool_call_id,
-                        (
-                            tool_result_json(result)
-                            if result.name
-                            in {
-                                CATALOG_QUERY_TOOL_NAME,
-                                HTTP_REQUEST_TOOL_NAME,
-                            }
-                            else _tool_result_text(result)
-                        ),
-                    )
+                    for call in response.tool_calls:
+                        result = self._execute_tool(call)
+                        self.context.append_tool_result(
+                            result.name,
+                            result.tool_call_id,
+                            (
+                                tool_result_json(result)
+                                if result.name
+                                in {
+                                    CATALOG_QUERY_TOOL_NAME,
+                                    HTTP_REQUEST_TOOL_NAME,
+                                }
+                                else _tool_result_text(result)
+                            ),
+                        )
                     continue
 
                 decision, errors = self._decision(response)
@@ -444,7 +464,10 @@ class FailureSolveSession:
         self.context.append_feedback(
             "SOLVE OUTPUT INVALID\n"
             + "\n".join(f"issue | {error}" for error in errors)
-            + "\nContinue with one valid tool call or one complete terminal JSON decision."
+            + (
+                "\nContinue with one or more read-only query calls, one "
+                "Patch/HTTP call, or one complete terminal JSON decision."
+            )
         )
 
     def _tool_specs(self) -> list[ToolSpec]:
@@ -468,16 +491,43 @@ class FailureSolveSession:
         errors: list[str] = []
         if checkpoint:
             errors.append("Tools are unavailable at a continuation checkpoint.")
-        if len(response.tool_calls) != 1:
-            errors.append("Call exactly one Solve tool per model output.")
         if response.parsed_json is not None or (
             response.content is not None and response.content.strip()
         ):
             errors.append("Do not mix a tool call with a Solve decision.")
-        if len(response.tool_calls) != 1:
+
+        calls = response.tool_calls
+        call_ids = [call.id for call in calls]
+        if len(call_ids) != len(set(call_ids)):
+            errors.append("Every Solve tool call must have a unique call id.")
+
+        if len(calls) > 1:
+            if any(call.name not in _READ_ONLY_QUERY_TOOL_NAMES for call in calls):
+                errors.append(
+                    "Call exactly one Patch or HTTP tool per model output; "
+                    "only read-only Catalog and Parameter Memory queries may "
+                    "be grouped."
+                )
+            if len(calls) > _MAX_READ_ONLY_TOOL_CALLS_PER_OUTPUT:
+                errors.append(
+                    "At most 8 read-only query calls may be grouped in one "
+                    "model output."
+                )
+        if errors:
             return errors
 
-        call = response.tool_calls[0]
+        for call in calls:
+            errors.extend(self._single_tool_errors(call))
+        return errors
+
+    def _single_tool_errors(self, call: ToolCall) -> list[str]:
+        """Validate one call after the surrounding output is proven safe.
+
+        The caller validates the whole group before executing anything.  This
+        helper therefore reports argument and ordering mistakes without
+        allowing a partly valid group to change session or target state.
+        """
+        errors: list[str] = []
         if call.name == _MEMORY_TOOL_NAME:
             handles = call.arguments.get("input_handles")
             if (
@@ -879,7 +929,8 @@ Investigate exactly one Operation Smoke Failure.
 
 1. Read the representative `TC*` reference and preloaded Failure history.
 2. Query `query_test_case_catalog` for exact request values, response fields,
-   or Failure Messages needed from any currently listed `TC*`.
+   or Failure Messages needed from any currently listed `TC*`. Independent
+   Catalog and Parameter Memory reads may be grouped in one output.
 3. Before patching an input, call `lookup_parameter_history`.
 4. Probe HTTP only when existing evidence cannot distinguish the root cause.
 5. Call `generate_parameter_patch` with confirmed, testable requirements.
@@ -887,7 +938,9 @@ Investigate exactly one Operation Smoke Failure.
 
 # Rules
 
-- One output calls exactly one tool or returns one decision, never both.
+- One output may group only read-only Catalog/Parameter Memory queries.
+- Patch and HTTP outputs call exactly one tool.
+- A tool output and a terminal decision are never mixed.
 - Copy semantic handles exactly from tool-schema enums.
 - Slash-separated `input_node_id` values are not semantic handles.
 - A replacement must remain compatible with prior Patches and conflicts.

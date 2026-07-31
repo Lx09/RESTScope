@@ -183,19 +183,6 @@ class ParameterPatchAgent:
                     }
                 )
                 decision, errors = self._parse(response)
-                if decision is None:
-                    fingerprint = _invalid_output_fingerprint(response)
-                    if fingerprint == last_invalid_fingerprint:
-                        repeated_invalid_count += 1
-                    else:
-                        last_invalid_fingerprint = fingerprint
-                        repeated_invalid_count = 1
-                else:
-                    # Valid DTOs may still fail compilation or sampling, but
-                    # those failures describe a new executable candidate rather
-                    # than the repeated structural mistake guarded here.
-                    last_invalid_fingerprint = None
-                    repeated_invalid_count = 0
                 if decision is not None and not errors:
                     if decision.action == "accept":
                         if validated is None:
@@ -256,6 +243,11 @@ class ParameterPatchAgent:
                         except (KeyError, TypeError, ValueError) as exc:
                             errors = [str(exc)]
                         else:
+                            # A compiled and sampled candidate is genuine new
+                            # progress. Clear any earlier invalid streak before
+                            # asking the model to review the samples.
+                            last_invalid_fingerprint = None
+                            repeated_invalid_count = 0
                             context.append_assistant(response)
                             context.append_feedback(
                                 _sample_feedback(
@@ -269,6 +261,20 @@ class ParameterPatchAgent:
                             continue
 
                 latest_errors = errors or ["The Patch output could not be used."]
+                # DTO-valid proposals can still violate Solve's affected-input
+                # boundary, reference pools, variant selection, or executable
+                # sampling rules. Repeating the same rejected candidate with
+                # the same validation result is no more useful than repeating
+                # malformed JSON, so both share the three-strike guard.
+                fingerprint = _invalid_output_fingerprint(
+                    response,
+                    errors=latest_errors,
+                )
+                if fingerprint == last_invalid_fingerprint:
+                    repeated_invalid_count += 1
+                else:
+                    last_invalid_fingerprint = fingerprint
+                    repeated_invalid_count = 1
                 if repeated_invalid_count >= 3:
                     failure = ParameterPatchFailure(
                         todo_id=task.todo_id,
@@ -375,12 +381,18 @@ def _invalid_output_feedback(errors: list[str]) -> str:
     return writer.render(max_chars=12_000).text
 
 
-def _invalid_output_fingerprint(response: LLMResponse) -> str:
-    """Identify semantically identical malformed decisions across retries.
+def _invalid_output_fingerprint(
+    response: LLMResponse,
+    *,
+    errors: list[str],
+) -> str:
+    """Identify semantically identical rejected attempts across retries.
 
     Parsed JSON is serialized with stable key ordering so property order alone
-    does not evade the guard. If the provider could not parse JSON, the raw
-    content becomes the comparison value instead.
+    does not evade the guard. Validation errors are part of the identity so a
+    candidate that reaches a genuinely different compiler or sampling result
+    starts a new streak. If the provider could not parse JSON, raw content is
+    used as the candidate value.
     """
 
     value = (
@@ -389,7 +401,7 @@ def _invalid_output_fingerprint(response: LLMResponse) -> str:
         else response.content
     )
     normalized = json.dumps(
-        value,
+        {"candidate": value, "errors": errors},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

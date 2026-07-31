@@ -39,6 +39,47 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             client=client,
         )
 
+    def invoke(self, request: LLMRequest) -> LLMResponse:
+        """Retry one incomplete thinking-mode tool response before it is used.
+
+        DeepSeek requires ``reasoning_content`` from a tool-calling assistant
+        message to be replayed verbatim in every later request.  The field
+        therefore cannot be invented or replaced with an empty value.  A retry
+        is safe here because normalization fails before RESTScope returns the
+        tool call to an Agent, so no tool or target-API side effect has run.
+
+        Any second incomplete response, or any other provider error, still
+        propagates to the caller instead of creating an unbounded retry loop.
+        """
+        try:
+            return super().invoke(request)
+        except DeepSeekCompatibilityError as exc:
+            if exc.code != "deepseek_reasoning_content_missing":
+                raise
+            # A malformed request history is deterministic and cannot improve
+            # on retry. Only retry when the history was complete, which means
+            # the provider's newly returned tool response omitted the field.
+            if any(
+                message.role == "assistant"
+                and message.tool_calls
+                and any(
+                    not call.provider_context.get("reasoning_content")
+                    for call in message.tool_calls
+                )
+                for message in request.messages
+            ):
+                raise
+
+        response = super().invoke(request)
+        return response.model_copy(
+            update={
+                "metadata": {
+                    **response.metadata,
+                    "provider_retry_count": 1,
+                }
+            }
+        )
+
     def _request_kwargs(self, request: LLMRequest) -> dict[str, Any]:
         """
         Handle request kwargs as part of provider-independent language-model invocation.

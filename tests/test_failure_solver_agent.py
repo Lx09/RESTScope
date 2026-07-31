@@ -589,7 +589,78 @@ def test_invalid_multiple_tool_calls_are_not_replayed_without_results() -> None:
         for message in retry_messages
         for call in message.tool_calls
     )
-    assert "Call exactly one Solve tool" in retry_messages[-1].content
+    assert "Call exactly one Patch or HTTP tool" in retry_messages[-1].content
+
+
+def test_multiple_read_only_catalog_queries_make_progress_in_one_output() -> None:
+    """Two exact Catalog reads should not be discarded as an invalid output.
+
+    DeepSeek commonly emits several independent Catalog lookups together when
+    it needs to compare a request value with the parsed Failure message.  Both
+    calls are local and read-only, so rejecting the complete output creates a
+    correction loop without protecting any mutable state.
+    """
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="catalog-parameter",
+                        name="query_test_case_catalog",
+                        arguments={
+                            "action": "parameter_value",
+                            "case_ids": ["TC1"],
+                            "name": "path.projectId",
+                        },
+                    ),
+                    ToolCall(
+                        id="catalog-failure",
+                        name="query_test_case_catalog",
+                        arguments={
+                            "action": "failure_messages",
+                            "case_ids": ["TC1"],
+                        },
+                    ),
+                    ToolCall(
+                        id="parameter-memory",
+                        name="lookup_parameter_history",
+                        arguments={"input_handles": ["path.projectId"]},
+                    ),
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    retry_messages = client.requests[1].messages
+    catalog_results = [
+        message
+        for message in retry_messages
+        if message.role == "tool"
+        and message.name == "query_test_case_catalog"
+    ]
+    assert {message.tool_call_id for message in catalog_results} == {
+        "catalog-parameter",
+        "catalog-failure",
+    }
+    assert any(
+        message.role == "tool"
+        and message.name == "lookup_parameter_history"
+        and message.tool_call_id == "parameter-memory"
+        for message in retry_messages
+    )
 
 
 def test_invalid_tool_arguments_are_not_replayed_without_a_result() -> None:
@@ -670,6 +741,37 @@ def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
     assert outcome.status == "applied_patch"
     assert outcome.outputs_used == 5
     assert len(client.requests) == 3
+
+
+def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
+    """Provider guidance should expose the exact terminal JSON contract.
+
+    Tools may still be selected in the same request. When the model chooses a
+    terminal decision instead, the provider-owned schema prevents repeated
+    guesses such as a top-level ``decision`` field or an incomplete
+    ``apply_patch`` object.
+    """
+    client = StubClient([_terminal("no_patch")])
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    request = client.requests[0]
+    assert request.response_format == "json_schema"
+    assert request.json_schema_name == "FailureSolveDecision"
+    assert request.json_schema["properties"]["action"]["enum"] == [
+        "apply_patch",
+        "no_patch",
+        "conflict",
+        "continue",
+    ]
 
 
 def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> None:
