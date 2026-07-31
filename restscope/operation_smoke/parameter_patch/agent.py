@@ -365,6 +365,11 @@ def _compile_patch(
                 strategy=strategy,
             )
         )
+    _validate_variant_branch_updates(
+        config=config,
+        updates=updates,
+        handle_by_node=semantic.handle_by_node,
+    )
     constraints = [
         _compile_constraint(
             change.expression,
@@ -382,6 +387,125 @@ def _compile_patch(
     )
     preview_generator_patch(config, patch.updates)
     return patch
+
+
+def _validate_variant_branch_updates(
+    *,
+    config: OperationGeneratorConfig,
+    updates: list[InputGeneratorPatch],
+    handle_by_node: Mapping[str, str],
+) -> None:
+    """Require a deterministic parent selection for every changed branch.
+
+    Updating only a child below ``oneOf`` or ``anyOf`` leaves the parent
+    Variant free to choose another branch. Such a candidate can look correct
+    in some samples while remaining unable to guarantee the requested repair.
+    The model must therefore patch every enclosing Variant with exclusive
+    weights that select the changed child's branch.
+
+    Args:
+        config: Frozen operation inputs and their current Generators.
+        updates: Candidate Generator changes compiled from semantic handles.
+        handle_by_node: Model-facing names used in actionable error messages.
+
+    Raises:
+        ValueError: A changed branch has no explicit exclusive parent Variant
+            selection. No Generator state is changed by this validation.
+    """
+    nodes = {
+        item.input_node_id: item
+        for item in config.snapshot.input_nodes
+    }
+    current_configs = {
+        item.input_node_id: item
+        for item in config.configs
+    }
+    updates_by_node = {
+        item.input_node_id: item
+        for item in updates
+    }
+
+    for changed_node_id in updates_by_node:
+        branch_node_id = changed_node_id
+        current = nodes[changed_node_id]
+        while current.parent_node_id is not None:
+            parent = nodes[current.parent_node_id]
+            parent_config = current_configs[parent.input_node_id]
+            if parent_config.strategy.type == "variant":
+                parent_update = updates_by_node.get(parent.input_node_id)
+                parent_strategy = (
+                    parent_update.strategy
+                    if parent_update is not None
+                    else None
+                )
+                parent_handle = handle_by_node.get(
+                    parent.input_node_id,
+                    parent.canonical_path,
+                )
+                if (
+                    parent_strategy is None
+                    or parent_strategy.type != "variant"
+                ):
+                    raise ValueError(
+                        f"{parent_handle} must select the changed variant "
+                        "branch explicitly"
+                    )
+
+                branch_children = sorted(
+                    (
+                        node
+                        for node in nodes.values()
+                        if node.parent_node_id == parent.input_node_id
+                        and (
+                            "/oneOf/" in node.canonical_path
+                            or "/anyOf/" in node.canonical_path
+                        )
+                    ),
+                    key=_variant_branch_index,
+                )
+                selected_index = next(
+                    (
+                        index
+                        for index, node in enumerate(branch_children)
+                        if node.input_node_id == branch_node_id
+                    ),
+                    None,
+                )
+                weights = parent_strategy.branch_weights
+                if (
+                    selected_index is None
+                    or selected_index >= len(weights)
+                    or weights[selected_index] <= 0
+                    or any(
+                        weight > 0
+                        for index, weight in enumerate(weights)
+                        if index != selected_index
+                    )
+                ):
+                    raise ValueError(
+                        f"{parent_handle} branch_weights must exclusively "
+                        "select the changed branch"
+                    )
+            branch_node_id = parent.input_node_id
+            current = parent
+
+
+def _variant_branch_index(node: Any) -> int:
+    """Return the numeric OpenAPI branch position used by Variant weights.
+
+    Args:
+        node: One frozen input node whose canonical path ends in a branch
+            index.
+
+    Returns:
+        The integer branch position, or zero for an unexpected non-numeric
+        suffix so later structural validation can reject a mismatch safely.
+    """
+    tail = node.canonical_path.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        return int(tail)
+    except ValueError:
+        return 0
 
 
 def _compile_constraint(

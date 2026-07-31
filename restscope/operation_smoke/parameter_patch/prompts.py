@@ -181,6 +181,10 @@ def build_parameter_patch_prompt(
             resource=option.canonical_resource,
             value_name=option.value_name,
             producers=option.producer_operation_keys,
+            status=option.producer_status_code,
+            media=option.producer_media_type,
+            field=option.source_field,
+            selector=option.source_selector,
         )
 
     writer.section("PRIOR COMPATIBILITY", untrusted=True)

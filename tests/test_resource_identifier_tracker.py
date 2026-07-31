@@ -196,6 +196,26 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     ).recommended_id == "secret-abc123"
 
 
+def test_acknowledgement_only_response_skips_identifier_llm(
+    tmp_path: Path,
+) -> None:
+    """A DELETE acceptance message is not resource-identifier evidence."""
+    client = StubLLMClient()
+    tracker, catalog = _tracker(tmp_path, client)
+    observation = _observation(
+        operation_key="DELETE /projects/{id}",
+        method="DELETE",
+        path="/projects/{id}",
+        body={"message": "202 Accepted"},
+    ).model_copy(update={"status_code": 202})
+
+    result = tracker.observe(observation)
+
+    assert result.status == "ignored"
+    assert client.requests == []
+    assert catalog.list_rules("DELETE /projects/{id}") == []
+
+
 def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
     tmp_path: Path,
 ) -> None:
@@ -401,7 +421,7 @@ def test_null_identifier_selection_is_retried_without_negative_rule(
         operation_key="GET /health",
         method="GET",
         path="/health",
-        body={"status": "ok"},
+        body={"version": "v1"},
     )
 
     assert tracker.observe(observation).status == "ignored"

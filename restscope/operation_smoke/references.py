@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from hashlib import sha256
 
 from restscope.api_behavior_monitor import (
@@ -167,6 +168,17 @@ class BehaviorMonitorReferenceValues:
             if not compatible:
                 continue
             for resource, lookup in populated_resources:
+                if not _resource_matches_input(
+                    canonical_resource=resource.canonical_name,
+                    aliases=lookup.aliases,
+                    input_names=_input_names(
+                        node=node,
+                        nodes=nodes,
+                        parameters=parameters,
+                    ),
+                    operation_path=config.snapshot.path,
+                ):
+                    continue
                 if not _resource_pool_compatible(
                     expected_type,
                     [value.value_type for value in lookup.identifiers],
@@ -299,6 +311,131 @@ def _input_name(
     if parameter is not None:
         return parameter.name
     return node.canonical_path.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _input_names(
+    *,
+    node: InputNodeSnapshot,
+    nodes: dict[str, InputNodeSnapshot],
+    parameters: dict[str, ParameterSnapshot],
+) -> list[str]:
+    """Collect names that give one nested input its semantic meaning.
+
+    Args:
+        node: The candidate input that may consume an observed identifier.
+        nodes: All frozen inputs keyed by their opaque runtime identity.
+        parameters: OpenAPI Parameter metadata keyed by input identity.
+
+    Returns:
+        The leaf name followed by unique ancestor names, without changing the
+        frozen operation snapshot.
+    """
+    names: list[str] = []
+    current: InputNodeSnapshot | None = node
+    while current is not None:
+        name = _input_name(
+            node=current,
+            parameter=parameters.get(current.input_node_id),
+        )
+        if name not in names:
+            names.append(name)
+        current = (
+            nodes.get(current.parent_node_id)
+            if current.parent_node_id is not None
+            else None
+        )
+    return names
+
+
+def _resource_matches_input(
+    *,
+    canonical_resource: str,
+    aliases: list[str],
+    input_names: list[str],
+    operation_path: str,
+) -> bool:
+    """Allow identifier pools only where names identify the same resource.
+
+    A specific input such as ``project_id`` can match the project catalog
+    directly. A generic path input named only ``id`` is accepted when the
+    current operation's final static path segment names that resource. This
+    keeps project IDs away from unrelated scalar inputs such as
+    ``min_access_level`` while preserving common ``/projects/{id}`` schemas.
+
+    Args:
+        canonical_resource: Stable resource name from the monitor catalog.
+        aliases: Other observed names for the same resource.
+        input_names: Leaf and ancestor names for the consuming input.
+        operation_path: Current OpenAPI path template used to interpret a
+            generic ``id`` input.
+
+    Returns:
+        Whether the resource identifier pool is semantically safe to offer.
+    """
+    resource_names = {
+        _singular_resource_name(value)
+        for value in [canonical_resource, *aliases]
+        if value
+    }
+    normalized_inputs = {
+        _normalize_reference_name(value)
+        for value in input_names
+        if value
+    }
+    for resource_name in resource_names:
+        if normalized_inputs.intersection(
+            {
+                resource_name,
+                f"{resource_name}id",
+                f"{resource_name}identifier",
+            }
+        ):
+            return True
+
+    if normalized_inputs.intersection({"id", "identifier"}):
+        static_segments = [
+            segment
+            for segment in operation_path.strip("/").split("/")
+            if segment
+            and not (
+                segment.startswith("{")
+                and segment.endswith("}")
+            )
+        ]
+        operation_resource = _singular_resource_name(
+            static_segments[-1] if static_segments else ""
+        )
+        return operation_resource in resource_names
+    return False
+
+
+def _normalize_reference_name(value: str) -> str:
+    """Return a lowercase alphanumeric name for semantic comparison.
+
+    Args:
+        value: An OpenAPI or monitor-provided name.
+
+    Returns:
+        The normalized name. No external or persistent state is changed.
+    """
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _singular_resource_name(value: str) -> str:
+    """Normalize common singular/plural resource spellings.
+
+    Args:
+        value: A canonical resource, alias, or static path segment.
+
+    Returns:
+        A normalized singular spelling used only for conservative matching.
+    """
+    normalized = _normalize_reference_name(value)
+    if normalized.endswith("ies") and len(normalized) > 3:
+        return f"{normalized[:-3]}y"
+    if normalized.endswith("s") and not normalized.endswith("ss"):
+        return normalized[:-1]
+    return normalized
 
 
 def _reference_expected_type(

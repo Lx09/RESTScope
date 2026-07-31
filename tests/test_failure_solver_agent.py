@@ -259,7 +259,22 @@ def _request():
             "cases": [
                 {
                     "case_id": "case-a",
-                    "request": {"path": "/projects/missing"},
+                    "generated_test_case": {
+                        "path_parameters": {"projectId": "missing"},
+                        "query_parameters": {"min_access_level": 25},
+                        "header_parameters": {"X-Scenario": "generated"},
+                        "cookie_parameters": {},
+                        "body": None,
+                        "body_present": False,
+                    },
+                    "request": {
+                        "path": "/projects/missing",
+                        "query_items": [["min_access_level", "25"]],
+                        "headers": {
+                            "Authorization": "[redacted]",
+                            "X-Scenario": "generated",
+                        },
+                    },
                     "response": {"status_code": 404},
                 }
             ],
@@ -438,6 +453,10 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     initial_prompt = client.requests[0].messages[1].content
     assert "CURRENT FAILURE CASES" in initial_prompt
     assert "path.projectId" in initial_prompt
+    assert "path_parameters.projectId=string:\"missing\"" in initial_prompt
+    assert "query.min_access_level=int:25" in initial_prompt
+    assert "headers.X-Scenario=string:\"generated\"" in initial_prompt
+    assert "Authorization" not in initial_prompt
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
     assert '{"' not in initial_prompt
@@ -519,6 +538,90 @@ def test_forged_candidate_ref_is_repaired_without_applying_any_patch() -> None:
     assert "P99" in client.requests[1].messages[-1].content
 
 
+def test_invalid_multiple_tool_calls_are_not_replayed_without_results() -> None:
+    """Rejected calls must not create an invalid provider conversation."""
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="probe-1",
+                        name="restscope.http.request",
+                        arguments={
+                            "method": "GET",
+                            "path": "/projects/known",
+                        },
+                    ),
+                    ToolCall(
+                        id="memory-1",
+                        name="lookup_parameter_history",
+                        arguments={"input_handles": ["path.projectId"]},
+                    ),
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    retry_messages = client.requests[1].messages
+    assert all(
+        call.id not in {"probe-1", "memory-1"}
+        for message in retry_messages
+        for call in message.tool_calls
+    )
+    assert "Call exactly one Solve tool" in retry_messages[-1].content
+
+
+def test_invalid_tool_arguments_are_not_replayed_without_a_result() -> None:
+    """A rejected single call also stays out of the provider conversation."""
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="invalid-memory",
+                        name="lookup_parameter_history",
+                        arguments={"input_handles": []},
+                    )
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    retry_messages = client.requests[1].messages
+    assert all(
+        call.id != "invalid-memory"
+        for message in retry_messages
+        for call in message.tool_calls
+    )
+    assert "input_handles must be a non-empty" in retry_messages[-1].content
+
+
 def test_patch_output_budget_is_part_of_solve_budget() -> None:
     """Scenario: nested Patch exhaustion can consume the final Solve output."""
     failed_patch = ParameterPatchFailure(
@@ -559,6 +662,95 @@ def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
     assert outcome.status == "applied_patch"
     assert outcome.outputs_used == 5
     assert len(client.requests) == 3
+
+
+def test_mutating_failure_solve_does_not_receive_an_http_probe_tool() -> None:
+    """DELETE investigations may reason from evidence but cannot probe targets."""
+    client = StubClient([_terminal("no_patch")])
+    config = smoke_config()
+    config = config.model_copy(
+        update={
+            "operation_key": "DELETE /projects/{projectId}",
+            "snapshot": config.snapshot.model_copy(
+                update={
+                    "operation_key": "DELETE /projects/{projectId}",
+                    "method": "DELETE",
+                }
+            ),
+        }
+    )
+    request = _request().model_copy(
+        update={
+            "operation_key": "DELETE /projects/{projectId}",
+            "operation": {
+                "method": "DELETE",
+                "path": "/projects/{projectId}",
+            },
+        }
+    )
+
+    _agent(
+        client,
+        StubMemory(),
+        StubPatchFactory([]),
+        StubPatchApplication(),
+    ).start(
+        request,
+        config=config,
+        active_constraints=[],
+        case_count=2,
+        random_seed=731,
+    ).advance()
+
+    assert {
+        tool.name for tool in client.requests[0].tools
+    } == {
+        "lookup_parameter_history",
+        "generate_parameter_patch",
+    }
+
+
+def test_solve_reference_cards_distinguish_response_sources() -> None:
+    """Response references expose enough provenance to choose deliberately."""
+    client = StubClient([_terminal("no_patch")])
+    request = _request().model_copy(
+        update={
+            "reference_options": [
+                {
+                    "option_id": "ref-a",
+                    "input_node_id": "path/projectId",
+                    "kind": "response_value",
+                    "value_name": "known_project_id",
+                    "compatible_scalar_type": "string",
+                    "value_count": 4,
+                    "producer_operation_keys": ["GET /projects"],
+                    "producer_status_code": "200",
+                    "producer_media_type": "application/json",
+                    "source_field": "id",
+                    "source_selector": "$[].id",
+                }
+            ]
+        }
+    )
+
+    _agent(
+        client,
+        StubMemory(),
+        StubPatchFactory([]),
+        StubPatchApplication(),
+    ).start(
+        request,
+        config=smoke_config(),
+        active_constraints=[],
+        case_count=2,
+        random_seed=731,
+    ).advance()
+
+    prompt = client.requests[0].messages[1].content
+    assert "producers=string:\"GET /projects\"" in prompt
+    assert "status=string:\"200\"" in prompt
+    assert "media=string:\"application/json\"" in prompt
+    assert "selector=string:\"$[].id\"" in prompt
 
 
 def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:

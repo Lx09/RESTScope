@@ -19,7 +19,7 @@ from restscope.http_transport import (
 )
 from restscope.testing import OperationGeneratorConfig
 
-from .agent import HTTPProbe
+from .agent import HTTPProbe, _READ_ONLY_HTTP_METHODS
 
 
 class CurrentOperationHTTPProbe(HTTPProbe):
@@ -146,6 +146,8 @@ def _scope_error(
     """
     if tool_call.name != HTTP_REQUEST_TOOL_NAME:
         return f"{tool_call.name} is not the allowed HTTP probe tool"
+    if config.snapshot.method.upper() not in _READ_ONLY_HTTP_METHODS:
+        return "HTTP probes are unavailable for mutating operations"
     try:
         HTTPRequestArguments.model_validate(tool_call.arguments)
     except ValidationError as exc:

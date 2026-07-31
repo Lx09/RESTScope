@@ -1,10 +1,11 @@
 """Investigate one Failure and finish with one durable terminal decision.
 
 Failure Solve is the Agent that decides which Parameters caused a Failure and
-whether a Generator Patch should be applied.  It can use three scoped tools:
-read Parameter history, probe only the current HTTP operation, and run a fresh
-Parameter Patch Agent.  Patch candidates remain session-local and have no side
-effects until the model returns ``apply_patch`` with a valid candidate reference.
+whether a Generator Patch should be applied. It can read Parameter history,
+probe the current operation only when the HTTP method is read-only, and run a
+fresh Parameter Patch Agent. Patch candidates remain session-local and have no
+side effects until the model returns ``apply_patch`` with a valid candidate
+reference.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
+from restscope.http_transport import is_sensitive_header
 from restscope.llm import (
     LLMClient,
     LLMModelConfig,
@@ -58,6 +60,7 @@ from .schemas import (
 
 _MEMORY_TOOL_NAME = "lookup_parameter_history"
 _PATCH_TOOL_NAME = "generate_parameter_patch"
+_READ_ONLY_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 class HTTPProbe(Protocol):
@@ -410,8 +413,16 @@ class FailureSolveSession:
         response: LLMResponse,
         errors: list[str],
     ) -> None:
-        """Retain the model output and add compact deterministic repair guidance."""
-        self.context.append_assistant(response)
+        """Add repair guidance without replaying tool calls that never ran.
+
+        A provider requires one tool-result message for every assistant tool
+        call retained in the next request. Validation rejects a whole output
+        before any tool runs, so retaining those calls would create an invalid
+        conversation. Plain structured decisions are safe to retain because
+        they do not require matching tool results.
+        """
+        if not response.tool_calls:
+            self.context.append_assistant(response)
         self.context.append_feedback(
             "SOLVE OUTPUT INVALID\n"
             + "\n".join(f"issue | {error}" for error in errors)
@@ -421,11 +432,15 @@ class FailureSolveSession:
     def _tool_specs(self) -> list[ToolSpec]:
         """Return capabilities whose schemas expose this operation's handles."""
         semantic_handles = sorted(self.semantic_inputs.node_by_handle)
-        return [
+        specs = [
             _parameter_memory_tool_spec(semantic_handles),
             _patch_tool_spec(semantic_handles),
-            self.http_probe.tool_spec(self.config),
         ]
+        # Diagnostic traffic must never add mutations beyond the bounded Smoke
+        # batch that the user explicitly requested.
+        if self.config.snapshot.method.upper() in _READ_ONLY_HTTP_METHODS:
+            specs.append(self.http_probe.tool_spec(self.config))
+        return specs
 
     def _tool_errors(
         self,
@@ -959,15 +974,11 @@ def _solve_context_text(
             media=response.get("media_type"),
             transport=response.get("error"),
         )
-        request_values = case.get("request")
-        if isinstance(request_values, dict):
+        request_values = _failure_request_values(case)
+        if request_values:
             writer.detail(
                 "input",
-                {
-                    key: request_values[key]
-                    for key in ("path_parameters", "query", "headers", "body")
-                    if key in request_values
-                },
+                request_values,
             )
         response_values = {
             key: response[key]
@@ -1028,6 +1039,11 @@ def _solve_context_text(
             values=option.value_count,
             resource=option.canonical_resource,
             value_name=option.value_name,
+            producers=", ".join(option.producer_operation_keys) or None,
+            status=option.producer_status_code,
+            media=option.producer_media_type,
+            field=option.source_field,
+            selector=option.source_selector,
         )
 
     _write_failure_history(
@@ -1036,6 +1052,53 @@ def _solve_context_text(
         handle_by_node=semantic_inputs.handle_by_node,
     )
     return writer.render(max_chars=24_000)
+
+
+def _failure_request_values(case: dict) -> dict:
+    """Project one case's Generator choices without transport credentials.
+
+    Args:
+        case: App-lifetime Batch evidence for one executed request.
+
+    Returns:
+        A compact mapping of generated path, query, safe header, cookie, and
+        optional body inputs. Legacy request-shaped evidence remains supported
+        for older in-memory callers. The source case is not changed.
+    """
+    generated = case.get("generated_test_case")
+    if isinstance(generated, dict):
+        header_parameters = generated.get("header_parameters")
+        header_parameters = (
+            header_parameters
+            if isinstance(header_parameters, dict)
+            else {}
+        )
+        values = {
+            "path_parameters": generated.get("path_parameters", {}),
+            "query": generated.get("query_parameters", {}),
+            "headers": {
+                name: value
+                for name, value in header_parameters.items()
+                if not is_sensitive_header(name)
+            },
+            "cookies": generated.get("cookie_parameters", {}),
+        }
+        if generated.get("body_present"):
+            values["body"] = generated.get("body")
+        return {
+            key: value
+            for key, value in values.items()
+            if value not in ({}, [], None)
+        }
+
+    request_values = case.get("request")
+    if not isinstance(request_values, dict):
+        return {}
+    return {
+        key: request_values[key]
+        for key in ("path_parameters", "query", "headers", "body")
+        if key in request_values
+    }
 
 
 def _write_failure_history(
