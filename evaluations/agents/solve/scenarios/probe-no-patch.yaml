@@ -15,12 +15,7 @@ input:
       todo_id: T2
       failure_id: failure-transient-project
       failure: One known project returned a transient server error.
-      test_case:
-        case_id: transient-project-error
-        failure: unexpected status
-        request:
-          path_parameters: {projectId: 7}
-        response: {status_code: 500}
+      test_case_id: TC1
     operation: {method: GET, path: "/projects/{projectId}"}
     generator_config: {}
   config:
@@ -50,6 +45,13 @@ input:
     summary: One known project returned a transient server error.
     observations: []
     investigations: []
+  catalog_cases:
+    - parameters: {path.projectId: 7}
+      response_body: {message: transient server error}
+      failure:
+        kind: http
+        status_code: 500
+        messages: ["HTTP 500: transient server error"]
   parameter_histories: []
   patch_results: []
   probe_results:

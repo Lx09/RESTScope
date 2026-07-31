@@ -212,7 +212,7 @@ def test_solve_scenarios_use_one_test_case_and_no_current_batch() -> None:
 
     for scenario in SUITES["solve"].load_scenarios():
         request = scenario.input.request
-        assert request.todo.test_case
+        assert request.todo.test_case_id.startswith("TC")
         assert not hasattr(request.todo, "cases")
         assert not hasattr(request, "current_batch")
 

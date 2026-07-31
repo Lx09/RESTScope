@@ -12,37 +12,24 @@ input:
     operation_key: POST /projects
     round_number: 1
     batch_run_id: eval-run-2
-    semantic_parameters: [body.name, body.namespace_id]
-    cases:
-      - case_id: case-name
-        generated_test_case:
-          path_parameters: {}
-          query_parameters: {}
-          header_parameters: {}
-          cookie_parameters: {}
-          body_present: true
-          body: {name: existing, namespace_id: 1}
-        request: {path: /projects}
-        response:
-          status_code: 400
-          media_type: application/json
-          body: '{"message":"name already exists"}'
-      - case_id: case-namespace
-        generated_test_case:
-          path_parameters: {}
-          query_parameters: {}
-          header_parameters: {}
-          cookie_parameters: {}
-          body_present: true
-          body: {name: new, namespace_id: 900001}
-        request: {path: /projects}
-        response:
-          status_code: 404
-          media_type: application/json
-          body: '{"message":"Namespace Not Found"}'
+    case_ids: [TC1, TC2]
+  valid_parameters: [body, body.name, body.namespace_id]
+  catalog_cases:
+    - parameters: {body.name: existing, body.namespace_id: 1}
+      response_body: {message: name already exists}
+      failure:
+        kind: http
+        status_code: 400
+        messages: ["HTTP 400: name already exists"]
+    - parameters: {body.name: new, body.namespace_id: 900001}
+      response_body: {message: Namespace Not Found}
+      failure:
+        kind: http
+        status_code: 404
+        messages: ["HTTP 404: Namespace Not Found"]
   max_outputs: 3
 expected:
   status: deduplicated
   failure_count: 2
   parameter_sets: [[body.name], [body.namespace_id]]
-  representative_case_ids: [case-name, case-namespace]
+  representative_case_ids: [TC1, TC2]
