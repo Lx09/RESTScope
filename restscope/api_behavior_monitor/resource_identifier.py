@@ -54,6 +54,9 @@ MAX_SCHEMA_FORMAT_CHARS = 200
 GENERIC_RESOURCE_WRAPPERS = frozenset(
     {"collection", "data", "items", "results"}
 )
+_ACKNOWLEDGEMENT_FIELD_NAMES = frozenset(
+    {"message", "status", "detail", "success"}
+)
 
 
 class ResourceIdentifierOutputError(RuntimeError):
@@ -626,6 +629,19 @@ class ResourceIdentifierTracker:
         surrounding orchestration remains readable.
         """
         candidates = _identifier_candidates(group.fields.values())
+        # Generic acknowledgement envelopes describe request processing, not
+        # reusable resource identity. Skipping them avoids a model call and
+        # deliberately does not persist a negative extraction rule.
+        if (
+            candidates
+            and any(field.values for field in candidates)
+            and all(
+                _normalize_identifier_name(field.name)
+                in _ACKNOWLEDGEMENT_FIELD_NAMES
+                for field in candidates
+            )
+        ):
+            return None
         suffix_candidates = [
             field
             for field in candidates

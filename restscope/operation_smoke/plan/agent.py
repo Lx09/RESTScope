@@ -13,6 +13,7 @@ import re
 from typing import Protocol
 
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
+from restscope.http_transport import is_sensitive_header
 from restscope.llm import (
     LLMClient,
     LLMModelConfig,
@@ -543,7 +544,36 @@ def _batch_statistics(request: SmokePlanRequest) -> dict:
 
 
 def _necessary_request_values(case: dict) -> dict:
-    """Keep only request inputs that can explain or reproduce the failure."""
+    """Keep generated inputs that can explain or reproduce the failure.
+
+    Execution reports deliberately keep the prepared request small, so its
+    public ``request`` field contains serialized path/query metadata rather
+    than the values chosen by Generators. Those values live in
+    ``generated_test_case``. Older in-memory fixtures may still carry the
+    legacy request-shaped projection, which remains a fallback.
+    """
+    generated = _mapping(case.get("generated_test_case"))
+    if generated:
+        values = {
+            "path_parameters": generated.get("path_parameters", {}),
+            "query": generated.get("query_parameters", {}),
+            "headers": {
+                name: value
+                for name, value in _mapping(
+                    generated.get("header_parameters")
+                ).items()
+                if not is_sensitive_header(name)
+            },
+            "cookies": generated.get("cookie_parameters", {}),
+        }
+        if generated.get("body_present"):
+            values["body"] = generated.get("body")
+        return {
+            key: value
+            for key, value in values.items()
+            if value not in ({}, [], None)
+        }
+
     request = _mapping(case.get("request"))
     return {
         key: request[key]

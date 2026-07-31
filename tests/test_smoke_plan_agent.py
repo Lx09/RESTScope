@@ -130,7 +130,22 @@ def _request():
             "C1": {
                 "case_id": "case-a",
                 "failure": "unexpected status",
-                "request": {"path_parameters": {"projectId": "missing-a"}},
+                "generated_test_case": {
+                    "path_parameters": {"projectId": "missing-a"},
+                    "query_parameters": {"min_access_level": 25},
+                    "header_parameters": {"X-Scenario": "generated"},
+                    "cookie_parameters": {},
+                    "body": None,
+                    "body_present": False,
+                },
+                "request": {
+                    "path": "/projects/missing-a",
+                    "query_items": [["min_access_level", "25"]],
+                    "headers": {
+                        "Authorization": "[redacted]",
+                        "X-Scenario": "generated",
+                    },
+                },
                 "response": {"status_code": 404},
             },
             "C2": {
@@ -201,6 +216,10 @@ def test_plan_receives_ranked_candidates_without_a_memory_tool_or_database_ids()
     assert "F1" in prompt
     assert "C3" not in prompt
     assert "db-failure-a" not in prompt
+    assert "path_parameters.projectId=string:\"missing-a\"" in prompt
+    assert "query.min_access_level=int:25" in prompt
+    assert "headers.X-Scenario=string:\"generated\"" in prompt
+    assert "Authorization" not in prompt
     assert '{"' not in prompt
 
 

@@ -104,3 +104,31 @@ def test_failure_solve_http_probe_atomically_preflights_strict_arguments() -> No
 
     assert error is not None
     assert "unexpected" in error
+
+
+def test_failure_solve_http_probe_rejects_mutating_operations() -> None:
+    """A forged DELETE probe is denied even when no Agent tool was exposed."""
+    probe = CurrentOperationHTTPProbe(executor=object())
+    config = smoke_config()
+    config = config.model_copy(
+        update={
+            "operation_key": "DELETE /projects/{projectId}",
+            "snapshot": config.snapshot.model_copy(
+                update={
+                    "operation_key": "DELETE /projects/{projectId}",
+                    "method": "DELETE",
+                }
+            ),
+        }
+    )
+
+    error = probe.validate(
+        config=config,
+        tool_call=ToolCall(
+            id="forged-delete",
+            name="restscope.http.request",
+            arguments={"method": "DELETE", "path": "/projects/known"},
+        ),
+    )
+
+    assert error == "HTTP probes are unavailable for mutating operations"

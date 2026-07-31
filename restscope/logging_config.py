@@ -21,6 +21,9 @@ from .restscope_config import CONFIG
 # These libraries are verbose at DEBUG level and typically not useful for debugging
 _SUPPRESSED_LOGGERS = [
     "urllib3",  # HTTP library
+    "httpx",  # Target and LLM HTTP client summaries
+    "httpcore",  # Low-level headers, including Set-Cookie
+    "openai",  # OpenAI-compatible provider request details
     "asyncio",  # Async runtime
 ]
 
