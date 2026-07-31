@@ -75,6 +75,10 @@ class LLMClient:
                 ("llm.token_count.completion", response.completion_tokens),
                 ("llm.token_count.total", response.total_tokens),
                 ("restscope.llm.latency_ms", response.latency_ms),
+                (
+                    "restscope.llm.provider_retry_count",
+                    response.metadata.get("provider_retry_count"),
+                ),
             ):
                 if value is not None:
                     span.set_attribute(name, value)

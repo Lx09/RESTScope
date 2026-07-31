@@ -23,6 +23,30 @@ class RecordingClient:
         self.chat = SimpleNamespace(completions=RecordingCompletions(response))
 
 
+class SequencedCompletions:
+    """Return a different provider response for each retry attempt."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        """Keep the finite response script and every submitted request."""
+        self.responses = list(responses)
+        self.requests: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        """Return the next scripted response or expose an unexpected retry."""
+        self.requests.append(kwargs)
+        if not self.responses:
+            raise AssertionError("DeepSeek provider made an unexpected retry")
+        return self.responses.pop(0)
+
+
+class SequencedClient:
+    """Expose sequenced completions through the OpenAI-compatible shape."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        """Create one recording completions endpoint for the provider."""
+        self.chat = SimpleNamespace(completions=SequencedCompletions(responses))
+
+
 def deepseek_response(
     *,
     content: str | None,
@@ -371,6 +395,44 @@ def test_deepseek_provider_rejects_tool_response_without_reasoning() -> None:
         )
 
     assert exc_info.value.code == "deepseek_reasoning_content_missing"
+
+
+def test_deepseek_provider_retries_one_incomplete_tool_response() -> None:
+    """A transient missing reasoning field is retried before any tool runs."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    client = SequencedClient(
+        [
+            deepseek_response(
+                content="",
+                tool_calls=[_provider_tool_call()],
+                reasoning_content=None,
+            ),
+            deepseek_response(
+                content="",
+                tool_calls=[_provider_tool_call()],
+                reasoning_content="Search the catalog before deciding.",
+            ),
+        ]
+    )
+
+    response = DeepSeekProvider(api_key="test-key", client=client).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            messages=[LLMMessage(role="user", content="Investigate")],
+            tools=[_search_tool()],
+            tool_choice="auto",
+            reasoning=LLMReasoningConfig(mode="enabled", effort="high"),
+        )
+    )
+
+    assert len(client.chat.completions.requests) == 2
+    assert response.tool_calls[0].provider_context["reasoning_content"] == (
+        "Search the catalog before deciding."
+    )
+    assert response.metadata["provider_retry_count"] == 1
 
 
 def test_deepseek_provider_rejects_thinking_history_without_reasoning() -> None:

@@ -494,6 +494,39 @@ def test_patch_stops_after_three_equivalent_invalid_outputs() -> None:
     assert len(client.requests) == 3
 
 
+def test_patch_stops_after_three_equivalent_task_boundary_failures() -> None:
+    """A valid DTO that repeats the same unsafe Patch must also stop early.
+
+    The proposal parses correctly, but it changes an input that Solve did not
+    authorize. Repeating it cannot produce new compiler evidence, so consuming
+    the remaining 20-output Patch budget would only delay the parent Solve
+    session.
+    """
+    from restscope.operation_smoke.parameter_patch import (
+        ParameterPatchAgent,
+        ParameterPatchFailure,
+    )
+
+    repeated = _constant_patch("query.region")
+    client = StubClient([repeated, repeated, repeated])
+
+    outcome = ParameterPatchAgent(client=client, model=_model()).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        max_outputs=20,
+    )
+
+    assert isinstance(outcome, ParameterPatchFailure)
+    assert outcome.reason == "repeated_invalid_output"
+    assert outcome.outputs_used == 3
+    assert outcome.errors == [
+        "query.region is outside the Solve Patch requirement"
+    ]
+    assert len(client.requests) == 3
+
+
 def test_patch_keeps_constraint_compilation_as_executable_boundary() -> None:
     """Scenario: an unsatisfiable Constraint never reaches real HTTP execution."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchAgent
