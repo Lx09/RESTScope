@@ -74,3 +74,89 @@
 - `restscope/operation_smoke/failure_solver/`
 - `restscope/testing/catalog.py`
 - `restscope/db/migrations/versions/`
+
+## 2026-07-30 Tool-recognition diagnosis
+
+- The user reports that Phoenix Evals identified inefficient Agent tool
+  recognition or use.
+- The exact Agent and inefficiency mechanism are not yet established.
+- The existing GitLab live test is pre-existing user work and is outside the
+  current edit scope unless later evidence makes it the correct regression
+  seam.
+- Current code exposes three tools to each non-checkpoint Failure Solve model
+  output: Parameter memory, Parameter Patch, and a current-operation HTTP
+  probe. The provider receives `tool_choice="auto"`.
+- Planner has a separate read-only Failure-memory tool. Parameter Patch Agent
+  itself has no tools.
+- Historical Phoenix exports exist locally, including complete Project API
+  smoke traces. They may provide a captured-trace replay without contacting a
+  live target or model.
+- The checked-in exports predate the current memory-driven Failure Solve
+  implementation; they show historical HTTP-tool inefficiency but cannot
+  directly prove the new Agent's tool-recognition failure.
+- The configured local Phoenix endpoint is `http://127.0.0.1:6006`, and the
+  live harness already contains read-only project/span export helpers.
+- Docker state could not be inspected inside the current filesystem sandbox,
+  so direct read-only Phoenix HTTP access is the next lower-privilege check.
+- The reported Evals were recovered from the separate persisted Docker volume
+  `arize-phoenix-tracing_phoenix_data`. The current Compose volume was empty.
+- Phoenix contains one Plan, two Solve, and one Patch experiment run against
+  repository revision `8f9a058`. Plan and Patch passed their applicable
+  evaluators.
+- Solve experiment 2 used the same dataset version and prompt hash as
+  experiment 3, but it called the HTTP probe twice with the same request,
+  never queried Parameter memory, never called Parameter Patch, ended
+  `no_patch`, and scored 0 on status, memory inputs, Patch calls, and applied
+  Patch count. It consumed 12 Solve outputs in about 52 seconds.
+- Solve experiment 3 eventually passed every applicable evaluator, but
+  consumed 20 total outputs in about 62 seconds for a scenario whose direct
+  valid path is Parameter-memory lookup, one Patch call with two nested Patch
+  outputs, and one final apply decision.
+- This confirms the user's symptom at the current Failure Solve seam: the
+  Agent sometimes fails to recognize the required tools and, even when it
+  succeeds, reaches them inefficiently.
+- The failing run's first two outputs each requested both HTTP and Parameter
+  memory together. Runtime rejects the entire output because it allows exactly
+  one tool call, but the system prompt never states that one-call rule.
+- Both Solve runs tried `path/projectId` and/or `projectId`. The actual semantic
+  handle is `path.projectId`. Neither tool JSON Schema enumerates allowed
+  handles, and the prompt exposes the internal node path `path/projectId`
+  without a discoverable semantic-handle directory. The model therefore
+  guessed invalid names and consumed repeated correction rounds.
+- In the passing run, the model also emitted one provider-shaped HTTP tool name
+  as ordinary content, producing another correction before a canonical tool
+  call. The dominant repository-controlled defect remains the ambiguous tool
+  contract: valid handles and the one-call protocol are hidden from the model.
+
+### Ranked hypotheses
+
+1. **Hidden tool vocabulary and protocol:** If the Parameter tool schemas
+   enumerate the current operation's semantic handles and the system prompt
+   states exactly one tool call per output, the local replay will finish in
+   three Solve calls and five total outputs.
+2. **Incomplete Eval context:** If the initial run's sparse operation/config is
+   the primary cause, contract guidance alone will not make the replay pass.
+   The second run's 20-output path already shows this cannot be the only cause.
+3. **Provider tool encoding:** If DeepSeek's tool-name encoding is primary,
+   canonical schemas will still produce provider-shaped tool calls as content.
+4. **Over-attractive HTTP probe:** If tool descriptions are primary, clarifying
+   when probing is unnecessary will reduce probe calls after handle discovery.
+5. **Continuation checkpoint:** If the checkpoint is primary, changing its
+   interval will remove the waste. The trace chronology instead shows the
+   errors begin before the first checkpoint.
+
+### Local feedback loop
+
+- Command:
+  `uv run pytest -q
+  tests/test_failure_solver_agent.py::test_solve_tool_contract_exposes_the_shortest_valid_tool_path`
+- Fresh red result: `solve_budget_exhausted` instead of `applied_patch`;
+  `1 failed in 0.18s`.
+- The test drives the approved Failure Solve Interface with a deterministic
+  model double that can follow only model-visible instructions and enum values.
+- Hypothesis 1 was confirmed. Enumerating the current operation's dotted
+  semantic handles in both Parameter tool schemas and stating the one-tool-call
+  protocol in the system prompt changed the same replay to `1 passed in 0.11s`.
+- The localized fix also tells Solve not to spend an HTTP probe when Batch and
+  memory evidence already distinguish the root cause. No public DTO,
+  persistence contract, dependency, or module boundary changed.

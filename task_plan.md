@@ -4,6 +4,9 @@
 
 Replace Effect validation with a memory-driven Batch → Plan → Solve → Patch
 loop, backed by App-lifetime database records and one App-wide generation seed.
+Then diagnose and resolve the Phoenix-Evals finding that an Agent recognizes or
+uses its tools inefficiently, without broadening the approved runtime
+architecture.
 
 ## Current Phase
 
@@ -58,6 +61,28 @@ Completed
 - [x] Fix trusted-header leakage with a red/green regression test.
 - [x] Reach 100% Batch success and audit the complete Phoenix trace.
 - **Status:** completed
+
+### Phase 8: Agent tool-recognition diagnosis
+
+- [x] Build a fast, deterministic, red-capable local feedback loop for the
+  inefficient tool-selection behavior.
+- [x] Minimize the reproduction and rank falsifiable hypotheses.
+- [x] Identify the narrowest fix and request approval first if it changes a
+  public contract or architectural boundary.
+- [x] Add the regression test, apply the approved/localized fix, and run fresh
+  focused plus proportional verification.
+- **Status:** completed
+
+## Phase 8 feedback loop
+
+`uv run pytest -q
+tests/test_failure_solver_agent.py::test_solve_tool_contract_exposes_the_shortest_valid_tool_path`
+
+- Pre-fix result: red, `solve_budget_exhausted` instead of `applied_patch`.
+- Fixed result: green in three Solve model calls and five total
+  outputs, including the nested two-output Patch Agent call.
+- Test seam: the previously user-approved public Failure Solve
+  `start(...).advance()` Interface.
 
 ## Decisions Made
 
