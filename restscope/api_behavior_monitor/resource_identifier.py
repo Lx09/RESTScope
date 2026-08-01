@@ -212,7 +212,7 @@ class ResourceIdentifierTracker:
         rules = [
             rule
             for rule in self.catalog.list_rules(
-                observation.operation.operation_key
+                observation.operation
             )
             if rule.has_resource
         ]

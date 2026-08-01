@@ -14,7 +14,6 @@ def smoke_config():
 
     return OperationGeneratorConfig(
         operation_key="GET /projects/{projectId}",
-        revision=3,
         snapshot=OperationTestSnapshot(
             operation_key="GET /projects/{projectId}",
             method="GET",
@@ -69,7 +68,6 @@ def smoke_report(*, long_value: str | None = None):
         run_id="run_1",
         operation_key="GET /projects/{projectId}",
         seed=1,
-        config_revision=3,
         cases=(
             CatalogTestCase(
                 case_id="TC1",

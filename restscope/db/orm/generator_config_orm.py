@@ -1,72 +1,69 @@
-"""ORM mappings for operation input generator configuration."""
+"""Map current input Generators, executable Constraints, and accepted changes.
+
+Operation request snapshots stay in memory because the App never reopens an
+existing database.  These tables retain only mutable current values plus the
+small before/after audit produced when Solve accepts a complete Patch.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import CheckConstraint, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
-class GeneratorCatalogStateORM(CreatedAtMixin, Base):
-    """
-    Map persisted generator catalog state rows to a database table.
-
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
-    __tablename__ = "generator_catalog_state"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-
-
-class OperationGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
-    """
-    Map persisted operation generator config rows to a database table.
-
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
-    __tablename__ = "operation_generator_configs"
-
-    operation_key: Mapped[str] = mapped_column(Text, primary_key=True)
-    revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    disabled_reasons: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
-    active_media_type: Mapped[str | None] = mapped_column(String)
-
-
 class InputGeneratorConfigORM(CreatedAtMixin, UpdatedAtMixin, Base):
-    """
-    Map persisted input generator config rows to a database table.
+    """Map the current Generator strategy for one stable OpenAPI input node."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "input_generator_configs"
+    __table_args__ = (
+        CheckConstraint(
+            "inclusion_probability >= 0 AND inclusion_probability <= 1",
+            name="inclusion_probability_range",
+        ),
+        Index("ix_input_generator_configs_operation", "operation_key", "position"),
+    )
 
     input_node_id: Mapped[str] = mapped_column(String, primary_key=True)
-    operation_key: Mapped[str] = mapped_column(
-        ForeignKey("operation_generator_configs.operation_key", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    operation_key: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     inclusion_probability: Mapped[float] = mapped_column(Float, nullable=False)
     strategy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-class GeneratorConfigRevisionORM(CreatedAtMixin, Base):
-    """Store immutable initial and directly accepted Generator revisions."""
-    __tablename__ = "generator_config_revisions"
+class OperationConstraintORM(CreatedAtMixin, Base):
+    """Map one normalized executable Constraint and its derived input owner."""
 
-    operation_key: Mapped[str] = mapped_column(
-        ForeignKey("operation_generator_configs.operation_key", ondelete="CASCADE"),
-        primary_key=True,
+    __tablename__ = "operation_constraints"
+    __table_args__ = (
+        Index("ix_operation_constraints_operation", "operation_key"),
     )
-    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
-    parent_revision: Mapped[int | None] = mapped_column(Integer)
-    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    operation_key: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_input_node_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    expression: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class GeneratorChangeEventORM(CreatedAtMixin, Base):
+    """Map the deterministic before/after diff for one accepted Solve Patch."""
+
+    __tablename__ = "generator_change_events"
+    __table_args__ = (
+        Index("ix_generator_change_events_operation_created", "operation_key", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    solve_attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("smoke_solve_attempts.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    operation_key: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    generator_changes: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    constraint_changes: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)

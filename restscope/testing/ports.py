@@ -1,4 +1,4 @@
-"""Persistence ports for generator configuration."""
+"""Persistence ports for current per-input Generator configuration."""
 
 from __future__ import annotations
 
@@ -6,17 +6,12 @@ from collections.abc import Callable, Sequence
 from types import TracebackType
 from typing import Protocol, TypeAlias
 
-from .models import (
-    GeneratorConfigRevision,
-    InputGeneratorConfig,
-    OperationGeneratorConfig,
-    ResourceIdentifierGenerator,
-    ResponseValueGenerator,
-)
+from .models import InputGeneratorConfig, ResourceIdentifierGenerator, ResponseValueGenerator
+from .constraints import OperationConstraintRecord
 
 
 class GeneratorConfigConcurrentWrite(RuntimeError):
-    """The persisted revision changed after the application-level read."""
+    """The stored input content changed after a Patch candidate was prepared."""
 
 
 class ReferenceValueProvider(Protocol):
@@ -29,44 +24,44 @@ class ReferenceValueProvider(Protocol):
 
 
 class GeneratorConfigRepository(Protocol):
-    """
-    Define the collaborator contract for generator config repository.
+    """Persist only current Generator rows keyed by stable input-node identity."""
 
-    Concrete implementations may vary while callers in deterministic request generation,
-    constraint solving, and execution depend only on these declared operations.
-    """
-    def is_initialized(self) -> bool: ...
+    def initialize(self, records: list[tuple[str, list[InputGeneratorConfig]]]) -> None: ...
 
-    def initialize(self, records: list[OperationGeneratorConfig]) -> None: ...
+    def get_inputs(self, operation_key: str) -> list[InputGeneratorConfig]: ...
 
-    def get(self, operation_key: str) -> OperationGeneratorConfig | None: ...
-
-    def replace(
+    def replace_inputs(
         self,
         *,
         operation_key: str,
-        expected_revision: int,
-        revision: int,
-        snapshot: dict,
-        enabled: bool,
-        disabled_reasons: list[dict],
-        active_media_type: str | None,
-        configs: list[InputGeneratorConfig],
-    ) -> OperationGeneratorConfig: ...
+        expected: list[InputGeneratorConfig],
+        updated: list[InputGeneratorConfig],
+    ) -> None: ...
 
-    def get_revision(
+    def get_constraints(self, operation_key: str) -> list[OperationConstraintRecord]: ...
+
+    def replace_constraints(
         self,
+        *,
         operation_key: str,
-        revision: int,
-    ) -> GeneratorConfigRevision | None: ...
+        expected: list[OperationConstraintRecord],
+        updated: list[OperationConstraintRecord],
+    ) -> None: ...
+
+    def record_change_event(
+        self,
+        *,
+        solve_attempt_id: str,
+        operation_key: str,
+        reason: str,
+        generator_changes: list[dict],
+        constraint_changes: list[dict],
+    ) -> str: ...
+
 
 class GeneratorConfigUnitOfWork(Protocol):
-    """
-    Define the collaborator contract for generator config unit of work.
+    """Expose one transaction around current Generator rows."""
 
-    Concrete implementations may vary while callers in deterministic request generation,
-    constraint solving, and execution depend only on these declared operations.
-    """
     generator_configs: GeneratorConfigRepository
 
     def __enter__(self) -> "GeneratorConfigUnitOfWork": ...

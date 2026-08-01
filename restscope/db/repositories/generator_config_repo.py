@@ -1,194 +1,179 @@
-"""SQLAlchemy adapter for generator configuration persistence."""
+"""SQLAlchemy adapter for current per-input Generator configuration."""
 
 from __future__ import annotations
 
-from typing import cast
+from uuid import uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from restscope.testing.models import (
-    GeneratorConfigRevision,
-    InputGeneratorConfig,
-    OperationGeneratorConfig,
-)
+from restscope.testing.models import InputGeneratorConfig
+from restscope.testing.constraints import OperationConstraintRecord
 from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
-from ..orm import (
-    GeneratorCatalogStateORM,
-    GeneratorConfigRevisionORM,
-    InputGeneratorConfigORM,
-    OperationGeneratorConfigORM,
-)
+from ..orm import GeneratorChangeEventORM, InputGeneratorConfigORM, OperationConstraintORM
 
 
 class SqlAlchemyGeneratorConfigRepository:
-    """
-    Define the collaborator contract for sql alchemy generator config repository.
+    """Persist Generator input rows without operation snapshots or revisions."""
 
-    Concrete implementations may vary while callers in the repository and database
-    persistence boundary depend only on these declared operations.
-    """
     def __init__(self, session: Session) -> None:
+        """Use the caller-owned session and transaction."""
+
         self.session = session
 
-    def is_initialized(self) -> bool:
-        """
-        Return whether initialized applies in the repository and database persistence
-        boundary.
+    def initialize(
+        self,
+        records: list[tuple[str, list[InputGeneratorConfig]]],
+    ) -> None:
+        """Insert every initial input once into an empty one-shot database."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        return self.session.get(GeneratorCatalogStateORM, 1) is not None
-
-    def initialize(self, records: list[OperationGeneratorConfig]) -> None:
-        """
-        Handle initialize as part of the repository and database persistence boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        self.session.add(GeneratorCatalogStateORM(id=1))
-        for record in records:
-            self._insert_record(record)
-            self._insert_revision(
-                record,
-                parent_revision=None,
-            )
+        existing = self.session.scalar(
+            select(func.count()).select_from(InputGeneratorConfigORM)
+        )
+        if existing:
+            raise GeneratorConfigConcurrentWrite("generator_catalog_initialized")
+        for operation_key, configs in records:
+            self._insert_inputs(operation_key, configs)
         try:
             self.session.flush()
         except IntegrityError as exc:
-            raise GeneratorConfigConcurrentWrite("generator_catalog_state") from exc
+            raise GeneratorConfigConcurrentWrite("generator_catalog_initialized") from exc
 
-    def get(self, operation_key: str) -> OperationGeneratorConfig | None:
-        """
-        Handle get as part of the repository and database persistence boundary.
+    def get_inputs(self, operation_key: str) -> list[InputGeneratorConfig]:
+        """Return current inputs in their deterministic snapshot order."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        operation = self.session.get(
-            OperationGeneratorConfigORM,
-            operation_key,
-        )
-        if operation is None:
-            return None
         rows = self.session.scalars(
             select(InputGeneratorConfigORM)
             .where(InputGeneratorConfigORM.operation_key == operation_key)
             .order_by(InputGeneratorConfigORM.position)
         ).all()
-        return OperationGeneratorConfig.model_validate(
-            {
-                "operation_key": operation.operation_key,
-                "revision": operation.revision,
-                "snapshot": operation.snapshot,
-                "enabled": operation.enabled,
-                "disabled_reasons": operation.disabled_reasons,
-                "active_media_type": operation.active_media_type,
-                "configs": [
-                    {
-                        "input_node_id": row.input_node_id,
-                        "inclusion_probability": row.inclusion_probability,
-                        "strategy": row.strategy,
-                    }
-                    for row in rows
-                ],
-            }
-        )
+        return [_to_input(row) for row in rows]
 
-    def replace(
+    def replace_inputs(
         self,
         *,
         operation_key: str,
-        expected_revision: int,
-        revision: int,
-        snapshot: dict,
-        enabled: bool,
-        disabled_reasons: list[dict],
-        active_media_type: str | None,
-        configs: list[InputGeneratorConfig],
-    ) -> OperationGeneratorConfig:
-        """
-        Handle replace as part of the repository and database persistence boundary.
+        expected: list[InputGeneratorConfig],
+        updated: list[InputGeneratorConfig],
+    ) -> None:
+        """Compare current content, then update only rows that actually changed."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        updated = self.session.execute(
-            update(OperationGeneratorConfigORM)
-            .where(
-                OperationGeneratorConfigORM.operation_key == operation_key,
-                OperationGeneratorConfigORM.revision == expected_revision,
-            )
-            .values(
-                revision=revision,
-                snapshot=snapshot,
-                enabled=enabled,
-                disabled_reasons=disabled_reasons,
-                active_media_type=active_media_type,
-            )
-        )
-        if updated.rowcount != 1:
+        current_rows = self.session.scalars(
+            select(InputGeneratorConfigORM)
+            .where(InputGeneratorConfigORM.operation_key == operation_key)
+            .order_by(InputGeneratorConfigORM.position)
+        ).all()
+        current = [_to_input(row) for row in current_rows]
+        if current != expected:
             raise GeneratorConfigConcurrentWrite(operation_key)
-        self.session.execute(
-            delete(InputGeneratorConfigORM).where(
-                InputGeneratorConfigORM.operation_key == operation_key
-            )
-        )
-        self._insert_input_configs(operation_key, configs)
+        if len(updated) != len(current_rows):
+            raise ValueError("A Generator Patch cannot add or remove input nodes")
+        by_id = {row.input_node_id: row for row in current_rows}
+        if set(by_id) != {item.input_node_id for item in updated}:
+            raise ValueError("A Generator Patch must preserve the complete input set")
+        for item in updated:
+            row = by_id[item.input_node_id]
+            if _to_input(row) == item:
+                continue
+            row.inclusion_probability = item.inclusion_probability
+            row.strategy = item.strategy.model_dump(mode="json")
         self.session.flush()
-        record = self.get(operation_key)
-        assert record is not None
-        self._insert_revision(
-            record,
-            parent_revision=expected_revision,
-        )
-        self.session.flush()
-        return record
 
-    def get_revision(
+    def get_constraints(self, operation_key: str) -> list[OperationConstraintRecord]:
+        """Return current normalized Constraints for one operation."""
+
+        rows = self.session.scalars(
+            select(OperationConstraintORM)
+            .where(OperationConstraintORM.operation_key == operation_key)
+            .order_by(OperationConstraintORM.id)
+        ).all()
+        return [
+            OperationConstraintRecord.model_validate(
+                {
+                    "id": row.id,
+                    "operation_key": row.operation_key,
+                    "owner_input_node_ids": row.owner_input_node_ids,
+                    "kind": row.kind,
+                    "constraint": row.expression,
+                }
+            )
+            for row in rows
+        ]
+
+    def replace_constraints(
         self,
+        *,
         operation_key: str,
-        revision: int,
-    ) -> GeneratorConfigRevision | None:
-        """
-        Return revision for the repository and database persistence boundary.
+        expected: list[OperationConstraintRecord],
+        updated: list[OperationConstraintRecord],
+    ) -> None:
+        """Compare current Constraint content, then insert/delete its exact diff."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        row = cast(
-            GeneratorConfigRevisionORM | None,
-            self.session.get(
-                GeneratorConfigRevisionORM,
-                (operation_key, revision),
-            ),
-        )
-        return self._revision_record(row) if row is not None else None
+        current = self.get_constraints(operation_key)
+        if current != sorted(expected, key=lambda item: item.id):
+            raise GeneratorConfigConcurrentWrite(operation_key)
+        current_by_id = {item.id: item for item in current}
+        updated_by_id = {item.id: item for item in updated}
+        if len(updated_by_id) != len(updated):
+            raise ValueError("Constraint identities must be unique")
+        for constraint_id in sorted(set(current_by_id) - set(updated_by_id)):
+            self.session.execute(
+                delete(OperationConstraintORM).where(
+                    OperationConstraintORM.id == constraint_id
+                )
+            )
+        for constraint_id in sorted(set(updated_by_id) - set(current_by_id)):
+            item = updated_by_id[constraint_id]
+            if item.operation_key != operation_key:
+                raise ValueError("A Constraint cannot move between operations")
+            self.session.add(
+                OperationConstraintORM(
+                    id=item.id,
+                    operation_key=item.operation_key,
+                    owner_input_node_ids=list(item.owner_input_node_ids),
+                    kind=item.kind,
+                    expression=item.constraint.model_dump(mode="json"),
+                )
+            )
+        for constraint_id in set(current_by_id) & set(updated_by_id):
+            if current_by_id[constraint_id] != updated_by_id[constraint_id]:
+                raise ValueError("A stable Constraint ID cannot change content")
+        self.session.flush()
 
-    def _insert_record(self, record: OperationGeneratorConfig) -> None:
+    def record_change_event(
+        self,
+        *,
+        solve_attempt_id: str,
+        operation_key: str,
+        reason: str,
+        generator_changes: list[dict],
+        constraint_changes: list[dict],
+    ) -> str:
+        """Append one accepted deterministic Patch diff and return its identity."""
+
+        event_id = f"generator_change_{uuid4().hex}"
         self.session.add(
-            OperationGeneratorConfigORM(
-                operation_key=record.operation_key,
-                revision=record.revision,
-                snapshot=record.snapshot.model_dump(mode="json"),
-                enabled=record.enabled,
-                disabled_reasons=[
-                    item.model_dump(mode="json") for item in record.disabled_reasons
-                ],
-                active_media_type=record.active_media_type,
+            GeneratorChangeEventORM(
+                id=event_id,
+                solve_attempt_id=solve_attempt_id,
+                operation_key=operation_key,
+                reason=reason,
+                generator_changes=generator_changes,
+                constraint_changes=constraint_changes,
             )
         )
-        self._insert_input_configs(record.operation_key, record.configs)
+        self.session.flush()
+        return event_id
 
-    def _insert_input_configs(
+    def _insert_inputs(
         self,
         operation_key: str,
         configs: list[InputGeneratorConfig],
     ) -> None:
+        """Add a complete ordered input set to the active session."""
+
         self.session.add_all(
             [
                 InputGeneratorConfigORM(
@@ -202,32 +187,14 @@ class SqlAlchemyGeneratorConfigRepository:
             ]
         )
 
-    def _insert_revision(
-        self,
-        record: OperationGeneratorConfig,
-        *,
-        parent_revision: int | None,
-    ) -> None:
-        """Append one immutable initial or directly accepted revision."""
-        self.session.add(
-            GeneratorConfigRevisionORM(
-                operation_key=record.operation_key,
-                revision=record.revision,
-                parent_revision=parent_revision,
-                config=record.model_dump(mode="json"),
-            )
-        )
 
-    @staticmethod
-    def _revision_record(
-        row: GeneratorConfigRevisionORM,
-    ) -> GeneratorConfigRevision:
-        return GeneratorConfigRevision.model_validate(
-            {
-                "operation_key": row.operation_key,
-                "revision": row.revision,
-                "parent_revision": row.parent_revision,
-                "config": row.config,
-                "created_at": row.created_at,
-            }
-        )
+def _to_input(row: InputGeneratorConfigORM) -> InputGeneratorConfig:
+    """Validate a stored JSON strategy before it reaches generation code."""
+
+    return InputGeneratorConfig.model_validate(
+        {
+            "input_node_id": row.input_node_id,
+            "inclusion_probability": row.inclusion_probability,
+            "strategy": row.strategy,
+        }
+    )

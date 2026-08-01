@@ -42,7 +42,8 @@ def build_operation_smoke_coordinator(
 
     Dedup writes current Failures while Solve reads histories through the same
     deep Memory Interface. Patch application receives the same Unit of Work
-    factory so Generator revision and Investigation commit atomically.
+    factory so current Generator/Constraint changes and the Solve Attempt
+    commit atomically.
     """
     if capability_runtime is None:
         raise ValueError(
@@ -60,6 +61,7 @@ def build_operation_smoke_coordinator(
         session_factory
     )
     memory = SmokeMemory(unit_of_work_factory)
+    patch_application = SmokePatchApplication(unit_of_work_factory)
     patch_agent_factory = ParameterPatchAgentFactory(
         client=client,
         model=selector.select("parameter_patch_agent"),
@@ -87,12 +89,11 @@ def build_operation_smoke_coordinator(
             ),
             memory=memory,
             patch_agent_factory=patch_agent_factory,
-            patch_application=SmokePatchApplication(
-                unit_of_work_factory
-            ),
+            patch_application=patch_application,
             reference_values=reference_values,
             tracing_runtime=runtime,
         ),
+        constraint_reader=patch_application,
         reference_values=reference_values,
         random_seed=SeededRandom(config.random.seed).seed,
         tracing_runtime=runtime,

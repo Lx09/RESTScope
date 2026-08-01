@@ -480,7 +480,6 @@ def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
     initial = build_initial_operation_config(operation)
     manual = initial.model_copy(
         update={
-            "revision": 2,
             "configs": [
                 InputGeneratorConfig(
                     input_node_id=initial.configs[0].input_node_id,
@@ -947,7 +946,6 @@ def test_test_case_generator_builds_configured_request_inputs_and_omits_optional
 
     config = OperationGeneratorConfig(
         operation_key=operation.operation_key,
-        revision=3,
         snapshot=snapshot,
         active_media_type="application/json",
         configs=[
@@ -1086,7 +1084,6 @@ def test_test_case_generator_supports_weighted_variants_and_all_of_objects() -> 
         snapshot,
         OperationGeneratorConfig(
             operation_key=operation.operation_key,
-            revision=1,
             snapshot=snapshot,
             active_media_type="application/json",
             configs=configs,
@@ -1146,7 +1143,6 @@ def test_nullable_object_can_generate_an_explicit_json_null_body() -> None:
         snapshot,
         OperationGeneratorConfig(
             operation_key=operation.operation_key,
-            revision=1,
             snapshot=snapshot,
             active_media_type="application/json",
             configs=configs,
@@ -1220,7 +1216,6 @@ def test_feedback_variant_generator_does_not_revalidate_one_of_membership() -> N
         snapshot,
         OperationGeneratorConfig(
             operation_key=operation.operation_key,
-            revision=1,
             snapshot=snapshot,
             active_media_type="application/json",
             configs=configs,

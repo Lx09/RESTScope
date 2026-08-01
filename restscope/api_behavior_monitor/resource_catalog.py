@@ -47,7 +47,10 @@ class ResourceCatalog:
             )
             uow.commit()
 
-    def list_rules(self, operation_key: str) -> list[LearnedResourceRule]:
+    def list_rules(
+        self,
+        operation: MonitoredOperation | str,
+    ) -> list[LearnedResourceRule]:
         """
         Return rules for API response monitoring and its narrowly approved evidence
         catalog.
@@ -55,8 +58,13 @@ class ResourceCatalog:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
+        resolved = (
+            operation
+            if isinstance(operation, MonitoredOperation)
+            else _operation_from_key(operation)
+        )
         with self.unit_of_work_factory() as uow:
-            return uow.resources.list_rules(operation_key)
+            return uow.resources.list_rules(resolved)
 
     def list_resources(
         self,
@@ -145,3 +153,16 @@ class ResourceCatalog:
         """
         with self.unit_of_work_factory() as uow:
             return uow.resources.lookup(request)
+
+
+def _operation_from_key(operation_key: str) -> MonitoredOperation:
+    """Rebuild method and path from the canonical ``METHOD /path`` key."""
+
+    method, separator, path = operation_key.partition(" ")
+    if not separator or not path:
+        raise ValueError(f"Invalid operation key: {operation_key}")
+    return MonitoredOperation(
+        operation_key=operation_key,
+        method=method,
+        path=path,
+    )

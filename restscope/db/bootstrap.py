@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import os
 from pathlib import Path
+import sqlite3
 import stat
 
 from alembic import command
@@ -177,6 +178,7 @@ def prepare_fresh_sqlite(config: DBConfig) -> tuple[DBConfig, _FreshSQLiteDataba
             normalized_config.url.replace("%", "%%"),
         )
         command.upgrade(alembic_config, "head")
+        _verify_sqlite_database(database_path)
     except BaseException as exc:
         database.cleanup()
         if not isinstance(exc, Exception):
@@ -187,6 +189,24 @@ def prepare_fresh_sqlite(config: DBConfig) -> tuple[DBConfig, _FreshSQLiteDataba
         ) from exc
 
     return normalized_config, database
+
+
+def _verify_sqlite_database(database_path: Path) -> None:
+    """Reject a freshly migrated file with integrity or foreign-key failures.
+
+    The database is still owned by the current bootstrap attempt when this
+    check runs, so any failure follows the existing safe cleanup path and cannot
+    alter a pre-existing user file.
+    """
+
+    connection = sqlite3.connect(database_path)
+    try:
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        foreign_key_issues = connection.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        connection.close()
+    if integrity != ("ok",) or foreign_key_issues:
+        raise RuntimeError("Fresh SQLite database failed integrity verification")
 
 
 def _normalize_sqlite_config(config: DBConfig) -> tuple[DBConfig, Path]:

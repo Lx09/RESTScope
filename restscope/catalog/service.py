@@ -1,109 +1,64 @@
-"""Application service for validated OpenAPI source persistence."""
+"""Transactional service for the current OpenAPI document and change audit."""
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-from uuid import uuid4
+from copy import deepcopy
+from typing import Any
 
-from restscope.openapi_parser import OpenAPIParser, OpenAPISpecIR
-from restscope.openapi_parser.loader import load_parse_input
-
-from .models import SchemaRecord, SchemaSourceInput
-from .ports import SchemaUnitOfWorkFactory
+from .models import OpenAPIChangeEventRecord, OpenAPIChangeEventWrite
+from .ports import OpenAPIUnitOfWorkFactory
 
 
-class SchemaNotFoundError(LookupError):
-    """Raised when a requested stored schema does not exist."""
+class OpenAPICatalog:
+    """Persist and inspect the normalized document owned by one App run."""
 
+    def __init__(self, unit_of_work_factory: OpenAPIUnitOfWorkFactory) -> None:
+        """Store the transaction factory without opening a database session."""
 
-class SchemaSourceValidationError(ValueError):
-    """Raised when a schema source cannot produce a valid OpenAPI IR."""
-
-
-class SchemaCatalog:
-    """Validate OpenAPI sources before persisting their original source reference.
-
-    A record stores either a readable file path or raw text, never both. Parsing
-    happens before commit so invalid replacement data cannot destroy the last
-    valid catalog entry.
-    """
-
-    def __init__(self, unit_of_work_factory: SchemaUnitOfWorkFactory) -> None:
         self.unit_of_work_factory = unit_of_work_factory
 
-    def register(self, source: SchemaSourceInput) -> SchemaRecord:
-        """Validate and atomically store a new schema source."""
-        file_path, raw_content = self._prepare(source)
-        self._parse(file_path=file_path, raw_content=raw_content)
+    def initialize(self, document: dict[str, Any]) -> None:
+        """Insert the singleton initial document.
+
+        ``document`` must already be produced by the normalized IR-to-spec
+        builder.  Reinitialization is rejected by the repository rather than
+        silently replacing the API bound to this one-shot database.
+        """
+
         with self.unit_of_work_factory() as uow:
-            record = uow.schemas.add(
-                id=f"schema_{uuid4().hex}",
-                file_path=file_path,
-                raw_content=raw_content,
+            uow.openapi.initialize(deepcopy(document))
+            uow.commit()
+
+    def current_document(self) -> dict[str, Any]:
+        """Return an isolated copy of the current persisted document."""
+
+        with self.unit_of_work_factory() as uow:
+            document = uow.openapi.get_current()
+        if document is None:
+            raise RuntimeError("The OpenAPI catalog has not been initialized")
+        return deepcopy(document)
+
+    def record_change(
+        self,
+        *,
+        document: dict[str, Any],
+        event: OpenAPIChangeEventWrite,
+    ) -> OpenAPIChangeEventRecord:
+        """Atomically update current OpenAPI and append its response event."""
+
+        with self.unit_of_work_factory() as uow:
+            record = uow.openapi.record_change(
+                document=deepcopy(document),
+                event=event,
             )
             uow.commit()
             return record
 
-    def get(self, schema_id: str) -> SchemaRecord:
-        """Return one stored source or raise ``SchemaNotFoundError``."""
+    def list_changes(
+        self,
+        operation_key: str | None = None,
+    ) -> list[OpenAPIChangeEventRecord]:
+        """Return chronological audit events, optionally for one operation."""
+
         with self.unit_of_work_factory() as uow:
-            record = uow.schemas.get(schema_id)
-        if record is None:
-            raise SchemaNotFoundError(f"Schema not found: {schema_id}")
-        return record
-
-    def list(self) -> list[SchemaRecord]:
-        """Return all stored schema-source records in repository order."""
-        with self.unit_of_work_factory() as uow:
-            return uow.schemas.list()
-
-    def replace(self, schema_id: str, source: SchemaSourceInput) -> SchemaRecord:
-        """Validate a replacement completely before committing it."""
-        file_path, raw_content = self._prepare(source)
-        self._parse(file_path=file_path, raw_content=raw_content)
-        with self.unit_of_work_factory() as uow:
-            record = uow.schemas.replace_source(
-                schema_id,
-                file_path=file_path,
-                raw_content=raw_content,
-            )
-            if record is None:
-                raise SchemaNotFoundError(f"Schema not found: {schema_id}")
-            uow.commit()
-            return record
-
-    def load(self, schema_id: str) -> OpenAPISpecIR:
-        """Re-read and parse one stored source into a fresh in-memory IR."""
-        record = self.get(schema_id)
-        return self._parse(file_path=record.file_path, raw_content=record.raw_content)
-
-    @staticmethod
-    def _prepare(source: SchemaSourceInput) -> tuple[str | None, str | None]:
-        if source.file_path is None:
-            return None, source.raw_content
-
-        path = source.file_path.expanduser().resolve()
-        if not path.is_file() or not os.access(path, os.R_OK):
-            raise SchemaSourceValidationError(f"OpenAPI file is not readable: {path}")
-        return str(path), None
-
-    @staticmethod
-    def _parse(*, file_path: str | None, raw_content: str | None) -> OpenAPISpecIR:
-        source: object = Path(file_path) if file_path is not None else raw_content
-        try:
-            parse_input = load_parse_input(source)
-            ir = OpenAPIParser.parse(parse_input.raw_document)
-        except Exception as exc:
-            raise SchemaSourceValidationError(str(exc)) from exc
-
-        errors = [
-            *ir.diagnostics.spec_errors,
-            *ir.diagnostics.path_errors,
-            *ir.diagnostics.operation_errors,
-        ]
-        if errors:
-            raise SchemaSourceValidationError(
-                f"OpenAPI parsing produced {len(errors)} error diagnostic(s)"
-            )
-        return ir
+            return uow.openapi.list_changes(operation_key)

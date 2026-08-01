@@ -26,6 +26,7 @@ class FailureDedupRequest(_Model):
     round_number: int = Field(ge=1)
     batch_run_id: str = Field(min_length=1)
     case_ids: list[str] = Field(min_length=1)
+    input_node_ids_by_handle: dict[str, str]
 
 
 class FailureGroupDecision(_Model):

@@ -70,7 +70,6 @@ class _SmokeCoordinator:
             operation_key=request.operation_key,
             success_rate=1.0 if result_status == "passed" else 0.0,
             required_success_rate=request.success_rate_threshold,
-            active_config_revision=1,
             stop_reason=passed_stop_reasons.get(status),
             reason=(
                 f"The scripted Coordinator stopped because {passed_stop_reasons[status]}."

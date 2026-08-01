@@ -273,6 +273,17 @@ class APIBehaviorMonitorCoordinator:
                 media_type=media_type,
                 body=body,
             )
+            if value_result.warning is not None:
+                warnings.append(
+                    APIBehaviorWarning(
+                        code=value_result.warning.code,
+                        message=value_result.warning.message,
+                        issues=(
+                            f"scalar_count={value_result.warning.scalar_count}",
+                            f"scalar_limit={value_result.warning.scalar_limit}",
+                        ),
+                    )
+                )
         except Exception as exc:
             value_result = None
             warnings.append(

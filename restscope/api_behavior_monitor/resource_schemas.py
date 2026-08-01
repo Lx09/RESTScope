@@ -247,8 +247,6 @@ class ResourceOperationSummary(BaseModel):
     incorrectly typed values at the boundary.
     """
     operation_key: str
-    method: str
-    path: str
     access_mode: AccessMode
     resource_aliases: list[str]
     id_field_aliases: list[str]

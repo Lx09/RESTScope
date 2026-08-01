@@ -14,7 +14,6 @@ from typing import Protocol
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.memory import (
     FailureBatchWrite,
-    FailureObservationWrite,
     FailureWrite,
     RecordedFailures,
 )
@@ -182,7 +181,7 @@ class FailureDeduplicator:
         correction_count: int,
         bypassed: bool,
     ) -> FailureDedupResult:
-        """Persist one representative Observation, then create Solve Todos."""
+        """Persist stable Failure facts, then create run-local Solve Todos."""
         selections = [
             _select_representative(
                 group=group,
@@ -194,28 +193,21 @@ class FailureDeduplicator:
         recorded = self.memory.record_failures(
             FailureBatchWrite(
                 operation_key=request.operation_key,
-                round_number=request.round_number,
-                batch_run_id=request.batch_run_id,
                 failures=[
                     FailureWrite(
                         summary=group.summary,
-                        suspected_parameters=(
-                            None if bypassed else group.suspected_parameters
+                        messages=list(group.messages),
+                        suspected_input_node_ids=(
+                            None
+                            if bypassed
+                            else [
+                                request.input_node_ids_by_handle[handle]
+                                for handle in group.suspected_parameters
+                            ]
                         ),
-                        observations=[
-                            _observation_write(
-                                # The model may list messages in any order. Use
-                                # the message that actually produced the chosen
-                                # earliest case so Memory evidence cannot pair
-                                # one HTTP exchange with another error text.
-                                message=message,
-                                case=catalog.get_case(case_id),
-                                observation_key=(
-                                    f"{request.batch_run_id}:"
-                                    f"{request.case_ids.index(case_id) + 1}"
-                                ),
-                            )
-                        ],
+                        last_status_code=_failure_status(
+                            catalog.get_case(case_id)
+                        ),
                     )
                     for group, (message, case_id) in zip(
                         decision.failures,
@@ -285,22 +277,9 @@ def _fingerprints(
     return output
 
 
-def _observation_write(
-    *,
-    message: str,
-    case: CatalogTestCase,
-    observation_key: str,
-) -> FailureObservationWrite:
-    """Reduce the representative case to bounded persistent evidence."""
-    response_summary = {}
+def _failure_status(case: CatalogTestCase) -> int | None:
+    """Return the representative HTTP status, or null for transport failure."""
+
     if case.failure is not None and case.failure.kind == "http":
-        response_summary["status_code"] = case.failure.status_code
-    return FailureObservationWrite(
-        observation_key=observation_key,
-        trigger=message,
-        response_summary=response_summary,
-        # Concrete request values remain exclusively in the run-local Catalog.
-        # Persisting them here would quietly turn one representative Test Case
-        # into a database-backed test history.
-        necessary_values={},
-    )
+        return case.failure.status_code
+    return None

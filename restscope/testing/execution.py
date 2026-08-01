@@ -64,7 +64,6 @@ class BatchExecutionResult:
     run_id: str
     operation_key: str
     seed: int
-    config_revision: int
     cases: tuple[CatalogTestCase, ...]
 
     @property
@@ -190,16 +189,11 @@ class OperationTestingService:
             span.set_output(
                 {
                     "run_id": outcome.run_id,
-                    "config_revision": outcome.config_revision,
                     "case_count": len(outcome.cases),
                     "success_count": outcome.success_count,
                 }
             )
             span.set_attribute("restscope.test.run_id", outcome.run_id)
-            span.set_attribute(
-                "restscope.generator.config_revision",
-                outcome.config_revision,
-            )
             span.set_attribute(
                 "restscope.test.observed_2xx",
                 outcome.success_count > 0,
@@ -294,7 +288,6 @@ class OperationTestingService:
             run_id=run_id,
             operation_key=operation_key,
             seed=run_seed,
-            config_revision=config.revision,
             cases=tuple(cases),
         )
 

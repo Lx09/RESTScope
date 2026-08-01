@@ -103,7 +103,7 @@ class SqlAlchemyResourceCatalogRepository:
             )
         self.session.flush()
 
-    def list_rules(self, operation_key: str) -> list[LearnedResourceRule]:
+    def list_rules(self, operation: MonitoredOperation) -> list[LearnedResourceRule]:
         """
         Return rules for the repository and database persistence boundary.
 
@@ -112,10 +112,10 @@ class SqlAlchemyResourceCatalogRepository:
         """
         rows = self.session.scalars(
             select(OperationResourceRuleORM)
-            .where(OperationResourceRuleORM.operation_key == operation_key)
+            .where(OperationResourceRuleORM.operation_key == operation.operation_key)
             .order_by(OperationResourceRuleORM.group_path)
         ).all()
-        return [self._to_rule(row) for row in rows]
+        return [self._to_rule(row, operation=operation) for row in rows]
 
     def list_resources(
         self,
@@ -218,10 +218,7 @@ class SqlAlchemyResourceCatalogRepository:
         )
         if row is None:
             row = ResourceMonitorErrorORM(
-                id=_new_id("resource_error"),
                 operation_key=operation.operation_key,
-                method=operation.method,
-                path=operation.path,
                 group_path=group_path,
                 resource_id=rule.resource_id if rule is not None else None,
                 code=warning.code,
@@ -233,8 +230,6 @@ class SqlAlchemyResourceCatalogRepository:
             self.session.add(row)
         else:
             row.resource_id = rule.resource_id if rule is not None else None
-            row.method = operation.method
-            row.path = operation.path
             row.code = warning.code
             row.message = warning.message
             row.issues = warning.issues
@@ -451,7 +446,6 @@ class SqlAlchemyResourceCatalogRepository:
                 continue
             self.session.add(
                 ResourceAliasORM(
-                    id=_new_id("resource_alias"),
                     resource_id=resource.id,
                     alias=alias,
                     normalized_alias=normalized,
@@ -478,36 +472,27 @@ class SqlAlchemyResourceCatalogRepository:
                 OperationResourceRuleORM.group_path == group.group_path,
             )
         )
-        observed = bool(group.identifier_values)
         if rule is None:
             rule = OperationResourceRuleORM(
                 id=_new_id("resource_rule"),
                 resource_id=resource.id if resource is not None else None,
                 operation_key=operation.operation_key,
-                method=operation.method,
-                path=operation.path,
                 group_path=group.group_path,
                 has_resource=group.has_resource,
-                resource_aliases=group.resource_aliases,
                 id_field_name=group.id_field_name,
                 id_selector=group.id_selector,
                 access_mode=operation.access_mode,
                 classification_source=group.classification_source,
-                id_observed=observed,
             )
             self.session.add(rule)
         elif not rule.has_resource and group.has_resource:
             assert resource is not None
             rule.resource_id = resource.id
-            rule.method = operation.method
-            rule.path = operation.path
             rule.has_resource = True
-            rule.resource_aliases = group.resource_aliases
             rule.id_field_name = group.id_field_name
             rule.id_selector = group.id_selector
             rule.access_mode = operation.access_mode
             rule.classification_source = group.classification_source
-            rule.id_observed = observed
         else:
             if (
                 rule.resource_id != (resource.id if resource is not None else None)
@@ -518,7 +503,8 @@ class SqlAlchemyResourceCatalogRepository:
                 raise ResourceCatalogConflict(
                     f"Operation resource rule changed for {operation.operation_key} {group.group_path}"
                 )
-            rule.id_observed = rule.id_observed or observed
+            rule.access_mode = operation.access_mode
+            rule.classification_source = group.classification_source
         self.session.flush()
         return rule
 
@@ -550,6 +536,7 @@ class SqlAlchemyResourceCatalogRepository:
                 resource_id=resource.id,
                 value_type=value_type,
                 value_text=value_text,
+                first_seen_at=observed_at,
                 last_seen_at=observed_at,
             )
             self.session.add(row)
@@ -580,17 +567,20 @@ class SqlAlchemyResourceCatalogRepository:
         if row is None:
             self.session.add(
                 ResourceOperationUsageORM(
-                    id=_new_id("resource_usage"),
                     identifier_id=identifier.id,
                     operation_rule_id=rule.id,
-                    access_mode=rule.access_mode,
                     latest_seen_at=observed_at,
                 )
             )
         elif observed_at > as_utc(row.latest_seen_at):
             row.latest_seen_at = observed_at
 
-    def _to_rule(self, row: OperationResourceRuleORM) -> LearnedResourceRule:
+    def _to_rule(
+        self,
+        row: OperationResourceRuleORM,
+        *,
+        operation: MonitoredOperation,
+    ) -> LearnedResourceRule:
         """
         Handle to rule as part of the repository and database persistence boundary.
 
@@ -606,6 +596,20 @@ class SqlAlchemyResourceCatalogRepository:
             if row.resource_id is not None
             else None
         )
+        aliases = (
+            self.session.scalars(
+                select(ResourceAliasORM.alias)
+                .where(ResourceAliasORM.resource_id == row.resource_id)
+                .order_by(ResourceAliasORM.normalized_alias)
+            ).all()
+            if row.resource_id is not None
+            else []
+        )
+        id_observed = self.session.scalar(
+            select(ResourceOperationUsageORM.identifier_id)
+            .where(ResourceOperationUsageORM.operation_rule_id == row.id)
+            .limit(1)
+        ) is not None
         return LearnedResourceRule.model_validate(
             {
                 "rule_id": row.id,
@@ -618,18 +622,14 @@ class SqlAlchemyResourceCatalogRepository:
                     if resource is not None
                     else None
                 ),
-                "resource_aliases": list(row.resource_aliases),
-                "operation": {
-                    "operation_key": row.operation_key,
-                    "method": row.method,
-                    "path": row.path,
-                },
+                "resource_aliases": list(aliases),
+                "operation": operation.model_dump(mode="json"),
                 "group_path": row.group_path,
                 "id_field_name": row.id_field_name,
                 "id_selector": row.id_selector,
                 "access_mode": row.access_mode,
                 "classification_source": row.classification_source,
-                "id_observed": row.id_observed,
+                "id_observed": id_observed,
             }
         )
 
@@ -671,21 +671,17 @@ class SqlAlchemyResourceCatalogRepository:
             if not usages:
                 continue
             representative = operation_rules[0]
+            aliases = self.session.scalars(
+                select(ResourceAliasORM.alias)
+                .where(ResourceAliasORM.resource_id == resource_id)
+                .order_by(ResourceAliasORM.normalized_alias)
+            ).all()
             output.append(
                 ResourceOperationSummary.model_validate(
                     {
                         "operation_key": operation_key,
-                        "method": representative.method,
-                        "path": representative.path,
                         "access_mode": representative.access_mode,
-                        "resource_aliases": sorted(
-                        {
-                            alias
-                            for rule in operation_rules
-                            for alias in rule.resource_aliases
-                        },
-                            key=lambda value: value.casefold(),
-                        ),
+                        "resource_aliases": list(aliases),
                         "id_field_aliases": sorted(
                             {
                                 rule.id_field_name

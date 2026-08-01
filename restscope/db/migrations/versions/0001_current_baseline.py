@@ -6,7 +6,7 @@ Create Date: 2026-07-29
 
 RESTScope deliberately rejects pre-existing database files during App startup.
 There is therefore no supported upgrade path from the exploratory 0001–0006
-chain.  This single baseline creates Schema, Generator, API Behavior Monitor,
+chain.  This single baseline creates OpenAPI, Generator, API Behavior Monitor,
 and Operation Smoke Memory tables exactly as the current ORM declares them.
 """
 

@@ -22,7 +22,6 @@ class PassingOperationSmokeCoordinator:
             operation_key=request.operation_key,
             success_rate=1.0,
             required_success_rate=request.success_rate_threshold,
-            active_config_revision=1,
             stop_reason="success_rate_reached",
             reason="The test double represents a successful complete Batch.",
         )

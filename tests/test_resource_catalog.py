@@ -352,10 +352,10 @@ def test_catalog_rolls_back_whole_response_when_one_group_conflicts(
     assert catalog.list_rules("GET /dashboard") == []
 
 
-def test_lookup_preserves_operation_specific_aliases_and_all_resource_usage(
+def test_lookup_reuses_canonical_aliases_across_all_resource_usage(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that lookup preserves operation specific aliases and all resource usage."""
+    """Usage rows stay operation-specific while aliases remain canonical vocabulary."""
     from restscope.api_behavior_monitor.resource_schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
@@ -413,8 +413,8 @@ def test_lookup_preserves_operation_specific_aliases_and_all_resource_usage(
         item.operation_key: item.resource_aliases
         for item in resource_result.operations
     } == {
-        "POST /users": ["user"],
-        "GET /owners/{ownerId}": ["owner"],
+        "POST /users": ["owner", "user"],
+        "GET /owners/{ownerId}": ["owner", "user"],
     }
     assert [item.operation_key for item in id_result.operations] == [
         "POST /users"

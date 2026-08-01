@@ -46,7 +46,6 @@ class ResponseValueRegistrationResult:
     incorrectly typed values at the boundary.
     """
     status: Literal["registered", "existing"]
-    monitor_id: str
     value_name: str
     sources: list[PersistedResponseValueSource]
 
@@ -62,6 +61,17 @@ class ResponseValueObservationResult:
     """
     sources_processed: int = 0
     values_recorded: int = 0
+    warning: "ResponseValueObservationWarning | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseValueObservationWarning:
+    """Explain why one oversized response was skipped without partial writes."""
+
+    code: str
+    message: str
+    scalar_count: int
+    scalar_limit: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,7 +196,6 @@ class ResponseValueTracker:
             raise ResponseValueUnavailableError(str(exc)) from exc
         return ResponseValueRegistrationResult(
             status="registered" if monitor.created else "existing",
-            monitor_id=monitor.monitor_id,
             value_name=monitor.value_name,
             sources=sources,
         )
@@ -312,7 +321,7 @@ class ResponseValueTracker:
         data needed for this call.
         """
         selected_count = 0
-        for monitor in self.catalog.list_active_monitors():
+        for monitor in self.catalog.list_monitors():
             sources = self._select_sources(
                 ir,
                 parameter_name=monitor.parameter_name,
@@ -321,7 +330,7 @@ class ResponseValueTracker:
             )
             if not sources:
                 continue
-            self.catalog.add_sources(monitor.monitor_id, sources)
+            self.catalog.add_sources(monitor.value_name, sources)
             selected_count += len(sources)
         return selected_count
 
@@ -474,12 +483,19 @@ class ResponseValueTracker:
             or not _is_json_media_type(normalized_media)
         ):
             return ResponseValueObservationResult()
-        self.catalog.record_observation(
-            operation_key=producer_operation_key,
-            status_code=status_code,
-            media_type=normalized_media,
-            scalars=_flatten_observed_scalars(body),
-        )
+        scalars = _flatten_observed_scalars(body)
+        if len(scalars) > 1000:
+            return ResponseValueObservationResult(
+                warning=ResponseValueObservationWarning(
+                    code="response_observation_scalar_limit_exceeded",
+                    message=(
+                        "Response observation was skipped because it exceeded "
+                        "the 1000-scalar persistence limit"
+                    ),
+                    scalar_count=len(scalars),
+                    scalar_limit=1000,
+                )
+            )
         sources = [
             source
             for source in self.catalog.list_sources_for_operation(
@@ -488,12 +504,18 @@ class ResponseValueTracker:
             if _status_matches(source.status_code, status_code)
             and source.media_type == normalized_media
         ]
-        values_recorded = 0
+        values_by_pool: dict[str, list[object]] = {}
         for source in sources:
-            values_recorded += self.catalog.record_values(
-                source.monitor_id,
-                _extract_selector_values(body, source.selector),
+            values_by_pool.setdefault(source.value_name, []).extend(
+                _extract_selector_values(body, source.selector)
             )
+        values_recorded = self.catalog.record_response(
+            operation_key=producer_operation_key,
+            status_code=status_code,
+            media_type=normalized_media,
+            scalars=scalars,
+            values_by_pool=values_by_pool,
+        )
         return ResponseValueObservationResult(
             sources_processed=len(sources),
             values_recorded=values_recorded,

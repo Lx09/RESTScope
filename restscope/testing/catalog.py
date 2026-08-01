@@ -1,4 +1,4 @@
-"""Validated, versioned generator catalog independent from later OpenAPI IRs."""
+"""Combine App-lifetime OpenAPI operation shapes with current Generator rows."""
 
 from __future__ import annotations
 
@@ -47,27 +47,22 @@ class GeneratorConfigError(ValueError):
         self.input_node_ids = tuple(input_node_ids)
 
 
-class GeneratorConfigRevisionConflict(GeneratorConfigError):
-    """
-    Coordinate generator config revision conflict behavior for deterministic request
-    generation, constraint solving, and execution.
+class GeneratorConfigStateConflict(GeneratorConfigError):
+    """Report that stored Generator content changed before Patch commit."""
 
-    Read the public methods as the supported lifecycle and treat underscore-prefixed
-    helpers as internal implementation details.
-    """
-    def __init__(self, *, expected: int, actual: int | None) -> None:
-        actual_text = str(actual) if actual is not None else "changed concurrently"
+    def __init__(self) -> None:
         super().__init__(
-            "generator_config_revision_conflict",
-            f"Generator configuration revision conflict: expected {expected}, actual {actual_text}",
+            "generator_config_state_conflict",
+            "Generator configuration changed while the Patch was being prepared",
         )
 
 
 class GeneratorConfigCatalog:
-    """Initialize frozen configs and append directly accepted revisions."""
+    """Combine App-lifetime operation snapshots with persisted current inputs."""
 
     def __init__(self, unit_of_work_factory: GeneratorConfigUnitOfWorkFactory) -> None:
         self.unit_of_work_factory = unit_of_work_factory
+        self._baselines: dict[str, OperationGeneratorConfig] = {}
 
     def get_operation(self, operation_key: str) -> OperationGeneratorConfig | None:
         """
@@ -77,76 +72,39 @@ class GeneratorConfigCatalog:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
+        baseline = self._baselines.get(operation_key)
+        if baseline is None:
+            return None
         with self.unit_of_work_factory() as uow:
-            return uow.generator_configs.get(operation_key)
+            inputs = uow.generator_configs.get_inputs(operation_key)
+        # Operations without configurable inputs legitimately have no rows.
+        if not inputs and baseline.configs:
+            raise GeneratorConfigError(
+                "generator_config_incomplete",
+                f"No persisted Generator inputs exist for {operation_key}",
+            )
+        return rebuild_generator_config(baseline, inputs)
 
     def initialize_once(self, ir: OpenAPISpecIR) -> bool:
-        """Persist the first IR-derived generator catalog and never resync it."""
+        """Freeze the App's IR in memory and persist only its initial inputs."""
 
+        if self._baselines:
+            return False
+        records = [
+            _validate_initial_record(record)
+            for record in build_initial_catalog(ir)
+        ]
         with self.unit_of_work_factory() as uow:
-            if uow.generator_configs.is_initialized():
-                return False
-            records = [
-                _validate_initial_record(record)
-                for record in build_initial_catalog(ir)
-            ]
             try:
-                uow.generator_configs.initialize(records)
+                uow.generator_configs.initialize(
+                    [(record.operation_key, record.configs) for record in records]
+                )
             except GeneratorConfigConcurrentWrite:
                 uow.rollback()
                 return False
             uow.commit()
-            return True
-
-    def apply_accepted_patch(
-        self,
-        *,
-        operation_key: str,
-        expected_revision: int,
-        updates: Sequence[InputGeneratorPatch],
-    ) -> OperationGeneratorConfig:
-        """Validate and persist one directly accepted Generator revision.
-
-        This generic catalog operation is used by non-Smoke callers and focused
-        tests.  Operation Smoke uses its wider atomic Unit of Work so this same
-        Generator write commits together with Investigation memory.
-        """
-        current = self._require_existing(operation_key)
-        if current.revision != expected_revision:
-            raise GeneratorConfigRevisionConflict(
-                expected=expected_revision,
-                actual=current.revision,
-            )
-        accepted = prepare_accepted_generator_patch(current, updates)
-        with self.unit_of_work_factory() as uow:
-            latest = uow.generator_configs.get(operation_key)
-            actual_revision = latest.revision if latest is not None else 0
-            if actual_revision != expected_revision:
-                raise GeneratorConfigRevisionConflict(
-                    expected=expected_revision,
-                    actual=actual_revision,
-                )
-            try:
-                persisted = uow.generator_configs.replace(
-                    operation_key=operation_key,
-                    expected_revision=expected_revision,
-                    revision=accepted.revision,
-                    snapshot=accepted.snapshot.model_dump(mode="json"),
-                    enabled=accepted.enabled,
-                    disabled_reasons=[
-                        item.model_dump(mode="json")
-                        for item in accepted.disabled_reasons
-                    ],
-                    active_media_type=accepted.active_media_type,
-                    configs=accepted.configs,
-                )
-            except GeneratorConfigConcurrentWrite as exc:
-                raise GeneratorConfigRevisionConflict(
-                    expected=expected_revision,
-                    actual=None,
-                ) from exc
-            uow.commit()
-            return persisted
+        self._baselines = {record.operation_key: record for record in records}
+        return True
 
     def require_operation(self, operation_key: str) -> OperationGeneratorConfig:
         """
@@ -337,12 +295,12 @@ def prepare_accepted_generator_patch(
     current: OperationGeneratorConfig,
     updates: Sequence[InputGeneratorPatch],
 ) -> OperationGeneratorConfig:
-    """Build the next directly accepted revision without writing a database.
+    """Build the accepted current Generator state without writing a database.
 
     Operation Smoke uses this pure step before opening its atomic persistence
     transaction.  It applies presence closure, validates every resulting input
     config, and clears only recoverable disabled reasons owned by patched
-    inputs.  The caller remains responsible for the revision-lock write.
+    inputs.  The caller remains responsible for a content-compare write.
     """
     updated, patched_node_ids = _apply_patches(current, updates)
     _validate_configs(
@@ -351,69 +309,94 @@ def prepare_accepted_generator_patch(
         configs=updated,
         enforce_schema=False,
     )
-    remaining_reasons = _contract_disabled_reasons(
-        current,
-        current.active_media_type,
+    del patched_node_ids
+    return rebuild_generator_config(current, updated)
+
+
+def rebuild_generator_config(
+    baseline: OperationGeneratorConfig,
+    configs: list[InputGeneratorConfig],
+) -> OperationGeneratorConfig:
+    """Derive enabled state from the immutable snapshot and current inputs.
+
+    Recoverable default-generator failures are deliberately recomputed instead
+    of persisted.  A successful Patch can therefore make an operation usable
+    without an operation-level state row or historical revision.
+    """
+
+    contract_reasons = _contract_disabled_reasons(
+        baseline,
+        baseline.active_media_type,
     )
-    nodes = {
-        node.input_node_id: node
-        for node in current.snapshot.input_nodes
+    baseline_by_id = {
+        item.input_node_id: item for item in baseline.configs
     }
-    configs_by_id = {item.input_node_id: item for item in updated}
-    selected_node_ids = _effective_node_ids(
-        _selected_node_ids(current, current.active_media_type),
-        nodes=nodes,
-        configs=configs_by_id,
-    )
-    invalid_containers = _container_configuration_errors(
-        nodes=nodes,
-        configs=configs_by_id,
-        selected_node_ids=selected_node_ids,
-    )
-    container_node_ids = {
-        node.input_node_id
-        for node in nodes.values()
-        if node.schema_contract is not None
-        and (
-            _has_type(node.schema_contract, "object")
-            or bool(node.schema_contract.properties)
-        )
+    changed_input_ids = {
+        item.input_node_id
+        for item in configs
+        if baseline_by_id.get(item.input_node_id) != item
     }
-    remaining_reasons.extend(
+    # Default derivation failures are attached to their input.  A later
+    # accepted Patch clears only failures for inputs whose current content is
+    # different from the original baseline; failures on untouched inputs
+    # remain visible and keep the operation disabled.
+    remaining_recoverable = [
         reason
-        for reason in current.disabled_reasons
+        for reason in baseline.disabled_reasons
         if reason.recoverable
-        and reason.input_node_id not in patched_node_ids
-        # A container-level default failure can be repaired by changing one of
-        # its child Generators. Re-evaluate the complete accepted Generator set
-        # instead of requiring the Patch to redundantly target the parent.
-        and not (
-            reason.code == "default_generator_unavailable"
-            and reason.input_node_id in container_node_ids
-            and reason.input_node_id not in invalid_containers
+        and not _changed_input_can_repair_reason(
+            baseline,
+            reason=reason,
+            changed_input_ids=changed_input_ids,
         )
-    )
-    # The same condition can come from the frozen contract and the previous
-    # catalog.  Keep one readable reason rather than accumulating duplicates.
-    unique_reasons = list(
-        {
-            (
-                item.code,
-                item.message,
-                item.recoverable,
-                item.input_node_id,
-            ): item
-            for item in remaining_reasons
-        }.values()
-    )
-    return current.model_copy(
+    ]
+    reasons = [*contract_reasons, *remaining_recoverable]
+    candidate = baseline.model_copy(
         update={
-            "revision": current.revision + 1,
-            "configs": updated,
-            "enabled": not unique_reasons,
-            "disabled_reasons": unique_reasons,
+            "configs": configs,
+            "enabled": not reasons,
+            "disabled_reasons": reasons,
         }
     )
+    _validate_configs(
+        candidate,
+        media_type=candidate.active_media_type,
+        configs=candidate.configs,
+        enforce_schema=False,
+    )
+    return candidate
+
+
+def _changed_input_can_repair_reason(
+    baseline: OperationGeneratorConfig,
+    *,
+    reason: GeneratorDisabledReason,
+    changed_input_ids: set[str],
+) -> bool:
+    """Return whether a current change touches the reason's input subtree.
+
+    Some derivation failures are attributed to a container even though a child
+    Generator controls whether the container satisfies cardinality.  Walking
+    parent links lets a changed descendant clear that container-level failure
+    without clearing unrelated input failures.
+    """
+
+    if not changed_input_ids:
+        return False
+    if reason.input_node_id is None:
+        return True
+    if reason.input_node_id in changed_input_ids:
+        return True
+    nodes = {
+        item.input_node_id: item for item in baseline.snapshot.input_nodes
+    }
+    for changed_id in changed_input_ids:
+        node = nodes.get(changed_id)
+        while node is not None and node.parent_node_id is not None:
+            if node.parent_node_id == reason.input_node_id:
+                return True
+            node = nodes.get(node.parent_node_id)
+    return False
 
 
 def _validate_initial_record(

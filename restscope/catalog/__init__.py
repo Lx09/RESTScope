@@ -1,16 +1,14 @@
-"""Database-independent OpenAPI schema catalog contracts."""
+"""OpenAPI current-document and response-change audit Interface."""
 
-from .models import SchemaRecord, SchemaSourceInput
-from .ports import SchemaRepository, SchemaUnitOfWork, SchemaUnitOfWorkFactory
-from .service import SchemaCatalog, SchemaNotFoundError, SchemaSourceValidationError
+from .models import OpenAPIChangeEventRecord, OpenAPIChangeEventWrite
+from .ports import OpenAPIRepository, OpenAPIUnitOfWork, OpenAPIUnitOfWorkFactory
+from .service import OpenAPICatalog
 
 __all__ = [
-    "SchemaCatalog",
-    "SchemaNotFoundError",
-    "SchemaRecord",
-    "SchemaRepository",
-    "SchemaSourceInput",
-    "SchemaSourceValidationError",
-    "SchemaUnitOfWork",
-    "SchemaUnitOfWorkFactory",
+    "OpenAPIChangeEventRecord",
+    "OpenAPIChangeEventWrite",
+    "OpenAPICatalog",
+    "OpenAPIRepository",
+    "OpenAPIUnitOfWork",
+    "OpenAPIUnitOfWorkFactory",
 ]

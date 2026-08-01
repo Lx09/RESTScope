@@ -125,26 +125,26 @@ explicit project decision:
   runtime instead of treating a precomputed plan as the source of truth.
 - Do not persist test plans, inferred operation relationships, scheduler
   queues, Agent intermediate state, or speculative long-term memory.
-- Persist only inputs or evidence with a concrete, user-approved need. Existing
-  schema-source persistence does not imply approval for a broader persistence
-  architecture.
+- Persist only inputs or evidence with a concrete, user-approved need. The
+  current normalized OpenAPI document and response-contract change events are
+  approved audit/export artifacts, but they do not enable App recovery.
 - The API Behavior Monitor catalog is one explicit narrow exception. It may
   persist resource names and aliases, learned identifier selectors, typed
   identifier values, latest per-operation read/write usage, response-value
   monitor registrations and selectors, deduplicated typed response values, and
-  latest monitor errors. Its response-contract checks and direct mutations of
-  the current OpenAPI IR remain App-lifetime only. It must not persist raw
-  responses, LLM reasoning, plans, queues, general Agent memory, or evolved IR
-  snapshots.
+  latest monitor errors. It may also persist the complete current normalized
+  OpenAPI and append-only response change events. The response check registry
+  remains App-lifetime only. It must not persist raw responses, LLM reasoning,
+  plans, queues, general Agent memory, or recovery snapshots.
 - Operation Smoke Memory is a second narrow exception approved for the current
-  App lifecycle. It may persist stable per-operation Failures, bounded Failure
-  Observations, append-only Investigations, operation-local Parameter links,
-  and applied Generator/Constraint Patches. It must not persist raw Batches,
+  App lifecycle. It may persist stable per-operation Failures, append-only
+  terminal Solve Attempts, validated input attribution, current Constraints,
+  and deterministic Generator/Constraint change events. It must not persist raw Batches,
   response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
   queues, or a permanent `resolved` flag. Solve receives a read-only Parameter
   memory tool. Failure Dedup uses only the current run's in-memory Test Case
   Catalog, may query the global read-only OpenAPI operation capability, reads
-  no Failure Memory, and writes validated single-Observation Failures through
+  no Failure Memory, and writes validated stable Failure occurrences through
   deterministic runtime code. The Test Case Catalog stores every Batch and
   Solve Probe case only until `OperationSmokeCoordinator.run` returns; it must
   never be persisted.

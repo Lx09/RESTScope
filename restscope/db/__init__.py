@@ -11,7 +11,7 @@ from .unit_of_work import (
     SqlAlchemyGeneratorConfigUnitOfWork,
     SqlAlchemyResourceCatalogUnitOfWork,
     SqlAlchemyResponseValueCatalogUnitOfWork,
-    SqlAlchemySchemaUnitOfWork,
+    SqlAlchemyOpenAPIUnitOfWork,
     SqlAlchemySmokeMemoryUnitOfWork,
 )
 
@@ -19,7 +19,7 @@ __all__ = [
     "Base",
     "DatabaseAlreadyExistsError",
     "DatabaseBootstrapError",
-    "SqlAlchemySchemaUnitOfWork",
+    "SqlAlchemyOpenAPIUnitOfWork",
     "SqlAlchemyGeneratorConfigUnitOfWork",
     "SqlAlchemyResourceCatalogUnitOfWork",
     "SqlAlchemyResponseValueCatalogUnitOfWork",

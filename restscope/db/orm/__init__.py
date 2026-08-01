@@ -1,11 +1,11 @@
-"""SQLAlchemy mappings owned by the persistence adapter."""
+"""Public ORM registry for the final single-App database schema."""
 
 from .generator_config_orm import (
-    GeneratorCatalogStateORM,
-    GeneratorConfigRevisionORM,
+    GeneratorChangeEventORM,
     InputGeneratorConfigORM,
-    OperationGeneratorConfigORM,
+    OperationConstraintORM,
 )
+from .openapi_orm import OpenAPIChangeEventORM, OpenAPICurrentORM
 from .resource_catalog_orm import (
     OperationResourceRuleORM,
     ResourceAliasORM,
@@ -21,22 +21,18 @@ from .response_value_orm import (
     ResponseValueORM,
     ResponseValueSourceORM,
 )
-from .schema_orm import SchemaORM
 from .smoke_memory_orm import (
-    SmokeAppliedPatchORM,
-    SmokeFailureObservationORM,
     SmokeFailureORM,
-    SmokeInvestigationORM,
-    SmokeInvestigationParameterORM,
-    SmokeObservationORM,
-    SmokeParameterORM,
+    SmokeSolveAttemptORM,
+    SmokeSolveAttemptParameterORM,
 )
 
 __all__ = [
-    "GeneratorCatalogStateORM",
-    "GeneratorConfigRevisionORM",
+    "GeneratorChangeEventORM",
     "InputGeneratorConfigORM",
-    "OperationGeneratorConfigORM",
+    "OpenAPIChangeEventORM",
+    "OpenAPICurrentORM",
+    "OperationConstraintORM",
     "OperationResourceRuleORM",
     "ResourceAliasORM",
     "ResourceIdentifierORM",
@@ -48,12 +44,7 @@ __all__ = [
     "ResponseValueMonitorORM",
     "ResponseValueORM",
     "ResponseValueSourceORM",
-    "SchemaORM",
-    "SmokeAppliedPatchORM",
-    "SmokeFailureObservationORM",
     "SmokeFailureORM",
-    "SmokeInvestigationORM",
-    "SmokeInvestigationParameterORM",
-    "SmokeObservationORM",
-    "SmokeParameterORM",
+    "SmokeSolveAttemptORM",
+    "SmokeSolveAttemptParameterORM",
 ]

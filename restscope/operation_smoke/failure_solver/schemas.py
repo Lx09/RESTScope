@@ -1,7 +1,7 @@
 """Define one Failure Solve session and its internal tool handoffs.
 
-Solve receives one stable Failure with current Batch observations and historical
-Investigations.  It may read related Parameter memory, probe the target, and ask
+Solve receives one stable Failure with current Batch evidence and historical
+Solve Attempts.  It may read related Parameter memory, probe the target, and ask
 Parameter Patch Agent to construct validated candidates.  A final model decision
 can reference only a candidate created in this session; deterministic runtime
 then records or atomically applies that conclusion.
@@ -27,7 +27,7 @@ class _Model(BaseModel):
 
 
 class FailureSolveRequest(_Model):
-    """Supply all current evidence for one independent Investigation."""
+    """Supply all current evidence for one independent Solve session."""
 
     operation_key: str = Field(min_length=1)
     round_number: int = Field(ge=1)
@@ -45,7 +45,7 @@ class ParameterCauseDecision(_Model):
 
 
 class FailureSolveDecision(_Model):
-    """Return one terminal Investigation conclusion or a checkpoint choice."""
+    """Return one terminal Solve conclusion or a checkpoint choice."""
 
     action: Literal["apply_patch", "no_patch", "conflict", "continue"]
     candidate_ref: str | None = Field(
@@ -128,10 +128,46 @@ class FailureSolveOutcome(_Model):
         "solve_budget_exhausted",
     ]
     outputs_used: int = Field(ge=1, le=50)
-    investigation_id: str | None = None
-    active_config_revision: int | None = Field(default=None, ge=1)
+    solve_attempt_id: str | None = None
+    generator_change_event_id: str | None = None
     applied_patch: PatchCandidate | None = None
     active_constraints: list[CompiledConstraintPatch] = Field(
         default_factory=list
     )
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_persistence_identity(self) -> "FailureSolveOutcome":
+        """Keep terminal persistence IDs separate from technical exhaustion.
+
+        Every terminal Solve conclusion is durable and therefore has one
+        ``solve_attempt_id``. Only an applied Patch has a Generator change
+        event and selected candidate. Budget exhaustion writes nothing.
+        """
+
+        if self.status == "solve_budget_exhausted":
+            if (
+                self.solve_attempt_id is not None
+                or self.generator_change_event_id is not None
+                or self.applied_patch is not None
+                or self.active_constraints
+            ):
+                raise ValueError("Solve budget exhaustion cannot include persisted state")
+            if self.reason is None:
+                raise ValueError("Solve budget exhaustion requires a reason")
+            return self
+
+        if self.solve_attempt_id is None:
+            raise ValueError("A terminal Solve outcome requires solve_attempt_id")
+        if self.status == "applied_patch":
+            if self.generator_change_event_id is None or self.applied_patch is None:
+                raise ValueError(
+                    "An applied Patch requires its candidate and Generator change event"
+                )
+        elif (
+            self.generator_change_event_id is not None
+            or self.applied_patch is not None
+            or self.active_constraints
+        ):
+            raise ValueError("Only an applied Patch may include changed current state")
+        return self

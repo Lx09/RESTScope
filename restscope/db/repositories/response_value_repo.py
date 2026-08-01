@@ -1,4 +1,9 @@
-"""SQLAlchemy adapter for persistent response-value monitor pools."""
+"""SQLAlchemy adapter for bounded response observations and typed value pools.
+
+The response workflow extracts selectors before calling this adapter.  One
+write transaction stores the bounded observation, refreshes every registered
+pool, and prunes old rows so a partial response cannot become durable evidence.
+"""
 
 from __future__ import annotations
 
@@ -24,17 +29,18 @@ from ..orm.response_value_orm import (
     ResponseValueSourceORM,
 )
 
+
 MAX_RESPONSE_OBSERVATIONS_PER_OPERATION = 100
+MAX_RESPONSE_VALUES_PER_POOL = 100
+MAX_RESPONSE_SCALARS = 1000
 
 
 class SqlAlchemyResponseValueCatalogRepository:
-    """
-    Define the collaborator contract for sql alchemy response value catalog repository.
+    """Persist response evidence within fixed per-operation and per-pool bounds."""
 
-    Concrete implementations may vary while callers in the repository and database
-    persistence boundary depend only on these declared operations.
-    """
     def __init__(self, session: Session) -> None:
+        """Use the transaction and lifecycle owned by the surrounding unit of work."""
+
         self.session = session
 
     def ensure_monitor(
@@ -43,13 +49,8 @@ class SqlAlchemyResponseValueCatalogRepository:
         *,
         now: datetime,
     ) -> ResponseValueMonitorRecord:
-        """
-        Handle ensure monitor as part of the repository and database persistence
-        boundary.
+        """Create or refresh the one pool assigned to a consumer input."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
         row = self.session.scalar(
             select(ResponseValueMonitorORM).where(
                 ResponseValueMonitorORM.consumer_operation_key
@@ -61,56 +62,47 @@ class SqlAlchemyResponseValueCatalogRepository:
         created = row is None
         if row is None:
             row = ResponseValueMonitorORM(
-                id=f"rvm_{uuid4().hex}",
                 value_name=registration.value_name,
                 consumer_operation_key=registration.consumer_operation_key,
                 consumer_input_node_id=registration.consumer_input_node_id,
                 parameter_name=registration.parameter_name,
                 expected_type=registration.expected_type,
-                active=True,
                 created_at=now,
                 updated_at=now,
             )
             self.session.add(row)
         else:
+            if row.value_name != registration.value_name:
+                raise ValueError("A consumer input cannot change its response value name")
             row.parameter_name = registration.parameter_name
             row.expected_type = registration.expected_type
-            row.active = True
             row.updated_at = now
         self.session.flush()
         return _monitor_record(row, created=created)
 
     def add_sources(
         self,
-        monitor_id: str,
+        value_name: str,
         sources: list[ResponseValueSource],
         *,
         now: datetime,
     ) -> list[PersistedResponseValueSource]:
-        """
-        Handle add sources as part of the repository and database persistence boundary.
+        """Insert missing explicit producer selectors for one value pool."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        if self.session.get(ResponseValueMonitorORM, monitor_id) is None:
-            raise ValueError(f"Unknown response-value monitor: {monitor_id}")
+        if self.session.get(ResponseValueMonitorORM, value_name) is None:
+            raise ValueError(f"Unknown response-value pool: {value_name}")
         for source in sources:
-            row = self.session.scalar(
-                select(ResponseValueSourceORM).where(
-                    ResponseValueSourceORM.monitor_id == monitor_id,
-                    ResponseValueSourceORM.producer_operation_key
-                    == source.producer_operation_key,
-                    ResponseValueSourceORM.status_code == source.status_code,
-                    ResponseValueSourceORM.media_type == source.media_type,
-                    ResponseValueSourceORM.selector == source.selector,
-                )
+            key = (
+                value_name,
+                source.producer_operation_key,
+                source.status_code,
+                source.media_type,
+                source.selector,
             )
-            if row is None:
+            if self.session.get(ResponseValueSourceORM, key) is None:
                 self.session.add(
                     ResponseValueSourceORM(
-                        id=f"rvs_{uuid4().hex}",
-                        monitor_id=monitor_id,
+                        value_name=value_name,
                         producer_operation_key=source.producer_operation_key,
                         status_code=source.status_code,
                         media_type=source.media_type,
@@ -120,32 +112,22 @@ class SqlAlchemyResponseValueCatalogRepository:
                     )
                 )
         self.session.flush()
-        return self._list_sources(monitor_id=monitor_id)
+        return self._list_sources(value_name=value_name)
 
     def list_sources_for_operation(
         self,
         producer_operation_key: str,
     ) -> list[PersistedResponseValueSource]:
-        """
-        Return sources for operation for the repository and database persistence
-        boundary.
+        """Return every registered selector that reads one producer operation."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
         rows = self.session.scalars(
             select(ResponseValueSourceORM)
-            .join(
-                ResponseValueMonitorORM,
-                ResponseValueMonitorORM.id == ResponseValueSourceORM.monitor_id,
-            )
             .where(
                 ResponseValueSourceORM.producer_operation_key
-                == producer_operation_key,
-                ResponseValueMonitorORM.active.is_(True),
+                == producer_operation_key
             )
             .order_by(
-                ResponseValueSourceORM.monitor_id,
+                ResponseValueSourceORM.value_name,
                 ResponseValueSourceORM.status_code,
                 ResponseValueSourceORM.media_type,
                 ResponseValueSourceORM.selector,
@@ -153,17 +135,11 @@ class SqlAlchemyResponseValueCatalogRepository:
         ).all()
         return [_source_record(row) for row in rows]
 
-    def list_active_monitors(self) -> list[ResponseValueMonitorRecord]:
-        """
-        Return active monitors for the repository and database persistence boundary.
+    def list_monitors(self) -> list[ResponseValueMonitorRecord]:
+        """Return all registered pools; every stored monitor is active."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
         rows = self.session.scalars(
-            select(ResponseValueMonitorORM)
-            .where(ResponseValueMonitorORM.active.is_(True))
-            .order_by(
+            select(ResponseValueMonitorORM).order_by(
                 ResponseValueMonitorORM.consumer_operation_key,
                 ResponseValueMonitorORM.consumer_input_node_id,
             )
@@ -172,49 +148,14 @@ class SqlAlchemyResponseValueCatalogRepository:
 
     def record_values(
         self,
-        monitor_id: str,
+        value_name: str,
         values: list[object],
         *,
         now: datetime,
     ) -> int:
-        """
-        Record values for the repository and database persistence boundary.
+        """Refresh one pool and prune it to its 100 most recently active values."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        if self.session.get(ResponseValueMonitorORM, monitor_id) is None:
-            raise ValueError(f"Unknown response-value monitor: {monitor_id}")
-        recorded = 0
-        seen: set[tuple[str, str]] = set()
-        for value in values:
-            encoded = _encode_value(value)
-            if encoded is None or encoded in seen:
-                continue
-            seen.add(encoded)
-            value_type, value_text = encoded
-            row = self.session.scalar(
-                select(ResponseValueORM).where(
-                    ResponseValueORM.monitor_id == monitor_id,
-                    ResponseValueORM.value_type == value_type,
-                    ResponseValueORM.value_text == value_text,
-                )
-            )
-            if row is None:
-                first_seen_at = now + timedelta(microseconds=recorded)
-                self.session.add(
-                    ResponseValueORM(
-                        id=f"rv_{uuid4().hex}",
-                        monitor_id=monitor_id,
-                        value_type=value_type,
-                        value_text=value_text,
-                        first_seen_at=first_seen_at,
-                        last_seen_at=first_seen_at,
-                    )
-                )
-                recorded += 1
-            else:
-                row.last_seen_at = now
+        recorded = self._record_values(value_name, values, now=now)
         self.session.flush()
         return recorded
 
@@ -227,72 +168,45 @@ class SqlAlchemyResponseValueCatalogRepository:
         scalars: list[tuple[str, object]],
         now: datetime,
     ) -> None:
-        """
-        Record observation for the repository and database persistence boundary.
+        """Store one bounded observation without updating any registered pool."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        observation_id = f"rvo_{uuid4().hex}"
-        self.session.add(
-            ResponseObservationORM(
-                id=observation_id,
-                operation_key=operation_key,
-                status_code=status_code,
-                media_type=media_type,
-                observed_at=now,
-            )
+        self._record_observation(
+            operation_key=operation_key,
+            status_code=status_code,
+            media_type=media_type,
+            scalars=scalars,
+            now=now,
         )
-        seen: set[tuple[str, str, str]] = set()
-        position = 0
-        for selector, value in scalars:
-            encoded = _encode_value(value)
-            if encoded is None:
-                continue
-            value_type, value_text = encoded
-            key = (selector, value_type, value_text)
-            if key in seen:
-                continue
-            seen.add(key)
-            self.session.add(
-                ResponseObservationScalarORM(
-                    id=f"rvsnap_{uuid4().hex}",
-                    observation_id=observation_id,
-                    selector=selector,
-                    position=position,
-                    value_type=value_type,
-                    value_text=value_text,
-                )
-            )
-            position += 1
         self.session.flush()
-        expired_ids = list(
-            self.session.scalars(
-                select(ResponseObservationORM.id)
-                .where(
-                    ResponseObservationORM.operation_key == operation_key
-                )
-                .order_by(
-                    ResponseObservationORM.observed_at.desc(),
-                    ResponseObservationORM.id.desc(),
-                )
-                .offset(MAX_RESPONSE_OBSERVATIONS_PER_OPERATION)
-            ).all()
+
+    def record_response(
+        self,
+        *,
+        operation_key: str,
+        status_code: int,
+        media_type: str,
+        scalars: list[tuple[str, object]],
+        values_by_pool: dict[str, list[object]],
+        now: datetime,
+    ) -> int:
+        """Store an observation and all pool updates in the active transaction."""
+
+        self._record_observation(
+            operation_key=operation_key,
+            status_code=status_code,
+            media_type=media_type,
+            scalars=scalars,
+            now=now,
         )
-        if expired_ids:
-            self.session.execute(
-                delete(ResponseObservationScalarORM).where(
-                    ResponseObservationScalarORM.observation_id.in_(
-                        expired_ids
-                    )
-                )
-            )
-            self.session.execute(
-                delete(ResponseObservationORM).where(
-                    ResponseObservationORM.id.in_(expired_ids)
-                )
+        recorded = 0
+        for offset, (value_name, values) in enumerate(sorted(values_by_pool.items())):
+            recorded += self._record_values(
+                value_name,
+                values,
+                now=now + timedelta(microseconds=offset),
             )
         self.session.flush()
+        return recorded
 
     def historical_values_for_source(
         self,
@@ -300,13 +214,8 @@ class SqlAlchemyResponseValueCatalogRepository:
         *,
         limit: int,
     ) -> list[object]:
-        """
-        Handle historical values for source as part of the repository and database
-        persistence boundary.
+        """Read distinct historical selector values for registration backfill."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
         rows = self.session.execute(
             select(
                 ResponseObservationORM.status_code,
@@ -345,36 +254,149 @@ class SqlAlchemyResponseValueCatalogRepository:
         return values
 
     def values_for(self, value_name: str, *, limit: int) -> list[object]:
-        """
-        Handle values for as part of the repository and database persistence boundary.
+        """Return the most recently active typed values for one registered pool."""
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        monitor = self.session.scalar(
-            select(ResponseValueMonitorORM).where(
-                ResponseValueMonitorORM.value_name == value_name,
-                ResponseValueMonitorORM.active.is_(True),
-            )
-        )
-        if monitor is None:
+        if self.session.get(ResponseValueMonitorORM, value_name) is None:
             return []
         rows = self.session.scalars(
             select(ResponseValueORM)
-            .where(ResponseValueORM.monitor_id == monitor.id)
-            .order_by(ResponseValueORM.first_seen_at, ResponseValueORM.id)
+            .where(ResponseValueORM.value_name == value_name)
+            .order_by(
+                ResponseValueORM.last_seen_at,
+                ResponseValueORM.first_seen_at,
+                ResponseValueORM.value_type,
+                ResponseValueORM.value_text,
+            )
             .limit(limit)
         ).all()
         return [_decode_value(row.value_type, row.value_text) for row in rows]
 
-    def _list_sources(
+    def _record_values(
+        self,
+        value_name: str,
+        values: list[object],
+        *,
+        now: datetime,
+    ) -> int:
+        """Upsert typed values and delete rows beyond the pool retention limit."""
+
+        if self.session.get(ResponseValueMonitorORM, value_name) is None:
+            raise ValueError(f"Unknown response-value pool: {value_name}")
+        recorded = 0
+        seen: set[tuple[str, str]] = set()
+        for sequence, value in enumerate(values):
+            encoded = _encode_value(value)
+            if encoded is None or encoded in seen:
+                continue
+            seen.add(encoded)
+            value_type, value_text = encoded
+            row = self.session.get(
+                ResponseValueORM,
+                (value_name, value_type, value_text),
+            )
+            if row is None:
+                timestamp = now + timedelta(microseconds=sequence)
+                self.session.add(
+                    ResponseValueORM(
+                        value_name=value_name,
+                        value_type=value_type,
+                        value_text=value_text,
+                        first_seen_at=timestamp,
+                        last_seen_at=timestamp,
+                    )
+                )
+                recorded += 1
+            else:
+                row.last_seen_at = now + timedelta(microseconds=sequence)
+        self.session.flush()
+        expired = self.session.scalars(
+            select(ResponseValueORM)
+            .where(ResponseValueORM.value_name == value_name)
+            .order_by(
+                ResponseValueORM.last_seen_at.desc(),
+                ResponseValueORM.first_seen_at.desc(),
+                ResponseValueORM.value_type,
+                ResponseValueORM.value_text,
+            )
+            .offset(MAX_RESPONSE_VALUES_PER_POOL)
+        ).all()
+        for row in expired:
+            self.session.delete(row)
+        return recorded
+
+    def _record_observation(
         self,
         *,
-        monitor_id: str,
-    ) -> list[PersistedResponseValueSource]:
+        operation_key: str,
+        status_code: int,
+        media_type: str,
+        scalars: list[tuple[str, object]],
+        now: datetime,
+    ) -> None:
+        """Insert distinct scalars, then prune old parent observations."""
+
+        encoded_scalars: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for selector, value in scalars:
+            encoded = _encode_value(value)
+            if encoded is None:
+                continue
+            key = (selector, encoded[0], encoded[1])
+            if key not in seen:
+                seen.add(key)
+                encoded_scalars.append(key)
+        if len(encoded_scalars) > MAX_RESPONSE_SCALARS:
+            raise ValueError("A response observation cannot exceed 1000 scalar values")
+
+        observation_id = f"rvo_{uuid4().hex}"
+        self.session.add(
+            ResponseObservationORM(
+                id=observation_id,
+                operation_key=operation_key,
+                status_code=status_code,
+                media_type=media_type,
+                observed_at=now,
+            )
+        )
+        self.session.add_all(
+            [
+                ResponseObservationScalarORM(
+                    observation_id=observation_id,
+                    selector=selector,
+                    value_type=value_type,
+                    value_text=value_text,
+                    position=position,
+                )
+                for position, (selector, value_type, value_text) in enumerate(
+                    encoded_scalars
+                )
+            ]
+        )
+        self.session.flush()
+        expired_ids = list(
+            self.session.scalars(
+                select(ResponseObservationORM.id)
+                .where(ResponseObservationORM.operation_key == operation_key)
+                .order_by(
+                    ResponseObservationORM.observed_at.desc(),
+                    ResponseObservationORM.id.desc(),
+                )
+                .offset(MAX_RESPONSE_OBSERVATIONS_PER_OPERATION)
+            ).all()
+        )
+        if expired_ids:
+            self.session.execute(
+                delete(ResponseObservationORM).where(
+                    ResponseObservationORM.id.in_(expired_ids)
+                )
+            )
+
+    def _list_sources(self, *, value_name: str) -> list[PersistedResponseValueSource]:
+        """Return one pool's sources in deterministic display order."""
+
         rows = self.session.scalars(
             select(ResponseValueSourceORM)
-            .where(ResponseValueSourceORM.monitor_id == monitor_id)
+            .where(ResponseValueSourceORM.value_name == value_name)
             .order_by(
                 ResponseValueSourceORM.producer_operation_key,
                 ResponseValueSourceORM.status_code,
@@ -390,22 +412,23 @@ def _monitor_record(
     *,
     created: bool,
 ) -> ResponseValueMonitorRecord:
+    """Project one monitor row into the database-independent contract."""
+
     return ResponseValueMonitorRecord(
-        monitor_id=row.id,
         value_name=row.value_name,
         consumer_operation_key=row.consumer_operation_key,
         consumer_input_node_id=row.consumer_input_node_id,
         parameter_name=row.parameter_name,
         expected_type=row.expected_type,
-        active=row.active,
         created=created,
     )
 
 
 def _source_record(row: ResponseValueSourceORM) -> PersistedResponseValueSource:
+    """Project a natural-key source row into the catalog contract."""
+
     return PersistedResponseValueSource(
-        source_id=row.id,
-        monitor_id=row.monitor_id,
+        value_name=row.value_name,
         producer_operation_key=row.producer_operation_key,
         status_code=row.status_code,
         media_type=row.media_type,
@@ -415,6 +438,8 @@ def _source_record(row: ResponseValueSourceORM) -> PersistedResponseValueSource:
 
 
 def _encode_value(value: object) -> tuple[str, str] | None:
+    """Encode supported scalar values without conflating bool and integer."""
+
     if isinstance(value, str):
         return ("string", value)
     if isinstance(value, bool):
@@ -427,6 +452,8 @@ def _encode_value(value: object) -> tuple[str, str] | None:
 
 
 def _decode_value(value_type: str, value_text: str) -> object:
+    """Decode one stored scalar type used by generators and lookups."""
+
     if value_type == "string":
         return value_text
     if value_type == "boolean":
@@ -439,5 +466,7 @@ def _decode_value(value_type: str, value_text: str) -> object:
 
 
 def _status_matches(declared: str, actual: int) -> bool:
+    """Match an exact or OpenAPI wildcard response status declaration."""
+
     normalized = declared.upper()
     return normalized == str(actual) or normalized == f"{actual // 100}XX"

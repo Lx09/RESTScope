@@ -63,7 +63,7 @@ def test_catalog_initializes_all_operation_generators_once_from_ir(
     stored = catalog.get_operation("POST /orders/{orderId}")
 
     assert stored is not None
-    assert stored.revision == 1
+    assert not hasattr(stored, "revision")
     assert stored.enabled is True
     assert stored.snapshot.operation_key == "POST /orders/{orderId}"
     assert stored.snapshot.path == "/orders/{orderId}"
@@ -169,10 +169,10 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
     assert exc_info.value.code == "database_already_exists"
 
 
-def test_smoke_batch_uses_persisted_snapshot_when_current_ir_is_different(
+def test_smoke_batch_uses_app_memory_snapshot_when_current_ir_is_different(
     tmp_path: Path,
 ) -> None:
-    """Scenario: Smoke uses the persisted snapshot even when the current IR differs."""
+    """Smoke uses its App-memory snapshot even when another IR object differs."""
     import httpx
 
     from restscope.capabilities import ToolContext
@@ -220,17 +220,19 @@ def test_smoke_batch_uses_persisted_snapshot_when_current_ir_is_different(
     assert "/replacement" not in requested_urls[0]
 
 
-def test_catalog_patches_modify_frozen_generators_by_accepted_revision(
+def test_current_input_rows_rebuild_the_same_frozen_operation_snapshot(
     tmp_path: Path,
 ) -> None:
-    """Directly accepted Patches preserve the snapshot and revision lock."""
+    """Current-content writes preserve the App-memory snapshot and reject stale state."""
+
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing import (
-        GeneratorConfigRevisionConflict,
         InputGeneratorPatch,
+        prepare_accepted_generator_patch,
     )
+    from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
     catalog = _catalog(tmp_path)
     catalog.initialize_once(OpenAPIParser.parse(_spec()))
@@ -247,10 +249,9 @@ def test_catalog_patches_modify_frozen_generators_by_accepted_revision(
         == "query/verbose"
     )
 
-    patched = catalog.apply_accepted_patch(
-        operation_key=initial.operation_key,
-        expected_revision=1,
-        updates=[
+    patched_candidate = prepare_accepted_generator_patch(
+        initial,
+        [
             InputGeneratorPatch(
                 input_node_id=verbose.input_node_id,
                 inclusion_probability=1,
@@ -258,8 +259,15 @@ def test_catalog_patches_modify_frozen_generators_by_accepted_revision(
             )
         ],
     )
+    with catalog.unit_of_work_factory() as uow:
+        uow.generator_configs.replace_inputs(
+            operation_key=initial.operation_key,
+            expected=initial.configs,
+            updated=patched_candidate.configs,
+        )
+        uow.commit()
+    patched = catalog.require_operation(initial.operation_key)
 
-    assert patched.revision == 2
     assert patched.snapshot == initial.snapshot
     updated_verbose = next(
         item
@@ -275,30 +283,32 @@ def test_catalog_patches_modify_frozen_generators_by_accepted_revision(
         for node in patched.snapshot.input_nodes
         if node.canonical_path == "path/orderId"
     )
-    replaced = catalog.apply_accepted_patch(
-        operation_key=patched.operation_key,
-        expected_revision=2,
-        updates=[
+    replaced_candidate = prepare_accepted_generator_patch(
+        patched,
+        [
             InputGeneratorPatch(
                 input_node_id=path_node_id,
                 strategy={"type": "constant", "value": 5},
             )
         ],
     )
-
-    assert replaced.revision == 3
-    assert replaced.snapshot == initial.snapshot
-    with pytest.raises(GeneratorConfigRevisionConflict):
-        catalog.apply_accepted_patch(
-            operation_key=initial.operation_key,
-            expected_revision=2,
-            updates=[
-                InputGeneratorPatch(
-                    input_node_id=verbose.input_node_id,
-                    inclusion_probability=0,
-                )
-            ],
+    with catalog.unit_of_work_factory() as uow:
+        uow.generator_configs.replace_inputs(
+            operation_key=patched.operation_key,
+            expected=patched.configs,
+            updated=replaced_candidate.configs,
         )
+        uow.commit()
+    replaced = catalog.require_operation(patched.operation_key)
+
+    assert replaced.snapshot == initial.snapshot
+    with catalog.unit_of_work_factory() as uow:
+        with pytest.raises(GeneratorConfigConcurrentWrite):
+            uow.generator_configs.replace_inputs(
+                operation_key=initial.operation_key,
+                expected=patched.configs,
+                updated=patched.configs,
+            )
 
 
 def test_generator_patch_requires_an_actual_change() -> None:

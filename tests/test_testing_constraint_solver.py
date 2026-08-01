@@ -147,7 +147,6 @@ def _solver_config():
     ]
     return OperationGeneratorConfig(
         operation_key=snapshot.operation_key,
-        revision=1,
         snapshot=snapshot,
         active_media_type="application/json",
         configs=configs,

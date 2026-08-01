@@ -2,7 +2,7 @@
 
 Full Batch requests/responses and LLM conversations remain inside their owning
 runtime boundaries.  The public result reports actual Batch success, why the
-workflow stopped, and what each Investigation applied or declined.  It never
+workflow stopped, and what each Solve Attempt applied or declined.  It never
 labels a Patch ``resolved`` because only a later complete Batch can demonstrate
 its real effect.
 """
@@ -49,19 +49,19 @@ class PatchAttemptSummary(_PublicModel):
 
     candidate_ref: str
     patch_outputs: int = Field(ge=1, le=20)
-    applied_revision: int = Field(ge=1)
+    generator_change_event_id: str = Field(min_length=1)
     changed_input_count: int = Field(ge=0)
     constraint_count: int = Field(ge=0)
 
 
 class TodoRunSummary(_PublicModel):
-    """Summarize one independent Failure Investigation."""
+    """Summarize one independent terminal Failure Solve Attempt."""
 
     todo_id: str = Field(min_length=1)
     failure: str = Field(min_length=1)
     status: Literal["applied_patch", "no_patch", "conflict"]
     solve_outputs: int = Field(ge=1, le=50)
-    investigation_id: str | None = None
+    solve_attempt_id: str = Field(min_length=1)
     reason: str | None = None
     applied_patch: PatchAttemptSummary | None = None
 
@@ -76,7 +76,7 @@ class TodoRunSummary(_PublicModel):
 
 
 class SmokeRoundSummary(_PublicModel):
-    """Record one Batch, its Dedup result, and completed Investigations."""
+    """Record one Batch, its Dedup result, and completed Solve Attempts."""
 
     round_number: int = Field(ge=1)
     batch_run_id: str = Field(min_length=1)
@@ -97,7 +97,6 @@ class OperationSmokeResult(_PublicModel):
     operation_key: str
     success_rate: float = Field(ge=0, le=1)
     required_success_rate: float = Field(ge=0, le=1)
-    active_config_revision: int = Field(ge=1)
     batch_run_ids: list[str] = Field(default_factory=list)
     rounds: list[SmokeRoundSummary] = Field(default_factory=list)
     stop_reason: OperationSmokeStopReason | None = None

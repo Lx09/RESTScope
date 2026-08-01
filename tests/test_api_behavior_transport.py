@@ -31,6 +31,7 @@ class _CapturingResourceTracker:
 class _ValueResult:
     sources_processed: int = 1
     values_recorded: int = 1
+    warning: object | None = None
 
 
 class _CapturingValueTracker:

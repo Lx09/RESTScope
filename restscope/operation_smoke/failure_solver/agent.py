@@ -1,4 +1,4 @@
-"""Investigate one Failure and finish with one durable terminal decision.
+"""Solve one Failure and finish with one durable terminal decision.
 
 Failure Solve is the Agent that decides which Parameters caused a Failure and
 whether a Generator Patch should be applied. It can read Parameter history,
@@ -33,10 +33,10 @@ from restscope.observability import TracingRuntime
 from restscope.operation_smoke.memory import (
     AppliedSmokePatch,
     FailureHistory,
-    InvestigationParameterWrite,
-    InvestigationWrite,
     ParameterHistory,
-    PatchInvestigation,
+    PatchSolveAttempt,
+    SolveAttemptParameterWrite,
+    SolveAttemptWrite,
 )
 from restscope.operation_smoke.parameter_patch import (
     AvailableReferenceOption,
@@ -60,6 +60,7 @@ from restscope.testing import (
     build_semantic_input_map,
     preview_generator_patch,
 )
+from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
 from .schemas import (
     FailureSolveDecision,
@@ -107,24 +108,26 @@ class HTTPProbe(Protocol):
 class SolveMemory(Protocol):
     """Describe the memory reads and non-Patch write owned by Solve runtime."""
 
-    def lookup_failure_history(
+    def failure_history(
         self,
+        *,
         operation_key: str,
-        failure_ids: list[str],
-    ) -> list[FailureHistory]:
+        failure_id: str,
+    ) -> FailureHistory:
         """Load the complete history of one operation-scoped Failure."""
         ...
 
-    def lookup_parameter_history(
+    def parameter_history(
         self,
+        *,
         operation_key: str,
-        input_node_ids: list[str],
-    ) -> list[ParameterHistory]:
-        """Load past causes and repairs linked to selected operation inputs."""
+        input_node_id: str,
+    ) -> ParameterHistory:
+        """Load past causes and repairs linked to one operation input."""
         ...
 
-    def record_investigation(self, write: InvestigationWrite) -> str:
-        """Append a validated no-Patch or conflict Investigation."""
+    def record_solve_attempt(self, write: SolveAttemptWrite) -> str:
+        """Append a validated no-Patch or conflict Solve Attempt."""
         ...
 
 
@@ -137,24 +140,22 @@ class PatchAgentFactory(Protocol):
 
 
 class PatchApplication(Protocol):
-    """Atomically change Generator state and record an applied Investigation."""
+    """Atomically change current test state and record an applied Solve Attempt."""
 
     def apply(
         self,
         *,
-        expected_revision: int,
+        current: OperationGeneratorConfig,
+        expected_constraints: list[CompiledConstraintPatch],
         patch: GeneratorPatchDraft,
-        samples: list[dict[str, Any]],
-        before_generators: dict[str, Any],
-        after_generators: dict[str, Any],
-        investigation: PatchInvestigation,
+        attempt: PatchSolveAttempt,
     ) -> AppliedSmokePatch:
-        """Commit one chosen session candidate and its explanation together."""
+        """Commit a candidate only if its Generator and Constraint view is current."""
         ...
 
 
 class FailureSolveAgent:
-    """Create one isolated LLM Investigation for one deduplicated Failure."""
+    """Create one isolated LLM Solve session for one deduplicated Failure."""
 
     def __init__(
         self,
@@ -211,9 +212,9 @@ class FailureSolveAgent:
             raise ValueError("max_patch_outputs must be between 1 and 20")
         if not self.model.enabled:
             raise RuntimeError("The Failure Solve model is not configured")
-        history = self.memory.lookup_failure_history(
-            request.operation_key,
-            [request.todo.failure_id],
+        history = self.memory.failure_history(
+            operation_key=request.operation_key,
+            failure_id=request.todo.failure_id,
         )
         return FailureSolveSession(
             client=self.client,
@@ -233,7 +234,7 @@ class FailureSolveAgent:
             random_seed=random_seed,
             max_patch_outputs=max_patch_outputs,
             prepare_patch_updates=prepare_patch_updates,
-            failure_history=history[0],
+            failure_history=history,
             system_prompt=self.system_prompt,
             max_outputs=max_outputs,
             continuation_interval=continuation_interval,
@@ -329,7 +330,7 @@ class FailureSolveSession:
         Patch tool call is additionally capped at 20 outputs.
         """
         with self.tracing_runtime.span(
-            "FailureSolveAgent.investigate",
+            "FailureSolveAgent.solve",
             kind="AGENT",
             input_value={
                 "operation_key": self.request.operation_key,
@@ -363,7 +364,7 @@ class FailureSolveSession:
                         # Tool calls remain provider-owned. When the model
                         # returns a terminal decision instead, the authoritative
                         # DTO schema prevents it from guessing wrapper names or
-                        # omitting the investigation fields required by Memory.
+                        # omitting the terminal fields required by Memory.
                         response_format="json_schema",
                         json_schema=FailureSolveDecision.model_json_schema(),
                         json_schema_name="FailureSolveDecision",
@@ -440,7 +441,7 @@ class FailureSolveSession:
                     {
                         "status": outcome.status,
                         "outputs_used": outcome.outputs_used,
-                        "active_config_revision": outcome.active_config_revision,
+                        "solve_attempt_id": outcome.solve_attempt_id,
                     }
                 )
                 return outcome
@@ -637,10 +638,13 @@ class FailureSolveSession:
             self.semantic_inputs.node_by_handle[handle]
             for handle in handles
         ]
-        histories = self.memory.lookup_parameter_history(
-            self.request.operation_key,
-            node_ids,
-        )
+        histories = [
+            self.memory.parameter_history(
+                operation_key=self.request.operation_key,
+                input_node_id=node_id,
+            )
+            for node_id in node_ids
+        ]
         rendered = _parameter_history_text(
             handles=handles,
             histories=histories,
@@ -870,14 +874,14 @@ class FailureSolveSession:
         self,
         decision: FailureSolveDecision,
     ) -> FailureSolveOutcome:
-        """Write one terminal Investigation, applying a selected Patch atomically."""
+        """Write one terminal Solve Attempt and atomically apply its Patch."""
         assert decision.action != "continue"
         assert decision.trigger_conditions is not None
         assert decision.root_cause is not None
         assert decision.solution is not None
         assert decision.evidence_source is not None
         parameters = [
-            InvestigationParameterWrite(
+            SolveAttemptParameterWrite(
                 input_node_id=self.semantic_inputs.node_by_handle[
                     item.input_handle
                 ],
@@ -903,35 +907,71 @@ class FailureSolveSession:
                 patch = patch.model_copy(
                     update={"updates": prepared_updates}
                 )
-            applied = self.patch_application.apply(
-                expected_revision=self.config.revision,
-                patch=patch,
-                samples=candidate.samples,
-                before_generators=candidate.before_generators,
-                after_generators=candidate.after_generators,
-                investigation=PatchInvestigation(
-                    operation_key=self.request.operation_key,
-                    failure_id=self.request.todo.failure_id,
-                    round_number=self.request.round_number,
-                    trigger_conditions=decision.trigger_conditions,
-                    root_cause=decision.root_cause,
-                    solution=decision.solution,
-                    evidence_source=decision.evidence_source,
-                    parameters=parameters,
-                ),
-            )
+            try:
+                applied = self.patch_application.apply(
+                    current=self.config,
+                    expected_constraints=self.active_constraints,
+                    patch=patch,
+                    attempt=PatchSolveAttempt(
+                        operation_key=self.request.operation_key,
+                        failure_id=self.request.todo.failure_id,
+                        round_number=self.request.round_number,
+                        trigger_conditions=decision.trigger_conditions,
+                        root_cause=decision.root_cause,
+                        solution=decision.solution,
+                        evidence_source=decision.evidence_source,
+                        parameters=parameters,
+                    ),
+                )
+            except GeneratorConfigConcurrentWrite:
+                # The candidate was valid for the state shown to the Agent, but
+                # that state changed before commit.  This is durable domain
+                # evidence, not a partial technical failure: the Patch
+                # transaction has rolled back, then a conflict Attempt is
+                # appended in its own transaction.
+                conflict_reason = (
+                    "Current Generator or Constraint state changed before "
+                    "the selected Patch could commit."
+                )
+                solve_attempt_id = self.memory.record_solve_attempt(
+                    SolveAttemptWrite(
+                        operation_key=self.request.operation_key,
+                        failure_id=self.request.todo.failure_id,
+                        round_number=self.request.round_number,
+                        outcome="conflict",
+                        trigger_conditions=decision.trigger_conditions,
+                        root_cause=decision.root_cause,
+                        solution=decision.solution,
+                        evidence_source=decision.evidence_source,
+                        parameters=parameters,
+                        conflict_reason=conflict_reason,
+                    )
+                )
+                return FailureSolveOutcome(
+                    status="conflict",
+                    outputs_used=self.outputs_used,
+                    solve_attempt_id=solve_attempt_id,
+                    reason=conflict_reason,
+                )
             self.config = applied.config
             return FailureSolveOutcome(
                 status="applied_patch",
                 outputs_used=self.outputs_used,
-                investigation_id=applied.investigation_id,
-                active_config_revision=applied.config.revision,
+                solve_attempt_id=applied.solve_attempt_id,
+                generator_change_event_id=applied.generator_change_event_id,
                 applied_patch=candidate,
-                active_constraints=candidate.patch.constraints,
+                active_constraints=[
+                    CompiledConstraintPatch(
+                        constraint_id=item.id,
+                        kind=item.kind,
+                        constraint=item.constraint,
+                    )
+                    for item in applied.constraints
+                ],
             )
 
-        investigation_id = self.memory.record_investigation(
-            InvestigationWrite(
+        solve_attempt_id = self.memory.record_solve_attempt(
+            SolveAttemptWrite(
                 operation_key=self.request.operation_key,
                 failure_id=self.request.todo.failure_id,
                 round_number=self.request.round_number,
@@ -947,8 +987,7 @@ class FailureSolveSession:
         return FailureSolveOutcome(
             status=decision.action,
             outputs_used=self.outputs_used,
-            investigation_id=investigation_id,
-            active_config_revision=self.config.revision,
+            solve_attempt_id=solve_attempt_id,
             reason=(
                 decision.conflict_reason
                 if decision.action == "conflict"
@@ -1168,57 +1207,57 @@ def _write_failure_history(
     """Write compatibility-critical outcomes and aggregate old no-Patch noise."""
     writer.section("CURRENT FAILURE MEMORY", untrusted=True)
     outcomes: dict[str, int] = {}
-    for investigation in history.investigations:
-        outcomes[investigation.outcome] = outcomes.get(investigation.outcome, 0) + 1
+    for attempt in history.attempts:
+        outcomes[attempt.outcome] = outcomes.get(attempt.outcome, 0) + 1
     writer.record(
         "summary",
         failure=history.summary,
-        observations=len(history.observations),
-        investigations=len(history.investigations),
+        occurrences=history.occurrence_count,
+        solve_attempts=len(history.attempts),
         outcomes=outcomes,
     )
 
     detailed_ids = {
-        item.investigation_id
-        for item in history.investigations[-5:]
+        item.solve_attempt_id
+        for item in history.attempts[-5:]
     }
     older_no_patch: dict[str, int] = {}
-    for investigation in history.investigations:
+    for attempt in history.attempts:
         handles = [
             handle_by_node.get(parameter.input_node_id, "<inactive-input>")
-            for parameter in investigation.parameters
+            for parameter in attempt.parameters
         ]
-        compatibility_critical = investigation.outcome in {
+        compatibility_critical = attempt.outcome in {
             "applied_patch",
             "conflict",
         }
-        if compatibility_critical or investigation.investigation_id in detailed_ids:
+        if compatibility_critical or attempt.solve_attempt_id in detailed_ids:
             writer.record(
-                f"round-{investigation.round_number}",
-                outcome=investigation.outcome,
-                trigger=investigation.trigger_conditions,
-                root_cause=investigation.root_cause,
-                solution=investigation.solution,
+                f"round-{attempt.round_number}",
+                outcome=attempt.outcome,
+                trigger=attempt.trigger_conditions,
+                root_cause=attempt.root_cause,
+                solution=attempt.solution,
                 parameters=handles,
-                conflict=investigation.conflict_reason,
-                patch_revision=(
-                    investigation.applied_patch.generator_revision
-                    if investigation.applied_patch is not None
+                conflict=attempt.conflict_reason,
+                generator_change_event=(
+                    attempt.generator_change.event_id
+                    if attempt.generator_change is not None
                     else None
                 ),
             )
-            if investigation.applied_patch is not None:
+            if attempt.generator_change is not None:
                 writer.detail(
-                    "patch",
+                    "generator-change",
                     {
-                        "before": investigation.applied_patch.before_generators,
-                        "after": investigation.applied_patch.after_generators,
+                        "generators": attempt.generator_change.generator_changes,
+                        "constraints": attempt.generator_change.constraint_changes,
                     },
                 )
         else:
             signature = (
                 ",".join(sorted(handles)) or "no-parameter"
-            ) + "|" + investigation.root_cause.casefold()[:120]
+            ) + "|" + attempt.root_cause.casefold()[:120]
             older_no_patch[signature] = older_no_patch.get(signature, 0) + 1
     for signature, count in sorted(older_no_patch.items()):
         writer.record(
@@ -1259,46 +1298,46 @@ def _parameter_history_text(
         recent_no_patch: list[tuple[str, Any]] = []
         for failure in history.failures:
             writer.text("failure", failure.summary)
-            for investigation in failure.investigations:
+            for attempt in failure.attempts:
                 item = (
-                    investigation.root_cause,
-                    investigation,
+                    attempt.root_cause,
+                    attempt,
                 )
-                if investigation.outcome in {"applied_patch", "conflict"}:
+                if attempt.outcome in {"applied_patch", "conflict"}:
                     writer.record(
-                        f"round-{investigation.round_number}",
-                        outcome=investigation.outcome,
-                        cause=investigation.root_cause,
-                        solution=investigation.solution,
-                        conflict=investigation.conflict_reason,
+                        f"round-{attempt.round_number}",
+                        outcome=attempt.outcome,
+                        cause=attempt.root_cause,
+                        solution=attempt.solution,
+                        conflict=attempt.conflict_reason,
                         parameters=[
                             handle_by_node.get(
                                 parameter.input_node_id,
                                 "<inactive-input>",
                             )
-                            for parameter in investigation.parameters
+                            for parameter in attempt.parameters
                         ],
-                        patch_revision=(
-                            investigation.applied_patch.generator_revision
-                            if investigation.applied_patch is not None
+                        generator_change_event=(
+                            attempt.generator_change.event_id
+                            if attempt.generator_change is not None
                             else None
                         ),
                     )
-                    if investigation.applied_patch is not None:
+                    if attempt.generator_change is not None:
                         writer.detail(
-                            "patch",
+                            "generator-change",
                             {
-                                "before": investigation.applied_patch.before_generators,
-                                "after": investigation.applied_patch.after_generators,
+                                "generators": attempt.generator_change.generator_changes,
+                                "constraints": attempt.generator_change.constraint_changes,
                             },
                         )
                 else:
                     recent_no_patch.append(item)
-        for cause, investigation in recent_no_patch[-5:]:
+        for cause, attempt in recent_no_patch[-5:]:
             writer.record(
-                f"no-patch-round-{investigation.round_number}",
+                f"no-patch-round-{attempt.round_number}",
                 cause=cause,
-                solution=investigation.solution,
+                solution=attempt.solution,
                 required=False,
             )
         if len(recent_no_patch) > 5:
@@ -1322,9 +1361,9 @@ def _parameter_history_for_prompt(
     payload["input_handle"] = handle
     for failure in payload["failures"]:
         failure.pop("failure_id", None)
-        for investigation in failure["investigations"]:
-            investigation.pop("investigation_id", None)
-            for parameter in investigation["parameters"]:
+        for attempt in failure["attempts"]:
+            attempt.pop("solve_attempt_id", None)
+            for parameter in attempt["parameters"]:
                 node_id = parameter.pop("input_node_id")
                 parameter["input_handle"] = handle_by_node.get(
                     node_id,

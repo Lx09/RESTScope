@@ -17,7 +17,7 @@ def _alembic_config(database: Path):
     return config
 
 
-def test_current_baseline_creates_simplified_revision_and_smoke_memory_tables(
+def test_current_baseline_creates_current_generator_and_solve_attempt_tables(
     tmp_path: Path,
 ) -> None:
     """Scenario: a new App database receives every current persistence area."""
@@ -32,22 +32,22 @@ def test_current_baseline_creates_simplified_revision_and_smoke_memory_tables(
 
     assert {
         "smoke_failures",
-        "smoke_failure_observations",
-        "smoke_failure_observation_links",
-        "smoke_parameters",
-        "smoke_investigations",
-        "smoke_investigation_parameter_links",
-        "smoke_applied_patches",
+        "smoke_solve_attempts",
+        "smoke_solve_attempt_parameters",
+        "operation_constraints",
+        "generator_change_events",
     } <= set(inspector.get_table_names())
     assert {
         column["name"]
-        for column in inspector.get_columns("generator_config_revisions")
+        for column in inspector.get_columns("input_generator_configs")
     } == {
+        "input_node_id",
         "operation_key",
-        "revision",
-        "parent_revision",
-        "config",
+        "position",
+        "inclusion_probability",
+        "strategy",
         "created_at",
+        "updated_at",
     }
 
 

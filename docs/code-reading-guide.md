@@ -33,16 +33,19 @@ The core loop is:
 9. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
    Agent discovers OpenAPI Parameters and queries selected `TC*` cases before
    grouping messages by complete suspected Parameter set.
-10. **Investigate one Failure.** Failure Solve may query Test Cases, Parameter history or
+10. **Solve one Failure.** Failure Solve may query Test Cases, Parameter history or
    use an HTTP probe restricted to the current operation.
 11. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
-    internal tool. A selected Patch and its Investigation commit atomically.
+    internal tool. A selected Patch and its Solve Attempt commit atomically.
     Every Failure item finishes before the next complete Batch measures the result.
 
 Most state used in steps 4–10 is deliberately temporary. RESTScope does not
-persist plans, Agent conversations, hypotheses, queues, or evolved OpenAPI
-snapshots. It does persist bounded Failure Observations, stable Failures,
-Investigations, Parameter links, and applied Patches for the current App.
+persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases, or
+Patch samples. It persists the complete current normalized OpenAPI plus change
+events for audit/export, current per-input Generators and Constraints, bounded
+Behavior Monitor evidence, stable Failures, terminal Solve Attempts, validated
+input attribution, and deterministic accepted-change events. None of these
+artifacts restores an App.
 
 ## 2. A few Python concepts used throughout
 
@@ -109,15 +112,15 @@ item IDs or Fingerprint references. It uses a global OpenAPI lookup and a
 run-local exact Catalog query instead of receiving full HTTP JSON. Database
 primary keys never enter model prompts.
 
-### Failure Observation, Failure, and Investigation
+### Failure and Solve Attempt
 
-A Failure Observation is the one representative test case retained for a
-current-round Failure. A Failure groups messages with the same complete
-suspected causal Parameter set. An Investigation is one independent Solve
-session, including trigger conditions,
-Parameter attribution, root cause, proposed solution, and terminal outcome.
-An Applied Patch is recorded only when Solve selects a validated session
-candidate and the Generator revision commits.
+A Failure is stable across rounds when its operation, normalized message set,
+and complete suspected causal Parameter state match. The representative `TC*`
+remains only in the run-local Test Case Catalog. A Solve Attempt is one terminal
+Solve conclusion: trigger conditions, Parameter attribution, root cause,
+solution, evidence source, and outcome. When Solve selects a validated Patch,
+deterministic Generator/Constraint before-and-after changes commit with that
+Attempt; candidate samples are not persisted.
 
 ### DTO
 
@@ -137,8 +140,8 @@ Read these files in order:
 5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds, fixed
    Failure dispatch, and explicit stop conditions.
 6. `restscope/operation_smoke/failure_dedup/agent.py` and
-   `restscope/operation_smoke/failure_solver/agent.py` — failure todo management and one
-   continuous investigation.
+   `restscope/operation_smoke/failure_solver/agent.py` — Failure todo management
+   and one continuous Solve session.
 7. `restscope/operation_smoke/parameter_patch/agent.py` and
    `restscope/operation_smoke/memory/patch_application.py` — executable Patch
    construction, local sample review, and atomic persistence.
@@ -175,6 +178,13 @@ Converts OpenAPI dictionaries into the IR.
 - `document_builder.py` converts the evolved in-memory IR back to an OpenAPI
   document when a caller explicitly needs one.
 
+### `restscope/catalog/`
+
+Owns the database-independent current OpenAPI audit boundary. It initializes
+one complete normalized document, atomically replaces that document while
+appending real response-contract change events, and provides read-only export
+and event queries. It does not reopen an App from those records.
+
 ### `restscope/testing/`
 
 Owns deterministic request generation and execution.
@@ -187,7 +197,8 @@ Owns deterministic request generation and execution.
 - `constraint_solver.py` finds assignments that satisfy those expressions.
 - `serialization.py` turns generated values into an HTTP-shaped request.
 - `execution.py` sends batches and returns Catalog-ready Test Cases.
-- `catalog.py` persists approved Generator configuration revisions.
+- `catalog.py` combines App-memory operation snapshots with current persisted
+  per-input Generator rows. It does not store operation snapshots or revisions.
 
 ### `restscope/supervisor/`
 
@@ -215,7 +226,7 @@ correction, representative-case selection, and validated Failure recording.
 
 ### `restscope/operation_smoke/failure_solver/`
 
-Owns one continuous THINK Investigation per Failure, Parameter-memory and HTTP
+Owns one continuous THINK Solve session per Failure, Parameter-memory and HTTP
 tools, and the internal Parameter Patch tool. It alone decides root cause,
 Parameter attribution, candidate selection, conflict, and no-Patch outcomes.
 
@@ -273,7 +284,9 @@ Provider-independent language-model contracts and clients.
 ### `restscope/db/`
 
 Owns database setup, ORM records, migrations, and repositories. Repositories
-are narrow storage APIs; callers should not manipulate ORM rows directly.
+are narrow storage APIs; callers should not manipulate ORM rows directly. The
+single baseline creates 19 business tables. Every SQLite connection enables
+foreign keys, and the default App always rejects existing database paths.
 
 ### `restscope/observability/`
 
@@ -321,13 +334,13 @@ BatchExecutionResult + TestCaseCatalog
   -> exact normalized-message Fingerprint deduplication
   -> one Fingerprint: deterministic bypass
   -> several Fingerprints: FailureDedupAgent groups by suspected Parameters
-  -> one representative TC* per current-round Failure
+  -> one representative TC* per current-round Failure (run-local only)
   -> fresh FailureSolveAgent
   -> optional Catalog, Parameter-memory, and HTTP tools
   -> internal ParameterPatchAgent tool
   -> compile + solve + case_count local samples
   -> Solve selects a session-local P* candidate
-  -> atomic Generator + Investigation + Applied Patch write
+  -> atomic current Generator/Constraint + Solve Attempt + change event write
   -> remaining Dedup items
   -> next complete Batch
 ```

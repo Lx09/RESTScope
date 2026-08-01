@@ -228,6 +228,150 @@ def test_observation_history_flattens_all_scalars_and_keeps_latest_100() -> None
     assert values("$.nested.ignored") == []
 
 
+def test_response_value_pool_keeps_only_100_most_recent_typed_values() -> None:
+    """A pool deterministically removes its oldest active value at capacity 101."""
+
+    from restscope.api_behavior_monitor.response_value_catalog import (
+        ResponseValueCatalogRegistration,
+    )
+
+    catalog = _catalog()
+    catalog.ensure_monitor(
+        ResponseValueCatalogRegistration(
+            value_name="response_recent",
+            consumer_operation_key="GET /consumer",
+            consumer_input_node_id="query/token",
+            parameter_name="token",
+            expected_type="string",
+        )
+    )
+
+    catalog.record_values(
+        "response_recent",
+        [f"value-{index:03d}" for index in range(101)],
+    )
+
+    assert catalog.values_for("response_recent") == [
+        f"value-{index:03d}" for index in range(1, 101)
+    ]
+
+
+def test_1001_scalars_skip_the_whole_response_and_every_pool_update() -> None:
+    """Exactly 1000 scalars persist; 1001 returns a warning with no partial evidence."""
+
+    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
+    from restscope.api_behavior_monitor.response_value_catalog import (
+        ResponseValueCatalogRegistration,
+        ResponseValueSource,
+    )
+
+    catalog = _catalog()
+    tracker = ResponseValueTracker(catalog=catalog)
+    accepted = tracker.observe(
+        producer_operation_key="GET /large",
+        status_code=200,
+        media_type="application/json",
+        body={f"field{index}": index for index in range(1000)},
+    )
+    catalog.ensure_monitor(
+        ResponseValueCatalogRegistration(
+            value_name="response_large_field",
+            consumer_operation_key="GET /consumer",
+            consumer_input_node_id="query/value",
+            parameter_name="value",
+            expected_type="integer",
+        )
+    )
+    catalog.add_sources(
+        "response_large_field",
+        [
+            ResponseValueSource(
+                producer_operation_key="GET /large",
+                status_code="200",
+                media_type="application/json",
+                selector="$.field0",
+                field_name="field0",
+            )
+        ],
+    )
+
+    skipped = tracker.observe(
+        producer_operation_key="GET /large",
+        status_code=200,
+        media_type="application/json",
+        body={f"field{index}": index + 10 for index in range(1001)},
+    )
+
+    assert accepted.warning is None
+    assert skipped.warning is not None
+    assert skipped.warning.code == "response_observation_scalar_limit_exceeded"
+    assert catalog.values_for("response_large_field") == []
+    assert catalog.historical_values_for_source(
+        ResponseValueSource(
+            producer_operation_key="GET /large",
+            status_code="200",
+            media_type="application/json",
+            selector="$.field0",
+            field_name="field0",
+        )
+    ) == [0]
+
+
+def test_response_observation_and_pool_updates_roll_back_as_one_transaction(
+    monkeypatch,
+) -> None:
+    """A pool write failure removes the parent observation and all its scalars."""
+
+    import pytest
+
+    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
+    from restscope.api_behavior_monitor.response_value_catalog import (
+        ResponseValueCatalogRegistration,
+        ResponseValueSource,
+    )
+    from restscope.db.repositories import SqlAlchemyResponseValueCatalogRepository
+
+    catalog = _catalog()
+    tracker = ResponseValueTracker(catalog=catalog)
+    catalog.ensure_monitor(
+        ResponseValueCatalogRegistration(
+            value_name="response_atomic",
+            consumer_operation_key="GET /consumer",
+            consumer_input_node_id="query/value",
+            parameter_name="value",
+            expected_type="integer",
+        )
+    )
+    source = ResponseValueSource(
+        producer_operation_key="GET /producer",
+        status_code="200",
+        media_type="application/json",
+        selector="$.value",
+        field_name="value",
+    )
+    catalog.add_sources("response_atomic", [source])
+
+    def fail_pool_write(self, value_name, values, *, now):
+        del self, value_name, values, now
+        raise RuntimeError("simulated pool failure")
+
+    monkeypatch.setattr(
+        SqlAlchemyResponseValueCatalogRepository,
+        "_record_values",
+        fail_pool_write,
+    )
+    with pytest.raises(RuntimeError, match="simulated pool failure"):
+        tracker.observe(
+            producer_operation_key="GET /producer",
+            status_code=200,
+            media_type="application/json",
+            body={"value": 7},
+        )
+
+    assert catalog.values_for("response_atomic") == []
+    assert catalog.historical_values_for_source(source) == []
+
+
 def test_observation_history_ignores_non_2xx_and_non_json() -> None:
     """Scenario: verify that observation history ignores non successful 2xx  and non json."""
     from restscope.api_behavior_monitor.response_value import (
@@ -291,7 +435,7 @@ def test_registration_rejects_sources_without_observed_values() -> None:
     with pytest.raises(ResponseValueUnavailableError) as raised:
         tracker.register(**arguments)
     assert raised.value.code == "response_value_pool_unavailable"
-    assert catalog.list_active_monitors() == []
+    assert catalog.list_monitors() == []
 
 
 def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
@@ -322,7 +466,7 @@ def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
             ],
         )
 
-    assert catalog.list_active_monitors() == []
+    assert catalog.list_monitors() == []
     assert catalog.list_sources_for_operation("GET /producer") == []
 
 
@@ -368,7 +512,7 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
         )
     )
     catalog.add_sources(
-        monitor.monitor_id,
+        monitor.value_name,
         [
             ResponseValueSource(
                 producer_operation_key="GET /producer",
@@ -381,7 +525,7 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
     )
 
     assert catalog.record_values(
-        monitor.monitor_id,
+        monitor.value_name,
         ["1", 1, True, 1.5, None, {"nested": "ignored"}],
     ) == 4
     assert catalog.values_for("response_types") == ["1", 1, True, 1.5]

@@ -1,4 +1,9 @@
-"""ORM mappings for the single-App resource catalog."""
+"""Map the durable Resource Identifier evidence learned from API responses.
+
+The tables keep canonical resource vocabulary, typed identifier values, and
+only the latest operation/error usage facts.  Method and path remain owned by
+the current OpenAPI document instead of being copied into these rows.
+"""
 
 from __future__ import annotations
 
@@ -11,13 +16,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
 
 
-class ResourceORM(CreatedAtMixin, UpdatedAtMixin, Base):
-    """
-    Map persisted resource rows to a database table.
+class ResourceORM(CreatedAtMixin, Base):
+    """Map one canonical resource identity."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "resources"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -26,70 +27,48 @@ class ResourceORM(CreatedAtMixin, UpdatedAtMixin, Base):
 
 
 class ResourceAliasORM(CreatedAtMixin, Base):
-    """
-    Map persisted resource alias rows to a database table.
+    """Map one normalized alias directly to its canonical resource."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "resource_aliases"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    normalized_alias: Mapped[str] = mapped_column(Text, primary_key=True)
     resource_id: Mapped[str] = mapped_column(
         ForeignKey("resources.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     alias: Mapped[str] = mapped_column(Text, nullable=False)
-    normalized_alias: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
 
 class OperationResourceRuleORM(CreatedAtMixin, UpdatedAtMixin, Base):
-    """
-    Map persisted operation resource rule rows to a database table.
+    """Map the latest resource classification for one response group."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "operation_resource_rules"
     __table_args__ = (
-        UniqueConstraint("operation_key", "group_path", name="uq_operation_resource_rule"),
+        UniqueConstraint("operation_key", "group_path", name="operation_group"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     resource_id: Mapped[str | None] = mapped_column(
-        ForeignKey("resources.id", ondelete="CASCADE"),
+        ForeignKey("resources.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
     operation_key: Mapped[str] = mapped_column(Text, nullable=False)
-    method: Mapped[str] = mapped_column(String, nullable=False)
-    path: Mapped[str] = mapped_column(Text, nullable=False)
     group_path: Mapped[str] = mapped_column(Text, nullable=False)
     has_resource: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    resource_aliases: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     id_field_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     id_selector: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_mode: Mapped[str] = mapped_column(String, nullable=False)
     classification_source: Mapped[str] = mapped_column(String, nullable=False)
-    id_observed: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
 
-class ResourceIdentifierORM(CreatedAtMixin, Base):
-    """
-    Map persisted resource identifier rows to a database table.
+class ResourceIdentifierORM(Base):
+    """Map one typed identifier value observed for a canonical resource."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "resource_identifiers"
     __table_args__ = (
-        UniqueConstraint(
-            "resource_id",
-            "value_type",
-            "value_text",
-            name="uq_resource_identifier_value",
-        ),
+        UniqueConstraint("resource_id", "value_type", "value_text", name="resource_typed_value"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -100,61 +79,39 @@ class ResourceIdentifierORM(CreatedAtMixin, Base):
     )
     value_type: Mapped[str] = mapped_column(String, nullable=False)
     value_text: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ResourceOperationUsageORM(Base):
-    """
-    Map persisted resource operation usage rows to a database table.
+    """Map the latest observation of an identifier in one operation rule."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "resource_operation_usages"
-    __table_args__ = (
-        UniqueConstraint(
-            "identifier_id",
-            "operation_rule_id",
-            name="uq_resource_operation_usage",
-        ),
-    )
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
     identifier_id: Mapped[str] = mapped_column(
         ForeignKey("resource_identifiers.id", ondelete="CASCADE"),
-        nullable=False,
+        primary_key=True,
     )
     operation_rule_id: Mapped[str] = mapped_column(
         ForeignKey("operation_resource_rules.id", ondelete="CASCADE"),
-        nullable=False,
+        primary_key=True,
         index=True,
     )
-    access_mode: Mapped[str] = mapped_column(String, nullable=False)
     latest_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ResourceMonitorErrorORM(CreatedAtMixin, UpdatedAtMixin, Base):
-    """
-    Map persisted resource monitor error rows to a database table.
+    """Map only the latest monitor error for one operation response group."""
 
-    Repository classes use this mapping; runtime and Agent code should not manipulate
-    these rows directly.
-    """
     __tablename__ = "resource_monitor_errors"
-    __table_args__ = (
-        UniqueConstraint("operation_key", "group_path", name="uq_resource_monitor_error"),
-    )
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    operation_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    group_path: Mapped[str] = mapped_column(Text, primary_key=True)
     resource_id: Mapped[str | None] = mapped_column(
-        ForeignKey("resources.id", ondelete="CASCADE"),
+        ForeignKey("resources.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    operation_key: Mapped[str] = mapped_column(Text, nullable=False)
-    method: Mapped[str] = mapped_column(String, nullable=False)
-    path: Mapped[str] = mapped_column(Text, nullable=False)
-    group_path: Mapped[str] = mapped_column(Text, nullable=False)
     code: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     issues: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
