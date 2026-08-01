@@ -39,10 +39,10 @@ class CurrentOperationHTTPProbe(HTTPProbe):
         self.executor = executor
 
     def tool_spec(self, config: OperationGeneratorConfig) -> ToolSpec:
-        """Restrict the shared HTTP tool to the operation under Investigation.
+        """Restrict the shared HTTP tool to the operation under Solve.
 
         Args:
-            config: The current operation snapshot and Generator revision.
+            config: The current operation snapshot and Generator configuration.
 
         Returns:
             A copied tool description whose method and path explain the only

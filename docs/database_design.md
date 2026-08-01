@@ -1,109 +1,164 @@
 # RESTScope Database Design
 
-Status: Active exploratory design (2026-07-23)
+Status: Active exploratory design (2026-08-01)
 
-The database owns durable OpenAPI source locations/content and generator
-configuration for one current API. It does not persist parsed IR, operation
-facts, inferred dependencies, test plans, scheduler state, test cases, or test
-reports.
+RESTScope creates one SQLite file for one App. The file is an audit artifact,
+not a recovery image: a later App always rejects that existing path and never
+deletes, migrates, overwrites, or resumes it. The current baseline contains 19
+business tables plus Alembic's `alembic_version` table.
 
 ## Boundary
 
-- `restscope.catalog` owns schema-source DTOs, validation, repository protocols,
-  and the `SchemaCatalog` application service.
-- `restscope.testing` owns frozen operation request snapshots, generator
-  contracts, generation, serialization, and operation execution.
-- `restscope.db` owns SQLAlchemy ORM mappings, sessions, migrations, and the
-  concrete repository and unit-of-work adapters.
-- Domain code must not import SQLAlchemy, database configuration, or concrete
-  persistence adapters.
-- Composition roots wire both catalogs to the configured database.
+- `restscope.catalog` owns the database-independent current OpenAPI and change
+  event contracts.
+- `restscope.testing` owns the App-memory operation snapshot and current
+  per-input Generator and Constraint contracts.
+- API Behavior Monitor owns bounded Resource Identifier and Response Value
+  evidence.
+- Operation Smoke owns stable Failures and append-only terminal Solve Attempts.
+- `restscope.db` owns SQLAlchemy mappings, repositories, transactions, foreign
+  key setup, and the one baseline migration.
+- Raw responses, Test Cases, Batches, model messages, Patch samples, plans,
+  queues, and scheduler state never enter the database.
 
-## `schemas`
+Every SQLAlchemy and Alembic SQLite connection executes
+`PRAGMA foreign_keys=ON`. Fresh database creation finishes with
+`PRAGMA integrity_check` and `PRAGMA foreign_key_check`.
 
-| Column | Type | Rule |
-| --- | --- | --- |
-| `id` | string | Primary key using `schema_<uuid>` |
-| `file_path` | text, nullable | Absolute path to an OpenAPI file |
-| `raw_content` | text, nullable | Verbatim JSON or YAML content |
-| `created_at` | timestamp | Set when registered |
-| `updated_at` | timestamp | Set when the source is replaced |
+## OpenAPI: 2 tables
 
-A check constraint requires exactly one of `file_path` and `raw_content`.
-File-backed rows do not contain snapshots: each load reads the current file.
+### `openapi_current`
 
-Sources are parsed and checked for parser error diagnostics before registration
-or replacement. Parsed IR, diagnostics, catalog status, and operation counts are
-not persisted.
+One row with primary key `singleton_id=1` stores the complete normalized
+OpenAPI 3.1 document. `RESTScopeApp.initialize()` inserts it after parsing the
+source. A real observed response-contract change replaces the whole document.
+`created_at` and `updated_at` record those boundaries.
 
-## Generator configuration
+### `openapi_change_events`
 
-`generator_catalog_state` is a singleton initialization marker.
-`RESTScopeApp.initialize()` creates it together with every initial operation
-and input generator in one transaction. The default App never opens an existing
-database, so the marker is an internal Catalog invariant rather than a
-cross-process App reuse mechanism.
+Each real response-contract change appends one event containing the operation
+key, status, normalized media type, change labels, and the affected Response
+before and after the change. Matched, pending, and failed checks add no event.
+The tracker holds one lock while it backs up the affected in-memory Response,
+changes the IR, builds the complete document, and commits current state plus the
+event. A database failure restores both IR and tracker retry state.
 
-`operation_generator_configs` stores one frozen test model per original
-`OperationIR.operation_key`: method, path, parameter serialization rules,
-request-body media contracts, input tree, local schema constraints,
-enabled/disabled reasons, active media type, and a monotonically increasing
-configuration revision. There is intentionally no `schema_id`: one deployment
-and database serve one API lifecycle.
+The App exposes read-only current-document export and operation-filtered event
+listing. Neither API restores an App.
 
-`input_generator_configs` stores the complete one-to-one generator set for that
-frozen operation. Each row references only the stable `input_node_id`, its
-inclusion probability, and its discriminated generator strategy.
+## Generator and Constraint: 3 tables
 
-`generator_config_revisions` stores the complete immutable configuration for
-each revision. Only the initial configuration and directly accepted revisions
-exist; there is no pending candidate, Effect evaluation, rejected state, or
-compensating rollback revision. Operation Smoke records the reason for an
-accepted revision in its separate Applied Patch memory. Test cases, response
-bodies, and failure reports are not persisted.
+### `input_generator_configs`
 
-Whole-set replacement and node-level patch both use an expected revision, a
-database compare-and-swap update, and one transaction. Concurrent writers with
-an old revision fail instead of overwriting a newer revision. Required or
-structural nodes must have inclusion probability `1.0`; optional nodes may use
-`0.0` through `1.0`.
+One row per deterministic `input_node_id` stores the current inclusion
+probability and Generator strategy. The operation's method, path, input tree,
+media choice, disabled reasons, and request serialization snapshot stay in
+memory and are rebuilt with these rows. There is no operation snapshot,
+revision number, initialization marker, or full historical copy.
 
-There is no OpenAPI synchronization after initialization. Later constraint,
-input, or operation changes neither alter nor invalidate the frozen Catalog.
-An operation removed from the current IR remains executable from its stored
-request snapshot, using only the current App's target base URL and headers.
+### `operation_constraints`
 
-## Lifecycle
+Each row is one current normalized executable Constraint. Its ID is derived
+from `operation_key + normalized expression`; its owner list is derived from
+the expression's referenced input node IDs. An expression with no owner or an
+input outside the operation is rejected.
 
-Schema sources support register, get, list, whole-source replace, and load into
-`OpenAPISpecIR`. Generator configurations support inspect, whole-set replace,
-node-level patch, and load for preflight generation. There is no delete/reset
-tool.
+A complete Constraint Patch starts from its real new owners and replaces every
+old Constraint whose owner overlaps directly or transitively. The expanded old
+scope is used only to find rows to replace; it does not enlarge the new owner.
+A Generator-only Patch leaves all Constraints unchanged. Candidate sampling
+uses this final replacement set.
 
-The default DB-backed `RESTScopeApp` accepts only a nonexistent local file
-SQLite target. Construction resolves relative paths from the startup working
-directory, exclusively creates the file, and upgrades it to the packaged
-Alembic head before composing capabilities. Existing paths and unsupported
-database URLs fail without modification. Construction failures remove only the
-database and SQLite sidecars created by that attempt; successful construction,
-`initialize()` failures, and `close()` retain the database.
+### `generator_change_events`
 
-Each retained database is therefore a one-run artifact. A later App start must
-use a new URL or follow an explicit operational inspect/delete workflow.
-Injecting a complete custom `CapabilityRuntime` bypasses this lifecycle because
-the caller owns its persistence.
+One append-only event is linked one-to-one with the successful Solve Attempt
+that applied it. It records only deterministic Generator and Constraint
+insert/update/delete changes with per-item before and after values. Samples are
+run-local and are never stored. A candidate with no actual current-state change
+is rejected before an Attempt or event is written.
 
-The migration history has a schema-source baseline, generator configuration
-revision `0002`, resource catalog revision `0003`, and generator history
-revision `0004`. Revision `0004` backfills each existing active generator
-configuration as one accepted baseline revision. It does not upgrade databases
-created by the former ten-table Planner MVP.
+Current Generator rows, Constraint replacement, the applied Solve Attempt, its
+input links, and the change event commit in one transaction. Exact current
+content provides optimistic locking; a stale candidate rolls back and becomes
+a separate `conflict` Solve Attempt.
+
+## Resource Identifier: 6 tables
+
+- `resources`: canonical and normalized resource identity.
+- `resource_aliases`: normalized alias primary key linked to one resource.
+- `operation_resource_rules`: latest classification for one operation/group,
+  including selector, access mode, and classification source. Method, path,
+  aliases, and observed flags are derived rather than copied.
+- `resource_identifiers`: every distinct typed identifier with first and last
+  seen timestamps. Resource identifiers have no capacity eviction.
+- `resource_operation_usages`: composite identifier/rule key with only the
+  latest observation time.
+- `resource_monitor_errors`: latest error for one operation/group. A later
+  successful classification deterministically deletes that latest error.
+
+## Response Value: 5 tables
+
+- `response_value_monitors`: natural `value_name` primary key and one unique
+  consumer operation/input registration. Every stored monitor is active.
+- `response_value_sources`: natural composite key for an explicit producer
+  status/media/selector feeding one value pool.
+- `response_values`: typed natural key plus first/last seen timestamps. Each
+  pool retains its 100 most recently active distinct values.
+- `response_observations`: successful JSON observation metadata. Each producer
+  operation retains its latest 100 observations.
+- `response_observation_scalars`: natural selector/type/value key under one
+  observation. Deleting an old observation cascades to its scalars.
+
+Flattening more than 1000 supported non-null scalars skips the whole response
+and returns a structured warning. At or below the limit, the observation,
+scalars, all matching pool updates, and both retention passes share one
+transaction. A failure cannot leave partial observation or pool evidence.
+
+## Operation Smoke: 3 tables
+
+### `smoke_failures`
+
+A stable Failure key hashes the operation, normalized sorted message set, and
+the complete suspected-input state. `null` means the one-fingerprint path
+skipped attribution, `[]` means operation-level, and a non-empty array means
+exact input attribution. Repeated evidence reuses the row and updates occurrence
+count, last-seen time, and last HTTP status.
+
+### `smoke_solve_attempts`
+
+Every terminal `applied_patch`, `no_patch`, or `conflict` conclusion appends a
+row. It stores the trigger, root cause, solution, evidence source, and conflict
+reason when applicable. Attempts are never overwritten and there is no
+permanent resolved flag.
+
+### `smoke_solve_attempt_parameters`
+
+A composite Attempt/input key stores validated cause attribution in Agent
+order. An operation-level conclusion legitimately has no rows. Input links
+reference current operation input rows; the deterministic repository rejects
+unknown or cross-operation attribution.
+
+Failure Dedup uses only the current run's in-memory Test Case Catalog and
+persists messages, attribution state, and occurrence metadata—not the
+representative case. Solve reads Failure and Parameter projections from this
+memory, while HTTP probes and candidate samples stay temporary.
+
+## Lifecycle and compatibility
+
+The default App accepts only a nonexistent local file SQLite target. It claims
+that exact path before migration. Existing files, directories, and symlinks are
+rejected unchanged. Construction failure removes only a file and sidecars
+created by that construction; successful construction, initialization failure,
+and `close()` retain the artifact.
+
+Alembic has one `0001_current_baseline` that creates the final 19 tables. It
+contains no old-database data migration. Databases stamped with the retired
+exploratory chain are intentionally incompatible, and RESTScope provides no
+restore, reset, or automatic delete entrypoint.
 
 ## Deferred design
 
-- Multi-API generator namespaces and schema version history.
-- An explicit operational Catalog rebuild workflow.
-- `operations`: persisted fact fields and synchronization semantics.
-- `operation_dependencies`: intended to be read and replaced as a unit per
-  consuming operation, with input entries containing candidate producers; the
-  entry contract is intentionally not defined yet.
+- Reopening, restoring, or comparing App artifacts.
+- Multi-API namespaces and long-term schema history.
+- Persisted plans, inferred operation graphs, queues, or progress UI.
+- Authentication material or target API path bindings.

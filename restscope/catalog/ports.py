@@ -1,46 +1,40 @@
-"""Persistence ports consumed by the schema catalog service."""
+"""Persistence ports consumed by the OpenAPI audit catalog."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from types import TracebackType
-from typing import Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
-from .models import SchemaRecord
+from .models import OpenAPIChangeEventRecord, OpenAPIChangeEventWrite
 
 
-class SchemaRepository(Protocol):
-    """
-    Define the collaborator contract for schema repository.
+class OpenAPIRepository(Protocol):
+    """Define current-document and append-only event persistence operations."""
 
-    Concrete implementations may vary while callers in schema-source catalog access
-    depend only on these declared operations.
-    """
-    def add(self, *, id: str, file_path: str | None, raw_content: str | None) -> SchemaRecord: ...
+    def initialize(self, document: dict[str, Any]) -> None: ...
 
-    def get(self, schema_id: str) -> SchemaRecord | None: ...
+    def get_current(self) -> dict[str, Any] | None: ...
 
-    def list(self) -> list[SchemaRecord]: ...
-
-    def replace_source(
+    def record_change(
         self,
-        schema_id: str,
         *,
-        file_path: str | None,
-        raw_content: str | None,
-    ) -> SchemaRecord | None: ...
+        document: dict[str, Any],
+        event: OpenAPIChangeEventWrite,
+    ) -> OpenAPIChangeEventRecord: ...
+
+    def list_changes(
+        self,
+        operation_key: str | None = None,
+    ) -> list[OpenAPIChangeEventRecord]: ...
 
 
-class SchemaUnitOfWork(Protocol):
-    """
-    Define the collaborator contract for schema unit of work.
+class OpenAPIUnitOfWork(Protocol):
+    """Expose one transaction around the OpenAPI audit repository."""
 
-    Concrete implementations may vary while callers in schema-source catalog access
-    depend only on these declared operations.
-    """
-    schemas: SchemaRepository
+    openapi: OpenAPIRepository
 
-    def __enter__(self) -> "SchemaUnitOfWork": ...
+    def __enter__(self) -> "OpenAPIUnitOfWork": ...
 
     def __exit__(
         self,
@@ -54,4 +48,4 @@ class SchemaUnitOfWork(Protocol):
     def rollback(self) -> None: ...
 
 
-SchemaUnitOfWorkFactory: TypeAlias = Callable[[], SchemaUnitOfWork]
+OpenAPIUnitOfWorkFactory: TypeAlias = Callable[[], OpenAPIUnitOfWork]

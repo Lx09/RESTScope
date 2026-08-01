@@ -24,7 +24,7 @@ from restscope.testing.models import ConstantGenerator
 from tests._operation_smoke_dedup_solve_fixtures import smoke_config, smoke_report
 
 
-def _report(run_id: str, *, status_code: int, revision: int):
+def _report(run_id: str, *, status_code: int):
     """Build one complete single-case Batch result."""
     from restscope.operation_smoke.test_case_catalog import HTTPFailure
 
@@ -40,7 +40,6 @@ def _report(run_id: str, *, status_code: int, revision: int):
     return replace(
         base,
         run_id=run_id,
-        config_revision=revision,
         cases=(
             base.cases[0].model_copy(
                 update={
@@ -130,12 +129,11 @@ class StubSolveFactory:
                         owner.events.append(f"solve:{request.todo.todo_id}")
                         outcome = owner.outcomes.pop(0)
                         if outcome.status == "applied_patch":
-                            owner.catalog.current = (
-                                owner.catalog.current.model_copy(
-                                    update={
-                                        "revision": outcome.active_config_revision
-                                    }
-                                )
+                            from restscope.testing import preview_generator_patch
+
+                            owner.catalog.current = preview_generator_patch(
+                                owner.catalog.current,
+                                outcome.applied_patch.patch.updates,
                             )
                         return outcome
 
@@ -158,6 +156,17 @@ class EmptyReferences:
     def prepare_updates(self, *, updates, **arguments):
         del arguments
         return updates
+
+
+class EmptyConstraintReader:
+    """Return durable-current Constraints for each complete Batch boundary."""
+
+    def __init__(self) -> None:
+        self.reads = []
+
+    def current_constraints(self, operation_key):
+        self.reads.append(operation_key)
+        return []
 
 
 def _context() -> ToolContext:
@@ -212,7 +221,7 @@ def _dedup(*todo_ids: str, outputs_used: int = 1) -> FailureDedupResult:
     )
 
 
-def _applied(revision: int, value: str) -> FailureSolveOutcome:
+def _applied(number: int, value: str) -> FailureSolveOutcome:
     """Build one selected Patch result already committed by Solve."""
     candidate = PatchCandidate(
         candidate_ref="P1",
@@ -232,20 +241,19 @@ def _applied(revision: int, value: str) -> FailureSolveOutcome:
     return FailureSolveOutcome(
         status="applied_patch",
         outputs_used=4,
-        investigation_id=f"investigation-{revision}",
-        active_config_revision=revision,
+        solve_attempt_id=f"solve-attempt-{number}",
+        generator_change_event_id=f"generator-change-{number}",
         applied_patch=candidate,
     )
 
 
 def _outcome(status: str) -> FailureSolveOutcome:
-    """Build one terminal Investigation that applies no Patch."""
+    """Build one terminal Solve Attempt that applies no Patch."""
     return FailureSolveOutcome(
         status=status,
         outputs_used=2,
-        investigation_id=f"investigation-{status}",
-        active_config_revision=3,
-        reason=f"Investigation ended with {status}.",
+        solve_attempt_id=f"solve-attempt-{status}",
+        reason=f"Solve ended with {status}.",
     )
 
 
@@ -260,6 +268,7 @@ def _coordinator(*, reports, dedup_results, outcomes, events):
             batch_runner=StubRunner(reports, events),
             failure_deduplicator=deduplicator,
             failure_solver_factory=solve_factory,
+            constraint_reader=EmptyConstraintReader(),
             reference_values=EmptyReferences(),
             random_seed=731,
         ),
@@ -273,7 +282,7 @@ def test_success_rate_stops_before_dedup() -> None:
     """A successful complete Batch needs no Failure work."""
     events = []
     coordinator, _, _, _ = _coordinator(
-        reports=[_report("batch-1", status_code=200, revision=3)],
+        reports=[_report("batch-1", status_code=200)],
         dedup_results=[],
         outcomes=[],
         events=events,
@@ -292,7 +301,7 @@ def test_no_applied_patch_stops_after_every_unique_failure() -> None:
     """All deduplicated Failures finish before the no-Patch stop."""
     events = []
     coordinator, _, _, solve_factory = _coordinator(
-        reports=[_report("batch-1", status_code=404, revision=3)],
+        reports=[_report("batch-1", status_code=404)],
         dedup_results=[_dedup("T1", "T2")],
         outcomes=[_outcome("no_patch"), _outcome("conflict")],
         events=events,
@@ -321,8 +330,8 @@ def test_every_failure_finishes_before_next_complete_batch() -> None:
     events = []
     coordinator, _, _, _ = _coordinator(
         reports=[
-            _report("batch-1", status_code=404, revision=3),
-            _report("batch-2", status_code=200, revision=5),
+            _report("batch-1", status_code=404),
+            _report("batch-2", status_code=200),
         ],
         dedup_results=[_dedup("T1", "T2")],
         outcomes=[_applied(4, "first"), _applied(5, "second")],
@@ -334,7 +343,7 @@ def test_every_failure_finishes_before_next_complete_batch() -> None:
         OperationSmokeRequest(operation_key=smoke_config().operation_key),
     )
 
-    assert result.active_config_revision == 5
+    assert not hasattr(result, "active_config_revision")
     assert events == [
         "batch:batch-1",
         "dedup:1",
@@ -348,7 +357,7 @@ def test_dedup_budget_exhaustion_is_a_technical_error() -> None:
     """An unusable semantic classification cannot become a passed result."""
     events = []
     coordinator, _, _, _ = _coordinator(
-        reports=[_report("batch-1", status_code=404, revision=3)],
+        reports=[_report("batch-1", status_code=404)],
         dedup_results=[
             FailureDedupResult(
                 status="dedup_budget_exhausted",
@@ -374,9 +383,9 @@ def test_dedup_budget_exhaustion_is_a_technical_error() -> None:
 
 
 def test_solve_budget_exhaustion_is_a_technical_error() -> None:
-    """One exhausted Investigation ends the workflow."""
+    """One exhausted Solve session ends the workflow."""
     coordinator, _, _, _ = _coordinator(
-        reports=[_report("batch-1", status_code=404, revision=3)],
+        reports=[_report("batch-1", status_code=404)],
         dedup_results=[_dedup("T1")],
         outcomes=[
             FailureSolveOutcome(
@@ -395,3 +404,35 @@ def test_solve_budget_exhaustion_is_a_technical_error() -> None:
 
     assert result.status == "errored"
     assert result.failure_kind == "solve_budget_exhausted"
+
+
+def test_public_summaries_require_current_event_and_attempt_id_names() -> None:
+    """Retired revision and Investigation fields cannot cross the public boundary."""
+
+    import pytest
+    from pydantic import ValidationError
+
+    from restscope.operation_smoke import PatchAttemptSummary, TodoRunSummary
+
+    with pytest.raises(ValidationError, match="applied_revision"):
+        PatchAttemptSummary.model_validate(
+            {
+                "candidate_ref": "P1",
+                "patch_outputs": 2,
+                "generator_change_event_id": "generator-change-1",
+                "changed_input_count": 1,
+                "constraint_count": 0,
+                "applied_revision": 2,
+            }
+        )
+    with pytest.raises(ValidationError, match="investigation_id"):
+        TodoRunSummary.model_validate(
+            {
+                "todo_id": "T1",
+                "failure": "Project is missing",
+                "status": "no_patch",
+                "solve_outputs": 2,
+                "solve_attempt_id": "solve-attempt-1",
+                "investigation_id": "retired-name",
+            }
+        )

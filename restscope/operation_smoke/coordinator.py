@@ -41,6 +41,7 @@ from restscope.testing import (
     ResponseValueGenerator,
     build_semantic_input_map,
 )
+from restscope.testing.constraints import OperationConstraintRecord
 
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
@@ -71,6 +72,17 @@ class SmokeBatchRunner(Protocol):
         ...
 
 
+class CurrentConstraintReader(Protocol):
+    """Read the operation's executable Constraints from durable current state."""
+
+    def current_constraints(
+        self,
+        operation_key: str,
+    ) -> list[OperationConstraintRecord]:
+        """Return the complete current Constraint set for one operation."""
+        ...
+
+
 class OperationSmokeCoordinator:
     """Repeat full Batches until success or one approved terminal condition."""
 
@@ -81,28 +93,20 @@ class OperationSmokeCoordinator:
         batch_runner: SmokeBatchRunner,
         failure_deduplicator: FailureDeduplicator,
         failure_solver_factory: FailureSolveAgentFactory,
+        constraint_reader: CurrentConstraintReader,
         reference_values: BehaviorMonitorReferenceValues,
         random_seed: int = 0,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Store workflow collaborators and App-lifetime accepted Constraints.
-
-        Generator revisions live in the database.  Constraints are executable
-        Patch content without a general persistence consumer, so they remain
-        isolated by operation for this App lifetime and are also captured in
-        Applied Patch memory.
-        """
+        """Store workflow collaborators and the durable Constraint reader."""
         self.config_catalog = config_catalog
         self.batch_runner = batch_runner
         self.failure_deduplicator = failure_deduplicator
         self.failure_solver_factory = failure_solver_factory
+        self.constraint_reader = constraint_reader
         self.reference_values = reference_values
         self.random_seed = random_seed
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
-        self._constraints_by_operation: dict[
-            str,
-            dict[str, CompiledConstraintPatch],
-        ] = {}
 
     def run(
         self,
@@ -140,8 +144,7 @@ class OperationSmokeCoordinator:
             return result
 
     def clear_app_state(self) -> None:
-        """Release App-lifetime executable Constraints when the App closes."""
-        self._constraints_by_operation.clear()
+        """Retain a no-op close hook; current Constraints live in the database."""
 
     def _run(
         self,
@@ -168,14 +171,12 @@ class OperationSmokeCoordinator:
                 operation_key=request.operation_key,
                 success_rate=0,
                 required_success_rate=request.success_rate_threshold,
-                active_config_revision=current.revision,
                 failure_kind="unsupported_operation",
                 reason="The operation has no executable Generator configuration.",
             )
 
-        constraints = self._constraints_by_operation.setdefault(
-            request.operation_key,
-            {},
+        constraints = _compiled_constraints(
+            self.constraint_reader.current_constraints(request.operation_key)
         )
         batch_run_ids: list[str] = []
         rounds: list[SmokeRoundSummary] = []
@@ -193,6 +194,13 @@ class OperationSmokeCoordinator:
 
         try:
             while True:
+                # Each complete Batch starts from the durable current set. This
+                # avoids relying on private Coordinator memory after a Patch.
+                constraints = _compiled_constraints(
+                    self.constraint_reader.current_constraints(
+                        request.operation_key
+                    )
+                )
                 _assert_reference_invariants(current, self.reference_values)
                 batch = self.batch_runner.run_smoke_batch(
                     context,
@@ -200,17 +208,13 @@ class OperationSmokeCoordinator:
                     case_count=request.case_count,
                     seed=self.random_seed,
                     constraints=_combined_constraints(
-                        list(constraints.values())
+                        constraints
                     ),
                     case_id_factory=catalog.issue_case_id,
                 )
                 batch_run_ids.append(batch.run_id)
                 for case in batch.cases:
                     catalog.record(case)
-                if batch.config_revision != current.revision:
-                    raise RuntimeError(
-                        "Batch revision does not match active Generator config"
-                    )
                 success_rate = batch.success_rate
                 if success_rate >= request.success_rate_threshold:
                     return _passed_result(
@@ -237,6 +241,7 @@ class OperationSmokeCoordinator:
                             for case in batch.cases
                             if case.failure is not None
                         ],
+                        input_node_ids_by_handle=semantic.node_by_handle,
                     ),
                     catalog=catalog,
                     max_outputs=(
@@ -297,7 +302,7 @@ class OperationSmokeCoordinator:
                             ),
                             catalog=catalog,
                             config=current,
-                            active_constraints=list(constraints.values()),
+                            active_constraints=constraints,
                             case_count=request.case_count,
                             random_seed=self.random_seed,
                             max_outputs=(
@@ -346,12 +351,11 @@ class OperationSmokeCoordinator:
                     applied_summary = None
                     if solve.status == "applied_patch":
                         assert solve.applied_patch is not None
-                        assert solve.active_config_revision is not None
+                        assert solve.generator_change_event_id is not None
                         current = self.config_catalog.require_operation(
                             request.operation_key
                         )
-                        for constraint in solve.active_constraints:
-                            constraints[constraint.constraint_id] = constraint
+                        constraints = list(solve.active_constraints)
                         applied_count += 1
                         applied_summary = PatchAttemptSummary(
                             candidate_ref=(
@@ -360,7 +364,9 @@ class OperationSmokeCoordinator:
                             patch_outputs=(
                                 solve.applied_patch.patch_outputs
                             ),
-                            applied_revision=solve.active_config_revision,
+                            generator_change_event_id=(
+                                solve.generator_change_event_id
+                            ),
                             changed_input_count=len(
                                 solve.applied_patch.patch.updates
                             ),
@@ -374,7 +380,7 @@ class OperationSmokeCoordinator:
                             failure=todo.failure,
                             status=solve.status,
                             solve_outputs=solve.outputs_used,
-                            investigation_id=solve.investigation_id,
+                            solve_attempt_id=solve.solve_attempt_id,
                             reason=solve.reason,
                             applied_patch=applied_summary,
                         )
@@ -399,7 +405,7 @@ class OperationSmokeCoordinator:
                         rounds=rounds,
                         stop_reason="no_patch_applied",
                         reason=(
-                            "Every deduplicated Investigation completed, but none "
+                            "Every deduplicated Solve Attempt completed, but none "
                             "produced an applicable Patch."
                         ),
                     )
@@ -433,7 +439,6 @@ def _passed_result(
         operation_key=request.operation_key,
         success_rate=success_rate,
         required_success_rate=request.success_rate_threshold,
-        active_config_revision=current.revision,
         batch_run_ids=batch_run_ids,
         rounds=rounds,
         stop_reason=stop_reason,
@@ -457,7 +462,6 @@ def _errored_result(
         operation_key=request.operation_key,
         success_rate=success_rate,
         required_success_rate=request.success_rate_threshold,
-        active_config_revision=current.revision if current is not None else 1,
         batch_run_ids=batch_run_ids,
         rounds=rounds,
         failure_kind=failure_kind,
@@ -557,3 +561,18 @@ def _combined_constraints(
         for expression in patch.constraint.constraints
     ]
     return ConstraintSet(constraints=expressions) if expressions else None
+
+
+def _compiled_constraints(
+    records: list[OperationConstraintRecord],
+) -> list[CompiledConstraintPatch]:
+    """Translate durable records into the execution DTO used by Smoke."""
+
+    return [
+        CompiledConstraintPatch(
+            constraint_id=item.id,
+            kind=item.kind,
+            constraint=item.constraint,
+        )
+        for item in records
+    ]

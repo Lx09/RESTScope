@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Protocol
-
-from restscope.db.time import utc_now
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,13 +32,11 @@ class ResponseValueMonitorRecord:
     The annotated fields form the contract; validation rejects missing, extra, or
     incorrectly typed values at the boundary.
     """
-    monitor_id: str
     value_name: str
     consumer_operation_key: str
     consumer_input_node_id: str
     parameter_name: str
     expected_type: str | None
-    active: bool
     created: bool = False
 
 
@@ -69,8 +65,7 @@ class PersistedResponseValueSource(ResponseValueSource):
     The annotated fields form the contract; validation rejects missing, extra, or
     incorrectly typed values at the boundary.
     """
-    source_id: str
-    monitor_id: str
+    value_name: str
 
 
 class _ResponseValueRepository(Protocol):
@@ -89,7 +84,7 @@ class _ResponseValueRepository(Protocol):
 
     def add_sources(
         self,
-        monitor_id: str,
+        value_name: str,
         sources: list[ResponseValueSource],
         *,
         now: datetime,
@@ -100,11 +95,11 @@ class _ResponseValueRepository(Protocol):
         producer_operation_key: str,
     ) -> list[PersistedResponseValueSource]: ...
 
-    def list_active_monitors(self) -> list[ResponseValueMonitorRecord]: ...
+    def list_monitors(self) -> list[ResponseValueMonitorRecord]: ...
 
     def record_values(
         self,
-        monitor_id: str,
+        value_name: str,
         values: list[object],
         *,
         now: datetime,
@@ -121,6 +116,17 @@ class _ResponseValueRepository(Protocol):
         scalars: list[tuple[str, object]],
         now: datetime,
     ) -> None: ...
+
+    def record_response(
+        self,
+        *,
+        operation_key: str,
+        status_code: int,
+        media_type: str,
+        scalars: list[tuple[str, object]],
+        values_by_pool: dict[str, list[object]],
+        now: datetime,
+    ) -> int: ...
 
     def historical_values_for_source(
         self,
@@ -160,14 +166,42 @@ class ResponseValueCatalog:
         with self.unit_of_work_factory() as uow:
             result = uow.response_values.ensure_monitor(
                 registration,
-                now=utc_now(),
+                now=_utc_now(),
             )
             uow.commit()
             return result
 
+    def record_response(
+        self,
+        *,
+        operation_key: str,
+        status_code: int,
+        media_type: str,
+        scalars: list[tuple[str, object]],
+        values_by_pool: dict[str, list[object]],
+    ) -> int:
+        """Atomically store one observation and refresh every matching pool.
+
+        ``values_by_pool`` is computed by the response workflow before opening
+        the write transaction, so the SQL adapter never interprets selectors or
+        raw JSON response shapes.
+        """
+
+        with self.unit_of_work_factory() as uow:
+            recorded = uow.response_values.record_response(
+                operation_key=operation_key,
+                status_code=status_code,
+                media_type=media_type,
+                scalars=scalars,
+                values_by_pool=values_by_pool,
+                now=_utc_now(),
+            )
+            uow.commit()
+            return recorded
+
     def add_sources(
         self,
-        monitor_id: str,
+        value_name: str,
         sources: list[ResponseValueSource],
     ) -> list[PersistedResponseValueSource]:
         """
@@ -179,9 +213,9 @@ class ResponseValueCatalog:
         """
         with self.unit_of_work_factory() as uow:
             result = uow.response_values.add_sources(
-                monitor_id,
+                value_name,
                 sources,
-                now=utc_now(),
+                now=_utc_now(),
             )
             uow.commit()
             return result
@@ -202,13 +236,13 @@ class ResponseValueCatalog:
         data needed for this call.
         """
         with self.unit_of_work_factory() as uow:
-            now = utc_now()
+            now = _utc_now()
             monitor = uow.response_values.ensure_monitor(
                 registration,
                 now=now,
             )
             persisted = uow.response_values.add_sources(
-                monitor.monitor_id,
+                monitor.value_name,
                 sources,
                 now=now,
             )
@@ -233,7 +267,7 @@ class ResponseValueCatalog:
                     "Selected response sources have no compatible values"
                 )
             uow.response_values.record_values(
-                monitor.monitor_id,
+                monitor.value_name,
                 historical_values,
                 now=now,
             )
@@ -263,7 +297,7 @@ class ResponseValueCatalog:
                 producer_operation_key
             )
 
-    def list_active_monitors(self) -> list[ResponseValueMonitorRecord]:
+    def list_monitors(self) -> list[ResponseValueMonitorRecord]:
         """
         Return active monitors for API response monitoring and its narrowly approved
         evidence catalog.
@@ -272,11 +306,11 @@ class ResponseValueCatalog:
         data needed for this call.
         """
         with self.unit_of_work_factory() as uow:
-            return uow.response_values.list_active_monitors()
+            return uow.response_values.list_monitors()
 
     def record_values(
         self,
-        monitor_id: str,
+        value_name: str,
         values: list[object],
     ) -> int:
         """
@@ -288,9 +322,9 @@ class ResponseValueCatalog:
         """
         with self.unit_of_work_factory() as uow:
             count = uow.response_values.record_values(
-                monitor_id,
+                value_name,
                 values,
-                now=utc_now(),
+                now=_utc_now(),
             )
             uow.commit()
             return count
@@ -316,7 +350,7 @@ class ResponseValueCatalog:
                 status_code=status_code,
                 media_type=media_type,
                 scalars=scalars,
-                now=utc_now(),
+                now=_utc_now(),
             )
             uow.commit()
 
@@ -369,3 +403,9 @@ def _value_matches_expected_type(
             and not isinstance(value, bool)
         )
     return True
+
+
+def _utc_now() -> datetime:
+    """Return an aware UTC timestamp without importing the database package."""
+
+    return datetime.now(timezone.utc)

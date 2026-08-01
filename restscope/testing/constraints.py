@@ -238,6 +238,21 @@ ConstraintKind: TypeAlias = Literal[
 ]
 
 
+class OperationConstraintRecord(_ConstraintModel):
+    """Represent one normalized current Constraint stored for an operation.
+
+    ``owner_input_node_ids`` is derived from ``constraint`` and is retained so
+    deterministic replacement can find directly and transitively overlapping
+    parameter groups without asking an Agent for database actions.
+    """
+
+    id: str = Field(min_length=1, max_length=100)
+    operation_key: str = Field(min_length=1)
+    owner_input_node_ids: list[str] = Field(min_length=1, max_length=100)
+    kind: ConstraintKind
+    constraint: ConstraintSet
+
+
 class ConstraintValidationError(ValueError):
     """A constraint is incompatible with the frozen operation contract."""
 

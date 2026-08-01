@@ -14,6 +14,7 @@ from sqlalchemy import engine_from_config, pool
 
 from restscope.db import orm  # noqa: F401
 from restscope.db.base import Base
+from restscope.db.session import enable_sqlite_foreign_keys
 
 
 config = context.config
@@ -46,6 +47,7 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    enable_sqlite_foreign_keys(connectable)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

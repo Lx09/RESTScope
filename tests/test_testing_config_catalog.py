@@ -80,14 +80,20 @@ def _catalog(tmp_path: Path):
 
 
 def _apply_accepted_patch(catalog, operation_key: str, updates):
-    """Apply setup as one directly accepted revision."""
+    """Apply test setup through the current-content repository boundary."""
+    from restscope.testing import prepare_accepted_generator_patch
+
     current = catalog.get_operation(operation_key)
     assert current is not None
-    return catalog.apply_accepted_patch(
-        operation_key=operation_key,
-        expected_revision=current.revision,
-        updates=updates,
-    )
+    updated = prepare_accepted_generator_patch(current, updates)
+    with catalog.unit_of_work_factory() as uow:
+        uow.generator_configs.replace_inputs(
+            operation_key=operation_key,
+            expected=current.configs,
+            updated=updated.configs,
+        )
+        uow.commit()
+    return catalog.get_operation(operation_key)
 
 
 def _apply_accepted_configs(catalog, current, configs):
@@ -117,7 +123,8 @@ def test_first_initialization_creates_every_operation_and_default_generator(tmp_
     status = catalog.get_operation("GET /status")
     assert order is not None
     assert status is not None
-    assert order.revision == status.revision == 1
+    assert not hasattr(order, "revision")
+    assert not hasattr(status, "revision")
     assert order.active_media_type == "application/json"
     assert order.snapshot.available_media_types == [
         "application/json",
@@ -754,9 +761,9 @@ def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) ->
     body_id = current.snapshot.request_body_node_id
 
     with pytest.raises(GeneratorConfigError) as raised:
-        catalog.apply_accepted_patch(
-            operation_key=current.operation_key,
-            expected_revision=1,
+        _apply_accepted_patch(
+            catalog,
+            current.operation_key,
             updates=[
                 {
                     "input_node_id": body_id,
@@ -805,7 +812,7 @@ def test_unsupported_operation_is_saved_disabled_without_blocking_other_operatio
     )
     assert replaced.enabled is True
     assert replaced.disabled_reasons == []
-    assert catalog.require_operation(replaced.operation_key).revision == 2
+    assert catalog.require_operation(replaced.operation_key) == replaced
 
 
 def test_default_derivation_failure_disables_only_that_operation(
@@ -1409,10 +1416,10 @@ def test_catalog_initialization_rolls_back_all_records_and_can_retry(
     assert catalog.initialize_once(_ir()) is True
 
 
-def test_repository_compare_and_swap_rejects_a_concurrent_old_revision(
+def test_repository_compare_and_swap_rejects_stale_current_content(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that repository compare and swap rejects a concurrent old revision."""
+    """A second writer cannot overwrite content changed after it was read."""
     from restscope.db import SqlAlchemyGeneratorConfigUnitOfWork, make_session_factory
     from restscope.testing.ports import GeneratorConfigConcurrentWrite
 
@@ -1426,25 +1433,35 @@ def test_repository_compare_and_swap_rejects_a_concurrent_old_revision(
         SqlAlchemyGeneratorConfigUnitOfWork(session_factory) as first,
         SqlAlchemyGeneratorConfigUnitOfWork(session_factory) as second,
     ):
-        assert first.generator_configs.get(created.operation_key).revision == 1
-        assert second.generator_configs.get(created.operation_key).revision == 1
-        payload = {
-            "operation_key": created.operation_key,
-            "expected_revision": 1,
-            "revision": 2,
-            "snapshot": created.snapshot.model_dump(mode="json"),
-            "enabled": created.enabled,
-            "disabled_reasons": [
-                item.model_dump(mode="json") for item in created.disabled_reasons
+        from restscope.testing import InputGeneratorPatch, prepare_accepted_generator_patch
+
+        stale = first.generator_configs.get_inputs(created.operation_key)
+        assert second.generator_configs.get_inputs(created.operation_key) == stale
+        target = next(
+            item for item in created.configs if item.inclusion_probability < 1
+        )
+        updated = prepare_accepted_generator_patch(
+            created,
+            [
+                InputGeneratorPatch(
+                    input_node_id=target.input_node_id,
+                    inclusion_probability=0,
+                )
             ],
-            "active_media_type": created.active_media_type,
-            "configs": created.configs,
-        }
-        first.generator_configs.replace(**payload)
+        )
+        first.generator_configs.replace_inputs(
+            operation_key=created.operation_key,
+            expected=stale,
+            updated=updated.configs,
+        )
         first.commit()
 
         with pytest.raises(GeneratorConfigConcurrentWrite):
-            second.generator_configs.replace(**payload)
+            second.generator_configs.replace_inputs(
+                operation_key=created.operation_key,
+                expected=stale,
+                updated=updated.configs,
+            )
 
 
 def test_explicit_leaf_presence_patch_closes_all_request_body_ancestors() -> None:

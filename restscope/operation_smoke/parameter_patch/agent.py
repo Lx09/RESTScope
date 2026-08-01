@@ -36,6 +36,7 @@ from restscope.testing import (
     normalize_constraint_set,
     preview_generator_patch,
     project_generated_input_value,
+    referenced_input_node_ids,
     validate_constraint_set,
 )
 from restscope.testing.generation import generate_test_case
@@ -482,12 +483,11 @@ def _compile_patch(
     constraints = [
         _compile_constraint(
             change.expression,
-            index=index,
             task=task,
             semantic=semantic.node_by_handle,
             config=config,
         )
-        for index, change in enumerate(proposal.constraints, start=1)
+        for change in proposal.constraints
     ]
     patch = GeneratorPatchDraft(
         updates=updates,
@@ -620,7 +620,6 @@ def _variant_branch_index(node: Any) -> int:
 def _compile_constraint(
     expression: dict[str, Any],
     *,
-    index: int,
     task: ParameterPatchTask,
     semantic: Mapping[str, str],
     config: OperationGeneratorConfig,
@@ -660,7 +659,7 @@ def _compile_constraint(
         separators=(",", ":"),
     )
     identity = hashlib.sha256(
-        f"{task.todo_id}:{index}:{encoded}".encode()
+        f"{config.operation_key}:{encoded}".encode()
     ).hexdigest()[:16]
     return CompiledConstraintPatch(
         constraint_id=f"constraint_{identity}",
@@ -679,11 +678,15 @@ def _sample_patch(
     case_count: int,
     random_seed: int,
 ) -> list[dict[str, Any]]:
-    """Generate request-shaped local samples without sending HTTP requests."""
+    """Generate samples using the complete post-replacement Constraint set."""
     candidate = preview_generator_patch(config, patch.updates)
+    final_constraints = _replace_candidate_constraint_scope(
+        active_constraints,
+        patch.constraints,
+    )
     expressions = [
         expression
-        for item in [*active_constraints, *patch.constraints]
+        for item in final_constraints
         for expression in item.constraint.constraints
     ]
     constraints = ConstraintSet(constraints=expressions) if expressions else None
@@ -719,6 +722,52 @@ def _sample_patch(
             )
         samples.append({"values": values, "present": present})
     return samples
+
+
+def _replace_candidate_constraint_scope(
+    current: list[CompiledConstraintPatch],
+    replacement: list[CompiledConstraintPatch],
+) -> list[CompiledConstraintPatch]:
+    """Preview the same transitive owner replacement used at persistence.
+
+    A Generator-only Patch carries no replacement Constraints and therefore
+    preserves every current expression.  When expressions are present, their
+    referenced input IDs seed an overlap frontier.  Any old Constraint whose
+    owner intersects that frontier is replaced, including transitively linked
+    old owners.
+    """
+
+    if not replacement:
+        return list(current)
+
+    def owners(item: CompiledConstraintPatch) -> set[str]:
+        """Return input IDs referenced by one normalized expression set."""
+        return referenced_input_node_ids(item.constraint)
+
+    frontier = {
+        node_id
+        for item in replacement
+        for node_id in owners(item)
+    }
+    replaced_ids: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for item in current:
+            if item.constraint_id in replaced_ids:
+                continue
+            item_owners = owners(item)
+            if item_owners & frontier:
+                replaced_ids.add(item.constraint_id)
+                frontier.update(item_owners)
+                changed = True
+    retained = [
+        item for item in current if item.constraint_id not in replaced_ids
+    ]
+    by_id = {
+        item.constraint_id: item for item in [*retained, *replacement]
+    }
+    return [by_id[key] for key in sorted(by_id)]
 
 
 def _reference_pool_values(

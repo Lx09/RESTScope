@@ -68,13 +68,13 @@ uv run pytest
 
 ## Database
 
-The database stores OpenAPI schema sources, generator configuration, the
-narrow API Behavior Monitor evidence catalogs, and structured Operation Smoke
-Failure memory for the single current API.
-Those catalogs contain Resource Identifier facts and registered Response Value
-selectors and typed values; response-contract IR mutations remain in memory.
-Domain services depend on repository and transaction protocols; SQLAlchemy
-models, sessions, and adapters remain inside `restscope.db`.
+The database is one audit artifact for one App. It contains exactly 19 business
+tables: the complete current normalized OpenAPI and response-change events,
+current per-input Generators and Constraints, narrow Resource Identifier and
+bounded Response Value evidence, stable Failures, terminal Solve Attempts,
+validated input attribution, and accepted Generator/Constraint change events.
+It never stores raw responses, Test Cases, Batches, Patch samples, model
+conversations, plans, queues, scheduler progress, or authentication material.
 
 Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
@@ -85,24 +85,23 @@ default database bootstrap.
 
 Alembic now has one `0001_current_baseline` for fresh databases. Old exploratory
 database files and the former `0001`–`0006` chain are intentionally
-incompatible. Generator history contains only the initial configuration and
-directly accepted revisions. Smoke Memory stores bounded Observations,
-Failures, Investigations, operation-local Parameter links, and applied Patches;
-it never stores raw responses, HTTP/LLM transcripts, rejected candidates, or a
-permanent resolved state. A schema source stores either an absolute file path
-or verbatim JSON/YAML content. Paths are reread on every load, while
-parsed/evolved IR and test reports are not persisted:
+incompatible. Every project-created SQLite connection enables foreign keys;
+fresh creation also runs integrity and foreign-key checks. There is no restore,
+resume, reset, migration-from-old, or automatic-delete API.
 
 ```python
-from restscope import RESTScopeConfig, SchemaSourceInput, build_schema_catalog
+from restscope import RESTScopeApp, RESTScopeConfig
 
 config = RESTScopeConfig.from_environment()
-catalog = build_schema_catalog(config)
-schema = catalog.register(
-    SchemaSourceInput(file_path="assets/openapi/petstore-v3.json")
-)
-parsed = catalog.load(schema.id)
+app = RESTScopeApp.from_config(config)
+# After app.initialize(...):
+current_document = app.export_current_openapi()
+events = app.list_openapi_change_events("GET /projects/{projectId}")
 ```
+
+These methods are read-only audit/export interfaces. They do not recover an
+App from the retained file. Detailed table ownership, keys, retention, and
+transaction rules are documented in `docs/database_design.md`.
 
 ## LLM
 
@@ -254,40 +253,43 @@ internal `SmokeBatchRunner` interface, so other Agent roles cannot bypass
 Smoke's round ordering, budgets, shared seed, or direct Patch transaction.
 
 During the first successful `RESTScopeApp.initialize()`, every OpenAPI operation
-is frozen into a persistent request snapshot. Each parameter, body, media type,
+becomes an App-lifetime request snapshot. Each parameter, body, media type,
 property, array item, and composition branch has a deterministic
-`input_node_id` and exactly one initial generator. The same transaction stores
-all enabled or disabled operation records and a singleton Catalog marker. One
-default App owns one fresh database and one initialization; starting another
-App against the retained file is rejected. Testing another API requires a new
-database URL or an explicit operational deletion of the old run artifact;
-there is no runtime reset or delete tool.
+`input_node_id` and exactly one current generator row. Method, path,
+serialization rules, media type, and enabled or disabled state remain derived
+from the in-memory OpenAPI representation instead of being copied into the
+database. The complete normalized OpenAPI document is persisted once as the
+current audit document. One default App owns one fresh database and one
+initialization; starting another App against the retained file is rejected.
+Testing another API requires a new database URL or an explicit operational
+deletion of the old run artifact; there is no runtime reset or delete tool.
 
 Initial generators treat the OpenAPI document as the source for their defaults.
 For concrete values the precedence is `enum`, `const`, `default`, then
 `example`; a non-empty enum becomes an equal-weight choice containing every
 declared value. Later Generator changes can enter only through a validated,
 directly accepted Patch and may deliberately generate values that do not match
-the frozen Schema. Required and structural nodes must still use inclusion
+the initialized Schema. Required and structural nodes must still use inclusion
 probability `1.0`, and every generated case must still serialize under the
-frozen parameter and request-body contract before any request is sent. A
-An accepted Patch clears recoverable default-generation failures attributed to the
-nodes it updates and enables the operation once no blocking reason remains.
+parameter and request-body contract before any request is sent. An accepted
+Patch clears recoverable default-generation failures attributed to the nodes
+it updates and enables the operation once no blocking reason remains.
 
-The internal Smoke batch runner accepts a frozen Catalog `operation_key` such
-as `POST /orders`. It reads method, path, serialization rules, input
-constraints, and generators only from that persisted snapshot; it does not
-compare the operation with the current `ToolContext.ir`. It generates all
-requested cases in preflight and only then sends requests serially to the
-current App-bound target. It supports at most 20 cases, does not follow
-redirects or retry, and creates an isolated HTTP client per case. When the
-default API Behavior Monitor is present, it reads at most 1 MiB from each
-response before returning. Every first
-`operation + exact status + normalized media type` observation is compared
-with the current OpenAPI IR. The Monitor can conservatively add an exact
-status, media type, optional field, or wider type directly to that in-memory
-IR. Invalid or truncated JSON stays pending for the next matching response;
-the evolved IR and first-observation registry are not persisted.
+The internal Smoke batch runner accepts an initialized Catalog `operation_key`
+such as `POST /orders`. It combines the App-lifetime operation snapshot with
+the current input Generator rows and reads the operation's current Constraints
+from the database before every complete Batch. It generates all requested
+cases in preflight and only then sends requests serially to the current
+App-bound target. It supports at most 20 cases, does not follow redirects or
+retry, and creates an isolated HTTP client per case. When the default API
+Behavior Monitor is present, it reads at most 1 MiB from each response before
+returning. Every first `operation + exact status + normalized media type`
+observation is compared with the current OpenAPI representation. A real
+contract change updates the in-memory response, the complete current audit
+document, and one append-only change event in one critical section. A database
+failure restores the in-memory response and Tracker state. Invalid or
+truncated JSON stays pending for the next matching response and writes no
+event.
 
 Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
 tracking. Batch execution returns concrete Test Cases instead of building a
@@ -301,8 +303,8 @@ never persisted.
 `restscope.http.request` is a high-risk, non-read-only model capability that
 can trigger side effects on the bound target. Failure Solve receives a further
 operation-scoped wrapper around it. Generated batch execution remains internal
-to Operation Smoke and can execute only an operation stored in the frozen
-Generator Catalog using its complete persisted Generator configuration.
+to Operation Smoke and can execute only an initialized operation using its
+complete current Generator and Constraint configuration.
 The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
@@ -321,8 +323,9 @@ the original HTTP result and does not write evidence.
 
 The Monitor coordinates three bounded responsibilities:
 
-- Response Contract checks every first exact status/media observation and
-  evolves only the current App's OpenAPI IR.
+- Response Contract checks every first exact status/media observation. A real
+  change updates the current App's OpenAPI representation and its durable audit
+  document/event atomically.
 - Resource Identifier reuses the exact-`id` heuristic and bounded FAST
   classification. Learned selectors, typed identifiers, resource aliases,
   operation usage, and errors remain in the App database.
@@ -331,14 +334,19 @@ The Monitor coordinates three bounded responsibilities:
   the latest IR; exact normalized names are selected locally and an optional
   bounded FAST choice handles semantic names such as `commitId` and `sha`.
   Every valid, non-truncated 2xx JSON response contributes flattened scalar
-  evidence. The latest 100 observations per operation are persisted, allowing
-  a later monitor registration to backfill a deduplicated typed value pool.
+  evidence. The latest 100 observations per operation and the 100 most recently
+  active values per pool are retained, allowing a later monitor registration
+  to backfill a deduplicated typed value pool. A response with more than 1000
+  valid scalars is skipped in full and returns a structured warning; partial
+  evidence is never written.
 
 A learned Resource Identifier selector that previously produced an identifier
 but is later missing reports `expected_resource_id_missing`; it is not silently
-relearned. Raw response bodies, LLM reasoning, evolved IR snapshots, and
-response-contract first-observation state are never persisted. Flattened
-response scalar evidence is the narrow exception: all non-null scalar fields,
+relearned. Distinct typed Resource Identifiers are retained without capacity
+eviction. Raw response bodies, LLM reasoning, and response-contract pending
+state are never persisted. The current normalized OpenAPI and append-only
+contract change events are the audit exception; bounded flattened response
+scalar evidence is another narrow exception, and all non-null scalar fields,
 including sensitive-looking names, may be retained. `restscope.resource.lookup`
 remains the explicit read-only lookup tool; Response Value pools are consumed
 internally by Operation Smoke.
@@ -374,14 +382,17 @@ internally by Operation Smoke.
    satisfiability, and local samples are validated before the tool returns a
    session-local `P*` candidate reference.
 5. Solve finishes with `apply_patch(P*)`, `no_patch`, or `conflict`. Only the
-   first action changes Generator state. The new revision, Investigation,
-   Parameter links, and Applied Patch memory commit in one transaction.
+   first action changes Generator or Constraint state. A successful Patch
+   commits the current-state changes, one Solve Attempt, validated input links,
+   and one append-only Generator change event in one transaction. A state
+   conflict records a separate `conflict` Solve Attempt without applying the
+   stale candidate.
 
 Every item in the fixed Dedup result finishes before another Batch is allowed.
 If no Patch was applied, Smoke passes with `no_patch_applied`. Otherwise the next
 complete Batch validates all applied changes together, and
 `success_rate_reached` stops at the configured threshold (80% by default).
-There is no Effect Agent, candidate Batch, rollback revision, or permanent
+There is no Effect Agent, candidate Batch, rollback snapshot, or permanent
 `resolved` flag.
 
 Dedup has a shared 50-output budget. One Fingerprint uses zero outputs; several
@@ -393,12 +404,12 @@ Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Dedup or
 Solve exhaustion is a technical error; one Patch-tool exhaustion is recoverable
 feedback within its Solve session.
 
-The database keeps only structured Failure knowledge and applied Patches.
-Rejected session candidates, raw Batches/responses, HTTP transcripts, and LLM
-transcripts are not persisted. Accepted Constraints remain executable for the
-current App and are also present inside the structured Applied Patch record.
-Public results contain Batch run IDs plus bounded round, Investigation, and
-applied-Patch summaries. Request/response reports are intentionally absent.
+The database keeps stable structured Failures, append-only Solve Attempts,
+current input Generators and Constraints, and append-only deterministic change
+events. Rejected session candidates, Patch samples, raw Batches/responses, HTTP
+transcripts, and LLM transcripts are not persisted. Public results contain
+Batch run IDs plus bounded round, Solve Attempt, and Generator change-event
+summaries. Request/response reports are intentionally absent.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.
@@ -434,8 +445,10 @@ against a target you are authorized to test.
 
 App construction prepares the database before building the default capability
 and LLM runtimes. If construction fails, RESTScope removes only the SQLite file
-and sidecars created by that attempt. A failure during `initialize()` does not
-remove the database and remains retryable on the same App object.
+and sidecars created by that attempt. A failure during `initialize()` never
+deletes or overwrites the retained database. Parse and validation failures that
+occur before the OpenAPI catalog is initialized remain retryable on the same
+App object.
 
 Initialization validates the file, URL, or inline schema source and parses it
 exactly once for the lifetime of the App. The resulting IR and target settings

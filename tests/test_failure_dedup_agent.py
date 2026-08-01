@@ -134,6 +134,11 @@ def _request(case_ids: list[str]) -> FailureDedupRequest:
         round_number=1,
         batch_run_id="run-1",
         case_ids=case_ids,
+        input_node_ids_by_handle={
+            "body": "request/body",
+            "body.name": "request/body/name",
+            "body.namespace_id": "request/body/namespace_id",
+        },
     )
 
 
@@ -170,7 +175,10 @@ def test_exact_duplicate_bypasses_llm_and_keeps_first_test_case() -> None:
     assert result.todos[0].test_case_id == "TC1"
     assert result.todos[0].suspected_parameters is None
     assert client.requests == []
-    assert len(memory.writes[0].failures[0].observations) == 1
+    assert memory.writes[0].failures[0].messages == [
+        "HTTP 400: name already exists"
+    ]
+    assert memory.writes[0].failures[0].suspected_input_node_ids is None
 
 
 def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
@@ -237,16 +245,19 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     assert len(result.todos) == 1
     assert result.todos[0].test_case_id == "TC1"
     assert result.todos[0].suspected_parameters == ["body.name"]
-    assert (
-        memory.writes[0].failures[0].observations[0].trigger
-        == "HTTP 400: name already exists"
-    )
+    assert sorted(memory.writes[0].failures[0].messages) == [
+        "HTTP 400: name already exists",
+        "HTTP 409: name conflicts",
+    ]
+    assert memory.writes[0].failures[0].suspected_input_node_ids == [
+        "request/body/name"
+    ]
     prompt = "\n".join(
         message.content or ""
         for message in client.requests[0].messages
         if message.content
     )
-    assert "## Failure Observations — UNTRUSTED" in prompt
+    assert "## Current Failure Cases — UNTRUSTED" in prompt
     assert "TC1" in prompt
     assert "HTTP 400: name already exists" in prompt
     assert "body.name" not in prompt
@@ -324,12 +335,9 @@ def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:
     assert result.status == "deduplicated"
     assert result.exact_fingerprint_count == 2
     assert len(client.requests) == 1
-    assert [
-        failure.observations[0].trigger
-        for failure in memory.writes[0].failures
-    ] == [
-        "HTTP 400: name: has already been taken",
-        "HTTP 400: namespace_id: is invalid",
+    assert [failure.messages for failure in memory.writes[0].failures] == [
+        ["HTTP 400: name: has already been taken"],
+        ["HTTP 400: namespace_id: is invalid"],
     ]
 
 

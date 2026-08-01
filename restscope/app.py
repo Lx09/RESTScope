@@ -33,7 +33,8 @@ from restscope.capabilities import (
     build_capabilities,
 )
 from restscope.http_transport import TargetHTTPTransport
-from restscope.openapi_parser import OpenAPIParser
+from restscope.catalog import OpenAPIChangeEventRecord
+from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 from restscope.observability import TracingRuntime, build_tracing_runtime
 from restscope.redaction import Redactor
 from restscope.randomness import SeededRandom
@@ -100,8 +101,8 @@ class RESTScopeApp:
                 )
             )
             if capability_runtime is None:
-                # The catalog stores durable generator revisions.  The behavior
-                # monitor supplies observed identifiers/response values to
+                # The catalog stores only current per-input Generators.  The
+                # behavior monitor supplies observed identifiers/response values to
                 # generators, while the transport sends requests and returns
                 # every response to that monitor.
                 generator_catalog = build_generator_config_catalog(config)
@@ -383,10 +384,68 @@ class RESTScopeApp:
             None,
         )
         if testing_service is not None:
+            monitor = getattr(
+                self.capability_runtime,
+                "api_behavior_monitor_coordinator",
+                None,
+            )
+            openapi_catalog = (
+                getattr(monitor.contract_tracker, "catalog", None)
+                if monitor is not None
+                else None
+            )
+            if openapi_catalog is not None:
+                openapi_catalog.initialize(
+                    build_openapi_document(ir, list(ir.operations))
+                )
             testing_service.config_catalog.initialize_once(ir)
         self.capability_runtime.tool_executor.bind_context(context)
         self._tool_context = context
         return context
+
+    def export_current_openapi(self) -> dict[str, Any]:
+        """Return the normalized OpenAPI document persisted for audit/export.
+
+        This method does not restore an App or expose raw schema-source paths.
+        It is available only on the default database-backed runtime after
+        :meth:`initialize` has bound the current API.
+        """
+
+        self._ensure_open()
+        monitor = getattr(
+            self.capability_runtime,
+            "api_behavior_monitor_coordinator",
+            None,
+        )
+        catalog = (
+            getattr(monitor.contract_tracker, "catalog", None)
+            if monitor is not None
+            else None
+        )
+        if catalog is None:
+            raise RuntimeError("The current runtime has no OpenAPI audit catalog")
+        return catalog.current_document()
+
+    def list_openapi_change_events(
+        self,
+        operation_key: str | None = None,
+    ) -> list[OpenAPIChangeEventRecord]:
+        """Return chronological persisted response changes for inspection."""
+
+        self._ensure_open()
+        monitor = getattr(
+            self.capability_runtime,
+            "api_behavior_monitor_coordinator",
+            None,
+        )
+        catalog = (
+            getattr(monitor.contract_tracker, "catalog", None)
+            if monitor is not None
+            else None
+        )
+        if catalog is None:
+            raise RuntimeError("The current runtime has no OpenAPI audit catalog")
+        return catalog.list_changes(operation_key)
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
         """Run the global RESTScope supervisor graph."""

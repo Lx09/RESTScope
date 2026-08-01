@@ -245,7 +245,7 @@ def _input_text(
     writer = CompactTextWriter(max_value_chars=4_096)
     writer.section("Operation")
     writer.text("operation", operation_key)
-    writer.section("Failure Observations", untrusted=True)
+    writer.section("Current Failure Cases", untrusted=True)
     for observation in observations:
         writer.record(
             str(observation["case_id"]),

@@ -30,7 +30,7 @@ class FailureSolveAgentFactory:
         reference_values: ReferenceValueProvider | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Store stateless services shared by fresh Investigation sessions."""
+        """Store stateless services shared by fresh Failure Solve sessions."""
         self.client = client
         self.model = model
         self.http_probe = http_probe

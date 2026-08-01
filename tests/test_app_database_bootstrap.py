@@ -58,11 +58,11 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
         assert app.config.db.url == f"sqlite:///{database}"
         assert set(inspect(create_engine_from_url(app.config.db.url)).get_table_names()) == {
             "alembic_version",
-            "schemas",
-            "generator_catalog_state",
-            "operation_generator_configs",
+            "openapi_current",
+            "openapi_change_events",
             "input_generator_configs",
-            "generator_config_revisions",
+            "operation_constraints",
+            "generator_change_events",
             "resources",
             "resource_aliases",
             "operation_resource_rules",
@@ -75,12 +75,8 @@ def test_default_app_creates_migrated_fresh_sqlite_and_normalizes_relative_url(
             "response_observations",
             "response_observation_scalars",
             "smoke_failures",
-            "smoke_failure_observations",
-            "smoke_failure_observation_links",
-            "smoke_parameters",
-            "smoke_investigations",
-            "smoke_investigation_parameter_links",
-            "smoke_applied_patches",
+            "smoke_solve_attempts",
+            "smoke_solve_attempt_parameters",
         }
     finally:
         app.close()

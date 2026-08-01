@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from restscope.db import (
+    SqlAlchemyOpenAPIUnitOfWork,
     SqlAlchemyResourceCatalogUnitOfWork,
     SqlAlchemyResponseValueCatalogUnitOfWork,
     create_engine_from_config,
     make_session_factory,
 )
+from restscope.catalog import OpenAPICatalog
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
 from restscope.restscope_config import RESTScopeConfig
@@ -55,6 +57,9 @@ def build_api_behavior_monitor_coordinator(
     response_value_catalog = ResponseValueCatalog(
         lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
     )
+    openapi_catalog = OpenAPICatalog(
+        lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
+    )
     model = ModelSelector.from_config(config.llm).select(
         "api_behavior_monitor"
     )
@@ -65,7 +70,7 @@ def build_api_behavior_monitor_coordinator(
         tracing_runtime=runtime,
     )
     return APIBehaviorMonitorCoordinator(
-        contract_tracker=ResponseContractTracker(),
+        contract_tracker=ResponseContractTracker(openapi_catalog),
         resource_identifier_tracker=resource_tracker,
         response_value_tracker=ResponseValueTracker(
             catalog=response_value_catalog,

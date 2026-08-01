@@ -167,30 +167,26 @@ class StubMemory:
     def __init__(self) -> None:
         self.failure_lookups = []
         self.parameter_lookups = []
-        self.investigations = []
+        self.attempts = []
 
-    def lookup_failure_history(self, operation_key, failure_ids):
-        """Return the current Failure's complete but empty Investigation history."""
-        self.failure_lookups.append((operation_key, list(failure_ids)))
-        return [
-            FailureHistory(
-                failure_id=failure_ids[0],
-                summary="Project identifier is rejected.",
-            )
-        ]
+    def failure_history(self, *, operation_key, failure_id):
+        """Return the current Failure's complete but empty Solve history."""
+        self.failure_lookups.append((operation_key, failure_id))
+        return FailureHistory(
+            failure_id=failure_id,
+            summary="Project identifier is rejected.",
+            occurrence_count=1,
+        )
 
-    def lookup_parameter_history(self, operation_key, input_node_ids):
-        """Return an entry for every resolved operation-local input node."""
-        self.parameter_lookups.append((operation_key, list(input_node_ids)))
-        return [
-            ParameterHistory(input_node_id=input_node_id)
-            for input_node_id in input_node_ids
-        ]
+    def parameter_history(self, *, operation_key, input_node_id):
+        """Return an entry for one resolved operation-local input node."""
+        self.parameter_lookups.append((operation_key, input_node_id))
+        return ParameterHistory(input_node_id=input_node_id)
 
-    def record_investigation(self, write):
+    def record_solve_attempt(self, write):
         """Record terminal no-Patch/conflict decisions."""
-        self.investigations.append(write)
-        return f"investigation-{len(self.investigations)}"
+        self.attempts.append(write)
+        return f"solve-attempt-{len(self.attempts)}"
 
 
 class StubPatchAgent:
@@ -227,11 +223,18 @@ class StubPatchApplication:
         self.calls = []
 
     def apply(self, **kwargs):
-        """Return the next revision and retain the exact persistence request."""
+        """Return changed current state and retain the persistence request."""
+        from restscope.testing import prepare_accepted_generator_patch
+
         self.calls.append(kwargs)
         return AppliedSmokePatch(
-            config=smoke_config().model_copy(update={"revision": 2}),
-            investigation_id="investigation-applied",
+            config=prepare_accepted_generator_patch(
+                kwargs["current"],
+                kwargs["patch"].updates,
+            ),
+            solve_attempt_id="solve-attempt-applied",
+            generator_change_event_id="generator-change-applied",
+            constraints=(),
         )
 
 
@@ -260,7 +263,7 @@ def _request():
             "test_case_id": "TC1",
         },
         operation={"method": "GET", "path": "/projects/{projectId}"},
-        generator_config={"revision": 1},
+        generator_config={},
     )
 
 
@@ -446,12 +449,12 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
 
     assert outcome.status == "applied_patch"
     assert outcome.outputs_used == 5  # memory + Patch call + 2 Patch outputs + final
-    assert outcome.active_config_revision == 2
+    assert outcome.generator_change_event_id == "generator-change-applied"
     assert memory.failure_lookups == [
-        ("GET /projects/{projectId}", ["db-failure-1"])
+        ("GET /projects/{projectId}", "db-failure-1")
     ]
     assert memory.parameter_lookups == [
-        ("GET /projects/{projectId}", ["path/projectId"])
+        ("GET /projects/{projectId}", "path/projectId")
     ]
     assert len(application.calls) == 1
     assert application.calls[0]["patch"].updates[0].strategy.value == "known-project"
@@ -468,6 +471,37 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
     assert '{"' not in initial_prompt
+
+
+def test_state_change_during_apply_records_a_conflict_solve_attempt() -> None:
+    """A stale selected candidate becomes durable conflict evidence, not an error."""
+
+    from restscope.testing.ports import GeneratorConfigConcurrentWrite
+
+    memory = StubMemory()
+    application = StubPatchApplication()
+
+    def conflict(**_kwargs):
+        raise GeneratorConfigConcurrentWrite("GET /projects/{projectId}")
+
+    application.apply = conflict
+    patch_factory = StubPatchFactory([_validated_patch("known-project")])
+    client = StubClient(
+        [
+            _memory_call(),
+            _patch_call(),
+            _terminal("apply_patch", candidate_ref="P1"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(client, memory, patch_factory, application)
+    ).advance()
+
+    assert outcome.status == "conflict"
+    assert outcome.solve_attempt_id == "solve-attempt-1"
+    assert memory.attempts[0].outcome == "conflict"
+    assert memory.attempts[0].conflict_reason is not None
     memory_feedback = client.requests[1].messages[-1].content
     assert memory_feedback.startswith("## PARAMETER path.projectId — UNTRUSTED")
     assert '{"' not in memory_feedback
@@ -496,7 +530,7 @@ def test_patch_tool_requires_parameter_history_before_generation() -> None:
     assert outcome.status == "no_patch"
     assert patch_factory.created == []
     assert "Query Parameter memory" in client.requests[1].messages[-1].content
-    assert memory.investigations[0].outcome == "no_patch"
+    assert memory.attempts[0].outcome == "no_patch"
 
 
 def test_multiple_patch_calls_keep_candidates_local_and_apply_selected_one() -> None:
@@ -868,7 +902,7 @@ def test_solve_reference_cards_distinguish_response_sources() -> None:
 
 
 def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:
-    """Scenario: evaluation replaces only this Investigation's instructions."""
+    """An evaluation override replaces only this Solve session's instructions."""
     from restscope.operation_smoke.failure_solver import FailureSolveAgent
 
     client = StubClient([_terminal("no_patch")])

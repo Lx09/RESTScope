@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import re
 from typing import Annotated, Any, Literal
 
@@ -435,30 +434,21 @@ class GeneratorDisabledReason(BaseModel):
 
 
 class OperationGeneratorConfig(BaseModel):
-    """Versioned configuration for all active inputs of one operation."""
+    """Current configuration for all active inputs of one operation.
+
+    The immutable request snapshot is derived from the App's current OpenAPI
+    IR.  Only ``configs`` are stored in the database; the other fields are
+    rebuilt deterministically whenever the catalog reads current input rows.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     operation_key: str
-    revision: int = Field(ge=1)
     snapshot: OperationTestSnapshot
     enabled: bool = True
     disabled_reasons: list[GeneratorDisabledReason] = Field(default_factory=list)
     active_media_type: str | None = None
     configs: list[InputGeneratorConfig]
-
-
-class GeneratorConfigRevision(BaseModel):
-    """One immutable initial or directly accepted Generator configuration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    operation_key: str
-    revision: int = Field(ge=1)
-    parent_revision: int | None = Field(default=None, ge=1)
-    config: OperationGeneratorConfig
-    created_at: datetime
-
 
 class GeneratedNodeValue(BaseModel):
     """One concrete scalar generated for an input-node occurrence."""

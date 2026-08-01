@@ -531,10 +531,12 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    catalog.apply_accepted_patch(
-        operation_key=operation.operation_key,
-        expected_revision=1,
-        updates=[
+    from restscope.testing import prepare_accepted_generator_patch
+
+    current = catalog.require_operation(operation.operation_key)
+    updated = prepare_accepted_generator_patch(
+        current,
+        [
             {
                 "input_node_id": node.input_node_id,
                 "inclusion_probability": 1,
@@ -542,6 +544,13 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
             }
         ],
     )
+    with catalog.unit_of_work_factory() as uow:
+        uow.generator_configs.replace_inputs(
+            operation_key=operation.operation_key,
+            expected=current.configs,
+            updated=updated.configs,
+        )
+        uow.commit()
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
         config_catalog=catalog,
@@ -587,7 +596,6 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
             "run_id": result.run_id,
             "operation_key": result.operation_key,
             "seed": result.seed,
-            "config_revision": result.config_revision,
             "cases": [
                 case.model_dump(mode="json")
                 for case in result.cases

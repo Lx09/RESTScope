@@ -48,13 +48,19 @@ def _configured_catalog(tmp_path: Path, ir):
 
 
 def _accept_patch(catalog, operation_key: str, updates):
-    """Apply test-only setup as one directly accepted revision."""
+    """Write test setup through the repository's current-content compare seam."""
+    from restscope.testing import prepare_accepted_generator_patch
+
     current = catalog.require_operation(operation_key)
-    return catalog.apply_accepted_patch(
-        operation_key=operation_key,
-        expected_revision=current.revision,
-        updates=updates,
-    )
+    updated = prepare_accepted_generator_patch(current, updates)
+    with catalog.unit_of_work_factory() as uow:
+        uow.generator_configs.replace_inputs(
+            operation_key=operation_key,
+            expected=current.configs,
+            updated=updated.configs,
+        )
+        uow.commit()
+    return catalog.require_operation(operation_key)
 
 
 def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
@@ -208,7 +214,7 @@ def test_operation_testing_returns_catalog_cases_and_only_keeps_failure_body(
     assert all(request.headers["Authorization"] == "Bearer runtime-secret" for request in requests)
     assert all(str(request.url).startswith("https://api.example.test/v1/items/") for request in requests)
     assert batch.seed == 42
-    assert batch.config_revision == 1
+    assert not hasattr(batch, "config_revision")
     assert batch.operation_key == operation.operation_key
     assert [case.case_id for case in batch.cases] == ["TC1", "TC2", "TC3"]
     assert all(case.parameters["path.itemId"] >= 1 for case in batch.cases)
@@ -775,7 +781,6 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
     snapshot, _ = build_operation_snapshot(operation)
     config = OperationGeneratorConfig(
         operation_key=operation.operation_key,
-        revision=1,
         snapshot=snapshot,
         configs=[input_config],
     )

@@ -8,7 +8,8 @@ import json
 from threading import RLock
 from typing import Any, Literal
 
-from restscope.openapi_parser import OpenAPISpecIR
+from restscope.catalog import OpenAPIChangeEventWrite, OpenAPICatalog
+from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
 from restscope.openapi_parser.ir import MediaTypeIR, ResponseIR, SchemaIR
 
 
@@ -59,7 +60,14 @@ class ContractCheckResult:
 class ResponseContractTracker:
     """Check each exact status/media observation once for one App lifetime."""
 
-    def __init__(self) -> None:
+    def __init__(self, catalog: OpenAPICatalog | None = None) -> None:
+        """Create an App-lifetime state machine with optional durable auditing.
+
+        Production supplies ``catalog``.  Focused pure tracker tests may omit it
+        when they intentionally exercise only IR merge semantics.
+        """
+
+        self.catalog = catalog
         self._states: dict[ResponseContractKey, Literal["checking", "checked", "pending"]] = {}
         self._lock = RLock()
 
@@ -95,6 +103,15 @@ class ResponseContractTracker:
                     "operation_not_found",
                     f"Operation {operation_key!r} is not present in the current OpenAPI IR",
                 )
+            previous_state = self._states.get(key)
+            previous_responses = deepcopy(operation.responses.by_status)
+            before_document = build_openapi_document(ir, [operation_key])
+            response_before = _document_response(
+                before_document,
+                operation_path=operation.path,
+                operation_method=operation.method,
+                status_code=status_code,
+            )
             self._states[key] = "checking"
             observed_schema, body_kind = _observed_body_schema(
                 media_type=normalized_media,
@@ -105,19 +122,68 @@ class ResponseContractTracker:
                 self._states[key] = "pending"
                 return ContractCheckResult(key=key, status="pending_retry")
 
-            changes = _merge_response(
-                operation.responses.by_status,
-                status_code=status_code,
-                media_type=normalized_media,
-                observed_schema=observed_schema,
-                body_kind=body_kind,
-            )
+            try:
+                changes = _merge_response(
+                    operation.responses.by_status,
+                    status_code=status_code,
+                    media_type=normalized_media,
+                    observed_schema=observed_schema,
+                    body_kind=body_kind,
+                )
+                if changes and self.catalog is not None:
+                    current_document = build_openapi_document(
+                        ir,
+                        list(ir.operations),
+                    )
+                    response_after = _document_response(
+                        current_document,
+                        operation_path=operation.path,
+                        operation_method=operation.method,
+                        status_code=status_code,
+                    )
+                    assert response_after is not None
+                    self.catalog.record_change(
+                        document=current_document,
+                        event=OpenAPIChangeEventWrite(
+                            operation_key=operation_key,
+                            status_code=status_code,
+                            media_type=normalized_media,
+                            changes=changes,
+                            response_before=response_before,
+                            response_after=response_after,
+                        ),
+                    )
+            except Exception:
+                # The current document and event are one durable fact.  Restore
+                # the exact response mapping and retry state if persistence or
+                # normalized document generation fails.
+                operation.responses.by_status = previous_responses
+                if previous_state is None:
+                    self._states.pop(key, None)
+                else:
+                    self._states[key] = previous_state
+                raise
             self._states[key] = "checked"
             return ContractCheckResult(
                 key=key,
                 status="updated" if changes else "matched",
                 changes=tuple(changes),
             )
+
+
+def _document_response(
+    document: dict[str, Any],
+    *,
+    operation_path: str,
+    operation_method: str,
+    status_code: int,
+) -> dict[str, Any] | None:
+    """Extract one exact normalized Response from a built OpenAPI document."""
+
+    path_item = document.get("paths", {}).get(operation_path, {})
+    operation = path_item.get(operation_method.lower(), {})
+    response = operation.get("responses", {}).get(str(status_code))
+    return deepcopy(response) if isinstance(response, dict) else None
 
 
 def normalize_media_type(media_type: str | None) -> str | None:

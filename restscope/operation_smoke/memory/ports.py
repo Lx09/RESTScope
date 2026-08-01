@@ -1,74 +1,59 @@
-"""Declare the transaction seam used by the Operation Smoke Memory Module.
-
-The runtime Module depends on this narrow protocol rather than SQLAlchemy.
-Production supplies a database Adapter while focused tests may supply another
-Adapter without changing Failure Dedup or Failure Solve code.
-"""
+"""Persistence ports for stable Failure and Solve Attempt knowledge."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import TracebackType
-from typing import Protocol
+from typing import Protocol, TypeAlias
 
 from .schemas import (
     FailureBatchWrite,
     FailureHistory,
-    InvestigationWrite,
     ParameterHistory,
     RecordedFailures,
+    SolveAttemptWrite,
 )
 
 
 class SmokeMemoryRepository(Protocol):
-    """Store and query structured Operation Smoke knowledge."""
+    """Describe the exact reads and writes shared by Dedup and Solve."""
 
-    def record_failures(self, write: FailureBatchWrite) -> RecordedFailures:
-        """Persist validated current-round Failures and Observation links."""
-        ...
+    def record_failures(self, write: FailureBatchWrite) -> RecordedFailures: ...
 
-    def record_investigation(self, write: InvestigationWrite) -> str:
-        """Append one Solve result and return its durable Investigation ID."""
-        ...
+    def record_solve_attempt(self, write: SolveAttemptWrite) -> str: ...
 
-    def lookup_failure_history(
+    def failure_history(
         self,
+        *,
         operation_key: str,
-        failure_ids: list[str],
-    ) -> list[FailureHistory]:
-        """Return complete structured history for operation-scoped Failure IDs."""
-        ...
+        failure_id: str,
+    ) -> FailureHistory: ...
 
-    def lookup_parameter_history(
+    def parameter_history(
         self,
+        *,
         operation_key: str,
-        input_node_ids: list[str],
-    ) -> list[ParameterHistory]:
-        """Return Failures and repairs previously linked to selected inputs."""
-        ...
+        input_node_id: str,
+    ) -> ParameterHistory: ...
 
 
 class SmokeMemoryUnitOfWork(Protocol):
-    """Own one database transaction around Memory repository calls."""
+    """Expose Smoke and Generator repositories on one transaction when needed."""
 
     smoke_memory: SmokeMemoryRepository
 
-    def __enter__(self) -> "SmokeMemoryUnitOfWork":
-        """Open one transaction-scoped repository view."""
-        ...
+    def __enter__(self) -> "SmokeMemoryUnitOfWork": ...
 
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
-    ) -> None:
-        """Close the transaction, rolling back when an exception escaped."""
-        ...
+    ) -> None: ...
 
-    def commit(self) -> None:
-        """Make every write in the current transaction visible together."""
-        ...
+    def commit(self) -> None: ...
 
-    def rollback(self) -> None:
-        """Discard every uncommitted write in the current transaction."""
-        ...
+    def rollback(self) -> None: ...
+
+
+SmokeMemoryUnitOfWorkFactory: TypeAlias = Callable[[], SmokeMemoryUnitOfWork]

@@ -1,4 +1,4 @@
-"""Public facade for the Agent that investigates one failure todo."""
+"""Public facade for the Agent that solves one current Failure todo."""
 
 from .agent import FailureSolveAgent, FailureSolveSession, HTTPProbe
 from .factory import FailureSolveAgentFactory

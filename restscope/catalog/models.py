@@ -1,41 +1,37 @@
-"""Domain models for stored OpenAPI sources."""
+"""Database-independent contracts for OpenAPI audit persistence.
+
+The current document is a normalized OpenAPI mapping built from the App's IR.
+Change records contain only the affected Response before and after a runtime
+observation so callers can inspect evolution without storing raw HTTP data.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, model_validator
-
-
-class SchemaSourceInput(BaseModel):
-    """Exactly one durable source for an OpenAPI document."""
-
-    file_path: Path | None = None
-    raw_content: str | None = None
-
-    @model_validator(mode="after")
-    def require_exactly_one_source(self) -> "SchemaSourceInput":
-        """
-        Handle require exactly one source as part of schema-source catalog access.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        if (self.file_path is None) == (self.raw_content is None):
-            raise ValueError("Exactly one of file_path or raw_content is required")
-        if self.raw_content is not None and not self.raw_content.strip():
-            raise ValueError("raw_content must not be blank")
-        return self
+from pydantic import BaseModel, ConfigDict, Field
 
 
-@dataclass(frozen=True)
-class SchemaRecord:
-    """Stored schema source without persistence-framework types."""
+class _CatalogModel(BaseModel):
+    """Reject unknown persistence fields at the catalog boundary."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class OpenAPIChangeEventWrite(_CatalogModel):
+    """Describe one validated response change before database insertion."""
+
+    operation_key: str = Field(min_length=1)
+    status_code: int = Field(ge=100, le=599)
+    media_type: str | None = None
+    changes: list[str] = Field(min_length=1)
+    response_before: dict[str, Any] | None = None
+    response_after: dict[str, Any]
+
+
+class OpenAPIChangeEventRecord(OpenAPIChangeEventWrite):
+    """Return one persisted change event through the read-only audit API."""
 
     id: str
-    file_path: str | None
-    raw_content: str | None
     created_at: datetime
-    updated_at: datetime

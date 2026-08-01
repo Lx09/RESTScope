@@ -74,7 +74,6 @@ def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
                 operation_key=request.operation_key,
                 success_rate=1,
                 required_success_rate=request.success_rate_threshold,
-                active_config_revision=1,
                 stop_reason="success_rate_reached",
                 reason="The complete Batch passed in this tracing scenario.",
             )

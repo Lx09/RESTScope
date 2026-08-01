@@ -8,23 +8,23 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .repositories import (
     SqlAlchemyGeneratorConfigRepository,
+    SqlAlchemyOpenAPIRepository,
     SqlAlchemyResourceCatalogRepository,
     SqlAlchemyResponseValueCatalogRepository,
-    SqlAlchemySchemaRepository,
     SqlAlchemySmokeMemoryRepository,
 )
 
 
-class SqlAlchemySchemaUnitOfWork:
-    """Context-managed transaction for schema source persistence."""
+class SqlAlchemyOpenAPIUnitOfWork:
+    """Context-managed transaction for OpenAPI current state and audit."""
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self.session_factory = session_factory
         self.session: Session | None = None
 
-    def __enter__(self) -> "SqlAlchemySchemaUnitOfWork":
+    def __enter__(self) -> "SqlAlchemyOpenAPIUnitOfWork":
         self.session = self.session_factory()
-        self.schemas = SqlAlchemySchemaRepository(self.session)
+        self.openapi = SqlAlchemyOpenAPIRepository(self.session)
         return self
 
     def __exit__(
@@ -218,11 +218,12 @@ class SqlAlchemyResponseValueCatalogUnitOfWork:
 class SqlAlchemySmokeMemoryUnitOfWork:
     """Own one atomic transaction for Operation Smoke knowledge.
 
-    Failure Dedup uses this boundary to record validated Failure groups.
-    Failure Solve also uses it to change Generator state and write the matching
-    Investigation in the same database transaction. Exposing both repositories
-    on one session prevents a configuration from changing without an
-    explanation, or an Applied Patch record from existing without its change.
+    Failure Dedup uses this boundary to record validated stable Failures.
+    Failure Solve also uses it to change current Generator and Constraint state
+    while writing the matching Solve Attempt and change event in the same
+    database transaction. Exposing all repositories on one session prevents a
+    configuration from changing without an explanation, or an event from
+    existing without its current-state change.
     """
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:

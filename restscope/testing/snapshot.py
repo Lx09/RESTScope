@@ -79,7 +79,6 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
         )
     return OperationGeneratorConfig(
         operation_key=operation.operation_key,
-        revision=1,
         snapshot=snapshot,
         enabled=not reasons,
         disabled_reasons=_deduplicate_reasons(reasons),
@@ -89,7 +88,7 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
 
 
 def build_initial_catalog(ir: OpenAPISpecIR) -> list[OperationGeneratorConfig]:
-    """Build revision-one Generator configurations for every parsed operation."""
+    """Build initial Generator configurations for every parsed operation."""
     return [
         build_initial_operation_config(operation)
         for operation in ir.operations.values()
