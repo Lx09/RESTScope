@@ -271,6 +271,81 @@ def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     assert "tool-secret" not in error_event.attributes["exception.stacktrace"]
 
 
+def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
+    """Scenario: concurrent tool spans remain children of the calling Agent."""
+    import threading
+
+    from restscope.capabilities import AgentToolbox
+    from restscope.llm import ToolCall, ToolSpec
+
+    # Requiring both implementations to arrive before either returns proves
+    # that this scenario crosses the real worker-thread boundary.
+    barrier = threading.Barrier(2, timeout=1)
+
+    def query(*, value: str) -> dict:
+        """Wait for the sibling call and return one schema-valid value."""
+        barrier.wait()
+        return {"structured": {"value": value}}
+
+    runtime, exporter = _recording_runtime()
+    toolbox = AgentToolbox(tracing_runtime=runtime)
+    toolbox.register(
+        spec=ToolSpec(
+            name="catalog.query",
+            description="Read one catalog value.",
+            kind="local_function",
+            input_schema={
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        ),
+        execute=query,
+    )
+
+    with runtime.span("FailureDedupAgent.deduplicate", kind="AGENT"):
+        results = toolbox.execute_many(
+            [
+                ToolCall(
+                    id="first-query",
+                    name="catalog.query",
+                    arguments={"value": "first"},
+                ),
+                ToolCall(
+                    id="second-query",
+                    name="catalog.query",
+                    arguments={"value": "second"},
+                ),
+            ]
+        )
+    runtime.close()
+
+    spans = exporter.get_finished_spans()
+    agent_span = next(
+        span for span in spans if span.name == "FailureDedupAgent.deduplicate"
+    )
+    tool_spans = [span for span in spans if span.name == "catalog.query"]
+
+    assert [result.status for result in results] == ["succeeded", "succeeded"]
+    assert len(tool_spans) == 2
+    assert all(
+        span.context.trace_id == agent_span.context.trace_id
+        for span in tool_spans
+    )
+    assert all(
+        span.parent is not None
+        and span.parent.span_id == agent_span.context.span_id
+        for span in tool_spans
+    )
+
+
 def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     """Scenario: verify that app owns one runtime and emits a CHAIN hierarchy."""
     from restscope import RESTScopeApp

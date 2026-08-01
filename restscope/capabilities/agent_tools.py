@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any, Literal
 
 from jsonschema import SchemaError, ValidationError, validate
@@ -180,10 +181,26 @@ class AgentToolbox:
                 )
             ]
 
-        # ``Executor.map`` starts calls concurrently but yields their results
-        # in input order, which preserves the provider's tool-call protocol.
+        # Worker threads do not inherit Python Context variables automatically.
+        # OpenTelemetry keeps the current parent span in that Context, so every
+        # task needs its own copy to remain inside the calling Agent's trace.
+        contexts = [copy_context() for _tool_call in tool_calls]
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
-            return list(pool.map(self._execute_validated, tool_calls))
+            futures = [
+                pool.submit(
+                    context.run,
+                    self._execute_validated,
+                    tool_call,
+                )
+                for context, tool_call in zip(
+                    contexts,
+                    tool_calls,
+                    strict=True,
+                )
+            ]
+            # Reading submitted Futures in call order preserves the provider's
+            # tool-call protocol even when later calls finish first.
+            return [future.result() for future in futures]
 
     def _validation_failure(self, tool_call: ToolCall) -> ToolResult | None:
         """Return a denial before execution, or ``None`` for a valid call."""
