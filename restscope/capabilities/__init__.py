@@ -6,7 +6,15 @@ from .http_request import (
     TargetHTTPRequestTool,
     http_request_tool_spec,
 )
-from .openapi_lookup import OPENAPI_LOOKUP_TOOL_NAME
+from .openapi_lookup import (
+    OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
+    OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
+    OPENAPI_LIST_INPUTS_TOOL_NAME,
+    OpenAPICapability,
+    openapi_get_input_schema_tool_spec,
+    openapi_get_response_field_schema_tool_spec,
+    openapi_list_inputs_tool_spec,
+)
 from .runtime import CapabilityRuntime, build_capabilities, build_capabilities_with_mcp_host
 from .skills import SkillManifest, SkillPolicy, SkillRegistry
 from .tool_context import ToolContext, ToolContextError
@@ -30,7 +38,13 @@ __all__ = [
     "HTTP_REQUEST_TOOL_NAME",
     "TargetHTTPRequestTool",
     "http_request_tool_spec",
-    "OPENAPI_LOOKUP_TOOL_NAME",
+    "OPENAPI_LIST_INPUTS_TOOL_NAME",
+    "OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME",
+    "OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME",
+    "OpenAPICapability",
+    "openapi_list_inputs_tool_spec",
+    "openapi_get_input_schema_tool_spec",
+    "openapi_get_response_field_schema_tool_spec",
     "ToolSourceError",
     "UnsupportedToolSourceKindError",
     "register_tool_source",

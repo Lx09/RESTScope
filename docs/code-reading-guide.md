@@ -31,10 +31,11 @@ The core loop is:
 8. **Index Test Cases.** One run-local Catalog retains every sent request's
    semantic Parameter values and only failed response bodies.
 9. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
-   Agent discovers OpenAPI Parameters and queries selected `TC*` cases before
+   Agent lists OpenAPI input handles and queries selected `TC*` cases before
    grouping messages by complete suspected Parameter set.
-10. **Solve one Failure.** Failure Solve may query Test Cases, Parameter history or
-   use an HTTP probe restricted to the current operation.
+10. **Solve one Failure.** Failure Solve may query exact OpenAPI input or
+   response-field Schemas, Test Cases, Parameter history, or use an HTTP probe
+   restricted to the current operation.
 11. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
     internal tool. A selected Patch and its Solve Attempt commit atomically.
     Every Failure item finishes before the next complete Batch measures the result.
@@ -108,9 +109,10 @@ maximum”, or “exactly one of these fields is included”.
 
 Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
 Dedup receives exact messages and representative `TC*` references without
-item IDs or Fingerprint references. It uses a global OpenAPI lookup and a
-run-local exact Catalog query instead of receiving full HTTP JSON. Database
-primary keys never enter model prompts.
+item IDs or Fingerprint references. It uses the global `openapi.list_inputs`
+tool and a run-local exact Catalog query instead of receiving full HTTP JSON.
+Solve can additionally query one input or response-field Schema at a time.
+The complete OpenAPI IR and database primary keys never enter model prompts.
 
 ### Failure and Solve Attempt
 

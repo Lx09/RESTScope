@@ -299,7 +299,17 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
         call["tool"] == "restscope.http.request"
         for call in output["tool_calls"]
     )
-    assert "path.projectId" in client.requests[0].messages[1].content
+    initial_prompt = client.requests[0].messages[1].content
+    assert "SEMANTIC INPUTS" not in initial_prompt
+    assert "path.projectId" not in initial_prompt
+    memory_spec = next(
+        tool
+        for tool in client.requests[0].tools
+        if tool.name == "lookup_parameter_history"
+    )
+    assert "path.projectId" in memory_spec.input_schema["properties"][
+        "input_handles"
+    ]["items"]["enum"]
     assert "path/projectId" not in client.requests[0].messages[1].content
 
 

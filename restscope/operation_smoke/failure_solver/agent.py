@@ -16,7 +16,14 @@ from typing import Any, Protocol
 from restscope.capabilities import (
     AgentToolbox,
     HTTP_REQUEST_TOOL_NAME,
+    OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
+    OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
+    OPENAPI_LIST_INPUTS_TOOL_NAME,
+    OpenAPICapability,
     ToolFailure,
+    openapi_get_input_schema_tool_spec,
+    openapi_get_response_field_schema_tool_spec,
+    openapi_list_inputs_tool_spec,
 )
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
@@ -75,6 +82,9 @@ _PATCH_TOOL_NAME = "generate_parameter_patch"
 _READ_ONLY_QUERY_TOOL_NAMES = {
     _MEMORY_TOOL_NAME,
     CATALOG_QUERY_TOOL_NAME,
+    OPENAPI_LIST_INPUTS_TOOL_NAME,
+    OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
+    OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
 }
 
 
@@ -166,6 +176,7 @@ class FailureSolveAgent:
         memory: SolveMemory,
         patch_agent_factory: PatchAgentFactory,
         patch_application: PatchApplication,
+        openapi_capability: OpenAPICapability,
         reference_values: ReferenceValueProvider | None = None,
         system_prompt: str | None = None,
         validator: OutputValidator | None = None,
@@ -182,6 +193,7 @@ class FailureSolveAgent:
         self.memory = memory
         self.patch_agent_factory = patch_agent_factory
         self.patch_application = patch_application
+        self.openapi_capability = openapi_capability
         self.reference_values = reference_values
         self.system_prompt = system_prompt or _system_prompt()
         self.validator = validator or OutputValidator()
@@ -223,6 +235,7 @@ class FailureSolveAgent:
             memory=self.memory,
             patch_agent_factory=self.patch_agent_factory,
             patch_application=self.patch_application,
+            openapi_capability=self.openapi_capability,
             reference_values=self.reference_values,
             validator=self.validator,
             tracing_runtime=self.tracing_runtime,
@@ -253,6 +266,7 @@ class FailureSolveSession:
         memory: SolveMemory,
         patch_agent_factory: PatchAgentFactory,
         patch_application: PatchApplication,
+        openapi_capability: OpenAPICapability,
         reference_values: ReferenceValueProvider | None,
         validator: OutputValidator,
         tracing_runtime: TracingRuntime,
@@ -276,6 +290,7 @@ class FailureSolveSession:
         self.memory = memory
         self.patch_agent_factory = patch_agent_factory
         self.patch_application = patch_application
+        self.openapi_capability = openapi_capability
         self.reference_values = reference_values
         self.validator = validator
         self.tracing_runtime = tracing_runtime
@@ -485,6 +500,18 @@ class FailureSolveSession:
         semantic_handles = sorted(self.semantic_inputs.node_by_handle)
         tools = AgentToolbox(tracing_runtime=self.tracing_runtime)
         tools.register(
+            spec=openapi_list_inputs_tool_spec(),
+            execute=self.openapi_capability.list_inputs,
+        )
+        tools.register(
+            spec=openapi_get_input_schema_tool_spec(),
+            execute=self.openapi_capability.get_input_schema,
+        )
+        tools.register(
+            spec=openapi_get_response_field_schema_tool_spec(),
+            execute=self.openapi_capability.get_response_field_schema,
+        )
+        tools.register(
             spec=_parameter_memory_tool_spec(semantic_handles),
             execute=lambda *, input_handles: self._read_parameter_history(
                 list(input_handles)
@@ -619,9 +646,14 @@ class FailureSolveSession:
                         "Query Parameter memory before generating a Patch for: "
                         + ", ".join(missing_queries)
                     )
-        elif call.name == CATALOG_QUERY_TOOL_NAME:
-            # Pydantic validation happens in the local tool so malformed calls
-            # become structured feedback instead of an Agent exception.
+        elif call.name in {
+            CATALOG_QUERY_TOOL_NAME,
+            OPENAPI_LIST_INPUTS_TOOL_NAME,
+            OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
+            OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
+        }:
+            # The toolbox validates each read-only tool's JSON arguments. The
+            # owning Module performs semantic lookup and returns safe failures.
             pass
         else:
             probe_error = self.http_probe.validate(
@@ -1005,9 +1037,10 @@ Investigate exactly one Operation Smoke Failure.
 # Stages
 
 1. Read the representative `TC*` reference and preloaded Failure history.
-2. Query `query_test_case_catalog` for exact request values, response fields,
-   or Failure Messages needed from any currently listed `TC*`. Independent
-   Catalog and Parameter Memory reads may be grouped in one output.
+2. Query OpenAPI tools for input or response-field Schemas and
+   `query_test_case_catalog` for exact request values, response fields, or
+   Failure Messages only as needed. Independent OpenAPI, Catalog, and Parameter
+   Memory reads may be grouped in one output.
 3. Before patching an input, call `lookup_parameter_history`.
 4. Probe HTTP only when existing evidence cannot distinguish the root cause.
 5. Call `generate_parameter_patch` with confirmed, testable requirements.
@@ -1015,7 +1048,7 @@ Investigate exactly one Operation Smoke Failure.
 
 # Rules
 
-- One output may group only read-only Catalog/Parameter Memory queries.
+- One output may group only read-only OpenAPI/Catalog/Parameter Memory queries.
 - Patch and HTTP outputs call exactly one tool.
 - A tool output and a terminal decision are never mixed.
 - Copy semantic handles exactly from tool-schema enums.
@@ -1118,7 +1151,7 @@ def _solve_context_text(
     reference_options: list[AvailableReferenceOption],
     catalog_range: str,
 ):
-    """Render the representative case reference, active inputs, and Memory."""
+    """Render the representative case reference, constraints, and Memory."""
     writer = CompactTextWriter(max_value_chars=800)
     writer.section("TASK")
     writer.record(
@@ -1126,35 +1159,12 @@ def _solve_context_text(
         operation=request.operation_key,
         method=config.snapshot.method,
         path=config.snapshot.path,
+        active_request_media_type=config.active_media_type,
         round=request.round_number,
         failure=request.todo.failure,
         representative_case=request.todo.test_case_id,
         catalog=catalog_range,
     )
-
-    config_by_node = {item.input_node_id: item for item in config.configs}
-    nodes_by_id = {
-        item.input_node_id: item for item in config.snapshot.input_nodes
-    }
-    writer.section("SEMANTIC INPUTS", untrusted=True)
-    for handle, node_id in semantic_inputs.node_by_handle.items():
-        node = nodes_by_id[node_id]
-        generator = config_by_node[node_id]
-        writer.record(
-            handle,
-            is_required=node.required,
-            schema=(
-                node.schema_contract.model_dump(
-                    mode="python",
-                    exclude_none=True,
-                    exclude_defaults=True,
-                )
-                if node.schema_contract is not None
-                else None
-            ),
-            inclusion_probability=generator.inclusion_probability,
-            generator=generator.strategy.model_dump(mode="python"),
-        )
 
     writer.section("ACTIVE CONSTRAINTS", untrusted=True)
     if not active_constraints:

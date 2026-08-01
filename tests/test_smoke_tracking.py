@@ -366,7 +366,7 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
             model="think",
             enabled=True,
         ),
-        operation_provider=capabilities.require_operation,
+        openapi_capability=capabilities.openapi_capability,
         tracing_runtime=runtime,
     )
     result, outputs, corrections, errors = agent.deduplicate(

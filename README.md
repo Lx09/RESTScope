@@ -368,15 +368,17 @@ internally by Operation Smoke.
    bypasses the LLM. With several Fingerprints, `FailureDedupAgent` groups them
    by equal complete suspected causal Parameter sets. Its initial Markdown
    context contains only the operation, each Failure Message, and a
-   representative `TC*` reference. It discovers Parameters through
-   `openapi.lookup_operation` and queries exact case values through
+   representative `TC*` reference. It discovers Parameter handles through
+   `openapi.list_inputs` and queries exact case values through
    `query_test_case_catalog`; native structured tool results are compact JSON.
    It reads no Failure history. Deterministic validation and Markdown
    correction run before Memory is written. Every current-round Failure
    carries exactly one representative `TC*`.
 3. Each debug item gets a fresh `FailureSolveAgent`. Solve preloads the current
    Failure, may query other Failure history by semantic Parameter handle, and
-   may query any currently known `TC*`. Its current-operation HTTP probe supports
+   may query any currently known `TC*`. It can list OpenAPI inputs and fetch one
+   exact input or response-field Schema through the shared global OpenAPI
+   capability without receiving the complete IR. Its current-operation HTTP probe supports
    GET, HEAD, OPTIONS, POST, PUT, PATCH, and DELETE. Every attempted Probe adds
    another `TC*`; mutating Probes are not rolled back. Before replacing a
    Parameter Generator it must inspect that Parameter's earlier Failure/Patch
@@ -401,7 +403,7 @@ There is no Effect Agent, candidate Batch, rollback snapshot, or permanent
 `resolved` flag.
 
 Dedup has a shared 50-output budget. One Fingerprint uses zero outputs; several
-normally require an OpenAPI lookup, optional Catalog reads, and one final
+normally require an OpenAPI input listing, optional Catalog reads, and one final
 decision. Each Solve has a 50-output budget that also counts every nested
 Parameter Patch LLM output; one Patch tool call is capped at 20 outputs.
 Malformed replies and invalid tool-requesting model outputs count.

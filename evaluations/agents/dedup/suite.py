@@ -122,7 +122,7 @@ def build_task(
         capability_runtime = build_capabilities(
             tracing_runtime=tracing_runtime
         )
-        capability_runtime.tool_executor.bind_context(
+        capability_runtime.bind_context(
             ToolContext(
                 ir=_evaluation_ir(),
                 baseline_schema_source={},
@@ -133,7 +133,7 @@ def build_task(
                 agent=FailureDedupAgent(
                     client=client,
                     model=model,
-                    tool_executor=capability_runtime.tool_executor,
+                    openapi_capability=capability_runtime.openapi_capability,
                     system_prompt=system_prompt,
                     tracing_runtime=tracing_runtime,
                 ),

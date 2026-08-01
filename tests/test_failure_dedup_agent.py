@@ -65,7 +65,8 @@ def _model() -> LLMModelConfig:
 
 
 def _runtime():
-    """Build the current OpenAPI operation provider used by Dedup."""
+    """Build the global OpenAPI Capability used by Dedup."""
+    from restscope.capabilities import OpenAPICapability, ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -94,7 +95,8 @@ def _runtime():
             },
         }
     )
-    return lambda operation_key: ir.operations[operation_key]
+    context = ToolContext(ir=ir, baseline_schema_source={})
+    return OpenAPICapability(context_provider=lambda: context)
 
 
 def _catalog(*cases: tuple[int, str, str]):
@@ -138,11 +140,11 @@ def _request(case_ids: list[str]) -> FailureDedupRequest:
 
 
 def _agent(client: StubClient) -> FailureDedupAgent:
-    """Build Dedup with an explicit current-operation provider."""
+    """Build Dedup with the explicitly registered global OpenAPI Capability."""
     return FailureDedupAgent(
         client=client,
         model=_model(),
-        operation_provider=_runtime(),
+        openapi_capability=_runtime(),
     )
 
 
@@ -185,8 +187,8 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
             tool_calls=[
                 ToolCall(
                     id="lookup-1",
-                    name="openapi.lookup_operation",
-                    arguments={},
+                    name="openapi.list_inputs",
+                    arguments={"operation_key": "POST /projects"},
                 )
             ],
         ),
@@ -334,8 +336,8 @@ def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:
     ]
 
 
-def test_dedup_openapi_tool_is_bound_to_the_current_operation() -> None:
-    """The model can read current inputs but cannot choose another operation."""
+def test_dedup_registers_only_the_global_input_listing_tool() -> None:
+    """Dedup selects its operation per call and receives no Schema lookup tools."""
     import json
 
     client = StubClient(
@@ -346,8 +348,8 @@ def test_dedup_openapi_tool_is_bound_to_the_current_operation() -> None:
                 tool_calls=[
                     ToolCall(
                         id="current-operation",
-                        name="openapi.lookup_operation",
-                        arguments={},
+                        name="openapi.list_inputs",
+                        arguments={"operation_key": "POST /projects"},
                     )
                 ],
             ),
@@ -388,13 +390,12 @@ def test_dedup_openapi_tool_is_bound_to_the_current_operation() -> None:
     openapi_spec = next(
         spec
         for spec in client.requests[0].tools
-        if spec.name == "openapi.lookup_operation"
+        if spec.name == "openapi.list_inputs"
     )
-    assert openapi_spec.input_schema == {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
+    assert openapi_spec.input_schema["required"] == ["operation_key"]
+    assert {
+        spec.name for spec in client.requests[0].tools if spec.name.startswith("openapi.")
+    } == {"openapi.list_inputs"}
     tool_message = next(
         message
         for message in client.requests[1].messages
@@ -402,9 +403,8 @@ def test_dedup_openapi_tool_is_bound_to_the_current_operation() -> None:
     )
     tool_result = json.loads(tool_message.content or "{}")
     assert tool_result["status"] == "succeeded"
-    assert tool_result["structured"]["operation"]["operation_key"] == (
-        "POST /projects"
-    )
+    assert tool_result["structured"]["operation_key"] == "POST /projects"
+    assert "schema" not in repr(tool_result["structured"])
 
 
 def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:
