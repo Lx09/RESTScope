@@ -742,7 +742,7 @@ def _replace_candidate_constraint_scope(
 
     def owners(item: CompiledConstraintPatch) -> set[str]:
         """Return input IDs referenced by one normalized expression set."""
-        return referenced_input_node_ids(item.constraint)
+        return set(referenced_input_node_ids(item.constraint))
 
     frontier = {
         node_id

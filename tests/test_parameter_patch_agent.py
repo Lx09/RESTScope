@@ -571,6 +571,65 @@ def test_patch_keeps_constraint_compilation_as_executable_boundary() -> None:
     )
 
 
+def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> None:
+    """A new Constraint replaces an active owner before local sample review.
+
+    The active presence rule and the proposed value rule both own the project
+    path Parameter. Parameter Patch must preview the same owner replacement
+    that persistence will apply, then sample only the proposed rule.
+    """
+    from restscope.operation_smoke.parameter_patch import (
+        CompiledConstraintPatch,
+        ParameterPatchAgent,
+        ValidatedParameterPatch,
+    )
+    from restscope.testing import ConstraintSet, PresentPredicate
+
+    active = CompiledConstraintPatch(
+        constraint_id="constraint_active_presence",
+        kind="Complex",
+        constraint=ConstraintSet(
+            constraints=[
+                PresentPredicate(
+                    type="present",
+                    input_node_id="path/projectId",
+                )
+            ]
+        ),
+    )
+    proposal = _constant_patch()
+    proposal["patch"]["constraints"] = [
+        {
+            "expression": {
+                "type": "compare",
+                "operator": "==",
+                "left": {
+                    "type": "input_value",
+                    "input": "path.projectId",
+                },
+                "right": {"type": "literal", "value": "known-project"},
+            }
+        }
+    ]
+    client = StubClient([proposal, {"action": "accept"}])
+
+    outcome = ParameterPatchAgent(client=client, model=_model()).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[active],
+        case_count=2,
+        max_outputs=2,
+    )
+
+    assert isinstance(outcome, ValidatedParameterPatch)
+    assert outcome.outputs_used == 2
+    assert len(outcome.patch.constraints) == 1
+    assert all(
+        sample["values"]["path.projectId"] == "known-project"
+        for sample in outcome.samples
+    )
+
+
 def test_patch_requires_case_count_within_testing_boundary() -> None:
     """Scenario: local review uses the same 1-20 case limit as Smoke execution."""
     import pytest
