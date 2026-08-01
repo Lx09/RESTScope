@@ -2,6 +2,13 @@
 
 Status: In progress
 
+> Superseded scope note (2026-08-01): the user has decided that Failure Solve
+> continues to receive its current-operation HTTP Probe for write operations.
+> The GET/HEAD/OPTIONS-only restriction below is historical evidence from this
+> task, not the current project rule. POST, PUT, PATCH, and DELETE Probes remain
+> exact-operation scoped, are not rolled back, and must have their target state
+> effects reported.
+
 ## Objective
 
 Repair the correctness, safety, and efficiency problems observed while smoke

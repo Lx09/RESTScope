@@ -148,6 +148,15 @@ explicit project decision:
   deterministic runtime code. The Test Case Catalog stores every Batch and
   Solve Probe case only until `OperationSmokeCoordinator.run` returns; it must
   never be persisted.
+- Failure Solve's current-operation HTTP Probe is an operation-scoped view of
+  the global `restscope.http.request` tool. It remains available for every
+  supported method, including POST, PUT, PATCH, and DELETE. The Probe must use
+  the exact current operation method and a concrete path matching that
+  operation's template; runtime code owns authentication and records every
+  attempted Probe in the run-local Test Case Catalog. Mutating Probe effects
+  are not rolled back and must be reported as target state changes. Tool
+  availability does not replace the required authorization for a live external
+  action.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
   current evidence. Operation Smoke Memory is evidence for Solve, not a

@@ -40,6 +40,13 @@ one operation Smoke run. It stores sent Parameter values for all cases and
 response bodies only for 4xx/5xx cases. It is never written to the database.
 _Avoid_: Batch report, persistent test history
 
+**Current-operation HTTP Probe**:
+A Failure Solve request through the global HTTP capability, restricted to the
+exact operation method and path template under Investigation. It is available
+for read and write operations; every attempt enters the Test Case Catalog, and
+write effects are not rolled back.
+_Avoid_: Read-only Probe, separate HTTP tool
+
 **Investigation**:
 One Solve session that records its trigger conditions, parameter attribution,
 root-cause conclusion, proposed resolution, and terminal outcome.
