@@ -59,8 +59,11 @@ has a concrete runtime or inspection consumer.
   CHECK, required index, and foreign-key target.
 - Generator/Constraint conflict and Failure Solve focus: 24 tests passed before
   the final strict DTO and suspected-input boundary checks were added.
-- Full suite: `uv run pytest -q` completed with `495 passed, 18 skipped`.
-- `uv run python -m compileall -q restscope tests` passed.
+- Full suite with evaluation dependencies:
+  `uv run --group evaluation pytest -q` completed with
+  `527 passed, 5 skipped`.
+- `uv run --group evaluation python -m compileall -q restscope tests evaluations`
+  passed.
 - `git diff --check` passed.
 - A fresh database initialized from the local GitLab 18.9.2 sample contained
   1740 operations, 13,850 input Generator rows, 19 business tables plus

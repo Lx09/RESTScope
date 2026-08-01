@@ -20,7 +20,6 @@ input:
     generator_config: {}
   config:
     operation_key: GET /projects/{projectId}
-    revision: 2
     snapshot:
       operation_key: GET /projects/{projectId}
       method: GET
@@ -43,8 +42,8 @@ input:
   failure_history:
     failure_id: failure-requires-large-project-id
     summary: This endpoint example succeeds only with projectId above 1000.
-    observations: []
-    investigations: []
+    occurrence_count: 1
+    attempts: []
   catalog_cases:
     - parameters: {path.projectId: 50}
       response_body: {message: project missing}
@@ -57,9 +56,9 @@ input:
       failures:
         - failure_id: failure-project-id-range
           summary: Project identifiers outside 3..100 are rejected.
-          observations: []
-          investigations:
-            - investigation_id: bounded-id-investigation
+          occurrence_count: 1
+          attempts:
+            - solve_attempt_id: bounded-id-solve-attempt
               round_number: 2
               outcome: applied_patch
               trigger_conditions: generated identifiers fall outside 3..100
@@ -69,19 +68,15 @@ input:
               parameters:
                 - input_node_id: path/projectId
                   cause_summary: the identifier value determines the failure
-              applied_patch:
-                generator_revision: 2
-                patch:
-                  updates:
-                    - input_node_id: path/projectId
-                      strategy: {type: integer_range, minimum: 3, maximum: 100}
-                before_generators: {}
-                after_generators:
-                  path.projectId:
-                    strategy: {type: integer_range, minimum: 3, maximum: 100}
-                samples:
-                  - values: {path.projectId: 3}
-                  - values: {path.projectId: 100}
+              generator_change:
+                event_id: bounded-id-generator-change
+                reason: generate only integers from 3 through 100
+                generator_changes:
+                  - action: update
+                    input_node_id: path/projectId
+                    before: {strategy: {type: integer_range, minimum: 1, maximum: 999999}}
+                    after: {strategy: {type: integer_range, minimum: 3, maximum: 100}}
+                constraint_changes: []
   patch_results: []
   probe_results: []
 expected:

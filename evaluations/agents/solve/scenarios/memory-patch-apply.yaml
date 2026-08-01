@@ -5,7 +5,7 @@ provenance:
   source: restscope-project-swagger-smoke-20260727T010238Z-9712a1cf/spans-complete.json
   trace_id: bc870e1e64d11b290a11c70fb497a01c
   span_ids: []
-  rationale: The source investigation connected identifier failures to Generator changes.
+  rationale: The source Solve Attempt connected identifier failures to Generator changes.
 tags: [acceptance, memory, patch]
 input:
   request:
@@ -20,7 +20,6 @@ input:
     generator_config: {}
   config:
     operation_key: GET /projects/{projectId}
-    revision: 1
     snapshot:
       operation_key: GET /projects/{projectId}
       method: GET
@@ -43,8 +42,8 @@ input:
   failure_history:
     failure_id: failure-project-id-range
     summary: Project identifiers outside 3..100 are rejected.
-    observations: []
-    investigations: []
+    occurrence_count: 1
+    attempts: []
   catalog_cases:
     - parameters: {path.projectId: 900001}
       response_body: {message: project missing}
@@ -57,9 +56,9 @@ input:
       failures:
         - failure_id: prior-project-id-minimum
           summary: Values smaller than 3 are rejected.
-          observations: []
-          investigations:
-            - investigation_id: prior-minimum-investigation
+          occurrence_count: 1
+          attempts:
+            - solve_attempt_id: prior-minimum-solve-attempt
               round_number: 1
               outcome: no_patch
               trigger_conditions: projectId is below 3

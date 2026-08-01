@@ -18,7 +18,6 @@ input:
     prior_attempts: []
   config:
     operation_key: GET /projects/{projectId}
-    revision: 1
     snapshot:
       operation_key: GET /projects/{projectId}
       method: GET

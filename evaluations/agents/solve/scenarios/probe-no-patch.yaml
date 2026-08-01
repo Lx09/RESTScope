@@ -20,7 +20,6 @@ input:
     generator_config: {}
   config:
     operation_key: GET /projects/{projectId}
-    revision: 1
     snapshot:
       operation_key: GET /projects/{projectId}
       method: GET
@@ -43,8 +42,8 @@ input:
   failure_history:
     failure_id: failure-transient-project
     summary: One known project returned a transient server error.
-    observations: []
-    investigations: []
+    occurrence_count: 1
+    attempts: []
   catalog_cases:
     - parameters: {path.projectId: 7}
       response_body: {message: transient server error}

@@ -13,6 +13,10 @@ input:
     round_number: 1
     batch_run_id: eval-run-1
     case_ids: [TC1, TC2]
+    input_node_ids_by_handle:
+      body: request/body
+      body.name: request/body/name
+      body.namespace_id: request/body/namespace_id
   valid_parameters: [body, body.name, body.namespace_id]
   catalog_cases:
     - parameters: {body.name: existing}

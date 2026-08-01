@@ -190,11 +190,20 @@ def _smoke_runtime(tmp_path: Path):
         def create(self):
             raise AssertionError("a successful batch must not create a sub-Agent")
 
+    class EmptyConstraintReader:
+        """Return the empty durable Constraint set used by this success case."""
+
+        def current_constraints(self, operation_key: str):
+            """Confirm the requested operation and return no Constraints."""
+            assert operation_key == "GET /items"
+            return []
+
     smoke = OperationSmokeCoordinator(
         config_catalog=catalog,
         batch_runner=testing,
         failure_deduplicator=UnexpectedDedup(),
         failure_solver_factory=UnexpectedFactory(),
+        constraint_reader=EmptyConstraintReader(),
         reference_values=references,
         tracing_runtime=runtime,
     )

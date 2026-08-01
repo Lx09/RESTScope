@@ -4,7 +4,7 @@ The real ``FailureSolveAgent`` still decides whether to inspect Parameter
 history, probe the current operation, request a Patch, and finish with
 ``apply_patch``, ``no_patch``, or ``conflict``.  Only the tool implementations
 are replaced: they replay structured scenario evidence, record calls, and keep
-the accepted Generator revision in memory rather than a RESTScope database.
+the accepted current Generator state in memory rather than a RESTScope database.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ from restscope.operation_smoke.failure_solver.agent import _system_prompt
 from restscope.operation_smoke.memory import (
     AppliedSmokePatch,
     FailureHistory,
-    InvestigationWrite,
     ParameterHistory,
+    SolveAttemptWrite,
 )
 from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
@@ -54,7 +54,7 @@ from restscope.testing import (
 
 
 class SolveScenarioInput(BaseModel):
-    """Supply one Investigation and every possible scripted tool result."""
+    """Supply one Solve session and every possible scripted tool result."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -86,7 +86,7 @@ class SolveExpectation(BaseModel):
 
 
 class SolveScenario(BaseModel):
-    """One isolated Investigation with scripted non-network collaborators."""
+    """One isolated Solve session with scripted non-network collaborators."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -116,7 +116,7 @@ def _to_example(scenario: BaseModel) -> DatasetExample:
 
 
 class TemporarySolveMemory:
-    """Replay current Failure and Parameter history for one Investigation."""
+    """Replay current Failure and Parameter history for one Solve session."""
 
     def __init__(self, scenario: SolveScenarioInput, calls: list[dict[str, Any]]):
         """Index scenario histories and share the task's compact call log."""
@@ -126,60 +126,60 @@ class TemporarySolveMemory:
             item.input_node_id: item for item in scenario.parameter_histories
         }
 
-    def lookup_failure_history(
+    def failure_history(
         self,
+        *,
         operation_key: str,
-        failure_ids: list[str],
-    ) -> list[FailureHistory]:
+        failure_id: str,
+    ) -> FailureHistory:
         """Return the one current Failure history loaded at session start."""
         self.calls.append(
             {
-                "tool": "lookup_failure_history",
+                "tool": "failure_history",
                 "operation_key": operation_key,
-                "failure_ids": list(failure_ids),
+                "failure_id": failure_id,
             }
         )
-        return [self.scenario.failure_history]
+        if failure_id != self.scenario.failure_history.failure_id:
+            raise KeyError(f"Unknown scripted Failure: {failure_id}")
+        return self.scenario.failure_history
 
-    def lookup_parameter_history(
+    def parameter_history(
         self,
+        *,
         operation_key: str,
-        input_node_ids: list[str],
-    ) -> list[ParameterHistory]:
-        """Return one structured value per requested node, even if unconfigured."""
-        missing = [
-            node_id
-            for node_id in input_node_ids
-            if node_id not in self.parameter_by_node
-        ]
+        input_node_id: str,
+    ) -> ParameterHistory:
+        """Return one structured value for a requested input node."""
         self.calls.append(
             {
                 "tool": "lookup_parameter_history",
                 "operation_key": operation_key,
-                "input_node_ids": list(input_node_ids),
-                "unconfigured": missing,
+                "input_node_ids": [input_node_id],
+                "unconfigured": (
+                    []
+                    if input_node_id in self.parameter_by_node
+                    else [input_node_id]
+                ),
             }
         )
-        return [
-            self.parameter_by_node.get(
-                node_id,
-                ParameterHistory(input_node_id=node_id),
-            )
-            for node_id in input_node_ids
-        ]
+        return self.parameter_by_node.get(
+            input_node_id,
+            ParameterHistory(input_node_id=input_node_id),
+        )
 
-    def record_investigation(self, write: InvestigationWrite) -> str:
+    def record_solve_attempt(self, write: SolveAttemptWrite) -> str:
         """Retain no-Patch or conflict facts in task output rather than a DB."""
         self.calls.append(
             {
-                "tool": "record_investigation",
+                "tool": "record_solve_attempt",
                 "outcome": write.outcome,
                 "parameters": [
                     item.input_node_id for item in write.parameters
                 ],
             }
         )
-        return "eval-investigation"
+        return "eval-solve-attempt"
 
 
 class ScriptedHTTPProbe:
@@ -377,7 +377,7 @@ class ScriptedPatchFactory:
 
 
 class TemporaryPatchApplication:
-    """Apply an accepted candidate to an in-memory Generator revision."""
+    """Apply an accepted candidate to in-memory current Generator state."""
 
     def __init__(
         self,
@@ -389,12 +389,9 @@ class TemporaryPatchApplication:
         self.calls = calls
 
     def apply(self, **kwargs: Any) -> AppliedSmokePatch:
-        """Preview the chosen updates and expose the next accepted revision."""
+        """Preview chosen updates and expose current-state audit identities."""
         patch = kwargs["patch"]
-        updated = preview_generator_patch(self.config, patch.updates)
-        self.config = updated.model_copy(
-            update={"revision": self.config.revision + 1}
-        )
+        self.config = preview_generator_patch(self.config, patch.updates)
         self.calls.append(
             {
                 "tool": "apply_patch",
@@ -404,7 +401,9 @@ class TemporaryPatchApplication:
         )
         return AppliedSmokePatch(
             config=self.config,
-            investigation_id="eval-investigation-applied",
+            solve_attempt_id="eval-solve-attempt-applied",
+            generator_change_event_id="eval-generator-change-applied",
+            constraints=(),
         )
 
 
@@ -419,7 +418,7 @@ def build_task(
     """Build Phoenix's Solve task using real Agent logic and scripted tools."""
 
     def task(input: dict[str, Any]) -> dict[str, Any]:
-        """Evaluate one Investigation with fresh collaborators and call logs."""
+        """Evaluate one Solve session with fresh collaborators and call logs."""
         scenario = SolveScenarioInput.model_validate(input)
         # Production Coordinator supplies both the live operation view and the
         # complete frozen Generator config. YAML keeps those facts in one

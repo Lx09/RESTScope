@@ -19,17 +19,21 @@ input:
       - input_handle: path.projectId
         failures:
           - summary: Values below 3 were rejected in an earlier round.
-            investigations:
+            attempts:
               - outcome: applied_patch
                 root_cause: the previous Generator included 1 and 2
                 solution: keep the Generator minimum at 3
-                applied_patch:
+                generator_change:
+                  generator_changes:
+                    - action: update
+                      input_node_id: path/projectId
+                      after:
+                        strategy: {type: integer_range, minimum: 3, maximum: 100}
                   after_generators:
                     path.projectId:
                       strategy: {type: integer_range, minimum: 3, maximum: 100}
   config:
     operation_key: GET /projects/{projectId}
-    revision: 2
     snapshot:
       operation_key: GET /projects/{projectId}
       method: GET
