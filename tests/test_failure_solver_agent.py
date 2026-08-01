@@ -415,7 +415,57 @@ def _agent(client, memory, patch_factory, application):
         memory=memory,
         patch_agent_factory=patch_factory,
         patch_application=application,
+        openapi_capability=_openapi_capability(),
     )
+
+
+def _openapi_capability():
+    """Bind Solve's global OpenAPI tools to a trusted in-memory document."""
+    from restscope.capabilities import OpenAPICapability, ToolContext
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Solve", "version": "1"},
+            "paths": {
+                "/projects/{projectId}": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "projectId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "region",
+                                "in": "query",
+                                "schema": {"type": "string"},
+                            },
+                        ],
+                        "responses": {
+                            "404": {
+                                "description": "missing",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "message": {"type": "string"}
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+            },
+        }
+    )
+    context = ToolContext(ir=ir, baseline_schema_source={})
+    return OpenAPICapability(context_provider=lambda: context)
 
 
 def _start(agent, **kwargs):
@@ -464,7 +514,9 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     initial_prompt = client.requests[0].messages[1].content
     assert "representative_case=string:\"TC1\"" in initial_prompt
     assert "catalog=string:\"TC1\"" in initial_prompt
-    assert "path.projectId" in initial_prompt
+    assert "SEMANTIC INPUTS" not in initial_prompt
+    assert "path.projectId" not in initial_prompt
+    assert "random_string" not in initial_prompt
     assert "missing" not in initial_prompt
     assert "min_access_level" not in initial_prompt
     assert "X-Scenario" not in initial_prompt
@@ -839,6 +891,67 @@ def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
     assert len(client.requests) == 3
 
 
+def test_solve_registers_and_groups_all_three_read_only_openapi_tools() -> None:
+    """Solve may inspect independent input and response contracts in one output."""
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="list-inputs",
+                        name="openapi.list_inputs",
+                        arguments={
+                            "operation_key": "GET /projects/{projectId}",
+                        },
+                    ),
+                    ToolCall(
+                        id="response-schema",
+                        name="openapi.get_response_field_schema",
+                        arguments={
+                            "operation_key": "GET /projects/{projectId}",
+                            "status_code": 404,
+                            "field": "body.message",
+                        },
+                    ),
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    openapi_names = {
+        spec.name
+        for spec in client.requests[0].tools
+        if spec.name.startswith("openapi.")
+    }
+    assert openapi_names == {
+        "openapi.list_inputs",
+        "openapi.get_input_schema",
+        "openapi.get_response_field_schema",
+    }
+    tool_messages = [
+        message
+        for message in client.requests[1].messages
+        if message.role == "tool"
+    ]
+    assert [message.tool_call_id for message in tool_messages] == [
+        "list-inputs",
+        "response-schema",
+    ]
+
+
 def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
     """Provider guidance should expose the exact terminal JSON contract.
 
@@ -912,6 +1025,9 @@ def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> Non
     assert {
         tool.name for tool in client.requests[0].tools
     } == {
+        "openapi.list_inputs",
+        "openapi.get_input_schema",
+        "openapi.get_response_field_schema",
         "lookup_parameter_history",
         "generate_parameter_patch",
         "query_test_case_catalog",
@@ -975,6 +1091,7 @@ def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:
         memory=StubMemory(),
         patch_agent_factory=StubPatchFactory([]),
         patch_application=StubPatchApplication(),
+        openapi_capability=_openapi_capability(),
         system_prompt="Candidate Solve instructions.",
     )
 

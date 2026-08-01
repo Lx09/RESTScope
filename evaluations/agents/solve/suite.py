@@ -16,6 +16,7 @@ from phoenix.evals import Score, create_evaluator
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluations.models import DatasetExample, EvaluationSuite, ScenarioProvenance
+from restscope.capabilities import OpenAPICapability, ToolContext
 from restscope.llm import (
     LLMClient,
     LLMModelConfig,
@@ -24,6 +25,7 @@ from restscope.llm import (
     ToolSpec,
 )
 from restscope.observability import TracingRuntime
+from restscope.openapi_parser import OpenAPIParser
 from restscope.operation_smoke.failure_solver import (
     FailureSolveAgent,
     FailureSolveRequest,
@@ -48,6 +50,7 @@ from restscope.operation_smoke.test_case_catalog import (
 )
 from restscope.testing import (
     OperationGeneratorConfig,
+    SchemaSnapshot,
     build_semantic_input_map,
     preview_generator_patch,
 )
@@ -96,6 +99,126 @@ class SolveScenario(BaseModel):
     tags: list[str] = Field(default_factory=list)
     input: SolveScenarioInput
     expected: SolveExpectation
+
+
+def _openapi_capability(config: OperationGeneratorConfig) -> OpenAPICapability:
+    """Build the trusted OpenAPI context available to an offline Solve eval.
+
+    Evaluation scenarios retain the exact request snapshot but intentionally
+    do not carry response contracts.  The Adapter rebuilds the declared inputs
+    so a real evaluation model can use the two request lookup tools; it leaves
+    responses content-free rather than inventing response field Schemas.
+    """
+    snapshot = config.snapshot
+    nodes_by_id = {node.input_node_id: node for node in snapshot.input_nodes}
+    parameters = []
+    for parameter in snapshot.parameters:
+        node = nodes_by_id[parameter.input_node_id]
+        parameters.append(
+            {
+                "name": parameter.name,
+                "in": parameter.location,
+                "required": parameter.required,
+                "style": parameter.style,
+                "explode": parameter.explode,
+                "allowReserved": parameter.allow_reserved,
+                "schema": _schema_source(node.schema_contract),
+            }
+        )
+    contents = {
+        media_type: {
+            "schema": _schema_source(nodes_by_id[node_id].schema_contract)
+        }
+        for media_type, node_id in snapshot.media_type_node_ids.items()
+        if nodes_by_id[node_id].schema_contract is not None
+    }
+    request_body_node = (
+        nodes_by_id.get(snapshot.request_body_node_id)
+        if snapshot.request_body_node_id is not None
+        else None
+    )
+    operation_source: dict[str, Any] = {
+        "parameters": parameters,
+        "responses": {"200": {"description": "evaluation"}},
+    }
+    if contents:
+        operation_source["requestBody"] = {
+            "required": bool(request_body_node and request_body_node.required),
+            "content": contents,
+        }
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Solve evaluation", "version": "1"},
+            "paths": {
+                snapshot.path: {
+                    snapshot.method.casefold(): operation_source
+                }
+            },
+        }
+    )
+    context = ToolContext(ir=ir, baseline_schema_source={})
+    return OpenAPICapability(context_provider=lambda: context)
+
+
+def _schema_source(schema: SchemaSnapshot | None) -> dict[str, Any]:
+    """Convert one frozen request Schema back to parser-readable OpenAPI data."""
+    if schema is None:
+        return {}
+    output: dict[str, Any] = {
+        target: value
+        for target, value in (
+            ("type", schema.type),
+            ("format", schema.format),
+            ("enum", schema.enum),
+            ("nullable", schema.nullable),
+            ("minimum", schema.minimum),
+            ("maximum", schema.maximum),
+            ("exclusiveMinimum", schema.exclusive_minimum),
+            ("exclusiveMaximum", schema.exclusive_maximum),
+            ("minLength", schema.min_length),
+            ("maxLength", schema.max_length),
+            ("pattern", schema.pattern),
+            ("minItems", schema.min_items),
+            ("maxItems", schema.max_items),
+            ("uniqueItems", schema.unique_items),
+            ("minProperties", schema.min_properties),
+            ("maxProperties", schema.max_properties),
+        )
+        if value is not None
+    }
+    if schema.has_const:
+        output["const"] = schema.const
+    if schema.required:
+        output["required"] = list(schema.required)
+    if schema.properties:
+        output["properties"] = {
+            name: {
+                **_schema_source(child),
+                **(
+                    {"readOnly": True}
+                    if name in schema.read_only_properties
+                    else {}
+                ),
+            }
+            for name, child in schema.properties.items()
+        }
+    if schema.items is not None:
+        output["items"] = _schema_source(schema.items)
+    if isinstance(schema.additional_properties, SchemaSnapshot):
+        output["additionalProperties"] = _schema_source(
+            schema.additional_properties
+        )
+    elif schema.additional_properties is not None:
+        output["additionalProperties"] = schema.additional_properties
+    for target, branches in (
+        ("allOf", schema.all_of),
+        ("anyOf", schema.any_of),
+        ("oneOf", schema.one_of),
+    ):
+        if branches:
+            output[target] = [_schema_source(branch) for branch in branches]
+    return output
 
 
 def _to_example(scenario: BaseModel) -> DatasetExample:
@@ -475,6 +598,7 @@ def build_task(
                         scenario.config,
                         calls,
                     ),
+                    openapi_capability=_openapi_capability(scenario.config),
                     system_prompt=system_prompt,
                     tracing_runtime=tracing_runtime,
                 ).start(

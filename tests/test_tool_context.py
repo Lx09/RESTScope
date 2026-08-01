@@ -42,6 +42,14 @@ def test_capability_runtime_binds_context_once_and_exposes_exact_operations() ->
 
     assert runtime.require_context() is context
     assert runtime.require_operation("GET /pets").operation_key == "GET /pets"
+    assert runtime.openapi_capability.list_inputs(
+        operation_key="GET /pets"
+    )["structured"] == {
+        "operation_key": "GET /pets",
+        "inputs": [],
+        "total": 0,
+        "offset": 0,
+    }
     with pytest.raises(ToolContextError) as exc_info:
         runtime.bind_context(context)
     assert exc_info.value.code == "tool_context_already_initialized"

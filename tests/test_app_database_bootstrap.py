@@ -528,6 +528,7 @@ def test_from_config_keyboard_interrupt_cleans_owned_resources(
     runtime = SimpleNamespace(
         mcp_host=host,
         target_http_tool=object(),
+        openapi_capability=object(),
         require_operation=lambda _key: None,
         require_context=lambda: None,
     )
@@ -712,6 +713,7 @@ def test_smoke_coordinator_construction_failure_closes_runtime_and_removes_datab
     runtime = SimpleNamespace(
         mcp_host=host,
         target_http_tool=object(),
+        openapi_capability=object(),
         require_operation=lambda _key: None,
         require_context=lambda: None,
     )
@@ -794,6 +796,7 @@ def test_app_constructor_failure_removes_created_database(
     runtime = SimpleNamespace(
         mcp_host=host,
         target_http_tool=object(),
+        openapi_capability=object(),
         require_operation=lambda _key: None,
         require_context=lambda: None,
     )

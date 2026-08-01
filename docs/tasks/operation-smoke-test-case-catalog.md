@@ -1,5 +1,10 @@
 # Operation Smoke Test Case Catalog
 
+> Superseded scope note (2026-08-01): Failure Dedup now discovers handles with
+> `openapi.list_inputs`; the removed `openapi.lookup_operation` name below is
+> retained only as historical evidence. See
+> `docs/tasks/global-openapi-capability.md`.
+
 ## Status
 
 Implemented and locally verified on `codex/smoke-test-case-catalog`.

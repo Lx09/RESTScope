@@ -15,6 +15,7 @@ from restscope.capabilities.mcp import (
 )
 from restscope.capabilities.agent_tools import AgentToolbox
 from restscope.capabilities.http_request import TargetHTTPRequestTool
+from restscope.capabilities.openapi_lookup import OpenAPICapability
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_context import ToolContext, ToolContextError
 from restscope.capabilities.tool_sources import register_tool_source
@@ -33,8 +34,9 @@ class CapabilityRuntime:
 
     The runtime does not expose an executable all-tools registry. Agents build
     their own :class:`AgentToolbox` values and bind only the shared
-    implementation they need. The App-bound target context remains here so
-    OpenAPI and HTTP implementations can request it explicitly.
+    implementation they need. The App-bound target context remains here so the
+    shared OpenAPI and HTTP implementations can request it explicitly without
+    exposing IR or credentials as model-controlled arguments.
     """
 
     target_http_tool: TargetHTTPRequestTool
@@ -44,11 +46,18 @@ class CapabilityRuntime:
     mcp_host: MCPHost | None = None
     operation_testing_service: OperationTestingService | None = None
     api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None
+    openapi_capability: OpenAPICapability = field(init=False)
     _tool_context: ToolContext | None = field(
         default=None,
         init=False,
         repr=False,
     )
+
+    def __post_init__(self) -> None:
+        """Bind the shared OpenAPI Module to this runtime's context lifecycle."""
+        self.openapi_capability = OpenAPICapability(
+            context_provider=self.require_context,
+        )
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
         """Bind one tracing/redaction runtime to every built-in trace consumer."""
@@ -105,10 +114,10 @@ def build_capabilities(
 ) -> CapabilityRuntime:
     """Build shared App implementations and optional explicit integrations.
 
-    Local HTTP code is reusable but is not model-visible here. ``sources``
-    creates an isolated caller-owned toolbox, while ``skills`` remain prompt
-    metadata. Optional testing and monitor services retain their existing App
-    lifecycles.
+    Local OpenAPI and HTTP code is reusable but is not automatically
+    model-visible here. ``sources`` creates an isolated caller-owned toolbox,
+    while ``skills`` remain prompt metadata. Optional testing and monitor
+    services retain their existing App lifecycles.
     """
 
     runtime_tracing = tracing_runtime or TracingRuntime.disabled()

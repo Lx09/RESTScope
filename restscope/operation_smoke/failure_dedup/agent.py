@@ -8,14 +8,12 @@ validation, correction feedback, and output-budget accounting.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from restscope.capabilities import AgentToolbox
-from restscope.capabilities.openapi_lookup import (
-    OPENAPI_LOOKUP_TOOL_NAME,
-    lookup_operation,
-    scoped_openapi_lookup_tool_spec,
+from restscope.capabilities import (
+    AgentToolbox,
+    OpenAPICapability,
+    openapi_list_inputs_tool_spec,
 )
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
@@ -29,7 +27,6 @@ from restscope.llm import (
     ToolSpec,
 )
 from restscope.observability import TracingRuntime
-from restscope.openapi_parser.ir import OperationIR
 from restscope.operation_smoke.test_case_catalog import (
     CATALOG_QUERY_TOOL_NAME,
     TestCaseCatalog,
@@ -50,7 +47,7 @@ class FailureDedupAgent:
         *,
         client: LLMClient,
         model: LLMModelConfig,
-        operation_provider: Callable[[str], OperationIR],
+        openapi_capability: OpenAPICapability,
         system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
@@ -58,7 +55,7 @@ class FailureDedupAgent:
         """Store stateless collaborators used by each isolated Dedup call."""
         self.client = client
         self.model = model
-        self.operation_provider = operation_provider
+        self.openapi_capability = openapi_capability
         self.system_prompt = system_prompt or SYSTEM_PROMPT
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
@@ -104,10 +101,7 @@ class FailureDedupAgent:
         )
         last_errors: list[str] = []
         correction_count = 0
-        tools = self._build_tools(
-            operation_key=operation_key,
-            catalog=catalog,
-        )
+        tools = self._build_tools(catalog=catalog)
 
         with self.tracing_runtime.span(
             "FailureDedupAgent.deduplicate",
@@ -196,15 +190,13 @@ class FailureDedupAgent:
     def _build_tools(
         self,
         *,
-        operation_key: str,
         catalog: TestCaseCatalog,
     ) -> AgentToolbox:
         """Bind shared and run-local implementations for one Dedup call."""
         tools = AgentToolbox(tracing_runtime=self.tracing_runtime)
-        operation = self.operation_provider(operation_key)
         tools.register(
-            spec=scoped_openapi_lookup_tool_spec(operation),
-            execute=lambda: lookup_operation(operation),
+            spec=openapi_list_inputs_tool_spec(),
+            execute=self.openapi_capability.list_inputs,
         )
         tools.register(
             spec=catalog_query_tool_spec(),

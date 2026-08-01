@@ -1,5 +1,10 @@
 # Agent Tool Runtime Simplification
 
+> Superseded scope note (2026-08-01): the user replaced the operation-bound
+> OpenAPI projection with three global, exact-operation lookup tools while
+> preserving this task's Agent-owned toolbox decision. See
+> `docs/tasks/global-openapi-capability.md`.
+
 Status: Implemented and locally verified
 
 ## Objective
