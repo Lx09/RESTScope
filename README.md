@@ -108,8 +108,10 @@ parsed = catalog.load(schema.id)
 
 The MVP LLM layer lives in `restscope.llm`. It provides provider-neutral request
 and response schemas, OpenAI-compatible and DeepSeek providers, model selection
-for thinking/fast roles, structured output validation, and a safe tool-call shell
-in `restscope.capabilities`. Unit tests provide their own local stub providers;
+for thinking/fast roles, structured output validation, and Agent-owned toolboxes
+in `restscope.capabilities`. Each Agent registers only the tools it can actually
+use; the same toolbox validates and executes those calls. Unit tests provide
+their own local stub providers;
 the runtime package does not register an offline fake provider.
 
 Provider calls are routed through `LLMClient`; providers normalize responses but
@@ -224,8 +226,8 @@ caller can provide any compatible stdio server:
 ```
 
 Build a standalone capability runtime by letting RESTScope start the MCP server,
-run `tools/list`, and register the discovered tools through the generic
-capability layer:
+run `tools/list`, and place the discovered tools in an explicit external
+toolbox:
 
 ```python
 from restscope.capabilities import build_capabilities_with_mcp_host
@@ -238,11 +240,14 @@ runtime = build_capabilities_with_mcp_host(
 
 Lower-level embedding remains possible through `build_capabilities(...)` when a
 caller already has discovered tools and a call bridge. Explicit sources are
-registered in mapping order. Calling `build_capabilities()` without sources
-builds the local RESTScope tools only.
+registered in mapping order. The external toolbox remains isolated and is never
+automatically injected into a RESTScope Agent. Calling `build_capabilities()`
+without sources creates the shared target HTTP implementation and no
+model-visible toolbox.
 
-`MCPToolAdapter` uses MCP annotations for read-only/risk classification, while
-`ToolPolicy` remains the final execution gate.
+`MCPToolAdapter` preserves MCP input and optional output contracts but does not
+translate annotations into a central permission policy. The caller or owning
+Agent decides which discovered tools, if any, to include.
 
 ## Operation Smoke testing
 

@@ -8,10 +8,15 @@ validation, correction feedback, and output-budget accounting.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from restscope.capabilities import ToolExecutor
-from restscope.capabilities.openapi_lookup import OPENAPI_LOOKUP_TOOL_NAME
+from restscope.capabilities import AgentToolbox
+from restscope.capabilities.openapi_lookup import (
+    OPENAPI_LOOKUP_TOOL_NAME,
+    lookup_operation,
+    scoped_openapi_lookup_tool_spec,
+)
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -24,11 +29,12 @@ from restscope.llm import (
     ToolSpec,
 )
 from restscope.observability import TracingRuntime
+from restscope.openapi_parser.ir import OperationIR
 from restscope.operation_smoke.test_case_catalog import (
     CATALOG_QUERY_TOOL_NAME,
     TestCaseCatalog,
     catalog_query_tool_spec,
-    execute_catalog_query,
+    query_catalog,
     tool_result_json,
 )
 
@@ -44,7 +50,7 @@ class FailureDedupAgent:
         *,
         client: LLMClient,
         model: LLMModelConfig,
-        tool_executor: ToolExecutor,
+        operation_provider: Callable[[str], OperationIR],
         system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
@@ -52,7 +58,7 @@ class FailureDedupAgent:
         """Store stateless collaborators used by each isolated Dedup call."""
         self.client = client
         self.model = model
-        self.tool_executor = tool_executor
+        self.operation_provider = operation_provider
         self.system_prompt = system_prompt or SYSTEM_PROMPT
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
@@ -98,6 +104,10 @@ class FailureDedupAgent:
         )
         last_errors: list[str] = []
         correction_count = 0
+        tools = self._build_tools(
+            operation_key=operation_key,
+            catalog=catalog,
+        )
 
         with self.tracing_runtime.span(
             "FailureDedupAgent.deduplicate",
@@ -116,7 +126,7 @@ class FailureDedupAgent:
                         temperature=0,
                         max_tokens=self.model.max_tokens,
                         response_format="json",
-                        tools=self._tool_specs(),
+                        tools=tools.specs(),
                         tool_choice="auto",
                         timeout_seconds=self.model.timeout_seconds,
                         reasoning=self.model.reasoning,
@@ -124,24 +134,22 @@ class FailureDedupAgent:
                     )
                 )
                 if response.tool_calls:
-                    errors = _tool_call_errors(response)
+                    errors = _tool_call_errors(
+                        response,
+                        allowed_names={spec.name for spec in tools.specs()},
+                    )
                     if errors:
                         correction_count += 1
                         last_errors = errors
                         context.append_feedback(_correction_text(errors))
                         continue
-                    call = response.tool_calls[0]
                     context.append_assistant(response)
-                    result = self._execute_tool(
-                        call=call,
-                        operation_key=operation_key,
-                        catalog=catalog,
-                    )
-                    context.append_tool_result(
-                        result.name,
-                        result.tool_call_id,
-                        tool_result_json(result),
-                    )
+                    for result in tools.execute_many(response.tool_calls):
+                        context.append_tool_result(
+                            result.name,
+                            result.tool_call_id,
+                            tool_result_json(result),
+                        )
                     continue
 
                 decision, errors = _parse_decision(
@@ -185,55 +193,29 @@ class FailureDedupAgent:
             )
             return None, max_outputs, correction_count, last_errors
 
-    def _tool_specs(self) -> list[ToolSpec]:
-        """Offer one global OpenAPI lookup and the current run's Catalog query."""
-        return [
-            self.tool_executor.registry.get_spec(OPENAPI_LOOKUP_TOOL_NAME),
-            catalog_query_tool_spec(),
-        ]
-
-    def _execute_tool(
+    def _build_tools(
         self,
         *,
-        call: ToolCall,
         operation_key: str,
         catalog: TestCaseCatalog,
-    ) -> ToolResult:
-        """Run one validated tool without exposing another operation's Schema."""
-        if call.name == CATALOG_QUERY_TOOL_NAME:
-            return execute_catalog_query(
-                catalog=catalog,
-                tool_call=call,
-                tracing_runtime=self.tracing_runtime,
-            )
-        if call.name == OPENAPI_LOOKUP_TOOL_NAME:
-            if call.arguments.get("operation_key") != operation_key:
-                return ToolResult(
-                    tool_call_id=call.id,
-                    name=call.name,
-                    status="denied",
-                    error={
-                        "code": "dedup_operation_scope",
-                        "message": (
-                            "operation_key must exactly match the current "
-                            "Failure Dedup operation"
-                        ),
-                    },
+    ) -> AgentToolbox:
+        """Bind shared and run-local implementations for one Dedup call."""
+        tools = AgentToolbox(tracing_runtime=self.tracing_runtime)
+        operation = self.operation_provider(operation_key)
+        tools.register(
+            spec=scoped_openapi_lookup_tool_spec(operation),
+            execute=lambda: lookup_operation(operation),
+        )
+        tools.register(
+            spec=catalog_query_tool_spec(),
+            execute=lambda **arguments: {
+                "structured": query_catalog(
+                    catalog=catalog,
+                    arguments=arguments,
                 )
-            return self.tool_executor.execute(
-                tool_call=call,
-                role="operation_smoke_failure_dedup",
-                state={},
-            )
-        return ToolResult(
-            tool_call_id=call.id,
-            name=call.name,
-            status="denied",
-            error={
-                "code": "dedup_tool_not_allowed",
-                "message": f"Tool is not available to Failure Dedup: {call.name}",
             },
         )
+        return tools
 
 
 def _input_text(
@@ -254,17 +236,20 @@ def _input_text(
     return writer.render(max_chars=24_000)
 
 
-def _tool_call_errors(response: LLMResponse) -> list[str]:
-    """Require exactly one known tool call and no simultaneous final JSON."""
-    if len(response.tool_calls) != 1:
-        return ["One output must contain exactly one tool call."]
+def _tool_call_errors(
+    response: LLMResponse,
+    *,
+    allowed_names: set[str],
+) -> list[str]:
+    """Reject mixed, duplicate, or unavailable calls before batch execution."""
     if response.parsed_json is not None:
         return ["Do not mix a tool call with a final JSON decision."]
-    if response.tool_calls[0].name not in {
-        OPENAPI_LOOKUP_TOOL_NAME,
-        CATALOG_QUERY_TOOL_NAME,
-    }:
-        return [f"Unknown Failure Dedup tool: {response.tool_calls[0].name}"]
+    call_ids = [call.id for call in response.tool_calls]
+    if len(call_ids) != len(set(call_ids)):
+        return ["Every Failure Dedup tool call must have a unique call id."]
+    for call in response.tool_calls:
+        if call.name not in allowed_names:
+            return [f"Unknown Failure Dedup tool: {call.name}"]
     return []
 
 

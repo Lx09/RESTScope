@@ -22,7 +22,6 @@ __all__ = [
     "ResourceLookupResult",
     "RESOURCE_LOOKUP_TOOL_NAME",
     "build_api_behavior_monitor_coordinator",
-    "register_resource_lookup_tool",
 ]
 
 _PUBLIC_MODULE_BY_NAME = {
@@ -36,7 +35,6 @@ _PUBLIC_MODULE_BY_NAME = {
     "ResourceLookupResult": ".resource_schemas",
     "RESOURCE_LOOKUP_TOOL_NAME": ".tool",
     "build_api_behavior_monitor_coordinator": ".factory",
-    "register_resource_lookup_tool": ".tool",
 }
 
 

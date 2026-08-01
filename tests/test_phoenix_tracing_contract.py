@@ -79,7 +79,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
 
     from restscope import RESTScopeApp
     from restscope.supervisor import RESTScopeRunRequest
-    from restscope.capabilities import build_capabilities
+    from restscope.capabilities import AgentToolbox, build_capabilities
     from restscope.llm import (
         LLMClient,
         LLMMessage,
@@ -114,16 +114,18 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     assert runtime.enabled is True
 
     capabilities = build_capabilities(tracing_runtime=runtime)
-    capabilities.tool_registry.register(
+    toolbox = AgentToolbox(tracing_runtime=runtime)
+    toolbox.register(
         spec=ToolSpec(
             name="contract.tool",
             description="Emit a contract tool span",
             kind="local_function",
             input_schema={"type": "object"},
+            output_schema={"type": "object"},
         ),
-        handler=lambda context, **arguments: {
+        execute=lambda **arguments: {
             "structured": {
-                "operations": len(context.ir.operations),
+                "operations": len(capabilities.require_context().ir.operations),
                 "argument_keys": sorted(arguments),
             }
         },
@@ -150,14 +152,12 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
             metadata={"task_id": "phoenix-contract"},
         )
     )
-    capabilities.tool_executor.execute(
-        tool_call=ToolCall(
+    toolbox.execute(
+        ToolCall(
             id="contract-tool",
             name="contract.tool",
             arguments={"token": "contract-secret"},
-        ),
-        role="decision_maker",
-        state={},
+        )
     )
 
     reasoning = "contract private reasoning"

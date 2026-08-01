@@ -1,4 +1,4 @@
-"""Regression scenarios for tool context. Each test documents one observable contract or failure boundary."""
+"""Regression scenarios for App context and explicit tool dependencies."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import pytest
 
 
 def _context(*, secret: str = "Bearer runtime-secret"):
+    """Build one immutable App target context for boundary tests."""
     from restscope.capabilities import ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
@@ -31,79 +32,49 @@ def _context(*, secret: str = "Bearer runtime-secret"):
     )
 
 
-def test_tool_executor_binds_context_once_and_injects_it_out_of_band() -> None:
-    """Scenario: verify that tool executor binds context once and injects it out of band."""
-    from restscope.capabilities import ToolCallValidator, ToolContextError, ToolExecutor, ToolPolicy, ToolRegistry
-    from restscope.llm import ToolCall, ToolSpec
+def test_capability_runtime_binds_context_once_and_exposes_exact_operations() -> None:
+    """The App owns context lifecycle without an executable global registry."""
+    from restscope.capabilities import ToolContextError, build_capabilities
 
-    seen = []
-    registry = ToolRegistry()
-    spec = ToolSpec(
-        name="context.inspect",
-        description="Inspect bound context",
-        kind="local_function",
-        input_schema={
-            "type": "object",
-            "properties": {"value": {"type": "string"}},
-            "required": ["value"],
-        },
-    )
-
-    def handler(context, /, *, value):
-        seen.append(context)
-        return {"structured": {"value": value, "title": context.ir.meta.title}}
-
-    registry.register(spec=spec, handler=handler)
-    executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
+    runtime = build_capabilities()
     context = _context()
-    executor.bind_context(context)
+    runtime.bind_context(context)
 
-    result = executor.execute(
-        tool_call=ToolCall(id="inspect", name=spec.name, arguments={"value": "ok"}),
-        role="decision_maker",
-        state={},
-    )
-
-    assert seen == [context]
-    assert result.structured == {"value": "ok", "title": "Context API"}
-    assert "context" not in spec.input_schema["properties"]
-    assert "runtime-secret" not in result.model_dump_json()
+    assert runtime.require_context() is context
+    assert runtime.require_operation("GET /pets").operation_key == "GET /pets"
     with pytest.raises(ToolContextError) as exc_info:
-        executor.bind_context(context)
+        runtime.bind_context(context)
     assert exc_info.value.code == "tool_context_already_initialized"
 
 
-def test_model_arguments_cannot_replace_the_bound_context() -> None:
-    """Scenario: verify that model arguments cannot replace the bound context."""
-    from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry
+def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments() -> None:
+    """Only the implementation closure chooses whether it needs App context."""
+    from restscope.capabilities import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
 
+    context = _context()
     seen = []
-    registry = ToolRegistry()
+    toolbox = AgentToolbox()
     spec = ToolSpec(
-        name="context.override_attempt",
-        description="Observe an untrusted argument with a reserved-looking name",
+        name="context.inspect",
+        description="Inspect explicitly bound context",
         kind="local_function",
         input_schema={"type": "object", "additionalProperties": True},
+        output_schema={"type": "object"},
     )
 
-    def handler(context, /, **arguments):
+    def inspect(**arguments):
+        """Use the captured context while treating same-named input as data."""
         seen.append((context, arguments))
         return {"structured": {"title": context.ir.meta.title}}
 
-    registry.register(spec=spec, handler=handler)
-    executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
-    context = _context()
-    executor.bind_context(context)
-
-    result = executor.execute(
-        tool_call=ToolCall(
+    toolbox.register(spec=spec, execute=inspect)
+    result = toolbox.execute(
+        ToolCall(
             id="override",
             name=spec.name,
             arguments={"context": {"headers": {"Authorization": "attacker"}}},
-        ),
-        role="decision_maker",
-        state={},
+        )
     )
 
     assert result.status == "succeeded"
@@ -112,37 +83,38 @@ def test_model_arguments_cannot_replace_the_bound_context() -> None:
     assert result.structured == {"title": "Context API"}
 
 
-def test_tool_executor_requires_context_and_preserves_bound_header_values() -> None:
-    """Scenario: verify that tool executor requires context and preserves bound header values."""
-    from restscope.capabilities import ToolCallValidator, ToolContextError, ToolExecutor, ToolPolicy, ToolRegistry
+def test_missing_context_is_stable_and_unknown_tool_errors_hide_headers() -> None:
+    """Lifecycle errors are explicit while implementation details stay internal."""
+    from restscope.capabilities import AgentToolbox, ToolContextError, build_capabilities
     from restscope.llm import ToolCall, ToolSpec
 
-    registry = ToolRegistry()
-    spec = ToolSpec(
-        name="context.fail",
-        description="Fail with a secret",
-        kind="local_function",
-        input_schema={"type": "object", "properties": {}},
-    )
-
-    def handler(context, /):
-        raise RuntimeError(f"request failed with {context.headers['Authorization']}")
-
-    registry.register(spec=spec, handler=handler)
-    executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
-
+    runtime = build_capabilities()
     with pytest.raises(ToolContextError) as exc_info:
-        executor.require_context()
+        runtime.require_context()
     assert exc_info.value.code == "tool_context_not_initialized"
 
-    executor.bind_context(_context())
-    result = executor.execute(
-        tool_call=ToolCall(id="fail", name=spec.name, arguments={}),
-        role="decision_maker",
-        state={},
+    runtime.bind_context(_context())
+    toolbox = AgentToolbox()
+    spec = ToolSpec(
+        name="context.fail",
+        description="Exercise the unknown-error boundary",
+        kind="local_function",
+        input_schema={"type": "object", "properties": {}},
+        output_schema={"type": "object"},
     )
 
+    def fail():
+        """Raise an unexpected error containing target authentication."""
+        raise RuntimeError(
+            f"request failed with {runtime.require_context().headers['Authorization']}"
+        )
+
+    toolbox.register(spec=spec, execute=fail)
+    result = toolbox.execute(ToolCall(id="fail", name=spec.name, arguments={}))
+
     assert result.status == "failed"
-    assert result.error is not None
-    assert result.error["message"] == "request failed with Bearer runtime-secret"
-    assert "runtime-secret" in result.model_dump_json()
+    assert result.error == {
+        "code": "internal_tool_error",
+        "message": "The tool failed because of an internal error.",
+    }
+    assert "runtime-secret" not in result.model_dump_json()

@@ -77,7 +77,7 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tm
     assert first.status == second.status == "passed"
     assert len(seen) == 1
     assert app.tool_context is context
-    assert app.capability_runtime.tool_executor.tool_context is context
+    assert app.capability_runtime.require_context() is context
     assert context.baseline_schema_source["content"] != "changed"
     assert context.headers["Authorization"] == "Bearer runtime-secret"
     assert "runtime-secret" not in repr(context)
@@ -117,6 +117,7 @@ def test_app_validates_and_forwards_supported_schema_sources(
 
 def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app allows retry after initialization failure."""
+    from restscope.capabilities import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -134,7 +135,9 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) ->
     with pytest.raises(ValueError, match="broken schema"):
         app.initialize(schema_source={"kind": "inline", "content": "broken"})
     assert app.tool_context is None
-    assert app.capability_runtime.tool_executor.tool_context is None
+    with pytest.raises(ToolContextError) as exc_info:
+        app.capability_runtime.require_context()
+    assert exc_info.value.code == "tool_context_not_initialized"
 
     context = app.initialize(schema_source={"kind": "inline", "content": "valid"})
     assert context.ir is parsed
@@ -174,12 +177,14 @@ def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> No
     context = app.initialize(
         schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())}
     )
-    executor = app.capability_runtime.tool_executor
-    assert executor.tool_context is context
+    runtime = app.capability_runtime
+    assert runtime.require_context() is context
 
     app.close()
 
     assert app.tool_context is None
-    assert executor.tool_context is None
+    with pytest.raises(ToolContextError) as exc_info:
+        runtime.require_context()
+    assert exc_info.value.code == "tool_context_not_initialized"
     with pytest.raises(RuntimeError, match="closed"):
         app.run(_request())

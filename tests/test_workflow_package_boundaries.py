@@ -107,7 +107,6 @@ def test_workflow_facades_export_only_the_approved_interfaces() -> None:
         "ResourceLookupResult",
         "ResponseValueSource",
         "build_api_behavior_monitor_coordinator",
-        "register_resource_lookup_tool",
     }
 
 

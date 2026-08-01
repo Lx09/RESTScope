@@ -335,7 +335,7 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
         }
     )
     capabilities = build_capabilities(tracing_runtime=runtime)
-    capabilities.tool_executor.bind_context(
+    capabilities.bind_context(
         ToolContext(ir=ir, baseline_schema_source={})
     )
     catalog = TestCaseCatalog(valid_parameters={"body", "body.name"})
@@ -358,7 +358,7 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
             model="think",
             enabled=True,
         ),
-        tool_executor=capabilities.tool_executor,
+        operation_provider=capabilities.require_operation,
         tracing_runtime=runtime,
     )
     result, outputs, corrections, errors = agent.deduplicate(

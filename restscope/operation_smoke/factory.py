@@ -12,7 +12,7 @@ from restscope.operation_smoke.failure_dedup import (
     FailureDedupAgent,
     FailureDeduplicator,
 )
-from restscope.capabilities import ToolExecutor
+from restscope.capabilities import CapabilityRuntime
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
 from restscope.randomness import SeededRandom
@@ -34,7 +34,7 @@ def build_operation_smoke_coordinator(
     config_catalog: GeneratorConfigCatalog,
     batch_runner: SmokeBatchRunner,
     reference_values: BehaviorMonitorReferenceValues,
-    tool_executor: ToolExecutor | None = None,
+    capability_runtime: CapabilityRuntime | None = None,
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> OperationSmokeCoordinator:
@@ -44,9 +44,9 @@ def build_operation_smoke_coordinator(
     deep Memory Interface. Patch application receives the same Unit of Work
     factory so Generator revision and Investigation commit atomically.
     """
-    if tool_executor is None:
+    if capability_runtime is None:
         raise ValueError(
-            "Operation Smoke Failure Solve requires the scoped HTTP tool executor"
+            "Operation Smoke requires the App capability runtime"
         )
     runtime = tracing_runtime or TracingRuntime.disabled()
     client = llm_client or build_llm_client(
@@ -72,7 +72,7 @@ def build_operation_smoke_coordinator(
             agent=FailureDedupAgent(
                 client=client,
                 model=selector.select("operation_smoke_failure_dedup"),
-                tool_executor=tool_executor,
+                operation_provider=capability_runtime.require_operation,
                 tracing_runtime=runtime,
             ),
             memory=memory,
@@ -81,7 +81,10 @@ def build_operation_smoke_coordinator(
         failure_solver_factory=FailureSolveAgentFactory(
             client=client,
             model=selector.select("operation_smoke_failure_solve"),
-            http_probe=CurrentOperationHTTPProbe(tool_executor),
+            http_probe=CurrentOperationHTTPProbe(
+                http_tool=capability_runtime.target_http_tool,
+                context_provider=capability_runtime.require_context,
+            ),
             memory=memory,
             patch_agent_factory=patch_agent_factory,
             patch_application=SmokePatchApplication(

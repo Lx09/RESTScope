@@ -48,7 +48,8 @@ class RESTScopeApp:
 
     Creating the app is intentionally more than constructing a data object.  It
     opens the run-local database, tracing exporter, behavior monitor, HTTP
-    transport, testing service, capability registry, and top-level run graph.
+    transport, testing service, shared capability implementations, and the
+    top-level run graph.
     The app also records which resources it created so :meth:`close` can release
     them if startup succeeds *or* fails part-way through.
     """
@@ -146,7 +147,7 @@ class RESTScopeApp:
                             operation_testing_service,
                         ),
                         reference_values=reference_values,
-                        tool_executor=built_runtime.tool_executor,
+                        capability_runtime=built_runtime,
                         tracing_runtime=self._tracing_runtime,
                     )
             elif smoke_coordinator is None:
@@ -166,13 +167,6 @@ class RESTScopeApp:
             )
             if callable(bind_tracing_runtime):
                 bind_tracing_runtime(self._tracing_runtime)
-            else:
-                # Compatibility path for small test doubles that predate the
-                # runtime-level binding method.
-                executor = getattr(self.capability_runtime, "tool_executor", None)
-                if executor is not None:
-                    executor.tracing_runtime = self._tracing_runtime
-            self._tool_context: ToolContext | None = None
             self._closed = False
         except BaseException:
             # Startup is transactional from the caller's perspective: a failed
@@ -303,7 +297,7 @@ class RESTScopeApp:
                     config_catalog=generator_catalog,
                     batch_runner=operation_testing_service,
                     reference_values=reference_values,
-                    tool_executor=runtime.tool_executor,
+                    capability_runtime=runtime,
                     tracing_runtime=trace_runtime,
                 )
 
@@ -324,13 +318,16 @@ class RESTScopeApp:
 
     @property
     def tool_context(self) -> ToolContext | None:
-        """
-        Handle tool context as part of the RESTScope application runtime.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
-        return self._tool_context
+        """Return the initialized target snapshot, or ``None`` before startup."""
+        require_context = getattr(self.capability_runtime, "require_context", None)
+        if not callable(require_context):
+            return None
+        try:
+            return require_context()
+        except ToolContextError as exc:
+            if exc.code == "tool_context_not_initialized":
+                return None
+            raise
 
     @property
     def tracing_runtime(self) -> TracingRuntime:
@@ -352,7 +349,7 @@ class RESTScopeApp:
         """Parse and bind one immutable-by-convention target snapshot to this App."""
 
         self._ensure_open()
-        if self._tool_context is not None:
+        if self.tool_context is not None:
             raise ToolContextError(
                 "tool_context_already_initialized",
                 "Tool context is already initialized",
@@ -384,15 +381,15 @@ class RESTScopeApp:
         )
         if testing_service is not None:
             testing_service.config_catalog.initialize_once(ir)
-        self.capability_runtime.tool_executor.bind_context(context)
-        self._tool_context = context
+        self.capability_runtime.bind_context(context)
         return context
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
         """Run the global RESTScope supervisor graph."""
 
         self._ensure_open()
-        if self._tool_context is None:
+        context = self.tool_context
+        if context is None:
             raise ToolContextError(
                 "tool_context_not_initialized",
                 "Tool context is not initialized",
@@ -407,7 +404,7 @@ class RESTScopeApp:
         ) as span:
             report = RESTScopeMainGraph(
                 operation_smoke_coordinator=self.operation_smoke_coordinator,
-                tool_context=self._tool_context,
+                tool_context=context,
                 random_seed=self.random_source.seed,
                 tracing_runtime=self.tracing_runtime,
             ).run(request)
@@ -422,10 +419,9 @@ class RESTScopeApp:
 
         if self._closed:
             return
-        executor = getattr(self.capability_runtime, "tool_executor", None)
-        if executor is not None:
-            executor.clear_context()
-        self._tool_context = None
+        clear_context = getattr(self.capability_runtime, "clear_context", None)
+        if callable(clear_context):
+            clear_context()
         clear_smoke_state = getattr(
             self.operation_smoke_coordinator,
             "clear_app_state",

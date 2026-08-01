@@ -865,7 +865,7 @@ def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
     assert coordinator.resource_identifier_tracker.model.model == "fast-model"
 
 
-def test_resource_lookup_tool_returns_complete_structured_result(
+def test_resource_lookup_capability_remains_without_model_tool_wrapper(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that resource lookup tool returns complete structured result."""
@@ -873,16 +873,7 @@ def test_resource_lookup_tool_returns_complete_structured_result(
         DetectedResourceGroup,
         MonitoredOperation,
     )
-    from restscope.api_behavior_monitor import register_resource_lookup_tool
-    from restscope.capabilities import (
-        ToolCallValidator,
-        ToolContext,
-        ToolExecutor,
-        ToolPolicy,
-        ToolRegistry,
-    )
-    from restscope.llm import ToolCall
-    from restscope.openapi_parser import OpenAPIParser
+    from restscope.api_behavior_monitor import ResourceLookupRequest
 
     tracker, catalog = _tracker(tmp_path, StubLLMClient())
     catalog.record_groups(
@@ -903,46 +894,10 @@ def test_resource_lookup_tool_returns_complete_structured_result(
             )
         ],
     )
-    registry = ToolRegistry()
-    spec = register_resource_lookup_tool(registry, tracker)
-    executor = ToolExecutor(
-        registry,
-        ToolCallValidator(registry, ToolPolicy()),
-    )
-    executor.bind_context(
-        ToolContext(
-            ir=OpenAPIParser.parse(
-                {
-                    "openapi": "3.0.3",
-                    "info": {"title": "lookup", "version": "1"},
-                    "paths": {},
-                }
-            ),
-            baseline_schema_source={
-                "kind": "inline",
-                "format": "json",
-                "content": "{}",
-            },
-        )
-    )
+    result = tracker.lookup(ResourceLookupRequest(resource="user"))
 
-    result = executor.execute(
-        tool_call=ToolCall(
-            id="lookup",
-            name="restscope.resource.lookup",
-            arguments={"resource": "user"},
-        ),
-        role="operation_smoke_failure_solve",
-        state={},
-    )
-
-    assert spec.kind == "local_function"
-    assert spec.read_only is True
-    assert spec.risk_level == "medium"
-    assert spec.requires_approval is False
-    assert result.status == "succeeded"
-    assert result.structured["recommended_id"] == 9
-    assert result.structured["operations"][0]["operation_key"] == (
+    assert result.recommended_id == 9
+    assert result.operations[0].operation_key == (
         "GET /users/{userId}"
     )
 

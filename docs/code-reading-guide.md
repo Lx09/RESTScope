@@ -17,9 +17,9 @@ The core loop is:
    API, language models, logging, and tracing.
 2. **Parse OpenAPI.** Convert paths, operations, parameters, request bodies, and
    responses into a typed in-memory representation called the **IR**.
-3. **Create runtime services.** Build the database repositories, HTTP
-   transport, tool registry, language-model clients, tracing runtime, and
-   testing services.
+3. **Create runtime services.** Build the database repositories, shared HTTP
+   transport, Agent-owned toolboxes, language-model clients, tracing runtime,
+   and testing services.
 4. **Choose an operation.** The Supervisor selects one OpenAPI operation that
    still needs evidence.
 5. **Generate a batch.** Generator configurations produce concrete path,

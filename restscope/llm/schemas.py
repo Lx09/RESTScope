@@ -12,8 +12,7 @@ LLMResponseFormat = Literal["text", "json", "json_schema"]
 LLMReasoningMode = Literal["default", "enabled", "disabled"]
 LLMReasoningEffort = Literal["high", "max"]
 ToolKind = Literal["local_function", "mcp_tool", "skill", "provider_builtin"]
-ToolRiskLevel = Literal["low", "medium", "high"]
-ToolResultStatus = Literal["succeeded", "failed", "denied", "timed_out", "approval_required"]
+ToolResultStatus = Literal["succeeded", "failed", "denied", "timed_out"]
 
 
 class ToolCall(BaseModel):
@@ -51,11 +50,6 @@ class ToolSpec(BaseModel):
     kind: ToolKind
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] | None = Field(default=None)
-    risk_level: ToolRiskLevel = "low"
-    read_only: bool = True
-    requires_approval: bool = False
-    timeout_seconds: int = 30
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolResult(BaseModel):
@@ -68,7 +62,6 @@ class ToolResult(BaseModel):
     structured: Any | None = None
     error: dict[str, Any] | None = Field(default=None)
     artifact_ids: list[str] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class LLMRequest(BaseModel):

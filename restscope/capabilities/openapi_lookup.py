@@ -1,4 +1,4 @@
-"""Register the global read-only OpenAPI operation lookup capability.
+"""Project one Agent-bound OpenAPI operation into compact model evidence.
 
 The handler reads the App-bound OpenAPI IR and returns one compact JSON
 projection. Dedup uses it to discover semantic request handles without placing
@@ -13,71 +13,43 @@ from typing import Any
 from restscope.llm import ToolSpec
 from restscope.openapi_parser.ir import OperationIR, SchemaIR
 
-from .tool_context import ToolContext
-from .tool_registry import ToolRegistry
-
-
 OPENAPI_LOOKUP_TOOL_NAME = "openapi.lookup_operation"
 
 
-class OpenAPILookupError(LookupError):
-    """Expose a stable capability error without leaking other operation data."""
+def _output_schema() -> dict[str, Any]:
+    """Return the structured projection contract shared by both lookup scopes."""
+    return {
+        "type": "object",
+        "properties": {
+            "operation": {"type": "object"},
+            "parameters": {"type": "array"},
+            "request_bodies": {"type": "array"},
+        },
+        "required": ["operation", "parameters", "request_bodies"],
+        "additionalProperties": False,
+    }
 
-    code = "openapi_operation_not_found"
 
-
-def register_openapi_lookup_tool(registry: ToolRegistry) -> ToolSpec:
-    """Register operation-key lookup in the shared capability runtime."""
-    spec = ToolSpec(
+def scoped_openapi_lookup_tool_spec(operation: OperationIR) -> ToolSpec:
+    """Describe a lookup that can reveal only one already selected operation."""
+    return ToolSpec(
         name=OPENAPI_LOOKUP_TOOL_NAME,
         description=(
-            "List the request Parameters and request-body fields declared by "
-            "one OpenAPI operation. Use the exact RESTScope operation_key."
+            "List request Parameters and request-body fields for the current "
+            f"operation {operation.operation_key}."
         ),
         kind="local_function",
         input_schema={
             "type": "object",
-            "properties": {
-                "operation_key": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical METHOD /path operation key.",
-                }
-            },
-            "required": ["operation_key"],
+            "properties": {},
             "additionalProperties": False,
         },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "operation": {"type": "object"},
-                "parameters": {"type": "array"},
-                "request_bodies": {"type": "array"},
-            },
-            "required": ["operation", "parameters", "request_bodies"],
-            "additionalProperties": False,
-        },
-        risk_level="low",
-        read_only=True,
-        requires_approval=False,
-        metadata={"open_world": False},
+        output_schema=_output_schema(),
     )
-    registry.register(spec=spec, handler=_lookup_operation)
-    return spec
 
 
-def _lookup_operation(
-    context: ToolContext,
-    /,
-    *,
-    operation_key: str,
-) -> dict[str, Any]:
-    """Return a bounded JSON-ready request contract for one exact operation."""
-    operation = context.ir.operations.get(operation_key)
-    if operation is None:
-        raise OpenAPILookupError(
-            f"OpenAPI operation was not found: {operation_key}"
-        )
+def lookup_operation(operation: OperationIR) -> dict[str, Any]:
+    """Return the bounded model-facing projection for one bound operation."""
     return {
         "structured": {
             "operation": {
@@ -120,7 +92,7 @@ def _operation_parameters(operation: OperationIR) -> list[dict[str, Any]]:
 def operation_parameter_handles(operation: OperationIR) -> frozenset[str]:
     """Return every semantic request handle across all request media types.
 
-    Batch generation uses one active media type, but the global OpenAPI tool
+    Batch generation uses one active media type, but the scoped OpenAPI tool
     lists every declared body. The run-local Catalog uses this complete set so
     querying a legal field from an inactive media type returns
     ``present: false`` instead of looking forged.

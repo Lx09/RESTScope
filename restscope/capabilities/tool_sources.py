@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from restscope.capabilities.agent_tools import AgentToolbox
 from restscope.capabilities.mcp import MCPToolAdapter
-from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.llm.schemas import ToolSpec
 
 
@@ -23,12 +23,17 @@ class UnsupportedToolSourceKindError(ToolSourceError):
 
 def register_tool_source(
     *,
-    registry: ToolRegistry,
+    toolbox: AgentToolbox,
     server_name: str,
     source: Mapping[str, Any],
     adapter_registry: Mapping[str, Any] | None = None,
 ) -> list[ToolSpec]:
-    """Register all tools from one external source."""
+    """Add every discovered tool from one explicit source to a caller toolbox.
+
+    ``source`` supplies its protocol kind, discovered contracts, and call
+    bridge. The returned specifications are the exact values registered. An
+    unsupported kind fails during construction before any external call runs.
+    """
 
     kind = source.get("kind")
     if kind != "mcp":
@@ -39,10 +44,15 @@ def register_tool_source(
     registered: list[ToolSpec] = []
     for tool in source.get("tools", ()):
         spec = adapter.to_tool_spec(server_name=server_name, mcp_tool=tool)
-        registry.register(
+        source_tool_name = (
+            tool.get("name")
+            if isinstance(tool, Mapping)
+            else getattr(tool, "name")
+        )
+        toolbox.register(
             spec=spec,
-            handler=_build_handler(
-                tool_name=spec.metadata["mcp_tool_name"],
+            execute=_build_handler(
+                tool_name=str(source_tool_name),
                 call_tool=call_tool,
             ),
         )
@@ -51,6 +61,7 @@ def register_tool_source(
 
 
 def _adapter_for_kind(kind: str, adapter_registry: Mapping[str, Any] | None) -> Any:
+    """Choose the caller override or RESTScope's built-in MCP adapter."""
     if adapter_registry and kind in adapter_registry:
         return adapter_registry[kind]
     if kind == "mcp":
@@ -59,8 +70,10 @@ def _adapter_for_kind(kind: str, adapter_registry: Mapping[str, Any] | None) -> 
 
 
 def _build_handler(*, tool_name: str, call_tool: CallTool):
-    def handler(context: Any, /, **arguments: Any) -> dict[str, Any]:
-        del context
+    """Bind the source's original name and bridge before Agent execution."""
+
+    def handler(**arguments: Any) -> dict[str, Any]:
+        """Call the external source and normalize its model-facing result."""
         result = call_tool(tool_name, arguments)
         return _normalize_source_result(result)
 
@@ -68,6 +81,7 @@ def _build_handler(*, tool_name: str, call_tool: CallTool):
 
 
 def _normalize_source_result(result: Any) -> dict[str, Any]:
+    """Convert MCP-style or plain results into the toolbox output envelope."""
     if isinstance(result, dict):
         structured = result.get("structured")
         if structured is None:
@@ -81,6 +95,7 @@ def _normalize_source_result(result: Any) -> dict[str, Any]:
 
 
 def _summarize_content(content: Any, *, max_chars: int = 2000) -> str:
+    """Return a bounded readable summary without changing structured output."""
     if isinstance(content, str):
         text = content
     elif isinstance(content, list):
@@ -93,6 +108,7 @@ def _summarize_content(content: Any, *, max_chars: int = 2000) -> str:
 
 
 def _content_part_to_text(part: Any) -> str:
+    """Project one MCP content block into its compact text representation."""
     if isinstance(part, dict):
         if part.get("type") == "text" and "text" in part:
             return str(part["text"])

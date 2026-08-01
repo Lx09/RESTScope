@@ -161,13 +161,14 @@ def test_catalog_comparison_is_type_sensitive() -> None:
 
 def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> None:
     """Agent tools receive compact JSON while the Catalog keeps the full value."""
+    from restscope.capabilities import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.observability import TracingRuntime
     from restscope.operation_smoke.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
-        execute_catalog_query,
+        catalog_query_tool_spec,
+        query_catalog,
         tool_result_json,
     )
 
@@ -183,9 +184,18 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
             ),
         )
     )
-    result = execute_catalog_query(
-        catalog=catalog,
-        tool_call=ToolCall(
+    toolbox = AgentToolbox()
+    toolbox.register(
+        spec=catalog_query_tool_spec(),
+        execute=lambda **arguments: {
+            "structured": query_catalog(
+                catalog=catalog,
+                arguments=arguments,
+            )
+        },
+    )
+    result = toolbox.execute(
+        ToolCall(
             id="catalog-1",
             name="query_test_case_catalog",
             arguments={
@@ -193,8 +203,7 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
                 "case_ids": ["TC1"],
                 "name": "body.name",
             },
-        ),
-        tracing_runtime=TracingRuntime.disabled(),
+        )
     )
 
     rendered = tool_result_json(result)
@@ -205,17 +214,15 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
     assert clipped["original_chars"] == 10_000
     assert catalog.get_case("TC1").parameters["body.name"] == long_value
 
-    forged = execute_catalog_query(
-        catalog=catalog,
-        tool_call=ToolCall(
+    forged = toolbox.execute(
+        ToolCall(
             id="catalog-forged",
             name="query_test_case_catalog",
             arguments={
                 "action": "failure_messages",
                 "case_ids": ["TC99"],
             },
-        ),
-        tracing_runtime=TracingRuntime.disabled(),
+        )
     )
     assert forged.status == "failed"
     assert forged.error["code"] == "invalid_catalog_query"

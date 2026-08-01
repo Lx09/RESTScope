@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from pydantic import ValidationError
 
-from restscope.capabilities import ToolExecutor
+from restscope.capabilities import ToolContext
 from restscope.capabilities.http_request import (
     HTTP_REQUEST_TOOL_NAME,
     HTTPRequestArguments,
+    HTTPRequestTimeoutError,
+    HTTPRequestToolError,
+    TargetHTTPRequestTool,
+    http_request_tool_spec,
 )
 from restscope.llm import ToolCall, ToolResult, ToolSpec
 from restscope.http_transport import (
@@ -30,13 +35,17 @@ from .agent import HTTPProbe
 
 
 class CurrentOperationHTTPProbe(HTTPProbe):
-    """Expose the global HTTP tool without granting cross-operation requests."""
+    """Scope the shared HTTP implementation to the current operation."""
 
-    ROLE = "operation_smoke_failure_solve"
-
-    def __init__(self, executor: ToolExecutor) -> None:
-        """Bind the shared executor that injects authentication and tracing."""
-        self.executor = executor
+    def __init__(
+        self,
+        *,
+        http_tool: TargetHTTPRequestTool,
+        context_provider: Callable[[], ToolContext],
+    ) -> None:
+        """Bind only the shared HTTP implementation and target context source."""
+        self.http_tool = http_tool
+        self.context_provider = context_provider
 
     def tool_spec(self, config: OperationGeneratorConfig) -> ToolSpec:
         """Restrict the shared HTTP tool to the operation under Investigation.
@@ -49,7 +58,7 @@ class CurrentOperationHTTPProbe(HTTPProbe):
             request scope available to Failure Solve. Authentication remains
             runtime-owned and is never placed in the model prompt.
         """
-        source = self.executor.registry.get_spec(HTTP_REQUEST_TOOL_NAME)
+        source = http_request_tool_spec()
         schema = deepcopy(source.input_schema)
         schema["properties"]["method"]["enum"] = [
             config.snapshot.method.upper()
@@ -67,10 +76,15 @@ class CurrentOperationHTTPProbe(HTTPProbe):
                     "injected automatically."
                 ),
                 "input_schema": schema,
-                "metadata": {
-                    **source.metadata,
-                    "open_world": False,
-                    "operation_key": config.operation_key,
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "case_id": {"type": "string", "pattern": "^TC[1-9][0-9]*$"},
+                        "status_code": {"type": "integer"},
+                        "failure": {},
+                    },
+                    "required": ["case_id", "status_code", "failure"],
+                    "additionalProperties": False,
                 },
             }
         )
@@ -95,32 +109,15 @@ class CurrentOperationHTTPProbe(HTTPProbe):
         """
         error = _scope_error(config, tool_call)
         if error is not None:
-            with self.executor.tracing_runtime.span(
-                HTTP_REQUEST_TOOL_NAME,
-                kind="TOOL",
-                input_value={
-                    "operation_key": config.operation_key,
-                    "method": config.snapshot.method.upper(),
-                    "denied": True,
-                    "role": self.ROLE,
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                status="denied",
+                error={
+                    "code": "operation_smoke_probe_out_of_scope",
+                    "message": error,
                 },
-                attributes={"tool.name": HTTP_REQUEST_TOOL_NAME},
-            ) as span:
-                result = ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    status="denied",
-                    error={
-                        "code": "operation_smoke_probe_out_of_scope",
-                        "message": error,
-                    },
-                )
-                result = ToolResult.model_validate(
-                    self.executor.tracing_runtime.redactor.redact(result)
-                )
-                span.set_output(result)
-                span.set_attribute("restscope.tool.status", result.status)
-                return result
+            )
         with target_operation_scope(
             TargetOperationIdentity(
                 operation_key=config.operation_key,
@@ -128,23 +125,43 @@ class CurrentOperationHTTPProbe(HTTPProbe):
                 path=config.snapshot.path,
             )
         ):
-            raw_result = self.executor.execute(
-                tool_call=tool_call,
-                role=self.ROLE,
-                state={},
-                result_transform=lambda result: _record_probe_result(
-                    catalog=catalog,
-                    config=config,
-                    tool_call=tool_call,
-                    result=result,
-                ),
-                trace_input={
-                    "operation_key": config.operation_key,
-                    "method": config.snapshot.method.upper(),
-                    "role": self.ROLE,
-                },
+            raw_result = self._send(tool_call)
+        return _record_probe_result(
+            catalog=catalog,
+            config=config,
+            tool_call=tool_call,
+            result=raw_result,
+        )
+
+    def _send(self, tool_call: ToolCall) -> ToolResult:
+        """Translate shared HTTP implementation outcomes into a raw result."""
+        try:
+            payload = self.http_tool.execute(
+                self.context_provider(),
+                **tool_call.arguments,
             )
-        return raw_result
+        except HTTPRequestTimeoutError as exc:
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                status="timed_out",
+                error={"code": exc.code, "message": str(exc)},
+            )
+        except HTTPRequestToolError as exc:
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                status="failed",
+                error={"code": exc.code, "message": str(exc)},
+            )
+        return ToolResult(
+            tool_call_id=tool_call.id,
+            name=tool_call.name,
+            status="succeeded",
+            content=payload.get("content"),
+            structured=payload.get("structured"),
+            artifact_ids=payload.get("artifact_ids", []),
+        )
 
     def validate(
         self,
@@ -245,7 +262,6 @@ def _record_probe_result(
                     else None
                 ),
             },
-            metadata=result.metadata,
         )
 
     error = result.error or {}
@@ -269,7 +285,6 @@ def _record_probe_result(
             "failure": failure.model_dump(mode="json"),
         },
         error=result.error,
-        metadata=result.metadata,
     )
 
 

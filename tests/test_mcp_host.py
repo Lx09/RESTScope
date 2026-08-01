@@ -144,14 +144,10 @@ def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
 
 
 def test_mcp_source_builder_registers_discovered_tools_through_runtime(
-    tool_context,
 ) -> None:
     """Scenario: verify that mcp source builder registers discovered tools through runtime."""
     from restscope.capabilities import (
-        ToolCallValidator,
-        ToolExecutor,
-        ToolPolicy,
-        ToolRegistry,
+        AgentToolbox,
         register_tool_source,
     )
     from restscope.capabilities.mcp import (
@@ -190,27 +186,22 @@ def test_mcp_source_builder_registers_discovered_tools_through_runtime(
         session_factory=session_factory,
     )
     sources = MCPSourceBuilder(host).build_sources(server_names=("example",))
-    registry = ToolRegistry()
+    toolbox = AgentToolbox()
     registered = []
     for server_name, source in sources.items():
         registered.extend(
             register_tool_source(
-                registry=registry,
+                toolbox=toolbox,
                 server_name=server_name,
                 source=source,
             )
         )
-    executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
-    executor.bind_context(tool_context)
-
-    result = executor.execute(
-        tool_call=ToolCall(
+    result = toolbox.execute(
+        ToolCall(
             id="call_1",
             name="mcp.example.inspect",
             arguments={"item_id": "item_1"},
-        ),
-        role="planner",
-        state={},
+        )
     )
 
     assert [tool.name for tool in registered] == ["mcp.example.inspect"]
@@ -267,22 +258,12 @@ def test_build_capabilities_with_mcp_host_discovers_all_servers_by_default() -> 
 
     runtime = build_capabilities_with_mcp_host(mcp_host=host)
 
-    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request",
-        "openapi.lookup_operation",
+    assert runtime.external_tools is not None
+    assert [tool.name for tool in runtime.external_tools.specs()] == [
         "mcp.example.inspect",
         "mcp.example.mutate",
         "mcp.secondary.inspect",
         "mcp.secondary.mutate",
-    ]
-    assert [
-        tool.name
-        for tool in runtime.tool_selector.select_for_role(role="planner", state={})
-        ] == [
-            "restscope.http.request",
-            "openapi.lookup_operation",
-            "mcp.example.inspect",
-        "mcp.secondary.inspect",
     ]
 
 
@@ -326,15 +307,14 @@ def test_build_capabilities_with_mcp_host_can_filter_generic_server_names() -> N
         server_names=("secondary",),
     )
 
-    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request",
-        "openapi.lookup_operation",
+    assert runtime.external_tools is not None
+    assert [tool.name for tool in runtime.external_tools.specs()] == [
         "mcp.secondary.inspect",
     ]
 
 
-def test_build_capabilities_with_empty_mcp_host_keeps_builtin_tools() -> None:
-    """Scenario: verify that build capabilities with empty mcp host keeps builtin tools."""
+def test_build_capabilities_with_empty_mcp_host_has_no_external_tools() -> None:
+    """An empty MCP host does not create an executable toolbox."""
     from restscope.capabilities import build_capabilities_with_mcp_host
     from restscope.capabilities.mcp import MCPHost
 
@@ -342,10 +322,8 @@ def test_build_capabilities_with_empty_mcp_host_keeps_builtin_tools() -> None:
         mcp_host=MCPHost({}, session_factory=lambda config: None)
     )
 
-    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request",
-        "openapi.lookup_operation",
-    ]
+    assert runtime.external_tools is None
+    assert runtime.target_http_tool is not None
 
 
 def test_build_capabilities_with_mcp_host_closes_owned_host_on_discovery_failure(

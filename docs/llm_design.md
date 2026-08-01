@@ -11,6 +11,11 @@
 > factory sections below are also historical. The current message-construction
 > contract is the four-name `restscope.context` facade documented in
 > [`docs/tasks/project-agent-context.md`](tasks/project-agent-context.md).
+>
+> The global ToolRegistry, ToolSelector, ToolPolicy, ToolCallValidator, and
+> ToolExecutor sections are historical as well. Current Agents own small
+> explicit toolboxes; see
+> [`docs/tasks/agent-tool-runtime-simplification.md`](tasks/agent-tool-runtime-simplification.md).
 
 ## 1. 设计目标
 

@@ -174,11 +174,11 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert reasoning not in rendered
 
 
-def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
-    """Scenario: verify that tool executor uses actual tool name and sanitizes trace payload."""
+def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
+    """The Agent-owned execution boundary emits safe tool spans."""
     from opentelemetry.trace.status import StatusCode
 
-    from restscope.capabilities import ToolContext, build_capabilities
+    from restscope.capabilities import AgentToolbox, ToolContext
     from restscope.llm import ToolCall, ToolSpec
     from restscope.openapi_parser import OpenAPIParser
 
@@ -195,15 +195,22 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
         },
     }
     runtime, exporter = _recording_runtime(secret_values=["tool-secret"])
-    capabilities = build_capabilities(tracing_runtime=runtime)
-    capabilities.tool_registry.register(
+    context = ToolContext(
+        ir=OpenAPIParser.parse(json.dumps(schema)),
+        baseline_schema_source={"kind": "inline", "content": json.dumps(schema)},
+        base_url="http://example.test",
+        headers={},
+    )
+    toolbox = AgentToolbox(tracing_runtime=runtime)
+    toolbox.register(
         spec=ToolSpec(
             name="test.echo",
             description="Echo safely",
             kind="local_function",
             input_schema={"type": "object"},
+            output_schema={"type": "object"},
         ),
-        handler=lambda context, **arguments: {
+        execute=lambda **arguments: {
             "structured": {
                 "operation_count": len(context.ir.operations),
                 "arguments": arguments,
@@ -211,50 +218,39 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
         },
     )
 
-    def fail_handler(context, **arguments):
-        del context, arguments
-        raise RuntimeError("tool failed")
+    def fail_handler(**arguments):
+        del arguments
+        raise RuntimeError("tool failed with tool-secret")
 
-    capabilities.tool_registry.register(
+    toolbox.register(
         spec=ToolSpec(
             name="test.fail",
             description="Fail safely",
             kind="local_function",
             input_schema={"type": "object"},
+            output_schema={"type": "object"},
         ),
-        handler=fail_handler,
-    )
-    capabilities.tool_executor.bind_context(
-        ToolContext(
-            ir=OpenAPIParser.parse(json.dumps(schema)),
-            baseline_schema_source={"kind": "inline", "content": json.dumps(schema)},
-            base_url="http://example.test",
-            headers={},
-        )
+        execute=fail_handler,
     )
 
-    result = capabilities.tool_executor.execute(
-        tool_call=ToolCall(
+    result = toolbox.execute(
+        ToolCall(
             id="call-tool",
             name="test.echo",
             arguments={
                 "token": "tool-secret",
                 "password": "visible-generated-password",
             },
-        ),
-        role="decision_maker",
-        state={},
+        )
     )
-    failed_result = capabilities.tool_executor.execute(
-        tool_call=ToolCall(id="call-fail", name="test.fail", arguments={}),
-        role="decision_maker",
-        state={},
+    failed_result = toolbox.execute(
+        ToolCall(id="call-fail", name="test.fail", arguments={})
     )
     runtime.close()
 
     assert result.status == "succeeded"
     assert failed_result.status == "failed"
-    assert capabilities.tool_executor.tracing_runtime is runtime
+    assert toolbox.tracing_runtime is runtime
     spans = {span.name: span for span in exporter.get_finished_spans()}
     span = spans["test.echo"]
     rendered = json.dumps(dict(span.attributes), default=str)
@@ -270,6 +266,9 @@ def test_tool_executor_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     }
     assert "visible-generated-password" in rendered
     assert spans["test.fail"].status.status_code is StatusCode.ERROR
+    error_event = spans["test.fail"].events[0]
+    assert "RuntimeError" in error_event.attributes["exception.stacktrace"]
+    assert "tool-secret" not in error_event.attributes["exception.stacktrace"]
 
 
 def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
@@ -344,10 +343,10 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     )
 
     assert app.tracing_runtime is runtime
-    assert app.capability_runtime.tool_executor.tracing_runtime is runtime
+    assert app.capability_runtime.operation_testing_service.tracing_runtime is runtime
     assert (
         app.tracing_runtime.redactor
-        is app.capability_runtime.tool_executor.tracing_runtime.redactor
+        is app.capability_runtime.operation_testing_service.tracing_runtime.redactor
     )
     with pytest.raises(AttributeError):
         app.tracing_runtime = runtime
@@ -407,6 +406,19 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
     capabilities = build_capabilities(
         tracing_runtime=old_runtime,
         operation_testing_service=testing_service,
+        sources={
+            "example": {
+                "kind": "mcp",
+                "tools": [
+                    {
+                        "name": "inspect",
+                        "description": "Inspect",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+                "call_tool": lambda _name, _arguments: {"content": "ok"},
+            }
+        },
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(tmp_path / ".env"),
@@ -415,7 +427,8 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
         tracing_runtime=app_runtime,
     )
 
-    assert capabilities.tool_executor.tracing_runtime is app_runtime
+    assert capabilities.external_tools is not None
+    assert capabilities.external_tools.tracing_runtime is app_runtime
     assert capabilities.operation_testing_service is testing_service
     assert testing_service.tracing_runtime is app_runtime
     assert testing_service.tracing_runtime.redactor is app_runtime.redactor
@@ -429,9 +442,10 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     import httpx
 
     from restscope.capabilities import (
+        AgentToolbox,
         ToolContext,
-        build_capabilities,
-        register_http_request_tool,
+        TargetHTTPRequestTool,
+        http_request_tool_spec,
     )
     from restscope.llm import ToolCall
     from restscope.openapi_parser import OpenAPIParser
@@ -445,34 +459,33 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
         )
     )
     runtime, exporter = _recording_runtime(secret_values=["Bearer runtime-secret"])
-    capabilities = build_capabilities(tracing_runtime=runtime)
-    register_http_request_tool(
-        capabilities.tool_registry,
+    http_tool = TargetHTTPRequestTool(
         client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),
     )
-    capabilities.tool_executor.bind_context(
-        ToolContext(
-            ir=OpenAPIParser.parse(
-                {
-                    "openapi": "3.0.3",
-                    "info": {"title": "Trace HTTP", "version": "1"},
-                    "paths": {"/large": {"get": {"responses": {"200": {"description": "ok"}}}}},
-                }
-            ),
-            baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
-            base_url="https://api.example.test",
-            headers={"Authorization": "Bearer runtime-secret"},
-        )
+    context = ToolContext(
+        ir=OpenAPIParser.parse(
+            {
+                "openapi": "3.0.3",
+                "info": {"title": "Trace HTTP", "version": "1"},
+                "paths": {"/large": {"get": {"responses": {"200": {"description": "ok"}}}}},
+            }
+        ),
+        baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+        base_url="https://api.example.test",
+        headers={"Authorization": "Bearer runtime-secret"},
+    )
+    toolbox = AgentToolbox(tracing_runtime=runtime)
+    toolbox.register(
+        spec=http_request_tool_spec(),
+        execute=lambda **arguments: http_tool.execute(context, **arguments),
     )
 
-    result = capabilities.tool_executor.execute(
-        tool_call=ToolCall(
+    result = toolbox.execute(
+        ToolCall(
             id="trace-http",
             name="restscope.http.request",
             arguments={"method": "GET", "path": "/large"},
-        ),
-        role="future_agent",
-        state={},
+        )
     )
     runtime.close()
 

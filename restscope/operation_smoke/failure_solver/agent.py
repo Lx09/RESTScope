@@ -13,7 +13,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from restscope.capabilities import HTTP_REQUEST_TOOL_NAME
+from restscope.capabilities import (
+    AgentToolbox,
+    HTTP_REQUEST_TOOL_NAME,
+    ToolFailure,
+)
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -47,7 +51,7 @@ from restscope.operation_smoke.test_case_catalog import (
     CATALOG_QUERY_TOOL_NAME,
     TestCaseCatalog,
     catalog_query_tool_spec,
-    execute_catalog_query,
+    query_catalog,
     tool_result_json,
 )
 from restscope.testing import (
@@ -71,7 +75,6 @@ _READ_ONLY_QUERY_TOOL_NAMES = {
     _MEMORY_TOOL_NAME,
     CATALOG_QUERY_TOOL_NAME,
 }
-_MAX_READ_ONLY_TOOL_CALLS_PER_OUTPUT = 8
 
 
 class HTTPProbe(Protocol):
@@ -294,6 +297,7 @@ class FailureSolveSession:
             AvailableReferenceOption.model_validate(item)
             for item in request.reference_options
         ]
+        self.tools = self._build_tools()
 
         rendered = _solve_context_text(
             request=request,
@@ -363,7 +367,7 @@ class FailureSolveSession:
                         response_format="json_schema",
                         json_schema=FailureSolveDecision.model_json_schema(),
                         json_schema_name="FailureSolveDecision",
-                        tools=[] if checkpoint else self._tool_specs(),
+                        tools=[] if checkpoint else self.tools.specs(),
                         tool_choice="none" if checkpoint else "auto",
                         timeout_seconds=self.model.timeout_seconds,
                         reasoning=self.model.reasoning,
@@ -385,8 +389,13 @@ class FailureSolveSession:
                     # and HTTP tools never enter this branch as a group because
                     # they may create work or mutate the target API.
                     self.context.append_assistant(response)
-                    for call in response.tool_calls:
-                        result = self._execute_tool(call)
+                    results = (
+                        self.tools.execute_many(response.tool_calls)
+                        if len(response.tool_calls) > 1
+                        else [self.tools.execute(response.tool_calls[0])]
+                    )
+                    self._apply_query_results(response.tool_calls, results)
+                    for result in results:
                         self.context.append_tool_result(
                             result.name,
                             result.tool_call_id,
@@ -470,16 +479,73 @@ class FailureSolveSession:
             )
         )
 
-    def _tool_specs(self) -> list[ToolSpec]:
-        """Return capabilities whose schemas expose this operation's handles."""
+    def _build_tools(self) -> AgentToolbox:
+        """Bind every current-operation and session dependency for Solve."""
         semantic_handles = sorted(self.semantic_inputs.node_by_handle)
-        specs = [
-            _parameter_memory_tool_spec(semantic_handles),
-            _patch_tool_spec(semantic_handles),
-            catalog_query_tool_spec(),
-            self.http_probe.tool_spec(self.config),
-        ]
-        return specs
+        tools = AgentToolbox(tracing_runtime=self.tracing_runtime)
+        tools.register(
+            spec=_parameter_memory_tool_spec(semantic_handles),
+            execute=lambda *, input_handles: self._read_parameter_history(
+                list(input_handles)
+            ),
+        )
+        tools.register(
+            spec=_patch_tool_spec(semantic_handles),
+            execute=lambda **arguments: self._adapt_existing_result(
+                self._execute_patch_tool(
+                    ToolCall(
+                        id="solve-patch",
+                        name=_PATCH_TOOL_NAME,
+                        arguments=arguments,
+                    )
+                )
+            ),
+        )
+        tools.register(
+            spec=catalog_query_tool_spec(),
+            execute=lambda **arguments: {
+                "structured": query_catalog(
+                    catalog=self.catalog,
+                    arguments=arguments,
+                )
+            },
+        )
+        tools.register(
+            spec=self.http_probe.tool_spec(self.config),
+            execute=lambda **arguments: self._adapt_existing_result(
+                self.http_probe.execute(
+                    config=self.config,
+                    tool_call=ToolCall(
+                        id="solve-http-probe",
+                        name=HTTP_REQUEST_TOOL_NAME,
+                        arguments=arguments,
+                    ),
+                    catalog=self.catalog,
+                )
+            ),
+        )
+        return tools
+
+    @staticmethod
+    def _adapt_existing_result(result: ToolResult) -> dict[str, Any]:
+        """Convert a workflow result into the toolbox's implementation contract."""
+        if result.status != "succeeded":
+            error = result.error or {}
+            raise ToolFailure(
+                code=str(error.get("code") or "tool_failed"),
+                message=str(error.get("message") or "The tool failed."),
+                content=result.content,
+                status=(
+                    "timed_out"
+                    if result.status == "timed_out"
+                    else "failed"
+                ),
+            )
+        return {
+            "content": result.content,
+            "structured": result.structured,
+            "artifact_ids": result.artifact_ids,
+        }
 
     def _tool_errors(
         self,
@@ -507,11 +573,6 @@ class FailureSolveSession:
                     "Call exactly one Patch or HTTP tool per model output; "
                     "only read-only Catalog and Parameter Memory queries may "
                     "be grouped."
-                )
-            if len(calls) > _MAX_READ_ONLY_TOOL_CALLS_PER_OUTPUT:
-                errors.append(
-                    "At most 8 read-only query calls may be grouped in one "
-                    "model output."
                 )
         if errors:
             return errors
@@ -570,87 +631,65 @@ class FailureSolveSession:
                 errors.append(probe_error)
         return errors
 
-    def _execute_tool(self, call: ToolCall) -> ToolResult:
-        """Dispatch one prevalidated tool and return a sanitized result."""
-        if call.name == _MEMORY_TOOL_NAME:
-            return self._execute_memory_tool(call)
-        if call.name == _PATCH_TOOL_NAME:
-            return self._execute_patch_tool(call)
-        if call.name == CATALOG_QUERY_TOOL_NAME:
-            return execute_catalog_query(
-                catalog=self.catalog,
-                tool_call=call,
-                tracing_runtime=self.tracing_runtime,
-            )
-        return self.http_probe.execute(
-            config=self.config,
-            tool_call=call,
-            catalog=self.catalog,
-        )
-
-    def _execute_memory_tool(self, call: ToolCall) -> ToolResult:
-        """Resolve semantic handles, query related Failures, and hide row IDs."""
-        handles = list(call.arguments["input_handles"])
+    def _read_parameter_history(self, handles: list[str]) -> dict[str, Any]:
+        """Read and render Parameter history without mutating Solve state."""
         node_ids = [
             self.semantic_inputs.node_by_handle[handle]
             for handle in handles
         ]
-        with self.tracing_runtime.span(
-            "FailureSolveAgent.lookup_parameter_history",
-            kind="TOOL",
-            input_value={"input_handles": handles},
-        ) as span:
-            histories = self.memory.lookup_parameter_history(
-                self.request.operation_key,
-                node_ids,
+        histories = self.memory.lookup_parameter_history(
+            self.request.operation_key,
+            node_ids,
+        )
+        rendered = _parameter_history_text(
+            handles=handles,
+            histories=histories,
+            config=self.config,
+            handle_by_node=self.semantic_inputs.handle_by_node,
+        )
+        if rendered.text.startswith("CLIPPED MESSAGE"):
+            raise ToolFailure(
+                code="history_too_large",
+                message=(
+                    "Compatibility-critical Patch/conflict history exceeds "
+                    "the safe feedback budget."
+                ),
+                content=(
+                    "PARAMETER HISTORY UNAVAILABLE | "
+                    "code=history_too_large | patching-blocked=bool:true"
+                ),
             )
-            rendered = _parameter_history_text(
-                handles=handles,
-                histories=histories,
-                config=self.config,
+        prompt_histories = [
+            _parameter_history_for_prompt(
+                handle=handle,
+                history=history,
                 handle_by_node=self.semantic_inputs.handle_by_node,
             )
-            if rendered.text.startswith("CLIPPED MESSAGE"):
-                span.set_output(
-                    {
-                        "status": "history_too_large",
-                        "parameter_count": len(histories),
-                    }
-                )
-                return ToolResult(
-                    tool_call_id=call.id,
-                    name=call.name,
-                    status="failed",
-                    content=(
-                        "PARAMETER HISTORY UNAVAILABLE | "
-                        "code=history_too_large | patching-blocked=bool:true"
-                    ),
-                    error={
-                        "code": "history_too_large",
-                        "message": (
-                            "Compatibility-critical Patch/conflict history "
-                            "exceeds the safe feedback budget."
-                        ),
-                    },
-                )
-            prompt_histories = [
-                _parameter_history_for_prompt(
-                    handle=handle,
-                    history=history,
-                    handle_by_node=self.semantic_inputs.handle_by_node,
-                )
-                for handle, history in zip(handles, histories, strict=True)
-            ]
+            for handle, history in zip(handles, histories, strict=True)
+        ]
+        return {
+            "content": rendered.text,
+            "structured": {"parameters": prompt_histories},
+        }
+
+    def _apply_query_results(
+        self,
+        calls: list[ToolCall],
+        results: list[ToolResult],
+    ) -> None:
+        """Apply successful query bookkeeping after concurrent reads finish."""
+        for call, result in zip(calls, results, strict=True):
+            if call.name != _MEMORY_TOOL_NAME or result.status != "succeeded":
+                continue
+            handles = list(call.arguments["input_handles"])
+            structured = result.structured
+            if not isinstance(structured, dict):
+                continue
+            parameters = structured.get("parameters")
+            if not isinstance(parameters, list):
+                continue
             self.queried_parameter_handles.update(handles)
-            self.parameter_history_for_patch.extend(prompt_histories)
-            span.set_output({"parameter_count": len(prompt_histories)})
-        return ToolResult(
-            tool_call_id=call.id,
-            name=call.name,
-            status="succeeded",
-            content=rendered.text,
-            structured={"parameters": prompt_histories},
-        )
+            self.parameter_history_for_patch.extend(parameters)
 
     def _execute_patch_tool(self, call: ToolCall) -> ToolResult:
         """Run a fresh Patch Agent and retain only a validated local candidate."""
@@ -706,7 +745,6 @@ class FailureSolveSession:
                         "message": "; ".join(result.errors)
                         or "Parameter Patch did not produce a valid candidate.",
                     },
-                    metadata={"patch_outputs": result.outputs_used},
                 )
 
             assert isinstance(result, ValidatedParameterPatch)
@@ -982,8 +1020,12 @@ def _parameter_memory_tool_spec(
             "required": ["input_handles"],
             "additionalProperties": False,
         },
-        read_only=True,
-        risk_level="low",
+        output_schema={
+            "type": "object",
+            "properties": {"parameters": {"type": "array"}},
+            "required": ["parameters"],
+            "additionalProperties": False,
+        },
     )
 
 
@@ -1023,8 +1065,7 @@ def _patch_tool_spec(
             ],
             "additionalProperties": False,
         },
-        read_only=True,
-        risk_level="low",
+        output_schema=PatchCandidate.model_json_schema(),
     )
 
 

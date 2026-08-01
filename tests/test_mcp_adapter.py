@@ -18,8 +18,8 @@ def _mcp_tool(
     return tool
 
 
-def test_mcp_tool_adapter_uses_annotations_before_names() -> None:
-    """Scenario: verify that mcp tool adapter uses annotations before names."""
+def test_mcp_tool_adapter_preserves_contract_without_deciding_availability() -> None:
+    """MCP annotations do not become a hidden central permission policy."""
     from restscope.capabilities.mcp import MCPToolAdapter
 
     adapter = MCPToolAdapter()
@@ -65,30 +65,21 @@ def test_mcp_tool_adapter_uses_annotations_before_names() -> None:
     )
 
     assert read_only.name == "mcp.example.inspect"
-    assert read_only.read_only is True
-    assert read_only.requires_approval is False
-    assert read_only.risk_level == "low"
-    assert read_only.metadata["mcp_annotations"]["readOnlyHint"] is True
-    assert destructive.read_only is False
-    assert destructive.requires_approval is True
-    assert destructive.risk_level == "high"
-    assert open_world.read_only is True
-    assert open_world.requires_approval is False
-    assert open_world.risk_level == "medium"
-    assert missing.read_only is False
-    assert missing.requires_approval is True
-    assert missing.risk_level == "medium"
+    assert not hasattr(read_only, "metadata")
+    assert destructive.name == "mcp.example.mutate"
+    assert open_world.name == "mcp.external.fetch_remote"
+    assert missing.name == "mcp.unknown.get_status"
+    for spec in (read_only, destructive, open_world, missing):
+        assert "read_only" not in type(spec).model_fields
+        assert "requires_approval" not in type(spec).model_fields
+        assert "risk_level" not in type(spec).model_fields
 
 
 def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
-    tool_context,
 ) -> None:
     """Scenario: verify that register tool source uses external call bridge and summarizes results."""
     from restscope.capabilities import (
-        ToolCallValidator,
-        ToolExecutor,
-        ToolPolicy,
-        ToolRegistry,
+        AgentToolbox,
         register_tool_source,
     )
     from restscope.llm import ToolCall
@@ -103,9 +94,9 @@ def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
             "artifact_ids": ["artifact_1"],
         }
 
-    registry = ToolRegistry()
+    toolbox = AgentToolbox()
     registered = register_tool_source(
-        registry=registry,
+        toolbox=toolbox,
         server_name="example",
         source={
             "kind": "mcp",
@@ -128,17 +119,12 @@ def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
             "call_tool": call_tool,
         },
     )
-    executor = ToolExecutor(registry, ToolCallValidator(registry, ToolPolicy()))
-    executor.bind_context(tool_context)
-
-    result = executor.execute(
-        tool_call=ToolCall(
+    result = toolbox.execute(
+        ToolCall(
             id="call_1",
             name="mcp.example.inspect",
             arguments={"item_id": "item_1"},
-        ),
-        role="planner",
-        state={},
+        )
     )
 
     assert [tool.name for tool in registered] == ["mcp.example.inspect"]
@@ -153,61 +139,12 @@ def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
     assert result.artifact_ids == ["artifact_1"]
 
 
-def test_tool_policy_allows_generic_read_only_mcp_tools_and_denies_unsafe_tools() -> None:
-    """Scenario: verify that tool policy allows generic read only mcp tools and denies unsafe tools."""
-    from restscope.capabilities import ToolPolicy, ToolRegistry, ToolSelector
-    from restscope.capabilities.mcp import MCPToolAdapter
-
-    registry = ToolRegistry()
-    adapter = MCPToolAdapter()
-    registry.register(
-        spec=adapter.to_tool_spec(
-            server_name="example",
-            mcp_tool=_mcp_tool(
-                "inspect",
-                {
-                    "readOnlyHint": True,
-                    "destructiveHint": False,
-                    "idempotentHint": True,
-                    "openWorldHint": False,
-                },
-            ),
-        )
-    )
-    registry.register(
-        spec=adapter.to_tool_spec(
-            server_name="example",
-            mcp_tool=_mcp_tool(
-                "mutate",
-                {
-                    "readOnlyHint": False,
-                    "destructiveHint": True,
-                    "idempotentHint": False,
-                    "openWorldHint": True,
-                },
-            ),
-        )
-    )
-
-    selector = ToolSelector(registry, ToolPolicy())
-
-    assert [
-        tool.name
-        for tool in selector.select_for_role(role="planner", state={})
-    ] == ["mcp.example.inspect"]
-    assert [
-        tool.name
-        for tool in selector.select_for_role(role="result_analyst", state={})
-    ] == ["mcp.example.inspect"]
-    assert selector.select_for_role(role="check_designer", state={}) == []
-
-
 def test_register_tool_source_rejects_unsupported_source_kind() -> None:
     """Scenario: verify that register tool source rejects unsupported source kind."""
     import pytest
 
     from restscope.capabilities import (
-        ToolRegistry,
+        AgentToolbox,
         UnsupportedToolSourceKindError,
         register_tool_source,
     )
@@ -217,7 +154,7 @@ def test_register_tool_source_rejects_unsupported_source_kind() -> None:
         match="Unsupported tool source kind: skill",
     ):
         register_tool_source(
-            registry=ToolRegistry(),
+            toolbox=AgentToolbox(),
             server_name="some_skill",
             source={
                 "kind": "skill",
@@ -260,10 +197,9 @@ def test_build_capabilities_registers_all_explicit_sources_without_presets() -> 
         }
     )
 
-    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request",
-        "openapi.lookup_operation",
-        "mcp.example.inspect",
+    assert runtime.external_tools is not None
+    assert [tool.name for tool in runtime.external_tools.specs()] == [
+        "mcp.example.inspect"
     ]
     assert "presets" not in inspect.signature(
         capabilities.build_capabilities
@@ -304,13 +240,11 @@ def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
     )
 
     assert runtime.skill_registry.get("testing_strategy").name == "testing_strategy"
-    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request",
-        "openapi.lookup_operation",
-        "mcp.example.inspect",
+    assert runtime.external_tools is not None
+    assert [tool.name for tool in runtime.external_tools.specs()] == [
+        "mcp.example.inspect"
     ]
-    assert all(tool.kind != "skill" for tool in runtime.tool_registry.list_specs())
-    assert runtime.tool_executor is not None
+    assert all(tool.kind != "skill" for tool in runtime.external_tools.specs())
     assert runtime.skill_policy.is_allowed(
         skill=runtime.skill_registry.get("testing_strategy"),
         role="planner",
@@ -318,17 +252,14 @@ def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
     )
 
 
-def test_build_capabilities_defaults_to_builtin_tools_only() -> None:
-    """Scenario: verify that build capabilities defaults to builtin tools only."""
+def test_build_capabilities_defaults_to_no_model_visible_tools() -> None:
+    """Shared implementations are not an implicit Agent toolbox."""
     from restscope.capabilities import build_capabilities
 
     runtime = build_capabilities()
 
-    assert [tool.name for tool in runtime.tool_registry.list_specs()] == [
-        "restscope.http.request",
-        "openapi.lookup_operation",
-    ]
-    assert runtime.tool_executor is not None
+    assert runtime.external_tools is None
+    assert runtime.target_http_tool is not None
 
 
 def test_default_tools_are_not_public_api() -> None:

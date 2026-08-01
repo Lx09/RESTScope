@@ -11,7 +11,6 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from restscope.capabilities.tool_context import ToolContext
-from restscope.capabilities.tool_registry import ToolRegistry
 from restscope.llm.schemas import ToolSpec
 from restscope.http_transport import (
     BufferedTargetResponse,
@@ -51,7 +50,7 @@ class HTTPRequestToolError(RuntimeError):
 
 
 class HTTPRequestTimeoutError(TimeoutError):
-    """Stable timeout error consumed by ToolExecutor."""
+    """Stable timeout error consumed by a workflow-owned HTTP boundary."""
 
     code = "request_timeout"
 
@@ -84,15 +83,9 @@ class HTTPRequestArguments(BaseModel):
         return self
 
 
-def register_http_request_tool(
-    registry: ToolRegistry,
-    *,
-    client_factory: ClientFactory = httpx.Client,
-    transport: TargetHTTPTransport | None = None,
-) -> ToolSpec:
-    """Register the model-visible target HTTP request contract."""
-
-    spec = ToolSpec(
+def http_request_tool_spec() -> ToolSpec:
+    """Return the open-world HTTP contract before a workflow narrows it."""
+    return ToolSpec(
         name=HTTP_REQUEST_TOOL_NAME,
         description=(
             "Send one HTTP request to the target bound to this RESTScope App. "
@@ -173,20 +166,7 @@ def register_http_request_tool(
                 "behavior_monitor_warnings",
             ],
         },
-        risk_level="high",
-        read_only=False,
-        requires_approval=False,
-        timeout_seconds=30,
-        metadata={"target_bound": True, "open_world": True},
     )
-    registry.register(
-        spec=spec,
-        handler=TargetHTTPRequestTool(
-            client_factory=client_factory,
-            transport=transport,
-        ).execute,
-    )
-    return spec
 
 
 class TargetHTTPRequestTool:

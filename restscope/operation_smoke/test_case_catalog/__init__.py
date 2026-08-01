@@ -5,7 +5,7 @@ from .failure import parse_http_failure, parse_transport_failure
 from .tool import (
     CATALOG_QUERY_TOOL_NAME,
     catalog_query_tool_spec,
-    execute_catalog_query,
+    query_catalog,
     tool_result_json,
 )
 from .schemas import (
@@ -29,7 +29,7 @@ __all__ = [
     "TestCaseCatalog",
     "TransportFailure",
     "catalog_query_tool_spec",
-    "execute_catalog_query",
+    "query_catalog",
     "parse_http_failure",
     "parse_transport_failure",
     "tool_result_json",

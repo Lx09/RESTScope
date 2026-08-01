@@ -1,10 +1,9 @@
 """Expose exact Test Case Catalog reads as one Agent-local tool.
 
-The tool is offered only inside Dedup and Solve sessions. It is not registered
-in the App-wide capability registry because the Catalog exists for one
-Coordinator run. Arguments and results use the provider's native compact JSON
-protocol; traces retain only action and case counts, never queried values or
-response bodies.
+The tool is offered only inside Dedup and Solve sessions because the Catalog
+exists for one Coordinator run. Arguments and results use the provider's native
+compact JSON protocol. The Agent toolbox owns schema checks, redacted tracing,
+and the final model-visible result boundary.
 """
 
 from __future__ import annotations
@@ -14,8 +13,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from restscope.llm import ToolCall, ToolResult, ToolSpec
-from restscope.observability import TracingRuntime
+from restscope.capabilities import ToolFailure
+from restscope.llm import ToolResult, ToolSpec
 
 from .catalog import TestCaseCatalog
 from .schemas import CatalogQuery
@@ -37,61 +36,40 @@ def catalog_query_tool_spec() -> ToolSpec:
         kind="local_function",
         input_schema=CatalogQuery.model_json_schema(),
         output_schema={"type": "object"},
-        risk_level="low",
-        read_only=True,
-        requires_approval=False,
-        metadata={"open_world": False},
     )
 
 
-def execute_catalog_query(
+def query_catalog(
     *,
     catalog: TestCaseCatalog,
-    tool_call: ToolCall,
-    tracing_runtime: TracingRuntime,
-) -> ToolResult:
-    """Validate and execute one local Catalog read as a structured ToolResult."""
-    action = tool_call.arguments.get("action")
-    case_ids = tool_call.arguments.get("case_ids")
-    with tracing_runtime.span(
-        CATALOG_QUERY_TOOL_NAME,
-        kind="TOOL",
-        input_value={
-            "action": action,
-            "case_count": len(case_ids) if isinstance(case_ids, list) else 0,
-        },
-        attributes={"tool.name": CATALOG_QUERY_TOOL_NAME},
-    ) as span:
-        try:
-            query = CatalogQuery.model_validate(tool_call.arguments)
-            structured = _bound_catalog_result(catalog.query(query))
-            result = ToolResult(
-                tool_call_id=tool_call.id,
-                name=tool_call.name,
-                status="succeeded",
-                structured=structured,
-                metadata={"risk_level": "low", "read_only": True},
-            )
-        except (ValidationError, KeyError, ValueError) as exc:
-            result = ToolResult(
-                tool_call_id=tool_call.id,
-                name=tool_call.name,
-                status="failed",
-                error={
-                    "code": "invalid_catalog_query",
-                    "message": str(exc),
-                },
-            )
-        span.set_output(
-            {
-                "status": result.status,
-                "action": action,
-                "case_count": len(case_ids) if isinstance(case_ids, list) else 0,
-            }
-        )
-        if result.status == "failed":
-            span.mark_error((result.error or {}).get("message", "failed"))
-        return result
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Return one bounded Catalog query for an Agent-owned tool Module.
+
+    Args:
+        catalog: The run-local evidence store owned by the current Smoke run.
+        arguments: Model arguments already checked against the provider schema.
+
+    Returns:
+        The bounded structured result described by
+        :func:`catalog_query_tool_spec`.
+
+    Raises:
+        ToolFailure: If cross-field rules reject the query, a case or field is
+            unavailable, or a requested value cannot be queried safely.
+
+    The Agent toolbox owns tracing, redaction, and result construction. This
+    function retains only the Catalog's domain validation and bounded result
+    projection.
+    """
+    try:
+        query = CatalogQuery.model_validate(arguments)
+        return _bound_catalog_result(catalog.query(query))
+    except (ValidationError, KeyError, ValueError) as exc:
+        raise ToolFailure(
+            code="invalid_catalog_query",
+            message=str(exc),
+        ) from exc
 
 
 def tool_result_json(result: ToolResult) -> str:

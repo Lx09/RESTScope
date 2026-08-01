@@ -141,6 +141,7 @@ class StubProbe:
             description="Probe the current operation.",
             kind="local_function",
             input_schema={"type": "object"},
+            output_schema={"type": "object"},
         )
 
     def validate(self, *, config, tool_call):
@@ -661,6 +662,67 @@ def test_multiple_read_only_catalog_queries_make_progress_in_one_output() -> Non
         and message.tool_call_id == "parameter-memory"
         for message in retry_messages
     )
+
+
+def test_solve_executes_independent_memory_queries_concurrently_in_call_order() -> None:
+    """Parallel history reads retain the provider's original result ordering."""
+    import threading
+
+    class ConcurrentMemory(StubMemory):
+        """Require two Parameter reads to overlap before either can finish."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.barrier = threading.Barrier(2, timeout=1)
+
+        def lookup_parameter_history(self, operation_key, input_node_ids):
+            """Wait for the other independent lookup, then return normal data."""
+            self.barrier.wait()
+            return super().lookup_parameter_history(operation_key, input_node_ids)
+
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="path-memory",
+                        name="lookup_parameter_history",
+                        arguments={"input_handles": ["path.projectId"]},
+                    ),
+                    ToolCall(
+                        id="query-memory",
+                        name="lookup_parameter_history",
+                        arguments={"input_handles": ["query.region"]},
+                    ),
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            ConcurrentMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    tool_messages = [
+        message
+        for message in client.requests[1].messages
+        if message.role == "tool"
+    ]
+    assert [message.tool_call_id for message in tool_messages] == [
+        "path-memory",
+        "query-memory",
+    ]
+    assert "path.projectId" in (tool_messages[0].content or "")
+    assert "query.region" in (tool_messages[1].content or "")
 
 
 def test_invalid_tool_arguments_are_not_replayed_without_a_result() -> None:

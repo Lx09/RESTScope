@@ -134,7 +134,7 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
     """Scenario: verify that processor warning does not replace raw http result."""
     import httpx
 
-    from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
+    from restscope.capabilities import ToolContext, TargetHTTPRequestTool
     from restscope.http_transport import (
         TargetHTTPTransport,
         TargetResponseProcessorWarning,
@@ -161,9 +161,7 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
         ),
         response_processor=processor,
     )
-    registry = ToolRegistry()
-    register_http_request_tool(registry, transport=transport)
-    handler = registry.get_handler("restscope.http.request")
+    http_tool = TargetHTTPRequestTool(transport=transport)
     ir = OpenAPIParser.parse(
         {
             "openapi": "3.0.3",
@@ -176,7 +174,7 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
         }
     )
 
-    result = handler(
+    result = http_tool.execute(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -214,12 +212,9 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     from restscope.operation_smoke.failure_solver import CurrentOperationHTTPProbe
     from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
     from restscope.capabilities import (
-        ToolCallValidator,
         ToolContext,
-        ToolExecutor,
-        ToolPolicy,
-        ToolRegistry,
-        register_http_request_tool,
+        build_capabilities,
+        http_request_tool_spec,
     )
     from restscope.http_transport import TargetHTTPTransport
     from restscope.llm import ToolCall
@@ -240,12 +235,8 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
         ),
         response_processor=processor,
     )
-    registry = ToolRegistry()
-    spec = register_http_request_tool(registry, transport=transport)
-    executor = ToolExecutor(
-        registry,
-        ToolCallValidator(registry, ToolPolicy()),
-    )
+    runtime = build_capabilities(target_http_transport=transport)
+    spec = http_request_tool_spec()
     ir = OpenAPIParser.parse(
         {
             "openapi": "3.0.3",
@@ -270,7 +261,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
             },
         }
     )
-    executor.bind_context(
+    runtime.bind_context(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -284,7 +275,10 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     config = build_initial_operation_config(
         ir.operations["GET /users/{userId}"]
     )
-    probe = CurrentOperationHTTPProbe(executor)
+    probe = CurrentOperationHTTPProbe(
+        http_tool=runtime.target_http_tool,
+        context_provider=runtime.require_context,
+    )
 
     result = probe.execute(
         config=config,
@@ -295,18 +289,14 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
         ),
         catalog=TestCaseCatalog(valid_parameters={"path.userId"}),
     )
-    unscoped = executor.execute(
-        tool_call=ToolCall(
-            id="unscoped",
-            name="restscope.http.request",
-            arguments={"method": "GET", "path": "/users/me"},
-        ),
-        role="future_agent",
-        state={},
+    unscoped = runtime.target_http_tool.execute(
+        runtime.require_context(),
+        method="GET",
+        path="/users/me",
     )
 
     assert result.status == "succeeded"
-    assert unscoped.status == "succeeded"
+    assert unscoped["structured"]["status_code"] == 200
     scoped_context = processor.calls[0][1]
     assert scoped_context.operation_key == "GET /users/{userId}"
     assert scoped_context.operation_method == "GET"
@@ -476,7 +466,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
+    from restscope.capabilities import ToolContext, TargetHTTPRequestTool
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
@@ -495,8 +485,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
         ),
         response_processor=processor,
     )
-    registry = ToolRegistry()
-    register_http_request_tool(registry, transport=transport)
+    http_tool = TargetHTTPRequestTool(transport=transport)
     ir = OpenAPIParser.parse(
         {
             "openapi": "3.0.3",
@@ -525,7 +514,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
         }
     )
 
-    result = registry.get_handler("restscope.http.request")(
+    result = http_tool.execute(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -556,7 +545,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.capabilities import ToolContext, ToolRegistry, register_http_request_tool
+    from restscope.capabilities import ToolContext, TargetHTTPRequestTool
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
@@ -574,8 +563,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
         ),
         response_processor=APIBehaviorResponseProcessor(coordinator),
     )
-    registry = ToolRegistry()
-    register_http_request_tool(registry, transport=transport)
+    http_tool = TargetHTTPRequestTool(transport=transport)
     ir = OpenAPIParser.parse(
         {
             "openapi": "3.0.3",
@@ -591,7 +579,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
         }
     )
 
-    result = registry.get_handler("restscope.http.request")(
+    result = http_tool.execute(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -815,10 +803,10 @@ def test_response_schema_fields_include_collection_item_resource_name() -> None:
     assert {item["resource_name"] for item in fields} == {"Assignment"}
 
 
-def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
+def test_default_app_uses_one_monitored_transport_without_global_model_tools(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that default app uses one monitored transport and registers lookup tool."""
+    """The App shares transport code but creates no global model tool box."""
     from restscope import RESTScopeApp
     from restscope.restscope_config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
@@ -836,8 +824,7 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
         runtime = app.capability_runtime
         service = runtime.operation_testing_service
         assert service is not None
-        raw_handler = runtime.tool_registry.get_handler("restscope.http.request")
-        raw_tool = raw_handler.__self__
+        raw_tool = runtime.target_http_tool
 
         assert runtime.api_behavior_monitor_coordinator is not None
         assert not hasattr(runtime.api_behavior_monitor_coordinator, "initialize")
@@ -845,6 +832,6 @@ def test_default_app_uses_one_monitored_transport_and_registers_lookup_tool(
         assert service.transport.response_processor.coordinator is (
             runtime.api_behavior_monitor_coordinator
         )
-        assert runtime.tool_registry.get_spec("restscope.resource.lookup").read_only is True
+        assert runtime.external_tools is None
     finally:
         app.close()

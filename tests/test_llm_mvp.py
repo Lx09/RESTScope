@@ -542,56 +542,45 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
     assert invalid.errors
 
 
-def test_tool_runtime_selects_allows_denies_and_executes_read_only_tools(tool_context) -> None:
-    """Scenario: verify that tool runtime selects allows denies and executes read only tools."""
-    from restscope.capabilities import ToolCallValidator, ToolExecutor, ToolPolicy, ToolRegistry, ToolSelector
+def test_agent_toolbox_exposes_and_executes_only_explicit_tools(tool_context) -> None:
+    """An Agent's toolbox is its complete availability decision."""
+    del tool_context
+    from restscope.capabilities import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
 
-    registry = ToolRegistry()
-    registry.register(
+    toolbox = AgentToolbox()
+    toolbox.register(
         spec=ToolSpec(
             name="artifact.read_summary",
             description="Read summary",
             kind="local_function",
-            input_schema={"type": "object"},
-            read_only=True,
+            input_schema={
+                "type": "object",
+                "properties": {"artifact_id": {"type": "string"}},
+                "required": ["artifact_id"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"artifact_id": {"type": "string"}},
+                "required": ["artifact_id"],
+                "additionalProperties": False,
+            },
         ),
-        handler=lambda _context, /, artifact_id: {
+        execute=lambda artifact_id: {
             "content": f"summary:{artifact_id}",
             "structured": {"artifact_id": artifact_id},
         },
     )
-    registry.register(
-        spec=ToolSpec(
-            name="external.run_campaign",
-            description="Run campaign",
-            kind="local_function",
-            input_schema={"type": "object"},
-            read_only=False,
-            requires_approval=True,
-            risk_level="high",
-        ),
-        handler=lambda _context, /: {"content": "should not run"},
+
+    success = toolbox.execute(
+        ToolCall(id="call_1", name="artifact.read_summary", arguments={"artifact_id": "artifact_1"})
+    )
+    denied = toolbox.execute(
+        ToolCall(id="call_2", name="external.run_campaign", arguments={})
     )
 
-    selector = ToolSelector(registry)
-    selected = selector.select_for_role(role="planner", state={})
-    validator = ToolCallValidator(registry, ToolPolicy())
-    executor = ToolExecutor(registry, validator)
-    executor.bind_context(tool_context)
-
-    success = executor.execute(
-        tool_call=ToolCall(id="call_1", name="artifact.read_summary", arguments={"artifact_id": "artifact_1"}),
-        role="planner",
-        state={},
-    )
-    denied = executor.execute(
-        tool_call=ToolCall(id="call_2", name="external.run_campaign", arguments={}),
-        role="planner",
-        state={},
-    )
-
-    assert [tool.name for tool in selected] == ["artifact.read_summary"]
+    assert [tool.name for tool in toolbox.specs()] == ["artifact.read_summary"]
     assert success.status == "succeeded"
     assert success.content == "summary:artifact_1"
     assert denied.status == "denied"

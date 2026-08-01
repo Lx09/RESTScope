@@ -11,6 +11,18 @@ from restscope.llm import ToolCall
 from tests._operation_smoke_dedup_solve_fixtures import smoke_config
 
 
+def _validation_only_probe() -> CurrentOperationHTTPProbe:
+    """Build a Probe whose explicit dependencies cannot run during validation."""
+    from restscope.capabilities import TargetHTTPRequestTool
+
+    return CurrentOperationHTTPProbe(
+        http_tool=TargetHTTPRequestTool(),
+        context_provider=lambda: (_ for _ in ()).throw(
+            AssertionError("validation must not request App context")
+        ),
+    )
+
+
 def test_operation_smoke_request_uses_large_output_budgets() -> None:
     """The public request exposes the new role budgets and no legacy controls."""
     request = OperationSmokeRequest(
@@ -53,7 +65,7 @@ def test_operation_smoke_request_rejects_legacy_budget_fields(
 
 def test_failure_solve_http_probe_rejects_cross_operation_method_and_path() -> None:
     """Solve may vary parameters but cannot leave the current method/template."""
-    probe = CurrentOperationHTTPProbe(executor=object())
+    probe = _validation_only_probe()
 
     wrong_method = probe.validate(
         config=smoke_config(),
@@ -87,7 +99,7 @@ def test_failure_solve_http_probe_rejects_cross_operation_method_and_path() -> N
 
 def test_failure_solve_http_probe_atomically_preflights_strict_arguments() -> None:
     """Unknown HTTP fields are rejected before Failure Solve executes a call."""
-    probe = CurrentOperationHTTPProbe(executor=object())
+    probe = _validation_only_probe()
 
     error = probe.validate(
         config=smoke_config(),
@@ -108,7 +120,7 @@ def test_failure_solve_http_probe_atomically_preflights_strict_arguments() -> No
 
 def test_failure_solve_http_probe_allows_the_exact_mutating_operation() -> None:
     """Solve may investigate its current DELETE operation without crossing scope."""
-    probe = CurrentOperationHTTPProbe(executor=object())
+    probe = _validation_only_probe()
     config = smoke_config()
     config = config.model_copy(
         update={
@@ -181,7 +193,7 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
         )
     )
     runtime = build_capabilities(target_http_transport=transport)
-    runtime.tool_executor.bind_context(
+    runtime.bind_context(
         ToolContext(
             ir=ir,
             baseline_schema_source={},
@@ -192,7 +204,10 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
         valid_parameters={"path.projectId", "query.region"}
     )
 
-    result = CurrentOperationHTTPProbe(runtime.tool_executor).execute(
+    result = CurrentOperationHTTPProbe(
+        http_tool=runtime.target_http_tool,
+        context_provider=runtime.require_context,
+    ).execute(
         config=config,
         tool_call=ToolCall(
             id="probe-1",

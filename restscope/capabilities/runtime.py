@@ -3,52 +3,95 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from restscope.capabilities.mcp import MCPHost, MCPServerConfig, MCPSourceBuilder, load_mcp_server_configs
-from restscope.capabilities.http_request import register_http_request_tool
-from restscope.capabilities.openapi_lookup import register_openapi_lookup_tool
+from restscope.capabilities.mcp import (
+    MCPHost,
+    MCPServerConfig,
+    MCPSourceBuilder,
+    load_mcp_server_configs,
+)
+from restscope.capabilities.agent_tools import AgentToolbox
+from restscope.capabilities.http_request import TargetHTTPRequestTool
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
-from restscope.capabilities.tool_call_validator import ToolCallValidator
-from restscope.capabilities.tool_executor import ToolExecutor
-from restscope.capabilities.tool_policy import ToolPolicy
-from restscope.capabilities.tool_registry import ToolRegistry
-from restscope.capabilities.tool_selector import ToolSelector
+from restscope.capabilities.tool_context import ToolContext, ToolContextError
 from restscope.capabilities.tool_sources import register_tool_source
 from restscope.http_transport import TargetHTTPTransport
 from restscope.observability import TracingRuntime
+from restscope.openapi_parser.ir import OperationIR
 
 if TYPE_CHECKING:
     from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
     from restscope.testing.execution import OperationTestingService
 
 
-@dataclass(frozen=True)
+@dataclass
 class CapabilityRuntime:
-    """Runtime bundle for tools and prompt-only skill metadata."""
+    """Own shared implementations and optional caller-selected capabilities.
 
-    tool_registry: ToolRegistry
-    tool_policy: ToolPolicy
-    tool_selector: ToolSelector
-    tool_executor: ToolExecutor
+    The runtime does not expose an executable all-tools registry. Agents build
+    their own :class:`AgentToolbox` values and bind only the shared
+    implementation they need. The App-bound target context remains here so
+    OpenAPI and HTTP implementations can request it explicitly.
+    """
+
+    target_http_tool: TargetHTTPRequestTool
     skill_registry: SkillRegistry
     skill_policy: SkillPolicy
+    external_tools: AgentToolbox | None = None
     mcp_host: MCPHost | None = None
     operation_testing_service: OperationTestingService | None = None
     api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None
+    _tool_context: ToolContext | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
         """Bind one tracing/redaction runtime to every built-in trace consumer."""
 
-        self.tool_executor.tracing_runtime = tracing_runtime
+        if self.external_tools is not None:
+            self.external_tools.tracing_runtime = tracing_runtime
         if self.operation_testing_service is not None:
             self.operation_testing_service.tracing_runtime = tracing_runtime
         if self.api_behavior_monitor_coordinator is not None:
             self.api_behavior_monitor_coordinator.tracing_runtime = tracing_runtime
             tracker = self.api_behavior_monitor_coordinator.resource_identifier_tracker
             tracker.client.tracing_runtime = tracing_runtime
+
+    def bind_context(self, context: ToolContext) -> None:
+        """Bind target and OpenAPI state once after successful App parsing."""
+        if self._tool_context is not None:
+            raise ToolContextError(
+                "tool_context_already_initialized",
+                "Tool context is already initialized",
+            )
+        self._tool_context = context
+
+    def require_context(self) -> ToolContext:
+        """Return initialized target state or report stable startup misuse."""
+        if self._tool_context is None:
+            raise ToolContextError(
+                "tool_context_not_initialized",
+                "Tool context is not initialized",
+            )
+        return self._tool_context
+
+    def require_operation(self, operation_key: str) -> OperationIR:
+        """Return one exact operation from the currently bound OpenAPI IR."""
+        try:
+            return self.require_context().ir.operations[operation_key]
+        except KeyError as exc:
+            raise LookupError(
+                f"OpenAPI operation was not found: {operation_key}"
+            ) from exc
+
+    def clear_context(self) -> None:
+        """Release App-bound target state during shutdown."""
+        self._tool_context = None
 
 
 def build_capabilities(
@@ -60,46 +103,40 @@ def build_capabilities(
     target_http_transport: TargetHTTPTransport | None = None,
     api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None,
 ) -> CapabilityRuntime:
-    """Build a complete capability runtime from external sources and skills."""
+    """Build shared App implementations and optional explicit integrations.
 
-    tool_registry = ToolRegistry()
-    tool_policy = ToolPolicy()
-    tool_selector = ToolSelector(tool_registry, tool_policy)
-    tool_validator = ToolCallValidator(tool_registry, tool_policy)
-    tool_executor = ToolExecutor(
-        tool_registry,
-        tool_validator,
-        tracing_runtime=tracing_runtime,
+    Local HTTP code is reusable but is not model-visible here. ``sources``
+    creates an isolated caller-owned toolbox, while ``skills`` remain prompt
+    metadata. Optional testing and monitor services retain their existing App
+    lifecycles.
+    """
+
+    runtime_tracing = tracing_runtime or TracingRuntime.disabled()
+    external_tools = (
+        AgentToolbox(tracing_runtime=runtime_tracing)
+        if sources
+        else None
     )
     skill_registry = SkillRegistry()
     skill_policy = SkillPolicy()
-
-    register_http_request_tool(
-        tool_registry,
-        transport=target_http_transport,
-    )
-    register_openapi_lookup_tool(tool_registry)
-    if api_behavior_monitor_coordinator is not None:
-        from restscope.api_behavior_monitor import register_resource_lookup_tool
-
-        register_resource_lookup_tool(tool_registry, api_behavior_monitor_coordinator)
     for skill in skills:
         skill_registry.register(skill)
 
     for server_name, source in (sources or {}).items():
+        assert external_tools is not None
         register_tool_source(
-            registry=tool_registry,
+            toolbox=external_tools,
             server_name=server_name,
             source=source,
         )
 
     return CapabilityRuntime(
-        tool_registry=tool_registry,
-        tool_policy=tool_policy,
-        tool_selector=tool_selector,
-        tool_executor=tool_executor,
+        target_http_tool=TargetHTTPRequestTool(
+            transport=target_http_transport,
+        ),
         skill_registry=skill_registry,
         skill_policy=skill_policy,
+        external_tools=external_tools,
         operation_testing_service=operation_testing_service,
         api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
     )
@@ -116,7 +153,12 @@ def build_capabilities_with_mcp_host(
     target_http_transport: TargetHTTPTransport | None = None,
     api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None,
 ) -> CapabilityRuntime:
-    """Build capabilities after discovering tools through RESTScope's MCP host."""
+    """Discover selected MCP servers into the isolated external toolbox.
+
+    RESTScope owns and closes a Host only when this function constructs it.
+    Passing ``mcp_host`` leaves that lifecycle with the caller. Discovered
+    tools are never injected into a production Agent automatically.
+    """
 
     owns_host = mcp_host is None
     host = MCPHost(_load_mcp_configs(config)) if mcp_host is None else mcp_host
@@ -136,12 +178,10 @@ def build_capabilities_with_mcp_host(
             api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
         )
         return CapabilityRuntime(
-            tool_registry=runtime.tool_registry,
-            tool_policy=runtime.tool_policy,
-            tool_selector=runtime.tool_selector,
-            tool_executor=runtime.tool_executor,
+            target_http_tool=runtime.target_http_tool,
             skill_registry=runtime.skill_registry,
             skill_policy=runtime.skill_policy,
+            external_tools=runtime.external_tools,
             mcp_host=host,
             operation_testing_service=runtime.operation_testing_service,
             api_behavior_monitor_coordinator=runtime.api_behavior_monitor_coordinator,
@@ -155,7 +195,10 @@ def build_capabilities_with_mcp_host(
         raise
 
 
-def _load_mcp_configs(config: Mapping[str, MCPServerConfig] | str | Path | None) -> dict[str, MCPServerConfig]:
+def _load_mcp_configs(
+    config: Mapping[str, MCPServerConfig] | str | Path | None,
+) -> dict[str, MCPServerConfig]:
+    """Normalize default, file-backed, or already parsed MCP configuration."""
     if config is None:
         return load_mcp_server_configs()
     if isinstance(config, str | Path):

@@ -65,8 +65,7 @@ def _model() -> LLMModelConfig:
 
 
 def _runtime():
-    """Build the real global OpenAPI tool boundary used by Dedup."""
-    from restscope.capabilities import ToolContext, build_capabilities
+    """Build the current OpenAPI operation provider used by Dedup."""
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -95,11 +94,7 @@ def _runtime():
             },
         }
     )
-    runtime = build_capabilities()
-    runtime.tool_executor.bind_context(
-        ToolContext(ir=ir, baseline_schema_source={})
-    )
-    return runtime
+    return lambda operation_key: ir.operations[operation_key]
 
 
 def _catalog(*cases: tuple[int, str, str]):
@@ -138,11 +133,11 @@ def _request(case_ids: list[str]) -> FailureDedupRequest:
 
 
 def _agent(client: StubClient) -> FailureDedupAgent:
-    """Build Dedup with the same global capability executor as production."""
+    """Build Dedup with an explicit current-operation provider."""
     return FailureDedupAgent(
         client=client,
         model=_model(),
-        tool_executor=_runtime().tool_executor,
+        operation_provider=_runtime(),
     )
 
 
@@ -183,7 +178,7 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
                 ToolCall(
                     id="lookup-1",
                     name="openapi.lookup_operation",
-                    arguments={"operation_key": "POST /projects"},
+                    arguments={},
                 )
             ],
         ),
@@ -253,6 +248,152 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     assert "```json" not in prompt
     assert "fingerprint_ref" not in prompt.casefold()
     assert "item_id" not in prompt
+
+
+def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:
+    """Several Catalog reads run together and retain provider message order."""
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="dedup-model",
+                tool_calls=[
+                    ToolCall(
+                        id="first-query",
+                        name="query_test_case_catalog",
+                        arguments={
+                            "action": "parameter_value",
+                            "case_ids": ["TC1"],
+                            "name": "body.name",
+                        },
+                    ),
+                    ToolCall(
+                        id="second-query",
+                        name="query_test_case_catalog",
+                        arguments={
+                            "action": "failure_messages",
+                            "case_ids": ["TC2"],
+                        },
+                    ),
+                ],
+            ),
+            {
+                "failures": [
+                    {
+                        "summary": "Both failures concern the project name.",
+                        "suspected_parameters": ["body.name"],
+                        "messages": [
+                            "HTTP 400: name already exists",
+                            "HTTP 409: name conflicts",
+                        ],
+                    }
+                ],
+                "reason": "The independent queries confirm one Parameter group.",
+            },
+        ]
+    )
+    catalog = _catalog(
+        (400, "name already exists", "a"),
+        (409, "name conflicts", "b"),
+    )
+
+    decision, outputs, corrections, errors = _agent(client).deduplicate(
+        operation_key="POST /projects",
+        semantic_parameters=["body.name", "body.namespace_id"],
+        observations=[
+            {"case_id": "TC1", "message": "HTTP 400: name already exists"},
+            {"case_id": "TC2", "message": "HTTP 409: name conflicts"},
+        ],
+        catalog=catalog,
+        max_outputs=2,
+    )
+
+    assert decision is not None
+    assert outputs == 2
+    assert corrections == 0
+    assert errors == []
+    tool_results = [
+        message
+        for message in client.requests[1].messages
+        if message.role == "tool"
+    ]
+    assert [message.tool_call_id for message in tool_results] == [
+        "first-query",
+        "second-query",
+    ]
+
+
+def test_dedup_openapi_tool_is_bound_to_the_current_operation() -> None:
+    """The model can read current inputs but cannot choose another operation."""
+    import json
+
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="dedup-model",
+                tool_calls=[
+                    ToolCall(
+                        id="current-operation",
+                        name="openapi.lookup_operation",
+                        arguments={},
+                    )
+                ],
+            ),
+            {
+                "failures": [
+                    {
+                        "summary": "Both failures concern the project name.",
+                        "suspected_parameters": ["body.name"],
+                        "messages": [
+                            "HTTP 400: name already exists",
+                            "HTTP 409: name conflicts",
+                        ],
+                    }
+                ],
+                "reason": "The current operation declares body.name.",
+            },
+        ]
+    )
+    catalog = _catalog(
+        (400, "name already exists", "a"),
+        (409, "name conflicts", "b"),
+    )
+
+    decision, _outputs, corrections, errors = _agent(client).deduplicate(
+        operation_key="POST /projects",
+        semantic_parameters=["body.name", "body.namespace_id"],
+        observations=[
+            {"case_id": "TC1", "message": "HTTP 400: name already exists"},
+            {"case_id": "TC2", "message": "HTTP 409: name conflicts"},
+        ],
+        catalog=catalog,
+        max_outputs=2,
+    )
+
+    assert decision is not None
+    assert corrections == 0
+    assert errors == []
+    openapi_spec = next(
+        spec
+        for spec in client.requests[0].tools
+        if spec.name == "openapi.lookup_operation"
+    )
+    assert openapi_spec.input_schema == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    tool_message = next(
+        message
+        for message in client.requests[1].messages
+        if message.role == "tool"
+    )
+    tool_result = json.loads(tool_message.content or "{}")
+    assert tool_result["status"] == "succeeded"
+    assert tool_result["structured"]["operation"]["operation_key"] == (
+        "POST /projects"
+    )
 
 
 def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:

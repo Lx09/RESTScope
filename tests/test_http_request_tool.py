@@ -7,7 +7,7 @@ import json
 import pytest
 
 
-def _executor_for_transport(
+def _toolbox_for_transport(
     transport,
     *,
     base_url="https://api.example.test/v1",
@@ -16,86 +16,84 @@ def _executor_for_transport(
     import httpx
 
     from restscope.capabilities import (
-        ToolCallValidator,
+        AgentToolbox,
         ToolContext,
-        ToolExecutor,
-        ToolPolicy,
-        ToolRegistry,
-        register_http_request_tool,
+        ToolFailure,
+        TargetHTTPRequestTool,
+        http_request_tool_spec,
+    )
+    from restscope.capabilities.http_request import (
+        HTTPRequestTimeoutError,
+        HTTPRequestToolError,
     )
     from restscope.observability import TracingRuntime
     from restscope.openapi_parser import OpenAPIParser
     from restscope.redaction import Redactor
 
-    registry = ToolRegistry()
-    register_http_request_tool(
-        registry,
+    http_tool = TargetHTTPRequestTool(
         client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),
     )
-    executor = ToolExecutor(
-        registry,
-        ToolCallValidator(registry, ToolPolicy()),
+    toolbox = AgentToolbox(
         tracing_runtime=TracingRuntime.disabled(
             redactor=Redactor(secret_values),
         ),
     )
-    executor.bind_context(
-        ToolContext(
-            ir=OpenAPIParser.parse(
-                {
-                    "openapi": "3.0.3",
-                    "info": {"title": "HTTP Tool", "version": "1"},
-                    "paths": {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}},
-                }
-            ),
-            baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
-            base_url=base_url,
-            headers={
-                "Authorization": "Bearer runtime-secret",
-                "Accept": "application/problem+json",
-            },
-        )
+    context = ToolContext(
+        ir=OpenAPIParser.parse(
+            {
+                "openapi": "3.0.3",
+                "info": {"title": "HTTP Tool", "version": "1"},
+                "paths": {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}},
+            }
+        ),
+        baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
+        base_url=base_url,
+        headers={
+            "Authorization": "Bearer runtime-secret",
+            "Accept": "application/problem+json",
+        },
     )
-    return executor
+
+    def execute_http(**arguments):
+        """Bind only the target context and expose expected transport errors."""
+        try:
+            return http_tool.execute(context, **arguments)
+        except HTTPRequestTimeoutError as exc:
+            raise ToolFailure(
+                code=exc.code,
+                message=str(exc),
+                status="timed_out",
+            ) from exc
+        except HTTPRequestToolError as exc:
+            raise ToolFailure(code=exc.code, message=str(exc)) from exc
+
+    toolbox.register(spec=http_request_tool_spec(), execute=execute_http)
+    return toolbox
 
 
-def _execute(executor, **arguments):
+def _execute(toolbox, **arguments):
     from restscope.llm import ToolCall
 
-    return executor.execute(
+    return toolbox.execute(
         tool_call=ToolCall(
             id="http-request",
             name="restscope.http.request",
             arguments=arguments,
-        ),
-        role="future_agent",
-        state={},
+        )
     )
 
 
-def test_capability_runtime_registers_http_request_tool_for_every_role() -> None:
-    """Scenario: verify that capability runtime registers http request tool for every role."""
+def test_capability_runtime_has_shared_http_implementation_without_global_tools() -> None:
+    """The App reuses HTTP code without exposing an executable all-tools box."""
     from restscope.capabilities import build_capabilities
 
     runtime = build_capabilities()
 
-    spec = runtime.tool_registry.get_spec("restscope.http.request")
-    assert spec.kind == "local_function"
-    assert spec.risk_level == "high"
-    assert spec.read_only is False
-    assert spec.requires_approval is False
-    assert spec.timeout_seconds == 30
-    assert spec.input_schema["required"] == ["method", "path"]
-
-    for role in (
-        "planner",
-        "result_analyst",
-        "operation_smoke_failure_solve",
-        "decision_maker",
-        "future_agent",
-    ):
-        selected = runtime.tool_selector.select_for_role(role=role, state={})
-        assert spec in selected
+    assert runtime.target_http_tool is not None
+    assert not hasattr(runtime, "tool_registry")
+    assert not hasattr(runtime, "tool_policy")
+    assert not hasattr(runtime, "tool_selector")
+    assert not hasattr(runtime, "tool_executor")
 
 
 def test_http_request_tool_sends_target_json_and_preserves_full_response() -> None:
@@ -124,7 +122,7 @@ def test_http_request_tool_sends_target_json_and_preserves_full_response() -> No
             content=response_body,
         )
 
-    executor = _executor_for_transport(httpx.MockTransport(respond))
+    executor = _toolbox_for_transport(httpx.MockTransport(respond))
 
     result = _execute(
         executor,
@@ -200,7 +198,7 @@ def test_http_request_tool_encodes_text_and_form_bodies(arguments, expected_cont
         return httpx.Response(422, headers={"Content-Type": "text/plain"}, text="invalid request")
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(respond)),
+        _toolbox_for_transport(httpx.MockTransport(respond)),
         method="POST",
         path="/submit",
         **arguments,
@@ -226,7 +224,7 @@ def test_http_request_tool_does_not_follow_redirects() -> None:
         )
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(respond)),
+        _toolbox_for_transport(httpx.MockTransport(respond)),
         method="GET",
         path="/redirect",
     )
@@ -238,28 +236,32 @@ def test_http_request_tool_does_not_follow_redirects() -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("path", "expected_status", "expected_code"),
     [
-        "https://other.example.test/users",
-        "//other.example.test/users",
-        "/users?admin=true",
-        "/users#fragment",
-        "/safe/%252e%252e/secrets",
-        "/safe\\..\\secrets",
+        ("https://other.example.test/users", "denied", "invalid_tool_arguments"),
+        ("//other.example.test/users", "denied", "invalid_tool_arguments"),
+        ("/users?admin=true", "failed", "invalid_path"),
+        ("/users#fragment", "failed", "invalid_path"),
+        ("/safe/%252e%252e/secrets", "failed", "invalid_path"),
+        ("/safe\\..\\secrets", "failed", "invalid_path"),
     ],
 )
-def test_http_request_tool_rejects_paths_that_can_escape_the_target(path) -> None:
+def test_http_request_tool_rejects_paths_that_can_escape_the_target(
+    path,
+    expected_status,
+    expected_code,
+) -> None:
     """Scenario: verify that http request tool rejects paths that can escape the target."""
     import httpx
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
+        _toolbox_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
         method="GET",
         path=path,
     )
 
-    assert result.status == "failed"
-    assert result.error["code"] == "invalid_path"
+    assert result.status == expected_status
+    assert result.error["code"] == expected_code
 
 
 @pytest.mark.parametrize(
@@ -282,7 +284,7 @@ def test_http_request_tool_rejects_sensitive_and_transport_header_overrides(head
     import httpx
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
+        _toolbox_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
         method="GET",
         path="/users",
         headers={header: "attacker-value"},
@@ -298,15 +300,15 @@ def test_http_request_tool_requires_one_request_body_encoding() -> None:
     import httpx
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
+        _toolbox_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
         method="POST",
         path="/users",
         json_body={"name": "Ada"},
         text_body="Ada",
     )
 
-    assert result.status == "failed"
-    assert result.error["code"] == "invalid_request"
+    assert result.status == "denied"
+    assert result.error["code"] == "invalid_tool_arguments"
 
 
 def test_http_request_tool_requires_a_configured_base_url() -> None:
@@ -314,7 +316,7 @@ def test_http_request_tool_requires_a_configured_base_url() -> None:
     import httpx
 
     result = _execute(
-        _executor_for_transport(
+        _toolbox_for_transport(
             httpx.MockTransport(lambda request: pytest.fail(str(request.url))),
             base_url=None,
         ),
@@ -334,7 +336,7 @@ def test_http_request_tool_returns_stable_timeout_error() -> None:
         raise httpx.ReadTimeout("timeout-secret", request=request)
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(timeout)),
+        _toolbox_for_transport(httpx.MockTransport(timeout)),
         method="GET",
         path="/slow",
         timeout_seconds=0.1,
@@ -353,14 +355,13 @@ def test_http_request_tool_returns_stable_network_error() -> None:
         raise httpx.ConnectError("network-secret", request=request)
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(disconnect)),
+        _toolbox_for_transport(httpx.MockTransport(disconnect)),
         method="GET",
         path="/unavailable",
     )
 
     assert result.status == "failed"
     assert result.error == {
-        "type": "HTTPRequestToolError",
         "message": "HTTP request failed (ConnectError)",
         "code": "request_failed",
     }
@@ -387,7 +388,7 @@ def test_http_request_tool_rejects_unsafe_response_bodies(headers, content, expe
     import httpx
 
     result = _execute(
-        _executor_for_transport(
+        _toolbox_for_transport(
             httpx.MockTransport(lambda request: httpx.Response(200, headers=headers, content=content))
         ),
         method="GET",
@@ -405,7 +406,7 @@ def test_http_request_tool_preserves_complete_text_response() -> None:
 
     body = "prefix Bearer runtime-secret api_key=returned-secret suffix"
     result = _execute(
-        _executor_for_transport(
+        _toolbox_for_transport(
             httpx.MockTransport(
                 lambda request: httpx.Response(
                     200,
@@ -428,7 +429,7 @@ def test_http_request_tool_preserves_sensitive_query_values_in_result_url() -> N
     import httpx
 
     result = _execute(
-        _executor_for_transport(
+        _toolbox_for_transport(
             httpx.MockTransport(
                 lambda request: httpx.Response(
                     200,
@@ -453,7 +454,7 @@ def test_http_request_tool_only_redacts_registered_app_key() -> None:
 
     app_key = "configured-llm-key"
     result = _execute(
-        _executor_for_transport(
+        _toolbox_for_transport(
             httpx.MockTransport(
                 lambda request: httpx.Response(
                     200,
@@ -490,7 +491,7 @@ def test_http_request_tool_rejects_binary_without_content_type() -> None:
     import httpx
 
     result = _execute(
-        _executor_for_transport(
+        _toolbox_for_transport(
             httpx.MockTransport(lambda request: httpx.Response(200, content=b"\x00\x01"))
         ),
         method="GET",
@@ -506,7 +507,7 @@ def test_http_request_tool_rejects_non_json_body_before_sending() -> None:
     import httpx
 
     result = _execute(
-        _executor_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
+        _toolbox_for_transport(httpx.MockTransport(lambda request: pytest.fail(str(request.url)))),
         method="POST",
         path="/users",
         json_body={"payload": b"not-json"},

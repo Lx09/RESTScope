@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -104,22 +105,21 @@ class TraceSpan:
         self._set_content("input", value)
 
     def record_error(self, exc: BaseException) -> None:
-        """
-        Record error for bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Record a redacted internal traceback without exposing it to callers."""
         if self._span is None or self._content_encoder is None:
             return
         try:
             message = self._content_encoder.redactor.redact_text(str(exc))
+            stacktrace = self._content_encoder.redactor.redact_text(
+                "".join(traceback.format_exception(exc))
+            )
             self.mark_error(message)
             self._span.add_event(
                 "exception",
                 {
                     "exception.type": type(exc).__name__,
                     "exception.message": message,
+                    "exception.stacktrace": stacktrace,
                 },
             )
         except Exception:

@@ -263,14 +263,12 @@ def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
     from restscope import RESTScopeApp
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
-    class Executor:
-        def clear_context(self) -> None:
-            pass
-
     class FalseyRuntime:
         def __init__(self) -> None:
-            self.tool_executor = Executor()
             self.mcp_host = None
+
+        def clear_context(self) -> None:
+            """Mirror the current CapabilityRuntime cleanup seam."""
 
         def __bool__(self) -> bool:
             return False
@@ -533,7 +531,9 @@ def test_from_config_keyboard_interrupt_cleans_owned_resources(
     host.close = lambda: setattr(host, "closed", True)
     runtime = SimpleNamespace(
         mcp_host=host,
-        tool_executor=SimpleNamespace(),
+        target_http_tool=object(),
+        require_operation=lambda _key: None,
+        require_context=lambda: None,
     )
     monkeypatch.setattr(
         "restscope.app._build_app_tracing_runtime",
@@ -715,7 +715,9 @@ def test_smoke_coordinator_construction_failure_closes_runtime_and_removes_datab
     host.close = lambda: setattr(host, "closed", True)
     runtime = SimpleNamespace(
         mcp_host=host,
-        tool_executor=SimpleNamespace(),
+        target_http_tool=object(),
+        require_operation=lambda _key: None,
+        require_context=lambda: None,
     )
     monkeypatch.setattr(
         "restscope.app.build_capabilities",
@@ -751,9 +753,8 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
 
     database = tmp_path / "smoke-default.sqlite"
     smoke_coordinator = SimpleNamespace(run=lambda *_args, **_kwargs: None)
-    executor = SimpleNamespace(clear_context=lambda: None)
     runtime = SimpleNamespace(
-        tool_executor=executor,
+        clear_context=lambda: None,
         operation_testing_service=None,
     )
     capability_calls = []
@@ -796,7 +797,9 @@ def test_app_constructor_failure_removes_created_database(
     host.close = lambda: setattr(host, "closed", True)
     runtime = SimpleNamespace(
         mcp_host=host,
-        tool_executor=SimpleNamespace(),
+        target_http_tool=object(),
+        require_operation=lambda _key: None,
+        require_context=lambda: None,
     )
 
     def fail_constructor(self, **_kwargs):
