@@ -399,7 +399,7 @@ def test_patch_strict_tool_schema_preserves_wire_shape_and_server_rules() -> Non
         }
     )
 
-    from restscope.operation_smoke.parameter_patch_review import (
+    from restscope.operation_smoke.parameter_patch.review import (
         parameter_patch_review_tool_spec,
     )
 

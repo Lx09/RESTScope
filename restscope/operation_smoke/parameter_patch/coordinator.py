@@ -16,11 +16,6 @@ from typing import Any
 from restscope.context import CompactTextWriter
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
-from restscope.operation_smoke.parameter_patch_review import (
-    ParameterPatchReviewAgent,
-    ParameterPatchReviewCandidate,
-    ParameterPatchReviewFailure,
-)
 from restscope.testing import (
     ConstraintSet,
     InputGeneratorPatch,
@@ -41,6 +36,11 @@ from restscope.testing.generation import generate_test_case
 
 from .agent import ParameterPatchAgent, ParameterPatchAttempt
 from .prompts import build_parameter_patch_prompt
+from .review import (
+    ParameterPatchReviewAgent,
+    ParameterPatchReviewCandidate,
+    ParameterPatchReviewFailure,
+)
 from .schemas import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
