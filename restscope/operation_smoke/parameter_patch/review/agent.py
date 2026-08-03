@@ -1,8 +1,9 @@
-"""Independently review one compiled Parameter Patch in a fresh context.
+"""Independently review one compiled Parameter Patch inside its owning Module.
 
 This Agent sees normalized candidate facts but never the Patch Agent's dialogue,
 compiler errors, earlier Reviewer issues, or hidden reasoning. It owns only the
-semantic pass/reject decision for this one candidate.
+semantic pass/reject decision for this one candidate. The enclosing Parameter
+Patch Coordinator is its only production caller.
 """
 
 from __future__ import annotations

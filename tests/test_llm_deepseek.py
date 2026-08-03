@@ -301,7 +301,7 @@ def test_deepseek_beta_serializes_both_parameter_patch_strict_tools() -> None:
     from restscope.operation_smoke.parameter_patch import (
         parameter_patch_proposal_tool_spec,
     )
-    from restscope.operation_smoke.parameter_patch_review import (
+    from restscope.operation_smoke.parameter_patch.review import (
         parameter_patch_review_tool_spec,
     )
 

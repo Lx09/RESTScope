@@ -152,7 +152,7 @@ Read these files in order:
    and one continuous Solve session.
 7. `restscope/operation_smoke/parameter_patch/agent.py`,
    `restscope/operation_smoke/parameter_patch/coordinator.py`,
-   `restscope/operation_smoke/parameter_patch_review/agent.py`, and
+   `restscope/operation_smoke/parameter_patch/review/agent.py`, and
    `restscope/operation_smoke/memory/patch_application.py` — strict proposal,
    executable construction, fresh-context semantic review, and atomic
    persistence.
@@ -256,16 +256,13 @@ testing types, validates Generator schemas and Constraints, generates
 `agent.py` owns one continuing proposal/revision conversation;
 `coordinator.py` owns deterministic checks, shared output budget, and feedback.
 `decision_tool.py` exposes the fixed-root proposal-only strict schema. Provider
-routing and fallback errors stay in `restscope.llm`.
-
-### `restscope/operation_smoke/parameter_patch_review/`
-
-Owns the separate FAST Review Agent. Every compiled candidate receives a fresh
-context containing only normalized requirement, Generator, Constraint,
+routing and fallback errors stay in `restscope.llm`. Its private `review/`
+subpackage owns the FAST Review Agent. Every compiled candidate receives a
+fresh context containing only normalized requirement, Generator, Constraint,
 reference-provenance, and sample facts. Review issues are authoritative: an
 empty array passes, while non-empty issues return to the Patch Agent. The raw
 `accepted` flag is normalized locally and retained only in short-lived
-diagnostics.
+diagnostics; no separate Operation Smoke Review Interface is exposed.
 
 ### `restscope/context/`
 

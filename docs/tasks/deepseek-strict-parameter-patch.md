@@ -2,6 +2,11 @@
 
 Status: Completed
 
+> Module-placement update (2026-08-03): the Review Agent remains an independent
+> fresh-context LLM decision, but it now lives under
+> `operation_smoke/parameter_patch/review/` as a private part of the Parameter
+> Patch Module. See `nest-parameter-patch-review.md`.
+
 ## Objective
 
 Make DeepSeek transport reliable without asking the Patch proposal model to

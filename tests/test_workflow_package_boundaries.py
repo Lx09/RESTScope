@@ -47,6 +47,11 @@ def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
         assert (package / "__init__.py").is_file()
         assert (package / "agent.py").is_file()
         assert (package / "schemas.py").is_file()
+    review = OPERATION_SMOKE_ROOT / "parameter_patch" / "review"
+    assert review.is_dir()
+    assert (review / "agent.py").is_file()
+    assert (review / "schemas.py").is_file()
+    assert not (OPERATION_SMOKE_ROOT / "parameter_patch_review").exists()
     assert not (OPERATION_SMOKE_ROOT / "effect").exists()
     assert not (OPERATION_SMOKE_ROOT / "plan").exists()
     assert not (OPERATION_SMOKE_ROOT / "prompt_context" / "__init__.py").exists()
@@ -138,7 +143,6 @@ def test_cross_role_imports_use_the_target_role_facade() -> None:
         "failure_dedup",
         "failure_solver",
         "parameter_patch",
-        "parameter_patch_review",
     }
     violations: list[str] = []
 
