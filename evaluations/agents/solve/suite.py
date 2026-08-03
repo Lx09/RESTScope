@@ -572,7 +572,7 @@ def build_task(
         memory = TemporarySolveMemory(scenario, calls)
         semantic = build_semantic_input_map(scenario.config)
         catalog = TestCaseCatalog(
-            valid_parameters=semantic.node_by_handle,
+            input_references=semantic.reference_by_handle.values(),
         )
         for case in scenario.catalog_cases:
             catalog.record(case)

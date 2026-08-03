@@ -77,7 +77,11 @@ class _ParameterInput(_CaseIdsInput):
 
     parameter: str = Field(
         min_length=1,
-        description="Exact semantic input handle returned by openapi.list_inputs.",
+        description=(
+            "Exact semantic input handle returned by openapi.list_inputs, for "
+            "example query.sort. Test Case request JSON uses the direct key sort "
+            "inside its query object."
+        ),
     )
 
 
@@ -108,6 +112,8 @@ def get_parameter_value_tool_spec() -> ToolSpec:
         name=GET_PARAMETER_VALUE_TOOL_NAME,
         description=(
             "Get one exact request Parameter value for known TC references. "
+            "A used result contains direct-name request JSON, while parameter "
+            "remains the unique semantic handle. "
             "parameter_not_used_in_request is a final fact for that Test Case; "
             "repeating the same query cannot reveal a value."
         ),
@@ -123,7 +129,8 @@ def find_parameters_by_value_tool_spec() -> ToolSpec:
         name=FIND_PARAMETERS_BY_VALUE_TOOL_NAME,
         description=(
             "Find request Parameters whose exact typed value matches the supplied "
-            "value for known TC references."
+            "value. Each match contains the unique semantic handle and its "
+            "direct-name request JSON fragment."
         ),
         kind="local_function",
         input_schema=_ValueInput.model_json_schema(),
@@ -132,12 +139,20 @@ def find_parameters_by_value_tool_spec() -> ToolSpec:
                 "type": "object",
                 "properties": {
                     "value": {},
-                    "parameters": {
+                    "matches": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "parameter": {"type": "string"},
+                                "request": {"type": "object"},
+                            },
+                            "required": ["parameter", "request"],
+                            "additionalProperties": False,
+                        },
                     },
                 },
-                "required": ["value", "parameters"],
+                "required": ["value", "matches"],
                 "additionalProperties": False,
             }
         ),
@@ -150,6 +165,7 @@ def get_response_field_value_tool_spec() -> ToolSpec:
         name=GET_RESPONSE_FIELD_VALUE_TOOL_NAME,
         description=(
             "Get one concrete field from each retained failed response body. "
+            "A present result contains response.body JSON with direct field names. "
             "The result distinguishes an unretained body from a retained body "
             "without that field; either status is final for the same TC and field."
         ),
@@ -165,7 +181,8 @@ def find_response_fields_by_value_tool_spec() -> ToolSpec:
         name=FIND_RESPONSE_FIELDS_BY_VALUE_TOOL_NAME,
         description=(
             "Find concrete body paths whose exact typed value matches the supplied "
-            "value in retained failed responses for known TC references."
+            "value. Each match contains the unique field path and a response.body "
+            "JSON fragment with direct field names."
         ),
         kind="local_function",
         input_schema=_ValueInput.model_json_schema(),
@@ -174,12 +191,20 @@ def find_response_fields_by_value_tool_spec() -> ToolSpec:
                 "type": "object",
                 "properties": {
                     "value": {},
-                    "fields": {
+                    "matches": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string"},
+                                "response": {"type": "object"},
+                            },
+                            "required": ["field", "response"],
+                            "additionalProperties": False,
+                        },
                     },
                 },
-                "required": ["value", "fields"],
+                "required": ["value", "matches"],
                 "additionalProperties": False,
             }
         ),
@@ -339,9 +364,9 @@ def _parameter_fact_schema() -> dict[str, Any]:
                 "properties": {
                     "parameter": {"type": "string"},
                     "status": {"const": "parameter_used_in_request"},
-                    "value": {},
+                    "request": {"type": "object"},
                 },
-                "required": ["parameter", "status", "value"],
+                "required": ["parameter", "status", "request"],
                 "additionalProperties": False,
             },
             {
@@ -372,9 +397,9 @@ def _response_field_fact_schema() -> dict[str, Any]:
                     "status": {
                         "const": "response_field_present_in_retained_body"
                     },
-                    "value": {},
+                    "response": {"type": "object"},
                 },
-                "required": ["field", "status", "value"],
+                "required": ["field", "status", "response"],
                 "additionalProperties": False,
             },
             {

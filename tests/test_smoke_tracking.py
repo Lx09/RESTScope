@@ -346,11 +346,24 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
     capabilities.bind_context(
         ToolContext(ir=ir, baseline_schema_source={})
     )
-    catalog = TestCaseCatalog(valid_parameters={"body", "body.name"})
+    from restscope.request_inputs import RequestInputReference
+
+    catalog = TestCaseCatalog(
+        input_references=[
+            RequestInputReference.body(),
+            RequestInputReference.body().property("name"),
+        ]
+    )
     for message in ("first", "second"):
         catalog.record(
             CatalogTestCaseDraft(
-                parameters={"body.name": message},
+                request={
+                    "path": {},
+                    "query": {},
+                    "header": {},
+                    "cookie": {},
+                    "body": {"name": message},
+                },
                 response_body={"message": message},
                 failure=HTTPFailure(
                     status_code=400,

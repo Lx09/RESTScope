@@ -217,7 +217,7 @@ def test_operation_testing_returns_catalog_cases_and_only_keeps_failure_body(
     assert not hasattr(batch, "config_revision")
     assert batch.operation_key == operation.operation_key
     assert [case.case_id for case in batch.cases] == ["TC1", "TC2", "TC3"]
-    assert all(case.parameters["path.itemId"] >= 1 for case in batch.cases)
+    assert all(case.request["path"]["itemId"] >= 1 for case in batch.cases)
 
     # A success still remains queryable by input value, but its potentially
     # large response body is deliberately not retained.
@@ -329,7 +329,7 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
 
     assert len(requests) == 1
     assert requests[0].url.params["mode"] == "ffffffff"
-    assert batch.cases[0].parameters["query.mode"] == "ffffffff"
+    assert batch.cases[0].request["query"]["mode"] == "ffffffff"
 
 
 def test_smoke_execution_applies_constraints_and_traces_only_the_count(
@@ -376,7 +376,7 @@ def test_smoke_execution_applies_constraints_and_traces_only_the_count(
     assert len(requests) == 2
     assert [request.url.params["mode"] for request in requests] == ["slow", "slow"]
     assert [
-        case.parameters["query.mode"]
+        case.request["query"]["mode"]
         for case in batch.cases
     ] == ["slow", "slow"]
     root_input = tracing.inputs[0]
@@ -727,8 +727,8 @@ def test_batch_preserves_sensitive_named_values_only_as_catalog_parameters(tmp_p
     )
 
     assert sent_paths == [f"/users/{secret}"]
-    assert batch.cases[0].parameters["path.password"] == secret
-    assert not hasattr(batch.cases[0], "request")
+    assert batch.cases[0].request["path"]["password"] == secret
+    assert not hasattr(batch.cases[0], "parameters")
 
 
 def test_transport_preflight_validates_every_case_before_the_first_request(tmp_path: Path) -> None:

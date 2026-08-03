@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from http.cookies import CookieError, SimpleCookie
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -197,6 +198,9 @@ def _scope_error(
             f"HTTP probe field {location} is invalid: "
             f"{issue['msg']}"
         )
+    cookie_error = _probe_cookie_error(config, tool_call.arguments)
+    if cookie_error is not None:
+        return cookie_error
     method = tool_call.arguments.get("method")
     expected_method = config.snapshot.method.upper()
     if method != expected_method:
@@ -216,6 +220,42 @@ def _scope_error(
     return None
 
 
+def _probe_cookie_error(
+    config: OperationGeneratorConfig,
+    arguments: dict[str, Any],
+) -> str | None:
+    """Restrict a sensitive Cookie header to declared operation Parameters."""
+    cookie_header = next(
+        (
+            value
+            for name, value in (arguments.get("headers") or {}).items()
+            if name.casefold() == "cookie"
+        ),
+        None,
+    )
+    if cookie_header is None:
+        return None
+    parsed = SimpleCookie()
+    try:
+        parsed.load(str(cookie_header))
+    except CookieError:
+        return "HTTP probe Cookie header is invalid"
+    if not parsed:
+        return "HTTP probe Cookie header must contain declared Cookie Parameters"
+    declared = {
+        item.name
+        for item in config.snapshot.parameters
+        if item.location == "cookie"
+    }
+    unknown = sorted(set(parsed) - declared)
+    if unknown:
+        return (
+            "HTTP probe Cookie header contains undeclared Parameters: "
+            + ", ".join(unknown)
+        )
+    return None
+
+
 def _record_probe_result(
     *,
     catalog: TestCaseCatalog,
@@ -224,7 +264,7 @@ def _record_probe_result(
     result: ToolResult,
 ) -> ToolResult:
     """Record an attempted request and hide its full body from model feedback."""
-    parameters = _probe_parameters(
+    request = _probe_request(
         config=config,
         arguments=tool_call.arguments,
     )
@@ -244,7 +284,7 @@ def _record_probe_result(
         )
         case = catalog.record(
             CatalogTestCaseDraft(
-                parameters=parameters,
+                request=request,
                 response_body=body,
                 failure=failure,
             )
@@ -271,7 +311,7 @@ def _record_probe_result(
     )
     case = catalog.record(
         CatalogTestCaseDraft(
-            parameters=parameters,
+            request=request,
             response_body=None,
             failure=failure,
         )
@@ -288,35 +328,72 @@ def _record_probe_result(
     )
 
 
-def _probe_parameters(
+def _probe_request(
     *,
     config: OperationGeneratorConfig,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """Translate model-visible HTTP arguments into semantic Parameter handles."""
-    output: dict[str, Any] = {}
+    """Normalize model-visible HTTP arguments into Test Case request JSON.
+
+    The HTTP tool uses transport-oriented names such as ``headers`` and
+    ``json_body``. The Catalog uses the same direct-name path/query/header/
+    cookie/body shape as generated Batch cases. Only Cookie Parameters declared
+    by the current operation are expanded from the combined Cookie header.
+    """
+    request: dict[str, Any] = {
+        "path": {},
+        "query": deepcopy(arguments.get("query") or {}),
+        "header": {},
+        "cookie": {},
+    }
     path = str(arguments["path"])
     actual_segments = path.split("/")
     template_segments = config.snapshot.path.split("/")
     for actual, template in zip(actual_segments, template_segments):
         if template.startswith("{") and template.endswith("}"):
             name = template[1:-1]
-            output[f"path.{name}"] = _typed_path_value(
+            request["path"][name] = _typed_path_value(
                 config=config,
                 name=name,
                 value=unquote(actual),
             )
-    for name, value in (arguments.get("query") or {}).items():
-        output[f"query.{name}"] = value
     for name, value in (arguments.get("headers") or {}).items():
-        output[f"header.{name.lower()}"] = value
+        if name.casefold() == "cookie":
+            request["cookie"].update(
+                _declared_probe_cookies(config=config, header=str(value))
+            )
+            continue
+        request["header"][name.lower()] = deepcopy(value)
     if "json_body" in arguments:
-        _flatten_body(output, "body", arguments["json_body"])
+        request["body"] = deepcopy(arguments["json_body"])
     elif "form_body" in arguments:
-        _flatten_body(output, "body", arguments["form_body"])
+        request["body"] = deepcopy(arguments["form_body"])
     elif "text_body" in arguments:
-        output["body"] = arguments["text_body"]
-    return output
+        request["body"] = arguments["text_body"]
+    return request
+
+
+def _declared_probe_cookies(
+    *,
+    config: OperationGeneratorConfig,
+    header: str,
+) -> dict[str, str]:
+    """Extract only operation-declared Cookie Parameters from one header."""
+    parsed = SimpleCookie()
+    try:
+        parsed.load(header)
+    except CookieError:
+        return {}
+    declared = {
+        item.name
+        for item in config.snapshot.parameters
+        if item.location == "cookie"
+    }
+    return {
+        name: parsed[name].value
+        for name in sorted(declared)
+        if name in parsed
+    }
 
 
 def _typed_path_value(
@@ -362,22 +439,6 @@ def _typed_path_value(
         # Schema mismatch may itself be the evidence Solve is investigating.
         pass
     return value
-
-
-def _flatten_body(
-    output: dict[str, Any],
-    handle: str,
-    value: Any,
-) -> None:
-    """Retain a body value and each concrete object or array child."""
-    output[handle] = value
-    if isinstance(value, dict):
-        for name, child in value.items():
-            _flatten_body(output, f"{handle}.{name}", child)
-    elif isinstance(value, list):
-        # OpenAPI semantic handles use ``[]`` for an item Schema. The concrete
-        # list stays intact so typed reverse lookup remains deterministic.
-        output[f"{handle}[]"] = value
 
 
 def _matches_path_template(path: str, template: str) -> bool:

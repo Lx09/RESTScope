@@ -71,7 +71,12 @@ def smoke_report(*, long_value: str | None = None):
         cases=(
             CatalogTestCase(
                 case_id="TC1",
-                parameters={"path.projectId": value},
+                request={
+                    "path": {"projectId": value},
+                    "query": {},
+                    "header": {},
+                    "cookie": {},
+                },
                 response_body={"message": "project missing"},
                 failure=HTTPFailure(
                     status_code=404,

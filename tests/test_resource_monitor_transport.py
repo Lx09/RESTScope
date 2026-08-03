@@ -220,6 +220,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     from restscope.llm import ToolCall
     from restscope.openapi_parser import OpenAPIParser
     from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.testing import build_semantic_input_map
 
     processor = CapturingProcessor()
     transport = TargetHTTPTransport(
@@ -287,7 +288,11 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
             name="restscope.http.request",
             arguments={"method": "GET", "path": "/users/me"},
         ),
-        catalog=TestCaseCatalog(valid_parameters={"path.userId"}),
+        catalog=TestCaseCatalog(
+            input_references=build_semantic_input_map(
+                config
+            ).reference_by_handle.values()
+        ),
     )
     unscoped = runtime.target_http_tool.execute(
         runtime.require_context(),

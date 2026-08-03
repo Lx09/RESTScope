@@ -8,6 +8,7 @@ single-purpose tools return only the exact requested facts.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -42,13 +43,42 @@ CatalogFailure = HTTPFailure | TransportFailure
 class CatalogTestCaseDraft(_Model):
     """Carry one executed request before the Catalog assigns its short identity."""
 
-    parameters: dict[str, Any]
+    request: dict[str, Any]
     response_body: Any | None = None
     failure: CatalogFailure | None = Field(default=None, discriminator="kind")
 
     @model_validator(mode="after")
-    def validate_response_retention(self) -> "CatalogTestCaseDraft":
-        """Permit a body only for the approved actionable HTTP status range."""
+    def validate_retained_evidence(self) -> "CatalogTestCaseDraft":
+        """Validate canonical request JSON and approved response retention.
+
+        The four ordinary OpenAPI Parameter locations always exist as objects.
+        An optional ``body`` key distinguishes an omitted Body from an explicit
+        JSON null. No transport-only or internal control fields enter this DTO.
+        """
+        required_locations = {"path", "query", "header", "cookie"}
+        supplied = set(self.request)
+        if not required_locations <= supplied:
+            missing = sorted(required_locations - supplied)
+            raise ValueError(
+                "request must contain Parameter location objects: "
+                + ", ".join(missing)
+            )
+        unknown = supplied - required_locations - {"body"}
+        if unknown:
+            raise ValueError(
+                "request contains unknown top-level fields: "
+                + ", ".join(sorted(unknown))
+            )
+        for location in sorted(required_locations):
+            if not isinstance(self.request[location], dict):
+                raise ValueError(f"request.{location} must be an object")
+        try:
+            json.dumps(self.request, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "request must contain only JSON-compatible values"
+            ) from exc
+
         if self.response_body is None:
             return self
         if (

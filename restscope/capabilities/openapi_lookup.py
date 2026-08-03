@@ -26,6 +26,7 @@ from restscope.openapi_parser.ir import (
     ResponseIR,
     SchemaIR,
 )
+from restscope.request_inputs import RequestInputReference
 
 from .agent_tools import ToolFailure
 from .tool_context import ToolContext
@@ -223,6 +224,7 @@ class _SchemaEntry:
     required: bool
     schema: SchemaIR | None
     media_type: str | None = None
+    reference: RequestInputReference | None = None
 
 
 class OpenAPICapability:
@@ -319,6 +321,7 @@ class OpenAPICapability:
                 location="body",
                 media_type=selected_media_type,
                 skip_read_only=True,
+                reference=RequestInputReference.body(),
             )
         else:
             if media_type is not None:
@@ -431,11 +434,32 @@ def operation_parameter_handles(operation: OperationIR) -> frozenset[str]:
     """Return all legal semantic request handles for deterministic Catalog use.
 
     The Catalog accepts handles from every declared request media type so a
-    query for an inactive-but-valid Body field returns ``present: false``
-    instead of being mistaken for a forged name.  This direct runtime consumer
-    shares the exact traversal used by the three model-facing tools.
+    query for an inactive-but-valid Body field returns the explicit
+    ``parameter_not_used_in_request`` status instead of being mistaken for a
+    forged name. This direct runtime consumer shares the exact traversal used
+    by the three model-facing tools.
     """
-    return frozenset(entry.name for entry in _operation_inputs(operation))
+    return frozenset(
+        reference.handle
+        for reference in operation_input_references(operation)
+    )
+
+
+def operation_input_references(
+    operation: OperationIR,
+) -> tuple[RequestInputReference, ...]:
+    """Return every declared request input through the shared semantic Interface.
+
+    OpenAPI traversal remains this Capability's Adapter responsibility because
+    it also owns media-type and Schema selection.  Handle grammar and concrete
+    request-JSON traversal belong to :class:`RequestInputReference`.
+    """
+    references = {
+        entry.reference.handle: entry.reference
+        for entry in _operation_inputs(operation)
+        if entry.reference is not None
+    }
+    return tuple(references[handle] for handle in sorted(references))
 
 
 def _operation_inputs(operation: OperationIR) -> list[_SchemaEntry]:
@@ -454,6 +478,7 @@ def _operation_inputs(operation: OperationIR) -> list[_SchemaEntry]:
                 location="body",
                 media_type=media_type,
                 skip_read_only=True,
+                reference=RequestInputReference.body(),
             )
         )
     return output
@@ -472,13 +497,15 @@ def _ordinary_input_entries(operation: OperationIR) -> list[_SchemaEntry]:
             # Header names are case-insensitive on the wire.  Lowercasing here
             # keeps OpenAPI lookup aligned with generation, Catalog, and Patch.
             name = parameter.name.lower() if location == "header" else parameter.name
+            reference = RequestInputReference.parameter(location, name)
             output.extend(
                 _schema_entries(
                     parameter.schema,
-                    name=f"{location}.{name}",
+                    name=reference.handle,
                     required=parameter.required,
                     location=location,
                     skip_read_only=True,
+                    reference=reference,
                 )
             )
     return output
@@ -494,6 +521,7 @@ def _schema_entries(
     skip_read_only: bool = False,
     skip_write_only: bool = False,
     visited: frozenset[int] = frozenset(),
+    reference: RequestInputReference | None = None,
 ) -> list[_SchemaEntry]:
     """Flatten one resolved Schema into stable, model-facing semantic handles."""
     item = _SchemaEntry(
@@ -502,6 +530,7 @@ def _schema_entries(
         required=required,
         schema=schema,
         media_type=media_type,
+        reference=reference,
     )
     if schema is None or id(schema) in visited:
         return [item]
@@ -516,26 +545,42 @@ def _schema_entries(
         output.extend(
             _schema_entries(
                 child,
-                name=f"{name}.{property_name}",
+                name=(
+                    reference.property(property_name).handle
+                    if reference is not None
+                    else f"{name}.{property_name}"
+                ),
                 required=property_name in schema.required,
                 location=location,
                 media_type=media_type,
                 skip_read_only=skip_read_only,
                 skip_write_only=skip_write_only,
                 visited=next_visited,
+                reference=(
+                    reference.property(property_name)
+                    if reference is not None
+                    else None
+                ),
             )
         )
     if schema.items is not None:
         output.extend(
             _schema_entries(
                 schema.items,
-                name=f"{name}[]",
+                name=(
+                    reference.items().handle
+                    if reference is not None
+                    else f"{name}[]"
+                ),
                 required=required,
                 location=location,
                 media_type=media_type,
                 skip_read_only=skip_read_only,
                 skip_write_only=skip_write_only,
                 visited=next_visited,
+                reference=(
+                    reference.items() if reference is not None else None
+                ),
             )
         )
     for combiner, branches in (
@@ -547,13 +592,22 @@ def _schema_entries(
             output.extend(
                 _schema_entries(
                     branch,
-                    name=f"{name}.{combiner}[{index}]",
+                    name=(
+                        reference.variant(combiner, index).handle
+                        if reference is not None
+                        else f"{name}.{combiner}[{index}]"
+                    ),
                     required=required,
                     location=location,
                     media_type=media_type,
                     skip_read_only=skip_read_only,
                     skip_write_only=skip_write_only,
                     visited=next_visited,
+                    reference=(
+                        reference.variant(combiner, index)
+                        if reference is not None
+                        else None
+                    ),
                 )
             )
     return output
