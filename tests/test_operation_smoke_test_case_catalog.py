@@ -15,16 +15,23 @@ def test_catalog_assigns_ids_and_answers_typed_bidirectional_queries() -> None:
         HTTPFailure,
         TestCaseCatalog,
     )
+    from restscope.request_inputs import RequestInputReference
 
     catalog = TestCaseCatalog(
-        valid_parameters={"body.name", "body.namespace_id", "query.active"}
+        input_references=[
+            RequestInputReference.body().property("name"),
+            RequestInputReference.body().property("namespace_id"),
+            RequestInputReference.parameter("query", "active"),
+        ]
     )
     recorded = catalog.record(
         CatalogTestCaseDraft(
-            parameters={
-                "body.name": "demo",
-                "body.namespace_id": 900001,
-                "query.active": True,
+            request={
+                "path": {},
+                "query": {"active": True},
+                "header": {},
+                "cookie": {},
+                "body": {"name": "demo", "namespace_id": 900001},
             },
             response_body={
                 "message": {
@@ -49,22 +56,34 @@ def test_catalog_assigns_ids_and_answers_typed_bidirectional_queries() -> None:
             "TC1": {
                 "parameter": "body.namespace_id",
                 "status": "parameter_used_in_request",
-                "value": 900001,
+                "request": {"body": {"namespace_id": 900001}},
             }
         },
     }
     assert catalog.find_parameters_by_value(
         case_ids=["TC1"],
         value=900001,
-    )["cases"]["TC1"]["parameters"] == ["body.namespace_id"]
+    )["cases"]["TC1"]["matches"] == [
+        {
+            "parameter": "body.namespace_id",
+            "request": {"body": {"namespace_id": 900001}},
+        }
+    ]
     assert catalog.get_response_field_value(
         case_ids=["TC1"],
         field="body.message.retry",
-    )["cases"]["TC1"]["value"] == 900001
+    )["cases"]["TC1"]["response"] == {
+        "body": {"message": {"retry": 900001}}
+    }
     assert catalog.find_response_fields_by_value(
         case_ids=["TC1"],
         value=900001,
-    )["cases"]["TC1"]["fields"] == ["body.message.retry"]
+    )["cases"]["TC1"]["matches"] == [
+        {
+            "field": "body.message.retry",
+            "response": {"body": {"message": {"retry": 900001}}},
+        }
+    ]
     assert catalog.get_failure_messages(
         case_ids=["TC1"],
     )["cases"]["TC1"]["messages"] == [
@@ -83,11 +102,23 @@ def test_catalog_reports_whether_each_request_used_one_parameter() -> None:
         CatalogTestCaseDraft,
         TestCaseCatalog,
     )
+    from restscope.request_inputs import RequestInputReference
 
-    catalog = TestCaseCatalog(valid_parameters={"body.name", "query.optional"})
+    catalog = TestCaseCatalog(
+        input_references=[
+            RequestInputReference.body().property("name"),
+            RequestInputReference.parameter("query", "optional"),
+        ]
+    )
     recorded = catalog.record(
         CatalogTestCaseDraft(
-            parameters={"body.name": "created"},
+            request={
+                "path": {},
+                "query": {},
+                "header": {},
+                "cookie": {},
+                "body": {"name": "created"},
+            },
             response_body=None,
             failure=None,
         )
@@ -103,7 +134,7 @@ def test_catalog_reports_whether_each_request_used_one_parameter() -> None:
         "parameter": "query.optional",
         "status": "parameter_not_used_in_request",
     }
-    assert "value" not in result["cases"]["TC1"]
+    assert "request" not in result["cases"]["TC1"]
 
     used = catalog.get_parameter_value(
         case_ids=["TC1"],
@@ -112,7 +143,7 @@ def test_catalog_reports_whether_each_request_used_one_parameter() -> None:
     assert used["cases"]["TC1"] == {
         "parameter": "body.name",
         "status": "parameter_used_in_request",
-        "value": "created",
+        "request": {"body": {"name": "created"}},
     }
 
 
@@ -125,7 +156,7 @@ def test_catalog_dto_rejects_a_body_without_a_4xx_or_5xx_failure() -> None:
 
     with pytest.raises(ValidationError, match="only for a 4xx/5xx"):
         CatalogTestCaseDraft(
-            parameters={},
+            request={"path": {}, "query": {}, "header": {}, "cookie": {}},
             response_body={"large": "success body"},
             failure=None,
         )
@@ -139,11 +170,16 @@ def test_catalog_distinguishes_response_body_and_field_absence() -> None:
         TestCaseCatalog,
     )
 
-    catalog = TestCaseCatalog(valid_parameters=set())
+    catalog = TestCaseCatalog(input_references=[])
     for body in (None, {"message": "bad"}, {"code": 42}):
         catalog.record(
             CatalogTestCaseDraft(
-                parameters={},
+                request={
+                    "path": {},
+                    "query": {},
+                    "header": {},
+                    "cookie": {},
+                },
                 response_body=body,
                 failure=HTTPFailure(status_code=400, messages=["HTTP 400"]),
             )
@@ -167,7 +203,7 @@ def test_catalog_distinguishes_response_body_and_field_absence() -> None:
             "TC3": {
                 "field": "body.code",
                 "status": "response_field_present_in_retained_body",
-                "value": 42,
+                "response": {"body": {"code": 42}},
             },
         }
     }
@@ -182,8 +218,12 @@ def test_response_field_path_is_validated_when_body_was_not_retained() -> None:
         TestCaseCatalog,
     )
 
-    catalog = TestCaseCatalog(valid_parameters=set())
-    catalog.record(CatalogTestCaseDraft(parameters={}))
+    catalog = TestCaseCatalog(input_references=[])
+    catalog.record(
+        CatalogTestCaseDraft(
+            request={"path": {}, "query": {}, "header": {}, "cookie": {}}
+        )
+    )
 
     with pytest.raises(KeyError, match="must start with body"):
         catalog.get_response_field_value(
@@ -198,11 +238,22 @@ def test_catalog_comparison_is_type_sensitive() -> None:
         CatalogTestCaseDraft,
         TestCaseCatalog,
     )
+    from restscope.request_inputs import RequestInputReference
 
-    catalog = TestCaseCatalog(valid_parameters={"query.bool", "query.int"})
+    catalog = TestCaseCatalog(
+        input_references=[
+            RequestInputReference.parameter("query", "bool"),
+            RequestInputReference.parameter("query", "int"),
+        ]
+    )
     catalog.record(
         CatalogTestCaseDraft(
-            parameters={"query.bool": True, "query.int": 1},
+            request={
+                "path": {},
+                "query": {"bool": True, "int": 1},
+                "header": {},
+                "cookie": {},
+            },
             response_body=None,
             failure=None,
         )
@@ -213,7 +264,48 @@ def test_catalog_comparison_is_type_sensitive() -> None:
         value=True,
     )
 
-    assert result["cases"]["TC1"]["parameters"] == ["query.bool"]
+    assert result["cases"]["TC1"]["matches"] == [
+        {
+            "parameter": "query.bool",
+            "request": {"query": {"bool": True}},
+        }
+    ]
+    assert catalog.find_parameters_by_value(
+        case_ids=["TC1"],
+        value="not-sent",
+    )["cases"]["TC1"]["matches"] == []
+
+
+def test_response_fragment_keeps_a_complete_real_array() -> None:
+    """An indexed field query must not fabricate preceding array entries."""
+    from restscope.operation_smoke.test_case_catalog import (
+        CatalogTestCaseDraft,
+        HTTPFailure,
+        TestCaseCatalog,
+    )
+
+    catalog = TestCaseCatalog(input_references=[])
+    errors = [
+        {"code": "first", "detail": "one"},
+        {"code": "second", "detail": "two"},
+    ]
+    catalog.record(
+        CatalogTestCaseDraft(
+            request={"path": {}, "query": {}, "header": {}, "cookie": {}},
+            response_body={"errors": errors, "ignored": True},
+            failure=HTTPFailure(status_code=400, messages=["HTTP 400"]),
+        )
+    )
+
+    result = catalog.get_response_field_value(
+        case_ids=["TC1"],
+        field="body.errors[1].code",
+    )
+
+    assert result["cases"]["TC1"]["response"] == {
+        "body": {"errors": errors}
+    }
+    assert "value" not in result["cases"]["TC1"]
 
 
 def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> None:
@@ -227,12 +319,21 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
         register_test_case_tools,
         tool_result_json,
     )
+    from restscope.request_inputs import RequestInputReference
 
     long_value = "x" * 10_000
-    catalog = TestCaseCatalog(valid_parameters={"body.name"})
+    catalog = TestCaseCatalog(
+        input_references=[RequestInputReference.body().property("name")]
+    )
     catalog.record(
         CatalogTestCaseDraft(
-            parameters={"body.name": long_value},
+            request={
+                "path": {},
+                "query": {},
+                "header": {},
+                "cookie": {},
+                "body": {"name": long_value},
+            },
             response_body={"message": "invalid"},
             failure=HTTPFailure(
                 status_code=400,
@@ -274,14 +375,14 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
     rendered = tool_result_json(result)
     assert rendered.startswith("{")
     assert "```" not in rendered
-    clipped = result.structured["cases"]["TC1"]["value"]
+    clipped = result.structured["cases"]["TC1"]["request"]["body"]["name"]
     assert clipped["truncated"] is True
     assert clipped["original_chars"] == 10_000
     assert result.structured["cases"]["TC1"]["status"] == (
         "parameter_used_in_request"
     )
     assert "action" not in result.structured
-    assert catalog.get_case("TC1").parameters["body.name"] == long_value
+    assert catalog.get_case("TC1").request["body"]["name"] == long_value
 
     forged = toolbox.execute(
         ToolCall(

@@ -106,14 +106,25 @@ def _catalog(*cases: tuple[int, str, str]):
         HTTPFailure,
         TestCaseCatalog,
     )
+    from restscope.request_inputs import RequestInputReference
 
     catalog = TestCaseCatalog(
-        valid_parameters={"body", "body.name", "body.namespace_id"}
+        input_references=[
+            RequestInputReference.body(),
+            RequestInputReference.body().property("name"),
+            RequestInputReference.body().property("namespace_id"),
+        ]
     )
     for status, message, name in cases:
         catalog.record(
             CatalogTestCaseDraft(
-                parameters={"body.name": name},
+                request={
+                    "path": {},
+                    "query": {},
+                    "header": {},
+                    "cookie": {},
+                    "body": {"name": name},
+                },
                 response_body={"message": message},
                 failure=HTTPFailure(
                     status_code=status,
@@ -260,6 +271,9 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     assert "```json" not in prompt
     assert "fingerprint_ref" not in prompt.casefold()
     assert "item_id" not in prompt
+    assert "query.sort" in prompt
+    assert "request.query.sort" in prompt
+    assert '"sort"' in prompt
 
 
 def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:
@@ -446,13 +460,24 @@ def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:
         HTTPFailure,
         TestCaseCatalog,
     )
+    from restscope.request_inputs import RequestInputReference
 
     catalog = TestCaseCatalog(
-        valid_parameters={"body", "body.name", "body.namespace_id"}
+        input_references=[
+            RequestInputReference.body(),
+            RequestInputReference.body().property("name"),
+            RequestInputReference.body().property("namespace_id"),
+        ]
     )
     catalog.record(
         CatalogTestCaseDraft(
-            parameters={"body.name": "duplicate"},
+            request={
+                "path": {},
+                "query": {},
+                "header": {},
+                "cookie": {},
+                "body": {"name": "duplicate"},
+            },
             response_body={"message": {"name": ["has already been taken"]}},
             failure=HTTPFailure(
                 status_code=400,
@@ -462,7 +487,13 @@ def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:
     )
     catalog.record(
         CatalogTestCaseDraft(
-            parameters={"body.namespace_id": 999},
+            request={
+                "path": {},
+                "query": {},
+                "header": {},
+                "cookie": {},
+                "body": {"namespace_id": 999},
+            },
             response_body={"message": {"namespace_id": ["is invalid"]}},
             failure=HTTPFailure(
                 status_code=400,

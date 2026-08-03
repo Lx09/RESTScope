@@ -17,7 +17,7 @@ from dataclasses import asdict
 from typing import Protocol
 
 from restscope.capabilities.tool_context import ToolContext
-from restscope.capabilities.openapi_lookup import operation_parameter_handles
+from restscope.capabilities import operation_input_references
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.failure_solver import (
     FailureSolveAgentFactory,
@@ -185,10 +185,10 @@ class OperationSmokeCoordinator:
         semantic = build_semantic_input_map(current)
         operation = context.ir.operations.get(request.operation_key)
         catalog = TestCaseCatalog(
-            valid_parameters=(
-                operation_parameter_handles(operation)
+            input_references=(
+                operation_input_references(operation)
                 if operation is not None
-                else semantic.node_by_handle
+                else semantic.reference_by_handle.values()
             ),
         )
 

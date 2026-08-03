@@ -2,14 +2,15 @@
 
 The service freezes Generator configuration, prepares every request before the
 first network call, then executes the requests sequentially. Its output is a
-``BatchExecutionResult``: the concrete request parameters and outcome of each
-case, ready to enter Operation Smoke's run-local Test Case Catalog. It does not
-build a second reporting representation.
+``BatchExecutionResult``: structured direct-name request JSON and the outcome
+of each case, ready to enter Operation Smoke's run-local Test Case Catalog. It
+does not build a second reporting representation.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 import json
 import secrets
@@ -34,17 +35,12 @@ from restscope.operation_smoke.test_case_catalog import (
 from .catalog import GeneratorConfigCatalog
 from .constraints import ConstraintSet, ConstraintValidationError
 from .constraint_solver import ConstraintSolveError
-from .generation import (
-    generate_test_case,
-    project_generated_input_value,
-)
+from .generation import generate_test_case
 from .models import (
     GeneratedTestCase,
-    OperationTestSnapshot,
     PreparedTestRequest,
 )
 from .ports import ReferenceValueProvider
-from .semantics import build_semantic_input_map
 from .serialization import serialize_test_case
 
 
@@ -262,7 +258,6 @@ class OperationTestingService:
                 next_case_number += 1
                 return case_id
 
-        semantic_inputs = build_semantic_input_map(config)
         cases: list[CatalogTestCase] = []
         for case_index, (generated, request, target_request) in enumerate(
             prepared
@@ -276,11 +271,7 @@ class OperationTestingService:
                     generated=generated,
                     request=request,
                     target_request=target_request,
-                    parameters=_project_sent_parameters(
-                        config.snapshot,
-                        generated,
-                        semantic_inputs.handle_by_node,
-                    ),
+                    catalog_request=_catalog_request(generated),
                 )
             )
 
@@ -301,7 +292,7 @@ class OperationTestingService:
         generated: GeneratedTestCase,
         request: PreparedTestRequest,
         target_request: PreparedTargetRequest,
-        parameters: dict[str, Any],
+        catalog_request: dict[str, Any],
     ) -> CatalogTestCase:
         """Execute one prepared request and retain only Catalog-approved facts."""
         with self.tracing_runtime.span(
@@ -369,7 +360,7 @@ class OperationTestingService:
                 )
                 result = CatalogTestCase(
                     case_id=case_id,
-                    parameters=parameters,
+                    request=catalog_request,
                     response_body=response_body,
                     failure=failure,
                 )
@@ -398,35 +389,32 @@ class OperationTestingService:
 
         return CatalogTestCase(
             case_id=case_id,
-            parameters=parameters,
+            request=catalog_request,
             response_body=None,
             failure=failure,
         )
 
 
-def _project_sent_parameters(
-    operation: OperationTestSnapshot,
-    generated: GeneratedTestCase,
-    handle_by_node: Mapping[str, str],
-) -> dict[str, Any]:
-    """Project every actually present semantic input from one generated case.
+def _catalog_request(generated: GeneratedTestCase) -> dict[str, Any]:
+    """Copy one generated case into canonical direct-name request JSON.
 
-    The Generator stores values by internal node identity, while Agents use
-    stable handles such as ``query.page`` and ``body.name``. Missing optional
-    values are omitted here; the Catalog can still answer a valid lookup with
-    ``present: false`` because it knows the operation's complete handle set.
+    Generator control state and internal node identities stay outside the Test
+    Case. Header names are lowercased because HTTP makes them case-insensitive
+    and semantic handles use that canonical spelling. The optional Body key
+    preserves the difference between omission and an explicitly sent null.
     """
-    parameters: dict[str, Any] = {}
-    for input_node_id, handle in handle_by_node.items():
-        try:
-            parameters[handle] = project_generated_input_value(
-                operation,
-                generated,
-                input_node_id=input_node_id,
-            )
-        except KeyError:
-            continue
-    return parameters
+    request: dict[str, Any] = {
+        "path": deepcopy(generated.path_parameters),
+        "query": deepcopy(generated.query_parameters),
+        "header": {
+            name.lower(): deepcopy(value)
+            for name, value in generated.header_parameters.items()
+        },
+        "cookie": deepcopy(generated.cookie_parameters),
+    }
+    if generated.body_present:
+        request["body"] = deepcopy(generated.body)
+    return request
 
 
 def _decode_failure_body(

@@ -299,11 +299,13 @@ event.
 Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
 tracking. Batch execution returns concrete Test Cases instead of building a
 parallel report. Every attempted case enters one run-local `TestCaseCatalog`
-with its actually sent semantic Parameter values. Successful responses keep no
-body. A 4xx/5xx response keeps a decoded body up to 10 MiB plus its separately
-normalized Failure; redirects and transport errors keep only bounded Failure
-facts. The Catalog is released when the operation's Smoke run ends and is
-never persisted.
+with its actually sent inputs as structured `path`, `query`, `header`,
+`cookie`, and optional `body` JSON. Direct JSON keys such as `sort` remain
+distinct from the unique cross-tool handle `query.sort`. Successful responses
+keep no body. A 4xx/5xx response keeps a decoded body up to 10 MiB plus its
+separately normalized Failure; redirects and transport errors keep only bounded
+Failure facts. The Catalog is released when the operation's Smoke run ends and
+is never persisted.
 
 `restscope.http.request` is a high-risk, non-read-only model capability that
 can trigger side effects on the bound target. Failure Solve receives a further
@@ -370,9 +372,9 @@ internally by Operation Smoke.
    context contains only the operation, each Failure Message, and a
    representative `TC*` reference. It discovers Parameter handles through
    `openapi.list_inputs` and queries exact case evidence through five
-   single-purpose `test_case.*` tools for Parameter values, reverse Parameter
-   matches, response fields, reverse response matches, and Failure Messages.
-   Native structured results use explicit statuses such as
+   single-purpose `test_case.*` tools for request JSON fragments, reverse
+   Parameter matches, response JSON fragments, reverse response matches, and
+   Failure Messages. Native structured results use explicit statuses such as
    `parameter_not_used_in_request` instead of boolean presence flags.
    It reads no Failure history. Deterministic validation and Markdown
    correction run before Memory is written. Every current-round Failure

@@ -11,20 +11,29 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from restscope.request_inputs import RequestInputReference
+
 from .schemas import CatalogTestCase, CatalogTestCaseDraft
 
 
 class TestCaseCatalog:
     """Hide run-local Test Case identity, storage, and lookup behind one Interface."""
 
-    def __init__(self, *, valid_parameters: Iterable[str]) -> None:
+    def __init__(
+        self,
+        *,
+        input_references: Iterable[RequestInputReference],
+    ) -> None:
         """Create an empty Catalog for one operation.
 
         Args:
-            valid_parameters: Semantic OpenAPI input handles. They distinguish
-                a valid-but-absent request input from a forged Parameter name.
+            input_references: Trusted OpenAPI request-input references. They
+                distinguish valid-but-absent input from a forged handle and
+                own handle-to-request-JSON traversal for every Catalog query.
         """
-        self._valid_parameters = frozenset(valid_parameters)
+        self._input_references = {
+            item.handle: item for item in input_references
+        }
         self._cases: dict[str, CatalogTestCase] = {}
         self._next_number = 1
 
@@ -44,7 +53,7 @@ class TestCaseCatalog:
         The set is never added to an initial Prompt. Dedup uses it only after a
         final model response to reject invented semantic handles.
         """
-        return self._valid_parameters
+        return frozenset(self._input_references)
 
     def issue_case_id(self) -> str:
         """Reserve the next identity for Batch execution or an HTTP Probe."""
@@ -90,9 +99,10 @@ class TestCaseCatalog:
             parameter: The semantic OpenAPI input handle to inspect.
 
         Returns:
-            One result per Test Case. A used Parameter includes its exact value;
-            an unused Parameter has the explicit terminal status
-            ``parameter_not_used_in_request`` and omits ``value``.
+            One result per Test Case. A used Parameter includes direct-name
+            request JSON for the selected input. An unused Parameter has the
+            explicit terminal status
+            ``parameter_not_used_in_request`` and omits ``request``.
 
         Raises:
             KeyError: A Test Case or Parameter was not issued for this
@@ -101,12 +111,11 @@ class TestCaseCatalog:
         cases = [self._require_case(case_id) for case_id in case_ids]
         results: dict[str, Any] = {}
         for case in cases:
-            if (
-                parameter not in self._valid_parameters
-                and parameter not in case.parameters
-            ):
+            reference = self._input_references.get(parameter)
+            if reference is None:
                 raise KeyError(f"Unknown Parameter: {parameter}")
-            if parameter not in case.parameters:
+            present, _ = reference.read(case.request)
+            if not present:
                 results[case.case_id] = {
                     "parameter": parameter,
                     "status": "parameter_not_used_in_request",
@@ -115,7 +124,7 @@ class TestCaseCatalog:
             results[case.case_id] = {
                 "parameter": parameter,
                 "status": "parameter_used_in_request",
-                "value": case.parameters[parameter],
+                "request": reference.fragment(case.request),
             }
         return {"cases": results}
 
@@ -134,7 +143,7 @@ class TestCaseCatalog:
         Returns:
             One explicit status per Test Case. The result distinguishes an
             unretained response body from a retained body that lacks the field;
-            only a present field includes ``value``.
+            only a present field includes a structured ``response`` fragment.
 
         Raises:
             KeyError: A Test Case is unknown or the field path is invalid.
@@ -164,7 +173,7 @@ class TestCaseCatalog:
             results[case.case_id] = {
                 "field": field,
                 "status": "response_field_present_in_retained_body",
-                "value": value,
+                "response": _response_fragment(case.response_body, field),
             }
         return {"cases": results}
 
@@ -182,25 +191,26 @@ class TestCaseCatalog:
                 their types during comparison.
 
         Returns:
-            The matching semantic Parameter handles for each Test Case.
+            Matching semantic handles and direct-name request JSON fragments.
 
         Raises:
             KeyError: A Test Case reference is unknown.
         """
         cases = [self._require_case(case_id) for case_id in case_ids]
-        return {
-            "cases": {
-                case.case_id: {
-                    "value": value,
-                    "parameters": sorted(
-                        name
-                        for name, parameter_value in case.parameters.items()
-                        if _typed_equal(parameter_value, value)
-                    ),
-                }
-                for case in cases
-            }
-        }
+        results: dict[str, Any] = {}
+        for case in cases:
+            matches = []
+            for name, reference in sorted(self._input_references.items()):
+                present, parameter_value = reference.read(case.request)
+                if present and _typed_equal(parameter_value, value):
+                    matches.append(
+                        {
+                            "parameter": name,
+                            "request": reference.fragment(case.request),
+                        }
+                    )
+            results[case.case_id] = {"value": value, "matches": matches}
+        return {"cases": results}
 
     def find_response_fields_by_value(
         self,
@@ -215,8 +225,8 @@ class TestCaseCatalog:
             value: A JSON-like value compared without bool/integer coercion.
 
         Returns:
-            Concrete ``body.*`` paths for every match in each retained body.
-            A case without a retained body has an empty field list.
+            Concrete ``body.*`` paths and structured response fragments for
+            every match. A case without a match has an empty ``matches`` list.
 
         Raises:
             KeyError: A Test Case reference is unknown.
@@ -226,13 +236,20 @@ class TestCaseCatalog:
             "cases": {
                 case.case_id: {
                     "value": value,
-                    "fields": sorted(
-                        path
-                        for path, field_value in _response_fields(
-                            case.response_body
+                    "matches": [
+                        {
+                            "field": path,
+                            "response": _response_fragment(
+                                case.response_body,
+                                path,
+                            ),
+                        }
+                        for path, field_value in sorted(
+                            _response_fields(case.response_body),
+                            key=lambda item: item[0],
                         )
                         if _typed_equal(field_value, value)
-                    ),
+                    ],
                 }
                 for case in cases
             }
@@ -307,6 +324,29 @@ def _response_value(body: Any | None, path: str) -> tuple[bool, Any | None]:
                 return False, None
             current = current[part]
     return True, current
+
+
+def _response_fragment(body: Any, path: str) -> dict[str, Any]:
+    """Project one present response field as trustworthy JSON ancestry.
+
+    Object-only paths keep just the selected ancestry. When a path enters an
+    array, the fragment stops narrowing at that array and retains the complete
+    real container so it never fabricates values for omitted indices.
+    """
+    parts = _response_path_parts(path)
+    first_array = next(
+        (index for index, part in enumerate(parts) if isinstance(part, int)),
+        None,
+    )
+    selected = parts if first_array is None else parts[:first_array]
+    current = body
+    for part in selected:
+        assert isinstance(part, str)
+        current = current[part]
+    for part in reversed(selected):
+        assert isinstance(part, str)
+        current = {part: current}
+    return {"body": current}
 
 
 def _response_path_parts(path: str) -> list[str | int]:

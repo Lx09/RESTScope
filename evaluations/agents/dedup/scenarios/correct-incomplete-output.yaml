@@ -19,13 +19,13 @@ input:
       body.namespace_id: request/body/namespace_id
   valid_parameters: [body, body.name, body.namespace_id]
   catalog_cases:
-    - parameters: {body.name: invalid}
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {name: invalid}}
       response_body: {message: name is invalid}
       failure:
         kind: http
         status_code: 400
         messages: ["HTTP 400: name is invalid"]
-    - parameters: {body.namespace_id: 900001}
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {namespace_id: 900001}}
       response_body: {message: namespace is invalid}
       failure:
         kind: http

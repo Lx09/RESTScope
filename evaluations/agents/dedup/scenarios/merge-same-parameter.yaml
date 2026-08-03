@@ -19,13 +19,13 @@ input:
       body.namespace_id: request/body/namespace_id
   valid_parameters: [body, body.name, body.namespace_id]
   catalog_cases:
-    - parameters: {body.name: existing}
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {name: existing}}
       response_body: {message: name already exists}
       failure:
         kind: http
         status_code: 400
         messages: ["HTTP 400: name already exists"]
-    - parameters: {body.name: reserved}
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {name: reserved}}
       response_body: {message: name conflicts}
       failure:
         kind: http

@@ -154,6 +154,7 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
     from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
+    from restscope.testing import build_semantic_input_map
 
     config = smoke_config()
     ir = OpenAPIParser.parse(
@@ -198,7 +199,7 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
         )
     )
     catalog = TestCaseCatalog(
-        valid_parameters={"path.projectId", "query.region"}
+        input_references=build_semantic_input_map(config).reference_by_handle.values()
     )
 
     result = CurrentOperationHTTPProbe(
@@ -217,7 +218,7 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
         catalog=catalog,
     )
 
-    assert result.status == "succeeded"
+    assert result.status == "succeeded", result
     assert result.structured == {
         "case_id": "TC1",
         "status_code": 404,
@@ -232,8 +233,152 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
     assert catalog.get_parameter_value(
         case_ids=["TC1"],
         parameter="path.projectId",
-    )["cases"]["TC1"]["value"] == "known"
+    )["cases"]["TC1"]["request"] == {
+        "path": {"projectId": "known"}
+    }
     assert catalog.get_response_field_value(
         case_ids=["TC1"],
         field="body.message",
-    )["cases"]["TC1"]["value"] == "project missing"
+    )["cases"]["TC1"]["response"] == {
+        "body": {"message": "project missing"}
+    }
+
+
+def test_probe_normalizes_transport_arguments_to_direct_name_request_json() -> None:
+    """Probe evidence uses direct names and excludes runtime authentication."""
+    import httpx
+
+    from restscope.capabilities import ToolContext, build_capabilities
+    from restscope.capabilities import operation_input_references
+    from restscope.http_transport import TargetHTTPTransport
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Probe JSON", "version": "1"},
+            "paths": {
+                "/items/{id}": {
+                    "post": {
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "integer"},
+                            },
+                            {
+                                "name": "sort",
+                                "in": "query",
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "sort",
+                                "in": "header",
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "mode",
+                                "in": "cookie",
+                                "schema": {"type": "string"},
+                            },
+                        ],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"}
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"400": {"description": "bad"}},
+                    }
+                }
+            },
+        }
+    )
+    operation = ir.operations["POST /items/{id}"]
+    config = build_initial_operation_config(operation)
+    sent_cookie_headers: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        """Capture the wire Cookie while returning a deterministic failure."""
+        sent_cookie_headers.append(request.headers["cookie"])
+        return httpx.Response(
+            400,
+            headers={"Content-Type": "application/json"},
+            json={"message": "bad"},
+        )
+
+    runtime = build_capabilities(
+        target_http_transport=TargetHTTPTransport(
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(respond),
+                **kwargs,
+            )
+        )
+    )
+    runtime.bind_context(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={},
+            base_url="https://api.example.test",
+            headers={"Cookie": "session=runtime"},
+        )
+    )
+    catalog = TestCaseCatalog(
+        input_references=operation_input_references(operation)
+    )
+
+    result = CurrentOperationHTTPProbe(
+        http_tool=runtime.target_http_tool,
+        context_provider=runtime.require_context,
+    ).execute(
+        config=config,
+        tool_call=ToolCall(
+            id="probe-json",
+            name="restscope.http.request",
+            arguments={
+                "method": "POST",
+                "path": "/items/7",
+                "query": {"sort": "query-value"},
+                "headers": {
+                    "sort": "header-value",
+                    "Cookie": "mode=compact",
+                },
+                "json_body": {"name": "demo"},
+            },
+        ),
+        catalog=catalog,
+    )
+
+    assert result.status == "succeeded"
+    case = catalog.get_case("TC1")
+    assert case.request == {
+        "path": {"id": 7},
+        "query": {"sort": "query-value"},
+        "header": {"sort": "header-value"},
+        "cookie": {"mode": "compact"},
+        "body": {"name": "demo"},
+    }
+    assert len(sent_cookie_headers) == 1
+    assert {
+        part.strip()
+        for part in sent_cookie_headers[0].split(";")
+    } == {"mode=compact", "session=runtime"}
+    assert catalog.get_parameter_value(
+        case_ids=["TC1"], parameter="query.sort"
+    )["cases"]["TC1"]["request"] == {
+        "query": {"sort": "query-value"}
+    }
+    assert catalog.get_parameter_value(
+        case_ids=["TC1"], parameter="header.sort"
+    )["cases"]["TC1"]["request"] == {
+        "header": {"sort": "header-value"}
+    }

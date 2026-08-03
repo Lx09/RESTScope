@@ -2,6 +2,11 @@
 
 Status: Completed
 
+> Superseded output-shape note (2026-08-03): Test Cases now retain structured
+> request JSON, and Parameter/response tools return direct-name JSON fragments
+> alongside unique handles or paths. See
+> `test-case-structured-request-json.md`.
+
 ## Objective
 
 Replace the action-dispatched `query_test_case_catalog` model tool with five

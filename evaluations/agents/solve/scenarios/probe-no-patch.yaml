@@ -45,7 +45,7 @@ input:
     occurrence_count: 1
     attempts: []
   catalog_cases:
-    - parameters: {path.projectId: 7}
+    - request: {path: {projectId: 7}, query: {}, header: {}, cookie: {}}
       response_body: {message: transient server error}
       failure:
         kind: http
