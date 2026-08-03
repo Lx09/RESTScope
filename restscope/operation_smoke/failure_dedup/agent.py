@@ -28,10 +28,8 @@ from restscope.llm import (
 )
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.test_case_catalog import (
-    CATALOG_QUERY_TOOL_NAME,
     TestCaseCatalog,
-    catalog_query_tool_spec,
-    query_catalog,
+    register_test_case_tools,
     tool_result_json,
 )
 
@@ -198,15 +196,7 @@ class FailureDedupAgent:
             spec=openapi_list_inputs_tool_spec(),
             execute=self.openapi_capability.list_inputs,
         )
-        tools.register(
-            spec=catalog_query_tool_spec(),
-            execute=lambda **arguments: {
-                "structured": query_catalog(
-                    catalog=catalog,
-                    arguments=arguments,
-                )
-            },
-        )
+        register_test_case_tools(toolbox=tools, catalog=catalog)
         return tools
 
 

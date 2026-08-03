@@ -110,7 +110,10 @@ maximum”, or “exactly one of these fields is included”.
 Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
 Dedup receives exact messages and representative `TC*` references without
 item IDs or Fingerprint references. It uses the global `openapi.list_inputs`
-tool and a run-local exact Catalog query instead of receiving full HTTP JSON.
+tool and five run-local `test_case.*` tools instead of receiving full HTTP
+JSON. Each tool performs one exact query; an unused request Parameter and an
+unretained response body are reported with explicit terminal status text rather
+than a boolean presence flag.
 Solve can additionally query one input or response-field Schema at a time.
 The complete OpenAPI IR and database primary keys never enter model prompts.
 
@@ -216,7 +219,7 @@ Important files:
 
 - `coordinator.py`: complete-batch and fixed-todo orchestration.
 - `test_case_catalog/`: `TC*` identity, bounded response retention, exact
-  queries, and the Agent-local Catalog tool.
+  queries, and five single-purpose Agent-local Test Case tools.
 - `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
 - `references.py`: observed-value options exposed as model-safe `R` aliases.

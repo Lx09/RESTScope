@@ -198,11 +198,10 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
             tool_calls=[
                 ToolCall(
                     id="catalog-1",
-                    name="query_test_case_catalog",
+                    name="test_case.get_parameter_value",
                     arguments={
-                        "action": "parameter_value",
                         "case_ids": ["TC1", "TC2"],
-                        "name": "body.name",
+                        "parameter": "body.name",
                     },
                 )
             ],
@@ -273,18 +272,16 @@ def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:
                 tool_calls=[
                     ToolCall(
                         id="first-query",
-                        name="query_test_case_catalog",
+                        name="test_case.get_parameter_value",
                         arguments={
-                            "action": "parameter_value",
                             "case_ids": ["TC1"],
-                            "name": "body.name",
+                            "parameter": "body.name",
                         },
                     ),
                     ToolCall(
                         id="second-query",
-                        name="query_test_case_catalog",
+                        name="test_case.get_failure_messages",
                         arguments={
-                            "action": "failure_messages",
                             "case_ids": ["TC2"],
                         },
                     ),
@@ -336,8 +333,8 @@ def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:
     ]
 
 
-def test_dedup_registers_only_the_global_input_listing_tool() -> None:
-    """Dedup selects its operation per call and receives no Schema lookup tools."""
+def test_dedup_registers_input_listing_and_five_test_case_tools() -> None:
+    """Dedup receives one OpenAPI listing tool plus five exact evidence reads."""
     import json
 
     client = StubClient(
@@ -396,6 +393,17 @@ def test_dedup_registers_only_the_global_input_listing_tool() -> None:
     assert {
         spec.name for spec in client.requests[0].tools if spec.name.startswith("openapi.")
     } == {"openapi.list_inputs"}
+    assert {
+        spec.name
+        for spec in client.requests[0].tools
+        if spec.name.startswith("test_case.")
+    } == {
+        "test_case.get_parameter_value",
+        "test_case.find_parameters_by_value",
+        "test_case.get_response_field_value",
+        "test_case.find_response_fields_by_value",
+        "test_case.get_failure_messages",
+    }
     tool_message = next(
         message
         for message in client.requests[1].messages

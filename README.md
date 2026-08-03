@@ -369,8 +369,11 @@ internally by Operation Smoke.
    by equal complete suspected causal Parameter sets. Its initial Markdown
    context contains only the operation, each Failure Message, and a
    representative `TC*` reference. It discovers Parameter handles through
-   `openapi.list_inputs` and queries exact case values through
-   `query_test_case_catalog`; native structured tool results are compact JSON.
+   `openapi.list_inputs` and queries exact case evidence through five
+   single-purpose `test_case.*` tools for Parameter values, reverse Parameter
+   matches, response fields, reverse response matches, and Failure Messages.
+   Native structured results use explicit statuses such as
+   `parameter_not_used_in_request` instead of boolean presence flags.
    It reads no Failure history. Deterministic validation and Markdown
    correction run before Memory is written. Every current-round Failure
    carries exactly one representative `TC*`.

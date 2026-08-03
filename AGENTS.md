@@ -30,9 +30,12 @@ and task records. Do not load unrelated large documents by default.
 - Inspect Git status before editing. Preserve all unrelated and pre-existing
   user changes.
 - Build every new feature on its own branch in a dedicated Git worktree. After
-  the feature is complete and verified, merge it into local `main`, then remove
-  the feature worktree and branch. Commit, merge, and cleanup still require
-  their own explicit user authorization.
+  the feature is complete and verified, treat delivery as one continuous Git
+  lifecycle once the user has explicitly authorized its Git operations: commit
+  the scoped change, merge it into local `main`, verify the merged result, then
+  remove the feature worktree and branch. Do not leave a successfully merged
+  and verified feature worktree or branch behind. Commit, merge, and cleanup
+  still require explicit user authorization; push remains separately authorized.
 - Separate facts, hypotheses, proposals, and user-approved decisions when the
   distinction affects the work.
 - Treat current code and tests as executable evidence, not proof that the
@@ -188,6 +191,13 @@ These are hard project constraints:
 - A workflow package's `__init__.py` is its small external Interface.
   Cross-Agent imports must use the target Agent subpackage's public exports;
   do not reach into another Agent's private implementation modules.
+- Every RESTScope-owned LLM tool must expose one domain behavior. Do not use an
+  input discriminator such as `action`, `mode`, or `kind` to select unrelated
+  behaviors or result contracts inside one tool. Target selectors such as an
+  operation key, HTTP method, field path, filter, or pagination value are
+  allowed, as are same-behavior batching and natural result variants. This rule
+  does not apply to Agent final-output DTOs, internal domain DTOs, or external
+  MCP tool contracts.
 - Extract a shared package only when multiple real consumers have identical
   semantics and lifecycle requirements. Do not create speculative common base
   Agents or catch-all schema modules.
