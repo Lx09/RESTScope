@@ -47,6 +47,25 @@ class SequencedClient:
         self.chat = SimpleNamespace(completions=SequencedCompletions(responses))
 
 
+class FailingCompletions:
+    """Raise one SDK-like exception and retain the attempted request."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+        self.requests: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        self.requests.append(kwargs)
+        raise self.exc
+
+
+class FailingClient:
+    """Expose a failing completions endpoint through the SDK client shape."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.chat = SimpleNamespace(completions=FailingCompletions(exc))
+
+
 def deepseek_response(
     *,
     content: str | None,
@@ -206,6 +225,316 @@ def _search_tool():
             "required": ["query"],
         },
     )
+
+
+def _strict_submit_tool():
+    """Return one minimal schema satisfying DeepSeek strict object rules."""
+    from restscope.llm import ToolSpec
+
+    return ToolSpec(
+        name="submit_decision",
+        description="Submit one decision.",
+        kind="local_function",
+        input_schema={
+            "type": "object",
+            "properties": {"action": {"enum": ["accept"]}},
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        strict=True,
+    )
+
+
+def _strict_tool_call() -> Any:
+    """Return one provider-shaped strict submission call."""
+    return SimpleNamespace(
+        id="call_submit",
+        type="function",
+        function=SimpleNamespace(
+            name="submit_decision",
+            arguments='{"action":"accept"}',
+        ),
+    )
+
+
+def test_deepseek_strict_tools_use_only_the_beta_endpoint() -> None:
+    """A strict call is serialized to Beta while normal client stays unused."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    standard_client = RecordingClient()
+    beta_client = RecordingClient(
+        deepseek_response(
+            content="",
+            tool_calls=[_strict_tool_call()],
+        )
+    )
+    response = DeepSeekProvider(
+        api_key="test-key",
+        client=standard_client,
+        beta_client=beta_client,
+    ).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Submit acceptance")],
+            response_format="text",
+            tools=[_strict_submit_tool()],
+            tool_choice="required",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    assert standard_client.chat.completions.kwargs is None
+    kwargs = beta_client.chat.completions.kwargs
+    assert kwargs is not None
+    assert kwargs["tools"][0]["function"]["strict"] is True
+    assert kwargs["tool_choice"] == "required"
+    assert response.tool_calls[0].arguments == {"action": "accept"}
+    assert response.metadata["strict_tool_beta"] is True
+
+
+def test_deepseek_beta_serializes_both_parameter_patch_strict_tools() -> None:
+    """The two actual fixed-root ToolSpecs can share one strict Beta request."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+    from restscope.operation_smoke.parameter_patch import (
+        parameter_patch_proposal_tool_spec,
+    )
+    from restscope.operation_smoke.parameter_patch_review import (
+        parameter_patch_review_tool_spec,
+    )
+
+    response_call = SimpleNamespace(
+        id="call_review",
+        type="function",
+        function=SimpleNamespace(
+            name="submit_parameter_patch_review",
+            arguments='{"accepted":true,"issues":[]}',
+        ),
+    )
+    standard_client = RecordingClient()
+    beta_client = RecordingClient(
+        deepseek_response(content="", tool_calls=[response_call])
+    )
+    response = DeepSeekProvider(
+        api_key="test-key",
+        client=standard_client,
+        beta_client=beta_client,
+    ).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Validate both schemas")],
+            response_format="text",
+            tools=[
+                parameter_patch_proposal_tool_spec(),
+                parameter_patch_review_tool_spec(),
+            ],
+            tool_choice="required",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    kwargs = beta_client.chat.completions.kwargs
+    assert kwargs is not None
+    assert standard_client.chat.completions.kwargs is None
+    assert [tool["function"]["name"] for tool in kwargs["tools"]] == [
+        "submit_parameter_patch_proposal",
+        "submit_parameter_patch_review",
+    ]
+    assert all(tool["function"]["strict"] is True for tool in kwargs["tools"])
+    assert all(
+        tool["function"]["parameters"]["type"] == "object"
+        for tool in kwargs["tools"]
+    )
+    assert response.tool_calls[0].arguments == {"accepted": True, "issues": []}
+
+
+def test_deepseek_rejects_mixed_strict_tools_before_network() -> None:
+    """DeepSeek Beta requires every function in one request to be strict."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import (
+        DeepSeekCompatibilityError,
+        DeepSeekProvider,
+    )
+
+    standard_client = RecordingClient()
+    beta_client = RecordingClient()
+    with pytest.raises(DeepSeekCompatibilityError) as exc_info:
+        DeepSeekProvider(
+            api_key="test-key",
+            client=standard_client,
+            beta_client=beta_client,
+        ).invoke(
+            LLMRequest(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                messages=[LLMMessage(role="user", content="Submit")],
+                tools=[_strict_submit_tool(), _search_tool()],
+                tool_choice="required",
+                reasoning=LLMReasoningConfig(mode="disabled"),
+            )
+        )
+
+    assert exc_info.value.code == "deepseek_mixed_strict_tools"
+    assert standard_client.chat.completions.kwargs is None
+    assert beta_client.chat.completions.kwargs is None
+
+
+def test_deepseek_custom_gateway_reports_strict_endpoint_unavailable() -> None:
+    """A custom standard gateway is never silently rewritten to a Beta URL."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMReasoningConfig,
+        LLMRequest,
+        StrictToolUnavailableError,
+    )
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    client = RecordingClient()
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        base_url="https://gateway.example/v1",
+        client=client,
+    )
+    with pytest.raises(StrictToolUnavailableError) as exc_info:
+        provider.invoke(
+            LLMRequest(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                messages=[LLMMessage(role="user", content="Submit")],
+                tools=[_strict_submit_tool()],
+                tool_choice="required",
+                reasoning=LLMReasoningConfig(mode="disabled"),
+            )
+        )
+
+    assert exc_info.value.code == "deepseek_strict_endpoint_unavailable"
+    assert client.chat.completions.kwargs is None
+
+
+@pytest.mark.parametrize("status_code", [400, 404, 405, 422, 500, 503])
+def test_deepseek_beta_compatibility_failures_are_fallback_eligible(
+    status_code: int,
+) -> None:
+    """Schema, route, and server failures expose the narrow fallback error."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMReasoningConfig,
+        LLMRequest,
+        StrictToolUnavailableError,
+    )
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    error = RuntimeError("beta rejected request")
+    error.status_code = status_code  # type: ignore[attr-defined]
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        client=RecordingClient(),
+        beta_client=FailingClient(error),
+    )
+
+    with pytest.raises(StrictToolUnavailableError):
+        provider.invoke(
+            LLMRequest(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                messages=[LLMMessage(role="user", content="Submit")],
+                tools=[_strict_submit_tool()],
+                tool_choice="required",
+                reasoning=LLMReasoningConfig(mode="disabled"),
+            )
+        )
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 429])
+def test_deepseek_beta_account_failures_do_not_enable_fallback(
+    status_code: int,
+) -> None:
+    """Credentials, permission, and capacity failures remain provider errors."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMReasoningConfig,
+        LLMRequest,
+        ProviderInvokeError,
+        StrictToolUnavailableError,
+    )
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    error = RuntimeError("account request rejected")
+    error.status_code = status_code  # type: ignore[attr-defined]
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        client=RecordingClient(),
+        beta_client=FailingClient(error),
+    )
+
+    with pytest.raises(ProviderInvokeError) as exc_info:
+        provider.invoke(
+            LLMRequest(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                messages=[LLMMessage(role="user", content="Submit")],
+                tools=[_strict_submit_tool()],
+                tool_choice="required",
+                reasoning=LLMReasoningConfig(mode="disabled"),
+            )
+        )
+
+    assert not isinstance(exc_info.value, StrictToolUnavailableError)
+
+
+@pytest.mark.parametrize(
+    "network_error",
+    [ConnectionError("connection refused"), TimeoutError("request timed out")],
+)
+def test_deepseek_beta_network_failures_are_fallback_eligible(
+    network_error: Exception,
+) -> None:
+    """Connection and timeout failures expose the same bounded fallback seam."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMReasoningConfig,
+        LLMRequest,
+        StrictToolUnavailableError,
+    )
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        client=RecordingClient(),
+        beta_client=FailingClient(network_error),
+    )
+
+    with pytest.raises(StrictToolUnavailableError) as exc_info:
+        provider.invoke(
+            LLMRequest(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                messages=[LLMMessage(role="user", content="Submit")],
+                tools=[_strict_submit_tool()],
+                tool_choice="required",
+                reasoning=LLMReasoningConfig(mode="disabled"),
+            )
+        )
+
+    assert exc_info.value.code == "deepseek_strict_endpoint_unavailable"
+
+
+def test_deepseek_configured_beta_url_keeps_normal_calls_on_standard_url() -> None:
+    """An explicit Beta URL is split into standard and strict endpoint roles."""
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        base_url="https://api.deepseek.com/beta/",
+        client=RecordingClient(),
+        beta_client=RecordingClient(),
+    )
+
+    assert provider.base_url == "https://api.deepseek.com"
+    assert provider._strict_base_url == "https://api.deepseek.com/beta"
 
 
 def test_deepseek_thinking_auto_keeps_tools_but_omits_tool_choice() -> None:

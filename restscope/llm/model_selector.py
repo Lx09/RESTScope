@@ -25,11 +25,13 @@ class ModelSelector:
         "api_behavior_monitor",
         "decision_maker",
         "parameter_patch_agent",
+        "parameter_patch_review_agent",
     }
     ZERO_TEMPERATURE_ROLES = {
         "operation_smoke_failure_dedup",
         "operation_smoke_failure_solve",
         "parameter_patch_agent",
+        "parameter_patch_review_agent",
     }
 
     def __init__(self, *, thinking: LLMModelConfig, fast: LLMModelConfig) -> None:

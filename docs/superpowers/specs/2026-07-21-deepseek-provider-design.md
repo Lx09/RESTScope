@@ -2,6 +2,30 @@
 
 Status: Approved
 
+## 2026-08-03 strict-tool amendment
+
+The original structured-output and tool-choice sections below remain the
+legacy/general contract, but are partially superseded for explicitly strict
+tools:
+
+- `ToolSpec.strict=true` is serialized as a strict function definition.
+- A request containing only strict tools uses the official DeepSeek `/beta`
+  endpoint. Ordinary calls remain on `https://api.deepseek.com`; mixed strict
+  and non-strict tool lists fail before the network.
+- Beta schema/route rejection, server failure, connection failure, or timeout
+  raises the provider-neutral `StrictToolUnavailableError`. Authentication,
+  permission, and rate-limit failures do not.
+- Parameter Patch and Parameter Patch Review are the current consumers. Both
+  disable thinking and require one fixed-root strict tool call:
+  `submit_parameter_patch_proposal` or `submit_parameter_patch_review`.
+  Each Agent owns one bounded fallback to its legacy JSON representation.
+- The earlier combined proposal/accept tool was rejected by DeepSeek because
+  its function-parameter root used `anyOf`. The independent Review design
+  removes model-side accept and gives both tools a required object root.
+
+This amendment does not introduce a provider capability registry or make
+third-party DeepSeek gateways strict-compatible.
+
 ## Objective
 
 Add first-class support for the official DeepSeek API so every RESTScope Agent

@@ -39,10 +39,35 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
+        return self._invoke_with_client(request, client=self.client)
+
+    def _invoke_with_client(
+        self,
+        request: LLMRequest,
+        *,
+        client: Any,
+    ) -> LLMResponse:
+        """Invoke one request through an already-selected compatible client.
+
+        Provider adapters with more than one official endpoint can reuse the
+        common request translation and response normalization without
+        mutating ``self.client``. Keeping client selection at this private seam
+        also makes concurrent calls safe.
+
+        Args:
+            request: Provider-neutral messages, tools, and output controls.
+            client: OpenAI-compatible SDK client for the selected endpoint.
+
+        Returns:
+            The normalized provider response.
+
+        Raises:
+            ProviderInvokeError: The SDK call failed for any reason.
+        """
         kwargs = self._request_kwargs(request)
         started = time.perf_counter()
         try:
-            raw_response = self.client.chat.completions.create(**kwargs)
+            raw_response = client.chat.completions.create(**kwargs)
         except Exception as exc:  # pragma: no cover - SDK-specific branches are provider dependent.
             raise ProviderInvokeError(str(exc)) from exc
 
@@ -123,13 +148,16 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         return None
 
     def _tool_to_openai(self, tool: ToolSpec) -> dict[str, Any]:
+        function = {
+            "name": _provider_tool_name(tool.name),
+            "description": tool.description,
+            "parameters": tool.input_schema,
+        }
+        if tool.strict:
+            function["strict"] = True
         return {
             "type": "function",
-            "function": {
-                "name": _provider_tool_name(tool.name),
-                "description": tool.description,
-                "parameters": tool.input_schema,
-            },
+            "function": function,
         }
 
     def _normalize_response(self, request: LLMRequest, raw_response: Any, latency_ms: int) -> LLMResponse:

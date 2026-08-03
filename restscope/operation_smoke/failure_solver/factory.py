@@ -10,7 +10,7 @@ from restscope.testing import ReferenceValueProvider
 from .agent import (
     FailureSolveAgent,
     HTTPProbe,
-    PatchAgentFactory,
+    PatchCoordinatorFactory,
     PatchApplication,
     SolveMemory,
 )
@@ -26,7 +26,7 @@ class FailureSolveAgentFactory:
         model: LLMModelConfig,
         http_probe: HTTPProbe,
         memory: SolveMemory,
-        patch_agent_factory: PatchAgentFactory,
+        patch_coordinator_factory: PatchCoordinatorFactory,
         patch_application: PatchApplication,
         openapi_capability: OpenAPICapability,
         reference_values: ReferenceValueProvider | None = None,
@@ -37,7 +37,7 @@ class FailureSolveAgentFactory:
         self.model = model
         self.http_probe = http_probe
         self.memory = memory
-        self.patch_agent_factory = patch_agent_factory
+        self.patch_coordinator_factory = patch_coordinator_factory
         self.patch_application = patch_application
         self.openapi_capability = openapi_capability
         self.reference_values = reference_values
@@ -50,7 +50,7 @@ class FailureSolveAgentFactory:
             model=self.model,
             http_probe=self.http_probe,
             memory=self.memory,
-            patch_agent_factory=self.patch_agent_factory,
+            patch_coordinator_factory=self.patch_coordinator_factory,
             patch_application=self.patch_application,
             openapi_capability=self.openapi_capability,
             reference_values=self.reference_values,

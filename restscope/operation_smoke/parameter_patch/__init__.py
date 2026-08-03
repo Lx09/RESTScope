@@ -1,14 +1,16 @@
-"""Public facade for the Parameter Patch Agent package."""
+"""Public facade for Parameter Patch proposal and coordination."""
 
 from .agent import ParameterPatchAgent
-from .factory import ParameterPatchAgentFactory
+from .coordinator import ParameterPatchCoordinator
+from .decision_tool import parameter_patch_proposal_tool_spec
+from .factory import ParameterPatchCoordinatorFactory
 from .schemas import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
     GeneratorPatchDraft,
-    ParameterPatchDecision,
     ParameterPatchFailure,
     ParameterPatchProposal,
+    ParameterPatchSubmission,
     ParameterPatchTask,
     ValidatedParameterPatch,
 )
@@ -18,10 +20,12 @@ __all__ = [
     "CompiledConstraintPatch",
     "GeneratorPatchDraft",
     "ParameterPatchAgent",
-    "ParameterPatchAgentFactory",
-    "ParameterPatchDecision",
+    "ParameterPatchCoordinator",
+    "ParameterPatchCoordinatorFactory",
     "ParameterPatchFailure",
     "ParameterPatchProposal",
+    "ParameterPatchSubmission",
     "ParameterPatchTask",
     "ValidatedParameterPatch",
+    "parameter_patch_proposal_tool_spec",
 ]

@@ -79,6 +79,10 @@ class LLMClient:
                     "restscope.llm.provider_retry_count",
                     response.metadata.get("provider_retry_count"),
                 ),
+                (
+                    "restscope.llm.strict_tool_beta",
+                    response.metadata.get("strict_tool_beta"),
+                ),
             ):
                 if value is not None:
                     span.set_attribute(name, value)
@@ -99,4 +103,5 @@ def _request_attributes(request: LLMRequest) -> dict[str, object]:
         attributes["llm.reasoning.effort"] = request.reasoning.effort
     if request.tools:
         attributes["llm.tool_names"] = tuple(tool.name for tool in request.tools)
+        attributes["llm.tool_strict"] = all(tool.strict for tool in request.tools)
     return attributes

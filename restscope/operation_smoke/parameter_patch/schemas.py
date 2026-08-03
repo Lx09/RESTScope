@@ -1,4 +1,4 @@
-"""Public contracts owned by the Parameter Patch Agent.
+"""Public contracts owned by the Parameter Patch Module.
 
 Failure Solve supplies one root cause and Patch requirement. Parameter Patch
 translates that requirement into executable Generator and Constraint objects,
@@ -123,20 +123,11 @@ class ParameterPatchProposal(_Model):
         return self
 
 
-class ParameterPatchDecision(_Model):
-    """Propose a complete Patch or accept the latest compiled sample review."""
+class ParameterPatchSubmission(_Model):
+    """Carry the Patch Agent's one allowed final decision: a full proposal."""
 
-    action: Literal["propose", "accept"]
-    patch: ParameterPatchProposal | None = None
-
-    @model_validator(mode="after")
-    def validate_action(self) -> "ParameterPatchDecision":
-        """Keep proposal and acceptance shapes mutually exclusive."""
-        if self.action == "propose" and self.patch is None:
-            raise ValueError("propose requires a complete patch")
-        if self.action == "accept" and self.patch is not None:
-            raise ValueError("accept must not include a patch")
-        return self
+    action: Literal["propose"]
+    patch: ParameterPatchProposal
 
 
 class CompiledConstraintPatch(_Model):
@@ -179,7 +170,7 @@ class GeneratorPatchDraft(_Model):
 
 
 class ValidatedParameterPatch(_Model):
-    """Patch accepted after executable checks and dynamic local sample review."""
+    """Patch accepted after executable checks and independent semantic review."""
 
     status: Literal["validated"] = "validated"
     todo_id: str

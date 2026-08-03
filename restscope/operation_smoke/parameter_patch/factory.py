@@ -1,32 +1,35 @@
-"""Fresh Parameter Patch Agent construction per Solve requirement."""
+"""Fresh Parameter Patch Coordinator construction per Solve requirement."""
 
 from __future__ import annotations
 
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
 
-from .agent import ParameterPatchAgent
+from .coordinator import ParameterPatchCoordinator
 
 
-class ParameterPatchAgentFactory:
-    """Create isolated Patch Agents sharing only immutable dependencies."""
+class ParameterPatchCoordinatorFactory:
+    """Create isolated Coordinators sharing immutable model dependencies."""
 
     def __init__(
         self,
         *,
         client: LLMClient,
-        model: LLMModelConfig,
+        patch_model: LLMModelConfig,
+        review_model: LLMModelConfig,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Store immutable collaborators reused by otherwise isolated Agents."""
         self.client = client
-        self.model = model
+        self.patch_model = patch_model
+        self.review_model = review_model
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
-    def create(self) -> ParameterPatchAgent:
-        """Return a fresh Agent with no proposal or sample conversation."""
-        return ParameterPatchAgent(
+    def create(self) -> ParameterPatchCoordinator:
+        """Return a fresh Coordinator with no proposal or Review context."""
+        return ParameterPatchCoordinator(
             client=self.client,
-            model=self.model,
+            patch_model=self.patch_model,
+            review_model=self.review_model,
             tracing_runtime=self.tracing_runtime,
         )

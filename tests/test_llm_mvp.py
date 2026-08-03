@@ -62,6 +62,7 @@ def test_operation_smoke_phases_select_independent_models() -> None:
         ("operation_smoke_failure_dedup", "thinking-model"),
         ("operation_smoke_failure_solve", "thinking-model"),
         ("parameter_patch_agent", "fast-model"),
+        ("parameter_patch_review_agent", "fast-model"),
     ):
         selected = selector.select(role)
         assert selected.model == expected_model
@@ -250,6 +251,7 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
                     description="Read summary",
                     kind="local_function",
                     input_schema={"type": "object", "properties": {"artifact_id": {"type": "string"}}},
+                    strict=True,
                 )
             ],
             tool_choice="auto",
@@ -263,6 +265,7 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
     provider_tool_name = kwargs["tools"][0]["function"]["name"]
     assert "." not in provider_tool_name
     assert len(provider_tool_name) <= 64
+    assert kwargs["tools"][0]["function"]["strict"] is True
     assert response.parsed_json == {"ok": True}
     assert response.provider_request_id == "chatcmpl_test"
 
@@ -328,6 +331,7 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
 
     class EchoToolCompletions:
         def create(self, **kwargs):
+            assert "strict" not in kwargs["tools"][0]["function"]
             provider_name = kwargs["tools"][0]["function"]["name"]
             message = SimpleNamespace(
                 content=None,

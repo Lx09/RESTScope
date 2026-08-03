@@ -37,7 +37,7 @@ assertion.
 | `test_testing_execution.py`, `test_failure_dedup_agent.py` | Fail-before-send preflight, case-only Batch results, exact Failure deduplication, correction, and bounded diagnostic evidence. |
 | `test_operation_smoke_coordinator.py`, `test_operation_smoke_*` | Complete-Batch coordination, Failure Memory, and Dedup/Solve/Patch behavior. |
 | `test_workflow_package_boundaries.py` | Workflow locality, child-Agent seams, and deliberately small public facades. |
-| `test_parameter_patch_agent.py` | Patch trust boundary, ten-sample self-review, attempt limits, and group isolation. |
+| `test_parameter_patch_agent.py` | Proposal-only Patch Agent, deterministic trust boundary, fresh-context Review Agent, shared budget, and strict fallbacks. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |
 | `test_supervisor_operation_smoke.py` | Runtime FIFO scheduling across operations and rounds. |
 | `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, policy, operation scope, execution, and MCP adaptation. |

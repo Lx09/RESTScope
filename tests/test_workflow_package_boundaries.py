@@ -121,6 +121,8 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
         "OperationSmokeRequest",
         "OperationSmokeResult",
         "ParameterPatchAgent",
+        "ParameterPatchCoordinator",
+        "ParameterPatchReviewAgent",
         "ResourceIdentifierTracker",
         "SmokeEffectAgent",
         "FailureDedupAgent",
@@ -132,7 +134,12 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
 
 def test_cross_role_imports_use_the_target_role_facade() -> None:
     """Scenario: one Agent never reaches into another Agent's implementation file."""
-    role_names = {"failure_dedup", "failure_solver", "parameter_patch"}
+    role_names = {
+        "failure_dedup",
+        "failure_solver",
+        "parameter_patch",
+        "parameter_patch_review",
+    }
     violations: list[str] = []
 
     for path in OPERATION_SMOKE_ROOT.rglob("*.py"):

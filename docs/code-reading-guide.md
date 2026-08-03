@@ -147,9 +147,12 @@ Read these files in order:
 6. `restscope/operation_smoke/failure_dedup/agent.py` and
    `restscope/operation_smoke/failure_solver/agent.py` — Failure todo management
    and one continuous Solve session.
-7. `restscope/operation_smoke/parameter_patch/agent.py` and
-   `restscope/operation_smoke/memory/patch_application.py` — executable Patch
-   construction, local sample review, and atomic persistence.
+7. `restscope/operation_smoke/parameter_patch/agent.py`,
+   `restscope/operation_smoke/parameter_patch/coordinator.py`,
+   `restscope/operation_smoke/parameter_patch_review/agent.py`, and
+   `restscope/operation_smoke/memory/patch_application.py` — strict proposal,
+   executable construction, fresh-context semantic review, and atomic
+   persistence.
 8. `restscope/api_behavior_monitor/coordinator.py` — response observation and
    the narrow persistent evidence catalog.
 
@@ -239,7 +242,20 @@ Parameter attribution, candidate selection, conflict, and no-Patch outcomes.
 
 Constructs one Solve-owned Patch candidate. It compiles model output into
 testing types, validates Generator schemas and Constraints, generates
-`case_count` local samples, and requires the same Agent to review them.
+`case_count` local samples, and coordinates a separate semantic Reviewer.
+`agent.py` owns one continuing proposal/revision conversation;
+`coordinator.py` owns deterministic checks, shared output budget, and feedback.
+`decision_tool.py` exposes the fixed-root proposal-only strict schema. Provider
+routing and fallback errors stay in `restscope.llm`.
+
+### `restscope/operation_smoke/parameter_patch_review/`
+
+Owns the separate FAST Review Agent. Every compiled candidate receives a fresh
+context containing only normalized requirement, Generator, Constraint,
+reference-provenance, and sample facts. Review issues are authoritative: an
+empty array passes, while non-empty issues return to the Patch Agent. The raw
+`accepted` flag is normalized locally and retained only in short-lived
+diagnostics.
 
 ### `restscope/context/`
 

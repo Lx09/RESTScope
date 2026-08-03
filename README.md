@@ -59,6 +59,13 @@ FAST_REASONING_MODE=disabled
 `https://api.deepseek.com` is used by default. Third-party DeepSeek gateways
 are not part of the supported contract.
 
+Parameter Patch decisions use one strict function call. The DeepSeek Adapter
+routes only that strict request to the official `/beta` endpoint; all ordinary
+Agent calls stay on the standard endpoint. If Beta rejects the strict schema
+or route, the Patch session switches once to its locally validated legacy JSON
+representation. Parameter Patch deliberately disables thinking for these
+requests so `tool_choice=required` can guarantee one structured submission.
+
 ## Development
 
 ```bash
@@ -386,11 +393,14 @@ internally by Operation Smoke.
    another `TC*`; mutating Probes are not rolled back. Before replacing a
    Parameter Generator it must inspect that Parameter's earlier Failure/Patch
    history.
-4. Solve calls a fresh FAST `ParameterPatchAgent` as an internal tool.
-   Structured root cause, affected inputs, desired behavior, and acceptance
-   criteria are compiled into Generator/Constraint changes. DTO, Schema,
-   satisfiability, and local samples are validated before the tool returns a
-   session-local `P*` candidate reference.
+4. Solve calls a fresh `ParameterPatchCoordinator` as an internal tool. Its
+   FAST Patch Agent proposes a complete Generator/Constraint replacement;
+   deterministic code validates scope, Schema, references, Constraints,
+   compilation, and local samples. A separate FAST Review Agent then receives
+   a new context containing only normalized requirement and candidate facts.
+   Empty Review issues accept the candidate; concrete issues return to the
+   original Patch proposal call for revision. A validated result becomes the
+   same session-local `P*` candidate reference used by Solve.
 5. Solve finishes with `apply_patch(P*)`, `no_patch`, or `conflict`. Only the
    first action changes Generator or Constraint state. A successful Patch
    commits the current-state changes, one Solve Attempt, validated input links,
@@ -408,7 +418,8 @@ There is no Effect Agent, candidate Batch, rollback snapshot, or permanent
 Dedup has a shared 50-output budget. One Fingerprint uses zero outputs; several
 normally require an OpenAPI input listing, optional Catalog reads, and one final
 decision. Each Solve has a 50-output budget that also counts every nested
-Parameter Patch LLM output; one Patch tool call is capped at 20 outputs.
+Parameter Patch proposal and Review output; one Patch tool call shares a
+single cap of 20 outputs across both Agents.
 Malformed replies and invalid tool-requesting model outputs count.
 Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Dedup or
 Solve exhaustion is a technical error; one Patch-tool exhaustion is recoverable

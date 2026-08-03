@@ -2,8 +2,8 @@
 
 Failure Solve has already identified a root cause and selected affected semantic
 inputs.  This module projects only those Generators, active Constraints,
-reference aliases, and compatibility facts into safe text.  The common Context
-Module later manages the growing propose/validation/accept conversation.
+reference aliases, and compatibility facts into safe text. The common Context
+Module later manages the growing proposal/revision conversation.
 """
 
 from __future__ import annotations
@@ -29,13 +29,12 @@ and/or Constraint replacement. Do not diagnose a new cause or change target
 inputs.
 
 # Protocol
-Use propose → runtime compile/sample → accept. Return strict
-ParameterPatchDecision JSON only. ``action`` and ``patch`` are top-level
-fields: a proposal is ``action="propose"`` plus one complete ``patch``; an
-acceptance is only ``action="accept"`` with no ``patch``. Never wrap either
-decision under a ``propose`` or ``accept`` property. ``patch`` contains changes
-and constraints. A later proposal replaces the earlier proposal. Acceptance is
-valid only after successful sample feedback. Never mix prose with the decision.
+Call ``submit_parameter_patch_proposal`` exactly once per response. Its
+``action`` and ``patch`` arguments are top-level fields. ``action`` is always
+``"propose"`` and ``patch`` is one complete replacement containing changes and
+constraints. Never wrap the submission under another property and never emit
+an acceptance decision. A later proposal replaces the earlier proposal. Never
+mix prose with the tool call.
 
 # Generator Signatures
 constant | value
@@ -72,13 +71,11 @@ Each top-level constraint has exactly expression. Use at most 20. Ordered
 comparisons and arithmetic require compatible numeric values; matches requires
 a string-compatible value.
 
-# Review
-propose must cover only affected inputs and every stated requirement. The
-runtime validates DTO shape, schema compatibility, references, Constraints,
-and samples. Before accept, inspect every affected input, presence flag,
-representative sample, range/type summary, supplied reference-pool value, and
-Constraint result. If any requirement is not met, propose one complete
-replacement. Do not call tools, send HTTP, persist state, or emit prose.
+# Revision
+The runtime validates DTO shape, schema compatibility, references, Constraints,
+and samples. When it returns a compile error or independent review issue,
+submit one complete replacement proposal that resolves that feedback. Do not
+call any other tool, send HTTP, persist state, or emit prose.
 """.strip()
 
 

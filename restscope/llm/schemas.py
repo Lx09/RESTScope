@@ -43,13 +43,19 @@ class LLMMessage(BaseModel):
 
 
 class ToolSpec(BaseModel):
-    """Description of a callable capability that may be offered to a model."""
+    """Description of a callable capability that may be offered to a model.
+
+    ``strict`` asks compatible providers to validate generated function
+    arguments against ``input_schema`` before returning the call. It defaults
+    off so existing runtime tools keep their current provider behavior.
+    """
 
     name: str
     description: str
     kind: ToolKind
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] | None = Field(default=None)
+    strict: bool = False
 
 
 class ToolResult(BaseModel):

@@ -1,4 +1,4 @@
-"""Compose the three-Agent, memory-driven Operation Smoke workflow."""
+"""Compose the four-Agent, memory-driven Operation Smoke workflow."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ from restscope.operation_smoke.failure_solver import (
     CurrentOperationHTTPProbe,
     FailureSolveAgentFactory,
 )
-from restscope.operation_smoke.parameter_patch import ParameterPatchAgentFactory
+from restscope.operation_smoke.parameter_patch import (
+    ParameterPatchCoordinatorFactory,
+)
 from restscope.operation_smoke.memory import SmokeMemory, SmokePatchApplication
 from restscope.operation_smoke.failure_dedup import (
     FailureDedupAgent,
@@ -38,7 +40,7 @@ def build_operation_smoke_coordinator(
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> OperationSmokeCoordinator:
-    """Build Dedup, Solve, Patch, and their shared App-lifetime Memory.
+    """Build Dedup, Solve, Patch/Review, and shared App-lifetime Memory.
 
     Dedup writes current Failures while Solve reads histories through the same
     deep Memory Interface. Patch application receives the same Unit of Work
@@ -62,9 +64,10 @@ def build_operation_smoke_coordinator(
     )
     memory = SmokeMemory(unit_of_work_factory)
     patch_application = SmokePatchApplication(unit_of_work_factory)
-    patch_agent_factory = ParameterPatchAgentFactory(
+    patch_coordinator_factory = ParameterPatchCoordinatorFactory(
         client=client,
-        model=selector.select("parameter_patch_agent"),
+        patch_model=selector.select("parameter_patch_agent"),
+        review_model=selector.select("parameter_patch_review_agent"),
         tracing_runtime=runtime,
     )
     return OperationSmokeCoordinator(
@@ -88,7 +91,7 @@ def build_operation_smoke_coordinator(
                 context_provider=capability_runtime.require_context,
             ),
             memory=memory,
-            patch_agent_factory=patch_agent_factory,
+            patch_coordinator_factory=patch_coordinator_factory,
             patch_application=patch_application,
             reference_values=reference_values,
             openapi_capability=capability_runtime.openapi_capability,

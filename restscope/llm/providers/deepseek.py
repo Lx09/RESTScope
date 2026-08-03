@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from restscope.llm.exceptions import ProviderInvokeError
+from restscope.llm.exceptions import (
+    ProviderInvokeError,
+    StrictToolUnavailableError,
+)
 from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 from restscope.llm.schemas import LLMMessage, LLMReasoningConfig, LLMRequest, LLMResponse
 
@@ -23,6 +26,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 
     name = "deepseek"
     default_base_url = "https://api.deepseek.com"
+    beta_base_url = "https://api.deepseek.com/beta"
 
     def __init__(
         self,
@@ -30,17 +34,49 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         api_key: str,
         base_url: str | None = None,
         client: Any | None = None,
+        beta_client: Any | None = None,
         default_reasoning: LLMReasoningConfig | None = None,
     ) -> None:
+        """Create standard and lazily-built Beta endpoint adapters.
+
+        Args:
+            api_key: Credential shared by the two official DeepSeek endpoints.
+            base_url: Standard official endpoint, the official ``/beta`` URL,
+                or a custom compatibility gateway. Custom gateways remain
+                usable for ordinary calls but are not assumed to expose Beta.
+            client: Optional standard client used by tests or custom wiring.
+            beta_client: Optional Beta client used by strict-call tests.
+            default_reasoning: Reasoning controls inherited by requests that
+                leave their mode at ``default``.
+        """
         self.default_reasoning = default_reasoning or LLMReasoningConfig(mode="enabled")
+        configured_url = (base_url or self.default_base_url).rstrip("/")
+        if configured_url == self.beta_base_url:
+            standard_url = self.default_base_url
+            strict_url: str | None = self.beta_base_url
+        elif configured_url == self.default_base_url:
+            standard_url = self.default_base_url
+            strict_url = self.beta_base_url
+        else:
+            standard_url = configured_url
+            strict_url = None
+        self._strict_base_url = strict_url
+        self._beta_client = beta_client
+        self._beta_api_key = api_key
         super().__init__(
             api_key=api_key,
-            base_url=base_url or self.default_base_url,
+            base_url=standard_url,
             client=client,
         )
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
-        """Retry one incomplete thinking-mode tool response before it is used.
+        """Route strict tools to Beta and retry incomplete reasoning once.
+
+        A DeepSeek strict request must contain only strict functions. The
+        official Beta endpoint validates those schemas before generation.
+        Custom gateways are not assumed to implement that endpoint; callers
+        receive :class:`StrictToolUnavailableError` and may use an explicitly
+        owned fallback.
 
         DeepSeek requires ``reasoning_content`` from a tool-calling assistant
         message to be replayed verbatim in every later request.  The field
@@ -51,8 +87,58 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         Any second incomplete response, or any other provider error, still
         propagates to the caller instead of creating an unbounded retry loop.
         """
+        strict_tools = [tool for tool in request.tools if tool.strict]
+        if strict_tools and len(strict_tools) != len(request.tools):
+            raise DeepSeekCompatibilityError(
+                "deepseek_mixed_strict_tools",
+                "DeepSeek strict requests require every supplied function to be strict",
+            )
+        if strict_tools:
+            if self._strict_base_url is None:
+                raise StrictToolUnavailableError(
+                    "deepseek_strict_endpoint_unavailable",
+                    "the configured DeepSeek gateway has no declared Beta endpoint",
+                )
+            try:
+                response = self._invoke_with_reasoning_retry(
+                    request,
+                    client=self._get_beta_client(),
+                )
+            except ProviderInvokeError as exc:
+                reason = _strict_unavailable_reason(exc.__cause__)
+                if reason is None:
+                    raise
+                raise StrictToolUnavailableError(
+                    reason,
+                    "the DeepSeek Beta strict request was unavailable",
+                ) from exc
+            return response.model_copy(
+                update={
+                    "metadata": {
+                        **response.metadata,
+                        "strict_tool_beta": True,
+                    }
+                }
+            )
+        return self._invoke_with_reasoning_retry(request, client=self.client)
+
+    def _invoke_with_reasoning_retry(
+        self,
+        request: LLMRequest,
+        *,
+        client: Any,
+    ) -> LLMResponse:
+        """Invoke through one endpoint and retry a missing reasoning field.
+
+        Args:
+            request: Provider-neutral request already assigned to an endpoint.
+            client: Standard or Beta OpenAI-compatible SDK client.
+
+        Returns:
+            A normalized response with complete tool-call continuation data.
+        """
         try:
-            return super().invoke(request)
+            return self._invoke_with_client(request, client=client)
         except DeepSeekCompatibilityError as exc:
             if exc.code != "deepseek_reasoning_content_missing":
                 raise
@@ -70,7 +156,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             ):
                 raise
 
-        response = super().invoke(request)
+        response = self._invoke_with_client(request, client=client)
         return response.model_copy(
             update={
                 "metadata": {
@@ -79,6 +165,16 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 }
             }
         )
+
+    def _get_beta_client(self) -> Any:
+        """Build the official Beta client only when a strict call needs it."""
+        if self._beta_client is None:
+            assert self._strict_base_url is not None
+            self._beta_client = self._build_client(
+                api_key=self._beta_api_key,
+                base_url=self._strict_base_url,
+            )
+        return self._beta_client
 
     def _request_kwargs(self, request: LLMRequest) -> dict[str, Any]:
         """
@@ -223,3 +319,38 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 return converted
         converted.insert(0, {"role": "system", "content": instruction})
         return converted
+
+
+def _strict_unavailable_reason(exc: BaseException | None) -> str | None:
+    """Classify failures for which a caller-owned legacy fallback is safe.
+
+    Authentication, permission, and rate-limit failures intentionally return
+    ``None``. Retrying those requests through the standard endpoint would hide
+    the real operational problem rather than provide compatibility.
+
+    Args:
+        exc: Original SDK exception wrapped by the compatible Adapter.
+
+    Returns:
+        A stable reason code, or ``None`` when the error must propagate.
+    """
+    if exc is None:
+        return None
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {401, 403, 429}:
+        return None
+    if status_code in {400, 404, 405, 422}:
+        return "deepseek_strict_schema_or_route_rejected"
+    if isinstance(status_code, int) and status_code >= 500:
+        return "deepseek_strict_endpoint_unavailable"
+
+    # The OpenAI SDK exposes connection and timeout classes, but keeping this
+    # check name-based also supports test doubles without importing SDK-private
+    # exception constructors.
+    exception_name = type(exc).__name__
+    if isinstance(exc, (ConnectionError, TimeoutError)) or exception_name in {
+        "APIConnectionError",
+        "APITimeoutError",
+    }:
+        return "deepseek_strict_endpoint_unavailable"
+    return None

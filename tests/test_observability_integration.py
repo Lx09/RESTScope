@@ -71,6 +71,7 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
                 total_tokens=18,
                 finish_reason="tool_calls",
                 latency_ms=25,
+                metadata={"strict_tool_beta": True},
             )
 
     registry = LLMProviderRegistry()
@@ -93,6 +94,7 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
                     description="Lookup a catalog entry",
                     kind="local_function",
                     input_schema={"type": "object"},
+                    strict=True,
                 )
             ],
             tool_choice="auto",
@@ -122,9 +124,11 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert span.attributes["llm.reasoning.mode"] == "enabled"
     assert span.attributes["llm.reasoning.effort"] == "high"
     assert json.loads(span.attributes["llm.tool_names"]) == ["catalog.lookup"]
+    assert span.attributes["llm.tool_strict"] is True
     assert span.attributes["llm.tool_choice"] == "auto"
     assert span.attributes["llm.token_count.total"] == 18
     assert span.attributes["restscope.llm.latency_ms"] == 25
+    assert span.attributes["restscope.llm.strict_tool_beta"] is True
     assert input_value == {"message_count": 1, "roles": ["user"]}
     assert (
         span.attributes["llm.input_messages.0.message.role"]

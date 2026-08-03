@@ -7,6 +7,7 @@ from .exceptions import (
     LLMError,
     ProviderAuthError,
     ProviderInvokeError,
+    StrictToolUnavailableError,
     UnknownProviderError,
 )
 from .model_selector import ModelSelector
@@ -33,6 +34,7 @@ __all__ = [
     "LLMError",
     "ProviderAuthError",
     "ProviderInvokeError",
+    "StrictToolUnavailableError",
     "UnknownProviderError",
     "ModelSelector",
     "OutputValidator",

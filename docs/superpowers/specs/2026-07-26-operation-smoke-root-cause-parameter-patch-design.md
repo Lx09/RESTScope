@@ -45,6 +45,22 @@ consume that budget, but three consecutive invalid outputs defer the failure.
 Investigation state, hypotheses, observations, and model messages remain
 App-lifetime only.
 
+## 2026-08-03 independent-review amendment
+
+The self-review statements below are historical and are superseded for the
+current workflow. A deterministic `ParameterPatchCoordinator` now owns one
+Patch Agent proposal session, local compile/sample checks, the shared 20-output
+budget, and feedback. Every successfully compiled candidate is judged by a
+fresh `ParameterPatchReviewAgent` context containing normalized final facts but
+no Patch dialogue or earlier errors. The Reviewer reports concrete semantic
+issues only; it cannot overrule deterministic safety checks or reject merely
+because the next real Batch has not run. Empty issues accept the candidate and
+non-empty issues request a complete replacement proposal.
+
+Both roles use FAST, temperature zero, disabled thinking, and required strict
+tool calls. Failure Solve still receives the same validated `P*` candidate
+Interface and remains the only model that decides whether to apply it.
+
 ### 2. Construct isolated Patch Groups
 
 A FAST grouping decision may only partition confirmed `ActionableFailure`
@@ -106,6 +122,7 @@ used as a new baseline.
 - `operation_smoke_root_cause_diagnosis`: THINK
 - `operation_smoke_patch_grouping`: FAST
 - `parameter_patch_agent`: FAST
+- `parameter_patch_review_agent`: FAST
 - `operation_smoke_effect_validation`: THINK
 
 ## Persistence and privacy

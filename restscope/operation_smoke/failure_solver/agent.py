@@ -2,8 +2,8 @@
 
 Failure Solve is the Agent that decides which Parameters caused a Failure and
 whether a Generator Patch should be applied. It can read Parameter history,
-probe the exact current operation, and run a fresh Parameter Patch Agent. Patch
-candidates remain session-local and have no
+probe the exact current operation, and run a fresh Parameter Patch Coordinator.
+Patch candidates remain session-local and have no
 side effects until the model returns ``apply_patch`` with a valid candidate
 reference.
 """
@@ -49,7 +49,7 @@ from restscope.operation_smoke.parameter_patch import (
     AvailableReferenceOption,
     CompiledConstraintPatch,
     GeneratorPatchDraft,
-    ParameterPatchAgent,
+    ParameterPatchCoordinator,
     ParameterPatchFailure,
     ParameterPatchTask,
     ValidatedParameterPatch,
@@ -139,11 +139,11 @@ class SolveMemory(Protocol):
         ...
 
 
-class PatchAgentFactory(Protocol):
-    """Create a fresh Patch Agent for each tool invocation."""
+class PatchCoordinatorFactory(Protocol):
+    """Create a fresh Patch Coordinator for each tool invocation."""
 
-    def create(self) -> ParameterPatchAgent:
-        """Return a fresh Agent with an empty proposal conversation."""
+    def create(self) -> ParameterPatchCoordinator:
+        """Return a fresh Coordinator with empty Agent contexts."""
         ...
 
 
@@ -172,7 +172,7 @@ class FailureSolveAgent:
         model: LLMModelConfig,
         http_probe: HTTPProbe,
         memory: SolveMemory,
-        patch_agent_factory: PatchAgentFactory,
+        patch_coordinator_factory: PatchCoordinatorFactory,
         patch_application: PatchApplication,
         openapi_capability: OpenAPICapability,
         reference_values: ReferenceValueProvider | None = None,
@@ -189,7 +189,7 @@ class FailureSolveAgent:
         self.model = model
         self.http_probe = http_probe
         self.memory = memory
-        self.patch_agent_factory = patch_agent_factory
+        self.patch_coordinator_factory = patch_coordinator_factory
         self.patch_application = patch_application
         self.openapi_capability = openapi_capability
         self.reference_values = reference_values
@@ -231,7 +231,7 @@ class FailureSolveAgent:
             model=self.model,
             http_probe=self.http_probe,
             memory=self.memory,
-            patch_agent_factory=self.patch_agent_factory,
+            patch_coordinator_factory=self.patch_coordinator_factory,
             patch_application=self.patch_application,
             openapi_capability=self.openapi_capability,
             reference_values=self.reference_values,
@@ -262,7 +262,7 @@ class FailureSolveSession:
         model: LLMModelConfig,
         http_probe: HTTPProbe,
         memory: SolveMemory,
-        patch_agent_factory: PatchAgentFactory,
+        patch_coordinator_factory: PatchCoordinatorFactory,
         patch_application: PatchApplication,
         openapi_capability: OpenAPICapability,
         reference_values: ReferenceValueProvider | None,
@@ -281,12 +281,12 @@ class FailureSolveSession:
         max_outputs: int,
         continuation_interval: int,
     ) -> None:
-        """Build prompt state without calling the LLM, HTTP, or Patch Agent."""
+        """Build prompt state without calling the LLM, HTTP, or Patch Module."""
         self.client = client
         self.model = model
         self.http_probe = http_probe
         self.memory = memory
-        self.patch_agent_factory = patch_agent_factory
+        self.patch_coordinator_factory = patch_coordinator_factory
         self.patch_application = patch_application
         self.openapi_capability = openapi_capability
         self.reference_values = reference_values
@@ -715,7 +715,7 @@ class FailureSolveSession:
             self.parameter_history_for_patch.extend(parameters)
 
     def _execute_patch_tool(self, call: ToolCall) -> ToolResult:
-        """Run a fresh Patch Agent and retain only a validated local candidate."""
+        """Run a fresh Patch Coordinator and retain one reviewed candidate."""
         remaining_outputs = self.max_outputs - self.outputs_used
         if remaining_outputs <= 0:
             return ToolResult(
@@ -736,7 +736,7 @@ class FailureSolveSession:
                 "affected_inputs": task.affected_inputs,
             },
         ) as span:
-            result = self.patch_agent_factory.create().run(
+            result = self.patch_coordinator_factory.create().run(
                 task=task,
                 config=self.config,
                 active_constraints=self.active_constraints,
@@ -824,7 +824,8 @@ class FailureSolveSession:
             affected_inputs=affected,
             desired_behavior=arguments["desired_behavior"],
             acceptance_criteria=arguments["acceptance_criteria"],
-            # Patch Agent receives every related history read in this session.
+            # The Patch Module receives every related history read in this
+            # session.
             # This is the concrete mechanism behind "a replacement Generator
             # must also consider previously discovered Failures."
             prior_attempts=list(self.parameter_history_for_patch),
@@ -1097,7 +1098,7 @@ def _patch_tool_spec(
     return ToolSpec(
         name=_PATCH_TOOL_NAME,
         description=(
-            "Ask Parameter Patch Agent to build and locally validate a Generator "
+            "Ask Parameter Patch to build and independently review a Generator "
             "or cross-Parameter Constraint candidate. This tool has no side effects. "
             "Copy affected input handles exactly from the schema enum."
         ),

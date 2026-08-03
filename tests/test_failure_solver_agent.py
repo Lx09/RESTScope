@@ -413,7 +413,7 @@ def _agent(client, memory, patch_factory, application):
         model=_model(),
         http_probe=StubProbe(),
         memory=memory,
-        patch_agent_factory=patch_factory,
+        patch_coordinator_factory=patch_factory,
         patch_application=application,
         openapi_capability=_openapi_capability(),
     )
@@ -1092,7 +1092,7 @@ def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:
         model=_model(),
         http_probe=StubProbe(),
         memory=StubMemory(),
-        patch_agent_factory=StubPatchFactory([]),
+        patch_coordinator_factory=StubPatchFactory([]),
         patch_application=StubPatchApplication(),
         openapi_capability=_openapi_capability(),
         system_prompt="Candidate Solve instructions.",
