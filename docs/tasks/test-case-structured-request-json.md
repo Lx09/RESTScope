@@ -1,6 +1,8 @@
 # Structured Test Case Request JSON
 
-Status: Implemented and locally verified; uncommitted
+Status: Completed
+
+Merged into local `main` on 2026-08-03.
 
 ## Objective
 
