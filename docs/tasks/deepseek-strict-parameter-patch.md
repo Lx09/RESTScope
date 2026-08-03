@@ -1,6 +1,6 @@
 # Independent Strict Parameter Patch Review
 
-Status: Implemented and verified; uncommitted
+Status: Completed
 
 ## Objective
 
@@ -31,8 +31,9 @@ into independent Agents behind one deterministic Coordinator.
 - Do not make the Reviewer re-run deterministic technical validation.
 - Do not perform the separately authorized live DeepSeek schema request during
   ordinary local verification.
-- Do not commit, merge, remove the worktree/branch, or push without separate
-  authorization.
+- Git delivery follows separate authorization; the implementation was committed,
+  merged into local `main`, and its feature worktree and branch were removed.
+  It has not been pushed.
 
 ## Decisions
 
