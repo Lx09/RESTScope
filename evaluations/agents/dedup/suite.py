@@ -16,7 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from evaluations.models import DatasetExample, EvaluationSuite, ScenarioProvenance
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
-from restscope.capabilities import ToolContext, build_capabilities
+from restscope.capabilities import (
+    ToolContext,
+    build_capabilities,
+    operation_input_references,
+)
 from restscope.openapi_parser import OpenAPIParser
 from restscope.operation_smoke.failure_dedup import (
     FailureDedupAgent,
@@ -114,8 +118,11 @@ def build_task(
     def task(input: dict[str, Any]) -> dict[str, Any]:
         scenario = DedupScenarioInput.model_validate(input)
         memory = TemporaryFailureMemory()
+        ir = _evaluation_ir()
         catalog = TestCaseCatalog(
-            valid_parameters=scenario.valid_parameters
+            input_references=operation_input_references(
+                ir.operations[scenario.request.operation_key]
+            )
         )
         for case in scenario.catalog_cases:
             catalog.record(case)
@@ -124,7 +131,7 @@ def build_task(
         )
         capability_runtime.bind_context(
             ToolContext(
-                ir=_evaluation_ir(),
+                ir=ir,
                 baseline_schema_source={},
             )
         )

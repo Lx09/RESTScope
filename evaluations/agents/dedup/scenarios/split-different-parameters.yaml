@@ -19,13 +19,13 @@ input:
       body.namespace_id: request/body/namespace_id
   valid_parameters: [body, body.name, body.namespace_id]
   catalog_cases:
-    - parameters: {body.name: existing, body.namespace_id: 1}
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {name: existing, namespace_id: 1}}
       response_body: {message: name already exists}
       failure:
         kind: http
         status_code: 400
         messages: ["HTTP 400: name already exists"]
-    - parameters: {body.name: new, body.namespace_id: 900001}
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {name: new, namespace_id: 900001}}
       response_body: {message: Namespace Not Found}
       failure:
         kind: http

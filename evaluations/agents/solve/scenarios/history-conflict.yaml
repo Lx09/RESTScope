@@ -45,7 +45,7 @@ input:
     occurrence_count: 1
     attempts: []
   catalog_cases:
-    - parameters: {path.projectId: 50}
+    - request: {path: {projectId: 50}, query: {}, header: {}, cookie: {}}
       response_body: {message: project missing}
       failure:
         kind: http

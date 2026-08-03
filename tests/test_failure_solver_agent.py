@@ -275,15 +275,21 @@ def _catalog():
         HTTPFailure,
         TestCaseCatalog,
     )
+    from restscope.request_inputs import RequestInputReference
 
     catalog = TestCaseCatalog(
-        valid_parameters={"path.projectId", "query.region"}
+        input_references=[
+            RequestInputReference.parameter("path", "projectId"),
+            RequestInputReference.parameter("query", "region"),
+        ]
     )
     catalog.record(
         CatalogTestCaseDraft(
-            parameters={
-                "path.projectId": "missing",
-                "query.region": "us-east",
+            request={
+                "path": {"projectId": "missing"},
+                "query": {"region": "us-east"},
+                "header": {},
+                "cookie": {},
             },
             response_body={"message": "project missing"},
             failure=HTTPFailure(
@@ -980,6 +986,10 @@ def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
         "conflict",
         "continue",
     ]
+    system_prompt = request.messages[0].content
+    assert "query.sort" in system_prompt
+    assert "request.query.sort" in system_prompt
+    assert "json_body" in system_prompt
 
 
 def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> None:

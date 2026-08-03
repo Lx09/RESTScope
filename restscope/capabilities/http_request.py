@@ -193,7 +193,11 @@ class TargetHTTPRequestTool:
         request = _validate_arguments(arguments)
         request_kwargs = _body_arguments(request)
         request_headers = dict(request.headers)
-        if "form_body" in request.model_fields_set and not _contains_header(request_headers, "content-type"):
+        identity = current_target_operation_identity()
+        if (
+            "form_body" in request.model_fields_set
+            and not _contains_header(request_headers, "content-type")
+        ):
             request_headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         try:
@@ -205,6 +209,9 @@ class TargetHTTPRequestTool:
                 context_headers=context.headers,
                 request_headers=request_headers,
                 override_context_headers=True,
+                allowed_sensitive_request_headers=(
+                    {"cookie"} if identity is not None else set()
+                ),
             )
             response = self.transport.request_prepared(
                 prepared,
@@ -215,7 +222,7 @@ class TargetHTTPRequestTool:
                 processor_context=_response_operation_context(
                     context,
                     request=request,
-                    identity=current_target_operation_identity(),
+                    identity=identity,
                 ),
             )
             payload = _response_payload(response)

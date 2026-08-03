@@ -10,6 +10,10 @@
 > single-purpose `test_case.*` tools without a compatibility alias. See
 > `docs/tasks/test-case-catalog-tool-split.md`.
 
+> Superseded evidence-shape note (2026-08-03): cases now store direct-name
+> structured request JSON rather than a flattened semantic-Parameter map. See
+> `docs/tasks/test-case-structured-request-json.md`.
+
 ## Status
 
 Implemented and locally verified on `codex/smoke-test-case-catalog`.
@@ -21,10 +25,10 @@ of a single `OperationSmokeCoordinator.run` call. Batch execution and every
 actual Solve HTTP Probe append a short `TC*` case. The Catalog is released when
 the run returns and is never persisted.
 
-Every case stores only its identity, actually sent semantic Parameter values,
+Every case now stores only its identity, actually sent structured request JSON,
 an optional failed response body, and a parsed Failure. Successful cases retain
-their Parameters but no response body. Only 4xx/5xx bodies are retained, with a
-10 MiB limit.
+their request inputs but no response body. Only 4xx/5xx bodies are retained,
+with a 10 MiB limit.
 
 Failure Dedup initially receives only the operation, exact Failure Messages,
 and representative `TC*` references. It can discover the operation's Parameters

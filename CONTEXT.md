@@ -36,8 +36,9 @@ _Avoid_: Batch, case group
 
 **Test Case Catalog**:
 An in-memory index shared by every Batch, Dedup call, and Solve Probe during
-one operation Smoke run. It stores sent Parameter values for all cases and
-response bodies only for 4xx/5xx cases. It is never written to the database.
+one operation Smoke run. It stores sent request inputs as structured JSON for
+all cases and response bodies only for 4xx/5xx cases. It is never written to
+the database.
 _Avoid_: Batch report, persistent test history
 
 **Current-operation HTTP Probe**:
@@ -82,6 +83,10 @@ Models never receive database primary keys or Fingerprint references. Solve
 sees semantic input handles such as `body.project.startDate`; Dedup and Solve
 use run-local `TC1`, `TC2`, … references; Patch candidates use Solve-session
 `P*` references. Runtime code maps and validates each reference.
+
+A semantic handle is the unique cross-workflow name: `query.sort` identifies
+the direct key `sort` at `request.query.sort`. Test Case JSON keeps direct keys
+inside `path`, `query`, `header`, `cookie`, and optional `body` containers.
 
 There is no permanent “resolved” state. A later complete Batch may show that a
 previous Patch helped, did nothing, or interacted with another change; Memory

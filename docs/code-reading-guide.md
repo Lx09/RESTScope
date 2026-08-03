@@ -29,7 +29,7 @@ The core loop is:
 7. **Observe responses.** The API Behavior Monitor checks response contracts
    and learns narrowly approved identifier and response-value evidence.
 8. **Index Test Cases.** One run-local Catalog retains every sent request's
-   semantic Parameter values and only failed response bodies.
+   structured input JSON and only failed response bodies.
 9. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
    Agent lists OpenAPI input handles and queries selected `TC*` cases before
    grouping messages by complete suspected Parameter set.
@@ -111,9 +111,12 @@ Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
 Dedup receives exact messages and representative `TC*` references without
 item IDs or Fingerprint references. It uses the global `openapi.list_inputs`
 tool and five run-local `test_case.*` tools instead of receiving full HTTP
-JSON. Each tool performs one exact query; an unused request Parameter and an
-unretained response body are reported with explicit terminal status text rather
-than a boolean presence flag.
+JSON. Each tool performs one exact query and returns only the selected request
+or response JSON fragment. Inside JSON, `sort` is a direct key at
+`request.query.sort`; `query.sort` remains the unique semantic handle used by
+OpenAPI, Catalog, Memory, Patch, and Agent output. An unused request Parameter
+and an unretained response body are reported with explicit terminal status text
+rather than a boolean presence flag.
 Solve can additionally query one input or response-field Schema at a time.
 The complete OpenAPI IR and database primary keys never enter model prompts.
 
@@ -208,6 +211,13 @@ Owns deterministic request generation and execution.
 - `catalog.py` combines App-memory operation snapshots with current persisted
   per-input Generator rows. It does not store operation snapshots or revisions.
 
+### `restscope/request_inputs.py`
+
+Owns the pure in-memory `RequestInputReference` Interface shared by OpenAPI
+lookup, Testing, and the Test Case Catalog. It constructs semantic handles such
+as `query.sort`, reads the corresponding direct-name request JSON, and projects
+bounded evidence fragments. It owns no operation registry or persistent state.
+
 ### `restscope/supervisor/`
 
 Owns the dynamic top-level loop. It chooses operations from current runtime
@@ -222,7 +232,7 @@ Important files:
 
 - `coordinator.py`: complete-batch and fixed-todo orchestration.
 - `test_case_catalog/`: `TC*` identity, bounded response retention, exact
-  queries, and five single-purpose Agent-local Test Case tools.
+  structured-JSON queries, and five single-purpose Agent-local Test Case tools.
 - `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
 - `references.py`: observed-value options exposed as model-safe `R` aliases.

@@ -1042,6 +1042,14 @@ Investigate exactly one Operation Smoke Failure.
 - Patch and HTTP outputs call exactly one tool.
 - A tool output and a terminal decision are never mixed.
 - Copy semantic handles exactly from tool-schema enums.
+- A handle such as `query.sort` uniquely names the direct JSON key `"sort"` at
+  `request.query.sort`. Test Case `request` JSON uses direct names; never pass
+  bare `sort` where a tool or final decision requires a semantic handle.
+- Response `field` paths work the same way: `body.message` selects the direct
+  key `"message"` inside `response.body` JSON.
+- HTTP Probe arguments use transport names `query`, `headers`, and `json_body`.
+  After execution, the Catalog normalizes them to Test Case `query`, `header`,
+  `cookie`, and `body` JSON.
 - Slash-separated `input_node_id` values are not semantic handles.
 - A replacement must remain compatible with prior Patches and conflicts.
 - `generate_parameter_patch` has no side effects and returns a session `P` ref.
