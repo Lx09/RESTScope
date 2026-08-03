@@ -34,6 +34,14 @@ Use this lifecycle:
 6. run proportional verification on the merged `main` tree;
 7. remove the feature worktree and delete the merged feature branch.
 
+Once implementation and tests are complete and the user has explicitly
+authorized the required Git operations, finish steps 5 through 7 as one
+continuous delivery lifecycle. Do not stop after the feature commit or merge,
+and do not leave a successfully merged and verified feature worktree or branch
+behind. If the merge or merged-`main` verification fails, preserve the feature
+worktree for diagnosis and report the failure; cleanup happens only after both
+the merge and merged-result verification succeed.
+
 This mandatory lifecycle applies to new features. Bug fixes, documentation
 changes, and maintenance work may still use the risk-based guidance below.
 

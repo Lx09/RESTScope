@@ -153,10 +153,7 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
     from restscope.capabilities import ToolContext, build_capabilities
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.operation_smoke.test_case_catalog import (
-        CatalogQuery,
-        TestCaseCatalog,
-    )
+    from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
 
     config = smoke_config()
     ir = OpenAPIParser.parse(
@@ -232,17 +229,11 @@ def test_failure_solve_probe_records_a_new_catalog_case_without_returning_body()
         },
     }
     assert "body" not in result.structured
-    assert catalog.query(
-        CatalogQuery(
-            action="parameter_value",
-            case_ids=["TC1"],
-            name="path.projectId",
-        )
+    assert catalog.get_parameter_value(
+        case_ids=["TC1"],
+        parameter="path.projectId",
     )["cases"]["TC1"]["value"] == "known"
-    assert catalog.query(
-        CatalogQuery(
-            action="response_field_value",
-            case_ids=["TC1"],
-            name="body.message",
-        )
+    assert catalog.get_response_field_value(
+        case_ids=["TC1"],
+        field="body.message",
     )["cases"]["TC1"]["value"] == "project missing"

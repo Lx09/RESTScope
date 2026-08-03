@@ -1,73 +1,307 @@
-"""Expose exact Test Case Catalog reads as one Agent-local tool.
+"""Expose five single-purpose model tools for run-local Test Case evidence.
 
-The tool is offered only inside Dedup and Solve sessions because the Catalog
-exists for one Coordinator run. Arguments and results use the provider's native
-compact JSON protocol. The Agent toolbox owns schema checks, redacted tracing,
-and the final model-visible result boundary.
+Failure Dedup and Failure Solve share these tool definitions. Each tool names
+one exact Catalog query, validates only the arguments needed by that query, and
+returns bounded native JSON. The shared :class:`TestCaseCatalog` remains
+responsible for storage, Test Case identity, typed comparison, and response
+path traversal.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
-from pydantic import ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
-from restscope.capabilities import ToolFailure
+from restscope.capabilities import AgentToolbox, ToolFailure
 from restscope.llm import ToolResult, ToolSpec
 
 from .catalog import TestCaseCatalog
-from .schemas import CatalogQuery
 
 
-CATALOG_QUERY_TOOL_NAME = "query_test_case_catalog"
+GET_PARAMETER_VALUE_TOOL_NAME = "test_case.get_parameter_value"
+FIND_PARAMETERS_BY_VALUE_TOOL_NAME = "test_case.find_parameters_by_value"
+GET_RESPONSE_FIELD_VALUE_TOOL_NAME = "test_case.get_response_field_value"
+FIND_RESPONSE_FIELDS_BY_VALUE_TOOL_NAME = (
+    "test_case.find_response_fields_by_value"
+)
+GET_FAILURE_MESSAGES_TOOL_NAME = "test_case.get_failure_messages"
+TEST_CASE_TOOL_NAMES = frozenset(
+    {
+        GET_PARAMETER_VALUE_TOOL_NAME,
+        FIND_PARAMETERS_BY_VALUE_TOOL_NAME,
+        GET_RESPONSE_FIELD_VALUE_TOOL_NAME,
+        FIND_RESPONSE_FIELDS_BY_VALUE_TOOL_NAME,
+        GET_FAILURE_MESSAGES_TOOL_NAME,
+    }
+)
+
 _MAX_TOOL_VALUE_CHARS = 1_200
 
 
-def catalog_query_tool_spec() -> ToolSpec:
-    """Return the provider schema for the five approved exact query actions."""
-    return ToolSpec(
-        name=CATALOG_QUERY_TOOL_NAME,
-        description=(
-            "Query exact request values, failed-response fields, or parsed "
-            "Failure messages for known TC case references. This tool cannot "
-            "list all Parameters or return a complete Test Case."
-        ),
-        kind="local_function",
-        input_schema=CatalogQuery.model_json_schema(),
-        output_schema={"type": "object"},
+class _ToolInput(BaseModel):
+    """Reject arguments not declared by one single-purpose Catalog tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class _CaseIdsInput(_ToolInput):
+    """Validate the bounded same-query Test Case batch shared by every tool."""
+
+    case_ids: list[str] = Field(
+        min_length=1,
+        max_length=20,
+        json_schema_extra={"uniqueItems": True},
+        description="Unique run-local TC references to inspect together.",
+    )
+
+    @field_validator("case_ids")
+    @classmethod
+    def require_unique_case_ids(cls, value: list[str]) -> list[str]:
+        """Reject duplicate references before the Catalog repeats any work."""
+        if len(value) != len(set(value)):
+            raise ValueError("case_ids must be unique")
+        return value
+
+
+class _ParameterInput(_CaseIdsInput):
+    """Select one semantic request Parameter across known Test Cases."""
+
+    parameter: str = Field(
+        min_length=1,
+        description="Exact semantic input handle returned by openapi.list_inputs.",
     )
 
 
-def query_catalog(
+class _ResponseFieldInput(_CaseIdsInput):
+    """Select one concrete path inside each retained failed response body."""
+
+    field: str = Field(
+        min_length=1,
+        description=(
+            "Concrete response path beginning with body, for example "
+            "body.message or body.errors[0].code."
+        ),
+    )
+
+
+class _ValueInput(_CaseIdsInput):
+    """Select one exact typed JSON-like value for reverse lookup."""
+
+    value: Any
+
+
+_InputT = TypeVar("_InputT", bound=_ToolInput)
+
+
+def get_parameter_value_tool_spec() -> ToolSpec:
+    """Describe exact request-Parameter lookup without an action selector."""
+    return ToolSpec(
+        name=GET_PARAMETER_VALUE_TOOL_NAME,
+        description=(
+            "Get one exact request Parameter value for known TC references. "
+            "parameter_not_used_in_request is a final fact for that Test Case; "
+            "repeating the same query cannot reveal a value."
+        ),
+        kind="local_function",
+        input_schema=_ParameterInput.model_json_schema(),
+        output_schema=_cases_schema(_parameter_fact_schema()),
+    )
+
+
+def find_parameters_by_value_tool_spec() -> ToolSpec:
+    """Describe reverse typed-value lookup across request Parameters."""
+    return ToolSpec(
+        name=FIND_PARAMETERS_BY_VALUE_TOOL_NAME,
+        description=(
+            "Find request Parameters whose exact typed value matches the supplied "
+            "value for known TC references."
+        ),
+        kind="local_function",
+        input_schema=_ValueInput.model_json_schema(),
+        output_schema=_cases_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "value": {},
+                    "parameters": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["value", "parameters"],
+                "additionalProperties": False,
+            }
+        ),
+    )
+
+
+def get_response_field_value_tool_spec() -> ToolSpec:
+    """Describe exact retained-response-field lookup with explicit absence."""
+    return ToolSpec(
+        name=GET_RESPONSE_FIELD_VALUE_TOOL_NAME,
+        description=(
+            "Get one concrete field from each retained failed response body. "
+            "The result distinguishes an unretained body from a retained body "
+            "without that field; either status is final for the same TC and field."
+        ),
+        kind="local_function",
+        input_schema=_ResponseFieldInput.model_json_schema(),
+        output_schema=_cases_schema(_response_field_fact_schema()),
+    )
+
+
+def find_response_fields_by_value_tool_spec() -> ToolSpec:
+    """Describe reverse typed-value lookup across retained response fields."""
+    return ToolSpec(
+        name=FIND_RESPONSE_FIELDS_BY_VALUE_TOOL_NAME,
+        description=(
+            "Find concrete body paths whose exact typed value matches the supplied "
+            "value in retained failed responses for known TC references."
+        ),
+        kind="local_function",
+        input_schema=_ValueInput.model_json_schema(),
+        output_schema=_cases_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "value": {},
+                    "fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["value", "fields"],
+                "additionalProperties": False,
+            }
+        ),
+    )
+
+
+def get_failure_messages_tool_spec() -> ToolSpec:
+    """Describe parsed Failure-message lookup for exact Test Cases."""
+    return ToolSpec(
+        name=GET_FAILURE_MESSAGES_TOOL_NAME,
+        description=(
+            "Get parsed Failure messages for known TC references. An empty list "
+            "means that Test Case has no retained Failure messages."
+        ),
+        kind="local_function",
+        input_schema=_CaseIdsInput.model_json_schema(),
+        output_schema=_cases_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "messages": {"type": "array", "items": {}},
+                },
+                "required": ["messages"],
+                "additionalProperties": False,
+            }
+        ),
+    )
+
+
+def register_test_case_tools(
     *,
+    toolbox: AgentToolbox,
     catalog: TestCaseCatalog,
-    arguments: dict[str, Any],
-) -> dict[str, Any]:
-    """Return one bounded Catalog query for an Agent-owned tool Module.
+) -> None:
+    """Register the five explicit Catalog reads in one Agent-owned toolbox.
 
     Args:
-        catalog: The run-local evidence store owned by the current Smoke run.
-        arguments: Model arguments already checked against the provider schema.
+        toolbox: The Dedup- or Solve-owned tool Module to extend.
+        catalog: The run-local evidence store used by every registered query.
 
-    Returns:
-        The bounded structured result described by
-        :func:`catalog_query_tool_spec`.
-
-    Raises:
-        ToolFailure: If cross-field rules reject the query, a case or field is
-            unavailable, or a requested value cannot be queried safely.
-
-    The Agent toolbox owns tracing, redaction, and result construction. This
-    function retains only the Catalog's domain validation and bounded result
-    projection.
+    This shared adapter keeps both Agents on the exact same tool contracts. It
+    changes only the supplied toolbox and never changes Catalog evidence.
     """
+    toolbox.register(
+        spec=get_parameter_value_tool_spec(),
+        execute=lambda **arguments: {
+            "structured": _run_catalog_query(
+                model_type=_ParameterInput,
+                arguments=arguments,
+                execute=lambda query: catalog.get_parameter_value(
+                    case_ids=query.case_ids,
+                    parameter=query.parameter,
+                ),
+            )
+        },
+    )
+    toolbox.register(
+        spec=find_parameters_by_value_tool_spec(),
+        execute=lambda **arguments: {
+            "structured": _run_catalog_query(
+                model_type=_ValueInput,
+                arguments=arguments,
+                execute=lambda query: catalog.find_parameters_by_value(
+                    case_ids=query.case_ids,
+                    value=query.value,
+                ),
+            )
+        },
+    )
+    toolbox.register(
+        spec=get_response_field_value_tool_spec(),
+        execute=lambda **arguments: {
+            "structured": _run_catalog_query(
+                model_type=_ResponseFieldInput,
+                arguments=arguments,
+                execute=lambda query: catalog.get_response_field_value(
+                    case_ids=query.case_ids,
+                    field=query.field,
+                ),
+            )
+        },
+    )
+    toolbox.register(
+        spec=find_response_fields_by_value_tool_spec(),
+        execute=lambda **arguments: {
+            "structured": _run_catalog_query(
+                model_type=_ValueInput,
+                arguments=arguments,
+                execute=lambda query: catalog.find_response_fields_by_value(
+                    case_ids=query.case_ids,
+                    value=query.value,
+                ),
+            )
+        },
+    )
+    toolbox.register(
+        spec=get_failure_messages_tool_spec(),
+        execute=lambda **arguments: {
+            "structured": _run_catalog_query(
+                model_type=_CaseIdsInput,
+                arguments=arguments,
+                execute=lambda query: catalog.get_failure_messages(
+                    case_ids=query.case_ids,
+                ),
+            )
+        },
+    )
+
+
+def _run_catalog_query(
+    *,
+    model_type: type[_InputT],
+    arguments: dict[str, Any],
+    execute: Callable[[_InputT], dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate one fixed query contract and bound its model-visible result."""
     try:
-        query = CatalogQuery.model_validate(arguments)
-        return _bound_catalog_result(catalog.query(query))
+        query = model_type.model_validate(arguments)
+        return _bound_catalog_result(execute(query))
     except (ValidationError, KeyError, ValueError) as exc:
         raise ToolFailure(
-            code="invalid_catalog_query",
+            code="invalid_test_case_query",
             message=str(exc),
         ) from exc
 
@@ -79,6 +313,81 @@ def tool_result_json(result: ToolResult) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _cases_schema(fact_schema: dict[str, Any]) -> dict[str, Any]:
+    """Build the shared case-keyed output envelope for one fixed fact shape."""
+    return {
+        "type": "object",
+        "properties": {
+            "cases": {
+                "type": "object",
+                "additionalProperties": fact_schema,
+            }
+        },
+        "required": ["cases"],
+        "additionalProperties": False,
+    }
+
+
+def _parameter_fact_schema() -> dict[str, Any]:
+    """Describe used and unused Parameter facts without a boolean flag."""
+    return {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "parameter": {"type": "string"},
+                    "status": {"const": "parameter_used_in_request"},
+                    "value": {},
+                },
+                "required": ["parameter", "status", "value"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "parameter": {"type": "string"},
+                    "status": {"const": "parameter_not_used_in_request"},
+                },
+                "required": ["parameter", "status"],
+                "additionalProperties": False,
+            },
+        ]
+    }
+
+
+def _response_field_fact_schema() -> dict[str, Any]:
+    """Describe the three exact response-field evidence outcomes."""
+    statuses_without_value = [
+        "response_body_not_retained",
+        "response_field_not_present_in_retained_body",
+    ]
+    return {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string"},
+                    "status": {
+                        "const": "response_field_present_in_retained_body"
+                    },
+                    "value": {},
+                },
+                "required": ["field", "status", "value"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string"},
+                    "status": {"enum": statuses_without_value},
+                },
+                "required": ["field", "status"],
+                "additionalProperties": False,
+            },
+        ]
+    }
 
 
 def _bound_tool_values(value: Any) -> Any:
@@ -121,18 +430,17 @@ def _bound_tool_values(value: Any) -> Any:
 
 
 def _bound_catalog_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Preserve the query envelope while bounding each selected case fact."""
+    """Bound every selected fact while preserving the case-keyed envelope."""
     cases = result.get("cases")
     assert isinstance(cases, dict)
     return {
-        "action": result["action"],
         "cases": {
             case_id: {
                 name: _bound_tool_values(value)
                 for name, value in facts.items()
             }
             for case_id, facts in cases.items()
-        },
+        }
     }
 
 

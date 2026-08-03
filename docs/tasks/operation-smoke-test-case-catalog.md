@@ -5,6 +5,11 @@
 > retained only as historical evidence. See
 > `docs/tasks/global-openapi-capability.md`.
 
+> Superseded tool-interface note (2026-08-03): the action-dispatched
+> `query_test_case_catalog` tool described below was replaced by five
+> single-purpose `test_case.*` tools without a compatibility alias. See
+> `docs/tasks/test-case-catalog-tool-split.md`.
+
 ## Status
 
 Implemented and locally verified on `codex/smoke-test-case-catalog`.

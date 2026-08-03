@@ -1,9 +1,9 @@
-"""Define run-local Test Case Catalog values and query commands.
+"""Define run-local values stored by the Test Case Catalog.
 
 Batch execution and Solve HTTP probes produce ``CatalogTestCaseDraft`` values.
 The Catalog assigns short ``TC*`` identities and returns immutable
-``CatalogTestCase`` records. Agents never receive these DTOs wholesale; they
-submit a bounded ``CatalogQuery`` and receive only the requested facts.
+``CatalogTestCase`` records. Agents never receive these DTOs wholesale; five
+single-purpose tools return only the exact requested facts.
 """
 
 from __future__ import annotations
@@ -65,47 +65,3 @@ class CatalogTestCase(CatalogTestCaseDraft):
     """Represent one immutable Test Case stored for the current Smoke run."""
 
     case_id: str = Field(pattern=r"^TC[1-9][0-9]*$")
-
-
-CatalogQueryAction = Literal[
-    "parameter_value",
-    "response_field_value",
-    "parameters_using_value",
-    "response_fields_using_value",
-    "failure_messages",
-]
-
-
-class CatalogQuery(_Model):
-    """Describe one exact, bounded read against one or more Test Cases."""
-
-    action: CatalogQueryAction
-    case_ids: list[str] = Field(min_length=1, max_length=20)
-    name: str | None = Field(default=None, min_length=1)
-    value: Any | None = None
-
-    @model_validator(mode="after")
-    def validate_action_arguments(self) -> "CatalogQuery":
-        """Require only the selector used by the chosen query action."""
-        needs_name = self.action in {
-            "parameter_value",
-            "response_field_value",
-        }
-        needs_value = self.action in {
-            "parameters_using_value",
-            "response_fields_using_value",
-        }
-        if needs_name != (self.name is not None):
-            raise ValueError(
-                f"{self.action} "
-                + ("requires name" if needs_name else "does not accept name")
-            )
-        supplied_value = "value" in self.model_fields_set
-        if needs_value != supplied_value:
-            raise ValueError(
-                f"{self.action} "
-                + ("requires value" if needs_value else "does not accept value")
-            )
-        if len(self.case_ids) != len(set(self.case_ids)):
-            raise ValueError("case_ids must be unique")
-        return self

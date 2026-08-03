@@ -695,18 +695,16 @@ def test_multiple_read_only_catalog_queries_make_progress_in_one_output() -> Non
                 tool_calls=[
                     ToolCall(
                         id="catalog-parameter",
-                        name="query_test_case_catalog",
+                        name="test_case.get_parameter_value",
                         arguments={
-                            "action": "parameter_value",
                             "case_ids": ["TC1"],
-                            "name": "path.projectId",
+                            "parameter": "path.projectId",
                         },
                     ),
                     ToolCall(
                         id="catalog-failure",
-                        name="query_test_case_catalog",
+                        name="test_case.get_failure_messages",
                         arguments={
-                            "action": "failure_messages",
                             "case_ids": ["TC1"],
                         },
                     ),
@@ -736,7 +734,8 @@ def test_multiple_read_only_catalog_queries_make_progress_in_one_output() -> Non
         message
         for message in retry_messages
         if message.role == "tool"
-        and message.name == "query_test_case_catalog"
+        and message.name is not None
+        and message.name.startswith("test_case.")
     ]
     assert {message.tool_call_id for message in catalog_results} == {
         "catalog-parameter",
@@ -1030,7 +1029,11 @@ def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> Non
         "openapi.get_response_field_schema",
         "lookup_parameter_history",
         "generate_parameter_patch",
-        "query_test_case_catalog",
+        "test_case.get_parameter_value",
+        "test_case.find_parameters_by_value",
+        "test_case.get_response_field_value",
+        "test_case.find_response_fields_by_value",
+        "test_case.get_failure_messages",
         "restscope.http.request",
     }
 

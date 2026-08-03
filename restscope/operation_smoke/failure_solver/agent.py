@@ -55,10 +55,9 @@ from restscope.operation_smoke.parameter_patch import (
     ValidatedParameterPatch,
 )
 from restscope.operation_smoke.test_case_catalog import (
-    CATALOG_QUERY_TOOL_NAME,
+    TEST_CASE_TOOL_NAMES,
     TestCaseCatalog,
-    catalog_query_tool_spec,
-    query_catalog,
+    register_test_case_tools,
     tool_result_json,
 )
 from restscope.testing import (
@@ -81,11 +80,10 @@ _MEMORY_TOOL_NAME = "lookup_parameter_history"
 _PATCH_TOOL_NAME = "generate_parameter_patch"
 _READ_ONLY_QUERY_TOOL_NAMES = {
     _MEMORY_TOOL_NAME,
-    CATALOG_QUERY_TOOL_NAME,
     OPENAPI_LIST_INPUTS_TOOL_NAME,
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
     OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
-}
+} | TEST_CASE_TOOL_NAMES
 
 
 class HTTPProbe(Protocol):
@@ -418,10 +416,8 @@ class FailureSolveSession:
                             (
                                 tool_result_json(result)
                                 if result.name
-                                in {
-                                    CATALOG_QUERY_TOOL_NAME,
-                                    HTTP_REQUEST_TOOL_NAME,
-                                }
+                                in TEST_CASE_TOOL_NAMES
+                                | {HTTP_REQUEST_TOOL_NAME}
                                 else _tool_result_text(result)
                             ),
                         )
@@ -529,15 +525,7 @@ class FailureSolveSession:
                 )
             ),
         )
-        tools.register(
-            spec=catalog_query_tool_spec(),
-            execute=lambda **arguments: {
-                "structured": query_catalog(
-                    catalog=self.catalog,
-                    arguments=arguments,
-                )
-            },
-        )
+        register_test_case_tools(toolbox=tools, catalog=self.catalog)
         tools.register(
             spec=self.http_probe.tool_spec(self.config),
             execute=lambda **arguments: self._adapt_existing_result(
@@ -646,8 +634,7 @@ class FailureSolveSession:
                         "Query Parameter memory before generating a Patch for: "
                         + ", ".join(missing_queries)
                     )
-        elif call.name in {
-            CATALOG_QUERY_TOOL_NAME,
+        elif call.name in TEST_CASE_TOOL_NAMES | {
             OPENAPI_LIST_INPUTS_TOOL_NAME,
             OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
             OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
@@ -1037,10 +1024,10 @@ Investigate exactly one Operation Smoke Failure.
 # Stages
 
 1. Read the representative `TC*` reference and preloaded Failure history.
-2. Query OpenAPI tools for input or response-field Schemas and
-   `query_test_case_catalog` for exact request values, response fields, or
-   Failure Messages only as needed. Independent OpenAPI, Catalog, and Parameter
-   Memory reads may be grouped in one output.
+2. Query OpenAPI tools for input or response-field Schemas and the
+   single-purpose `test_case.*` tools for exact request values, response
+   fields, reverse value matches, or Failure Messages only as needed.
+   Independent OpenAPI, Test Case, and Parameter Memory reads may be grouped.
 3. Before patching an input, call `lookup_parameter_history`.
 4. Probe HTTP only when existing evidence cannot distinguish the root cause.
 5. Call `generate_parameter_patch` with confirmed, testable requirements.
@@ -1049,6 +1036,8 @@ Investigate exactly one Operation Smoke Failure.
 # Rules
 
 - One output may group only read-only OpenAPI/Catalog/Parameter Memory queries.
+- Absence statuses from a `test_case.*` tool are final evidence for the same TC
+  and target. Do not repeat an identical query expecting a different result.
 - Patch and HTTP outputs call exactly one tool.
 - A tool output and a terminal decision are never mixed.
 - Copy semantic handles exactly from tool-schema enums.
