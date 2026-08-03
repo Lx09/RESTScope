@@ -28,7 +28,6 @@ class OperationSmokeRequest(_PublicModel):
     max_dedup_outputs: int = Field(default=50, ge=1, le=50)
     max_solve_outputs_per_todo: int = Field(default=50, ge=1, le=50)
     max_patch_outputs: int = Field(default=20, ge=1, le=20)
-    continuation_interval: int = Field(default=10, ge=1, le=50)
 
 
 OperationSmokeStopReason: TypeAlias = Literal[

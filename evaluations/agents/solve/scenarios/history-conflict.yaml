@@ -61,10 +61,8 @@ input:
             - solve_attempt_id: bounded-id-solve-attempt
               round_number: 2
               outcome: applied_patch
-              trigger_conditions: generated identifiers fall outside 3..100
+              reason: generate only integers from 3 through 100
               root_cause: path.projectId used an unrestricted Generator
-              solution: generate only integers from 3 through 100
-              evidence_source: mixed
               parameters:
                 - input_node_id: path/projectId
                   cause_summary: the identifier value determines the failure
@@ -80,7 +78,7 @@ input:
   patch_results: []
   probe_results: []
 expected:
-  status: conflict
+  status: no_patch
   memory_input_handles: [path.projectId]
   minimum_patch_calls: 0
   applied_patch_count: 0

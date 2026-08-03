@@ -22,7 +22,7 @@ input:
             attempts:
               - outcome: applied_patch
                 root_cause: the previous Generator included 1 and 2
-                solution: keep the Generator minimum at 3
+                reason: keep the Generator minimum at 3
                 generator_change:
                   generator_changes:
                     - action: update

@@ -125,11 +125,8 @@ class SqlAlchemySmokeMemoryRepository:
                 failure_id=write.failure_id,
                 round_number=write.round_number,
                 outcome=write.outcome,
-                trigger_conditions=write.trigger_conditions,
+                reason=write.reason,
                 root_cause=write.root_cause,
-                solution=write.solution,
-                evidence_source=write.evidence_source,
-                conflict_reason=write.conflict_reason,
             )
         )
         self.session.add_all(
@@ -243,11 +240,8 @@ class SqlAlchemySmokeMemoryRepository:
             solve_attempt_id=attempt.id,
             round_number=attempt.round_number,
             outcome=attempt.outcome,
-            trigger_conditions=attempt.trigger_conditions,
+            reason=attempt.reason,
             root_cause=attempt.root_cause,
-            solution=attempt.solution,
-            evidence_source=attempt.evidence_source,
-            conflict_reason=attempt.conflict_reason,
             parameters=[
                 SolveAttemptParameterWrite(
                     input_node_id=item.input_node_id,

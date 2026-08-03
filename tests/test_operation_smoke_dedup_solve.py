@@ -32,7 +32,7 @@ def test_operation_smoke_request_uses_large_output_budgets() -> None:
     assert request.max_dedup_outputs == 50
     assert request.max_solve_outputs_per_todo == 50
     assert request.max_patch_outputs == 20
-    assert request.continuation_interval == 10
+    assert not hasattr(request, "continuation_interval")
     assert not hasattr(request, "seed")
     assert not hasattr(request, "max_effect_outputs")
     assert not hasattr(request, "max_feedback_rounds")
@@ -48,6 +48,7 @@ def test_operation_smoke_request_uses_large_output_budgets() -> None:
         "max_patch_attempts",
         "seed",
         "max_effect_outputs",
+        "continuation_interval",
     ],
 )
 def test_operation_smoke_request_rejects_legacy_budget_fields(

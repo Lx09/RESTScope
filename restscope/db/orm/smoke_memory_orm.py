@@ -42,11 +42,6 @@ class SmokeSolveAttemptORM(CreatedAtMixin, Base):
     __tablename__ = "smoke_solve_attempts"
     __table_args__ = (
         Index("ix_smoke_solve_attempts_failure_created", "failure_id", "created_at"),
-        CheckConstraint(
-            "(outcome = 'conflict' AND conflict_reason IS NOT NULL) OR "
-            "(outcome IN ('applied_patch', 'no_patch') AND conflict_reason IS NULL)",
-            name="conflict_reason_matches_outcome",
-        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -56,11 +51,8 @@ class SmokeSolveAttemptORM(CreatedAtMixin, Base):
     )
     round_number: Mapped[int] = mapped_column(Integer, nullable=False)
     outcome: Mapped[str] = mapped_column(String, nullable=False)
-    trigger_conditions: Mapped[str] = mapped_column(Text, nullable=False)
-    root_cause: Mapped[str] = mapped_column(Text, nullable=False)
-    solution: Mapped[str] = mapped_column(Text, nullable=False)
-    evidence_source: Mapped[str] = mapped_column(String, nullable=False)
-    conflict_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SmokeSolveAttemptParameterORM(Base):

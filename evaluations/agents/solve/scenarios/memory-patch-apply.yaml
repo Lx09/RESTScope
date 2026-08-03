@@ -60,11 +60,9 @@ input:
           attempts:
             - solve_attempt_id: prior-minimum-solve-attempt
               round_number: 1
-              outcome: no_patch
-              trigger_conditions: projectId is below 3
+              outcome: applied_patch
+              reason: retain a minimum of 3 in a future compatible patch
               root_cause: projectId generator includes 1 and 2
-              solution: retain a minimum of 3 in a future compatible patch
-              evidence_source: batch
               parameters:
                 - input_node_id: path/projectId
                   cause_summary: generated value is below the accepted minimum

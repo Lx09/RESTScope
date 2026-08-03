@@ -388,25 +388,21 @@ def _terminal(
     action: str,
     *,
     candidate_ref: str | None = None,
-    conflict_reason: str | None = None,
+    reason: str | None = None,
 ) -> dict:
-    """Build the complete durable facts required by a terminal decision."""
+    """Build the flat terminal decision exposed to the Solve model."""
     return {
         "action": action,
         "candidate_ref": candidate_ref,
-        "trigger_conditions": "Generated identifiers are rejected.",
-        "root_cause": "path.projectId uses an unsuitable Generator.",
-        "solution": "Use the validated bounded Generator.",
-        "evidence_source": "mixed",
-        "parameters": [
-            {
-                "input_handle": "path.projectId",
-                "cause_summary": "This input contains the rejected value.",
-            }
-        ],
-        "conflict_reason": conflict_reason,
-        "reason": None,
-        "next_step": None,
+        "reason": (
+            reason
+            if reason is not None
+            else (
+                "No Generator Patch is appropriate for this Failure."
+                if action == "no_patch"
+                else None
+            )
+        ),
     }
 
 
@@ -496,7 +492,11 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
         [
             _memory_call(),
             _patch_call(),
-            _terminal("apply_patch", candidate_ref="P1"),
+            _terminal(
+                "apply_patch",
+                candidate_ref="P1",
+                reason="This terminal text must not become durable evidence.",
+            ),
         ]
     )
 
@@ -515,6 +515,17 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     ]
     assert len(application.calls) == 1
     assert application.calls[0]["patch"].updates[0].strategy.value == "known-project"
+    attempt = application.calls[0]["attempt"]
+    assert attempt.root_cause == "The unrestricted identifier is rejected."
+    assert attempt.change_reason == (
+        "Generate accepted identifiers no greater than 100."
+    )
+    assert [item.model_dump() for item in attempt.parameters] == [
+        {
+            "input_node_id": "path/projectId",
+            "cause_summary": "The unrestricted identifier is rejected.",
+        }
+    ]
     assert patch_factory.created[0].calls[0]["random_seed"] == 731
     assert patch_factory.created[0].calls[0]["task"].prior_attempts
     initial_prompt = client.requests[0].messages[1].content
@@ -530,6 +541,40 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
     assert '{"' not in initial_prompt
+
+
+def test_apply_patch_ignores_every_terminal_reason_shape() -> None:
+    """Missing, null, empty, and populated apply reasons select identically."""
+
+    terminals = [
+        {"action": "apply_patch", "candidate_ref": "P1"},
+        {"action": "apply_patch", "candidate_ref": "P1", "reason": None},
+        {"action": "apply_patch", "candidate_ref": "P1", "reason": ""},
+        {
+            "action": "apply_patch",
+            "candidate_ref": "P1",
+            "reason": "This text must not affect application.",
+        },
+    ]
+
+    for terminal in terminals:
+        application = StubPatchApplication()
+        client = StubClient([_memory_call(), _patch_call(), terminal])
+
+        outcome = _start(
+            _agent(
+                client,
+                StubMemory(),
+                StubPatchFactory([_validated_patch("known-project")]),
+                application,
+            )
+        ).advance()
+
+        assert outcome.status == "applied_patch"
+        assert len(application.calls) == 1
+        assert application.calls[0]["attempt"].change_reason == (
+            "Generate accepted identifiers no greater than 100."
+        )
 
 
 def test_state_change_during_apply_records_a_conflict_solve_attempt() -> None:
@@ -559,8 +604,16 @@ def test_state_change_during_apply_records_a_conflict_solve_attempt() -> None:
 
     assert outcome.status == "conflict"
     assert outcome.solve_attempt_id == "solve-attempt-1"
-    assert memory.attempts[0].outcome == "conflict"
-    assert memory.attempts[0].conflict_reason is not None
+    attempt = memory.attempts[0]
+    assert attempt.outcome == "conflict"
+    assert attempt.reason == (
+        "Current Generator or Constraint state changed before the selected "
+        "Patch could commit."
+    )
+    assert attempt.root_cause == "The unrestricted identifier is rejected."
+    assert [item.input_node_id for item in attempt.parameters] == [
+        "path/projectId"
+    ]
     memory_feedback = client.requests[1].messages[-1].content
     assert memory_feedback.startswith("## PARAMETER path.projectId — UNTRUSTED")
     assert '{"' not in memory_feedback
@@ -616,7 +669,12 @@ def test_multiple_patch_calls_keep_candidates_local_and_apply_selected_one() -> 
 
     assert outcome.status == "applied_patch"
     assert outcome.outputs_used == 8
+    assert outcome.applied_patch is not None
+    assert outcome.applied_patch.candidate_ref == "P2"
     assert application.calls[0]["patch"].updates[0].strategy.value == "second"
+    assert application.calls[0]["attempt"].change_reason == (
+        "Generate accepted identifiers no greater than 50."
+    )
     assert len(application.calls) == 1
 
 
@@ -625,6 +683,7 @@ def test_forged_candidate_ref_is_repaired_without_applying_any_patch() -> None:
     application = StubPatchApplication()
     client = StubClient(
         [
+            _terminal("apply_patch"),
             _terminal("apply_patch", candidate_ref="P99"),
             _terminal("no_patch"),
         ]
@@ -636,7 +695,103 @@ def test_forged_candidate_ref_is_repaired_without_applying_any_patch() -> None:
 
     assert outcome.status == "no_patch"
     assert application.calls == []
-    assert "P99" in client.requests[1].messages[-1].content
+    corrections = [request.messages[-1].content for request in client.requests[1:]]
+    assert all("apply_patch requires candidate_ref" in item for item in corrections)
+    assert all("Available candidates: none" in item for item in corrections)
+
+
+def test_no_patch_ignores_candidate_ref_and_persists_only_its_reason() -> None:
+    """A no-Patch conclusion never invents Parameter-specific history."""
+
+    memory = StubMemory()
+    application = StubPatchApplication()
+    client = StubClient(
+        [
+            {
+                "action": "no_patch",
+                "candidate_ref": "P999",
+                "reason": "The current Generators do not cause this Failure.",
+            }
+        ]
+    )
+
+    outcome = _start(
+        _agent(client, memory, StubPatchFactory([]), application)
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    assert outcome.reason == "The current Generators do not cause this Failure."
+    assert application.calls == []
+    assert len(memory.attempts) == 1
+    assert memory.attempts[0].model_dump() == {
+        "operation_key": "GET /projects/{projectId}",
+        "failure_id": "db-failure-1",
+        "round_number": 2,
+        "outcome": "no_patch",
+        "reason": "The current Generators do not cause this Failure.",
+        "root_cause": None,
+        "parameters": [],
+    }
+
+
+def test_no_patch_repairs_a_blank_reason_before_writing_memory() -> None:
+    """Blank no-Patch text receives focused correction and writes nothing."""
+
+    memory = StubMemory()
+    client = StubClient(
+        [
+            {"action": "no_patch", "candidate_ref": None},
+            {"action": "no_patch", "candidate_ref": None, "reason": None},
+            {"action": "no_patch", "candidate_ref": None, "reason": "   "},
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            memory,
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    assert len(memory.attempts) == 1
+    corrections = [request.messages[-1].content for request in client.requests[1:]]
+    assert all("no_patch requires a non-empty reason" in item for item in corrections)
+
+
+def test_removed_terminal_actions_and_fields_are_rejected() -> None:
+    """Continue, model conflict, and old facts cannot cross the flat DTO."""
+
+    memory = StubMemory()
+    client = StubClient(
+        [
+            {"action": "continue", "candidate_ref": None, "reason": "More work."},
+            {"action": "conflict", "candidate_ref": None, "reason": "Stale."},
+            {
+                "action": "no_patch",
+                "candidate_ref": None,
+                "reason": "Not input-caused.",
+                "root_cause": "Removed terminal fact.",
+            },
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            memory,
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    assert len(memory.attempts) == 1
+    assert len(client.requests) == 4
 
 
 def test_invalid_multiple_tool_calls_are_not_replayed_without_results() -> None:
@@ -983,13 +1138,42 @@ def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
     assert request.json_schema["properties"]["action"]["enum"] == [
         "apply_patch",
         "no_patch",
-        "conflict",
-        "continue",
     ]
     system_prompt = request.messages[0].content
     assert "query.sort" in system_prompt
     assert "request.query.sort" in system_prompt
     assert "json_body" in system_prompt
+
+
+def test_solve_always_offers_tools_with_a_flat_three_field_terminal_schema() -> None:
+    """A tool call continues naturally; no checkpoint changes the contract."""
+
+    client = StubClient([_memory_call()])
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        ),
+        max_outputs=1,
+    ).advance()
+
+    assert outcome.status == "solve_budget_exhausted"
+    request = client.requests[0]
+    assert request.tool_choice == "auto"
+    assert request.tools
+    assert set(request.json_schema["properties"]) == {
+        "action",
+        "candidate_ref",
+        "reason",
+    }
+    assert request.json_schema["properties"]["action"]["enum"] == [
+        "apply_patch",
+        "no_patch",
+    ]
+    assert "oneOf" not in request.json_schema
 
 
 def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> None:

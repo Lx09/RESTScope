@@ -94,8 +94,8 @@ EXPECTED_COLUMNS = {
         "last_seen_at", "last_status_code",
     },
     "smoke_solve_attempts": {
-        "id", "failure_id", "round_number", "outcome", "trigger_conditions",
-        "root_cause", "solution", "evidence_source", "conflict_reason", "created_at",
+        "id", "failure_id", "round_number", "outcome", "reason",
+        "root_cause", "created_at",
     },
     "smoke_solve_attempt_parameters": {
         "solve_attempt_id", "input_node_id", "cause_summary", "position",
@@ -286,10 +286,13 @@ def test_final_schema_declares_natural_keys_checks_indexes_and_foreign_keys(
         "occurrence_count >= 1" in item["sqltext"]
         for item in inspector.get_check_constraints("smoke_failures")
     )
-    assert any(
-        "conflict_reason" in item["sqltext"]
-        for item in inspector.get_check_constraints("smoke_solve_attempts")
-    )
+    assert inspector.get_check_constraints("smoke_solve_attempts") == []
+    attempt_columns = {
+        item["name"]: item
+        for item in inspector.get_columns("smoke_solve_attempts")
+    }
+    assert attempt_columns["reason"]["nullable"] is False
+    assert attempt_columns["root_cause"]["nullable"] is True
 
     expected_foreign_keys = {
         "generator_change_events": {("solve_attempt_id", "smoke_solve_attempts")},

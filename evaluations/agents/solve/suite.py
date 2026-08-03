@@ -2,9 +2,10 @@
 
 The real ``FailureSolveAgent`` still decides whether to inspect Parameter
 history, probe the current operation, request a Patch, and finish with
-``apply_patch``, ``no_patch``, or ``conflict``.  Only the tool implementations
-are replaced: they replay structured scenario evidence, record calls, and keep
-the accepted current Generator state in memory rather than a RESTScope database.
+``apply_patch`` or ``no_patch``. Runtime may still report a conflict when an
+accepted candidate cannot commit. Only the tool implementations are replaced:
+they replay structured scenario evidence, record calls, and keep accepted
+Generator state in memory rather than a RESTScope database.
 """
 
 from __future__ import annotations
@@ -457,15 +458,15 @@ class ScriptedHTTPProbe:
         )
 
 
-class ScriptedPatchAgent:
-    """Return one prepared Patch result while recording Solve's requirement."""
+class ScriptedPatchCoordinator:
+    """Return one prepared reviewed Patch while recording Solve's requirement."""
 
     def __init__(
         self,
         result: ValidatedParameterPatch | ParameterPatchFailure,
         calls: list[dict[str, Any]],
     ) -> None:
-        """Bind exactly one result to one fresh nested Agent instance."""
+        """Bind exactly one result to one fresh nested Coordinator instance."""
         self.result = result
         self.calls = calls
 
@@ -483,8 +484,8 @@ class ScriptedPatchAgent:
         return self.result
 
 
-class ScriptedPatchFactory:
-    """Create one side-effect-free scripted Patch Agent per tool call."""
+class ScriptedPatchCoordinatorFactory:
+    """Create one side-effect-free scripted Coordinator per tool call."""
 
     def __init__(
         self,
@@ -495,7 +496,7 @@ class ScriptedPatchFactory:
         self.results = list(results)
         self.calls = calls
 
-    def create(self) -> ScriptedPatchAgent:
+    def create(self) -> ScriptedPatchCoordinator:
         """Return a prepared result, or a structured budget-style tool failure."""
         if self.results:
             result = self.results.pop(0)
@@ -506,7 +507,7 @@ class ScriptedPatchFactory:
                 outputs_used=1,
                 errors=["This scenario did not configure another Patch result."],
             )
-        return ScriptedPatchAgent(result, self.calls)
+        return ScriptedPatchCoordinator(result, self.calls)
 
 
 class TemporaryPatchApplication:
@@ -590,7 +591,7 @@ def build_task(
                     model=model,
                     http_probe=ScriptedHTTPProbe(scenario.probe_results, calls),
                     memory=memory,
-                    patch_agent_factory=ScriptedPatchFactory(
+                    patch_coordinator_factory=ScriptedPatchCoordinatorFactory(
                         scenario.patch_results,
                         calls,
                     ),

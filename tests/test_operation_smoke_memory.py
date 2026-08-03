@@ -101,13 +101,10 @@ def test_failure_rejects_suspected_input_outside_current_operation() -> None:
         )
 
 
-def test_no_patch_attempt_is_append_only_and_queryable_by_input() -> None:
-    """A validated attribution appears in both Failure and Parameter history."""
+def test_no_patch_attempt_is_append_only_but_not_parameter_attributed() -> None:
+    """No-patch remains in Failure history without claiming an input cause."""
 
-    from restscope.operation_smoke.memory import (
-        SolveAttemptParameterWrite,
-        SolveAttemptWrite,
-    )
+    from restscope.operation_smoke.memory import SolveAttemptWrite
 
     memory, _, _ = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(
@@ -119,16 +116,7 @@ def test_no_patch_attempt_is_append_only_and_queryable_by_input() -> None:
             failure_id=failure_id,
             round_number=1,
             outcome="no_patch",
-            trigger_conditions="unknown identifiers return 404",
-            root_cause="the target record does not exist",
-            solution="no safe Generator change is justified",
-            evidence_source="batch",
-            parameters=[
-                SolveAttemptParameterWrite(
-                    input_node_id="path/projectId",
-                    cause_summary="The path value selects the missing record.",
-                )
-            ],
+            reason="No safe Generator change is justified.",
         )
     )
 
@@ -141,8 +129,11 @@ def test_no_patch_attempt_is_append_only_and_queryable_by_input() -> None:
         input_node_id="path/projectId",
     )
     assert failure.attempts[0].solve_attempt_id == attempt_id
+    assert failure.attempts[0].reason == "No safe Generator change is justified."
+    assert failure.attempts[0].root_cause is None
+    assert failure.attempts[0].parameters == []
     assert failure.attempts[0].generator_change is None
-    assert parameter.failures[0].failure_id == failure_id
+    assert parameter.failures == []
 
 
 def _patch_attempt(failure_id: str):
@@ -157,10 +148,8 @@ def _patch_attempt(failure_id: str):
         operation_key="GET /projects/{projectId}",
         failure_id=failure_id,
         round_number=1,
-        trigger_conditions="unknown identifiers return 404",
         root_cause="path.projectId uses arbitrary strings",
-        solution="use a known project identifier",
-        evidence_source="batch",
+        change_reason="use a known project identifier",
         parameters=[
             SolveAttemptParameterWrite(
                 input_node_id="path/projectId",
@@ -215,8 +204,16 @@ def test_patch_commits_current_generator_attempt_and_change_event_atomically() -
     assert inputs[0].strategy.type == "constant"
     assert applied.config.configs[0].strategy.type == "constant"
     assert history.attempts[0].solve_attempt_id == applied.solve_attempt_id
+    assert history.attempts[0].reason == "use a known project identifier"
+    assert history.attempts[0].root_cause == (
+        "path.projectId uses arbitrary strings"
+    )
+    assert [item.input_node_id for item in history.attempts[0].parameters] == [
+        "path/projectId"
+    ]
     assert change is not None
     assert change.event_id == applied.generator_change_event_id
+    assert change.reason == "use a known project identifier"
     assert change.generator_changes[0]["before"]["strategy"]["type"] == "random_string"
     assert "samples" not in change.model_dump(mode="json")
 

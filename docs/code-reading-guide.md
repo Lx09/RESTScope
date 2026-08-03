@@ -36,9 +36,11 @@ The core loop is:
 10. **Solve one Failure.** Failure Solve may query exact OpenAPI input or
    response-field Schemas, Test Cases, Parameter history, or use an HTTP probe
    restricted to the current operation.
-11. **Build and select a Patch.** Solve calls Parameter Patch Agent as an
-    internal tool. A selected Patch and its Solve Attempt commit atomically.
-    Every Failure item finishes before the next complete Batch measures the result.
+11. **Build and select a Patch.** Solve calls the Parameter Patch Coordinator as
+    an internal tool. Each reviewed candidate receives a session-local `P*`
+    reference. A flat apply/no-Patch terminal decision either selects one
+    candidate or records only a no-Patch reason. Every Failure item finishes
+    before the next complete Batch measures the result.
 
 Most state used in steps 4–10 is deliberately temporary. RESTScope does not
 persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases, or
@@ -124,11 +126,12 @@ The complete OpenAPI IR and database primary keys never enter model prompts.
 
 A Failure is stable across rounds when its operation, normalized message set,
 and complete suspected causal Parameter state match. The representative `TC*`
-remains only in the run-local Test Case Catalog. A Solve Attempt is one terminal
-Solve conclusion: trigger conditions, Parameter attribution, root cause,
-solution, evidence source, and outcome. When Solve selects a validated Patch,
-deterministic Generator/Constraint before-and-after changes commit with that
-Attempt; candidate samples are not persisted.
+remains only in the run-local Test Case Catalog. A Solve Attempt stores its
+outcome and one reason. Applied and runtime-conflict Attempts also inherit root
+cause and exact Parameter attribution from the reviewed candidate; no-Patch
+Attempts have neither. When Solve selects a validated Patch, deterministic
+Generator/Constraint before-and-after changes commit with that Attempt;
+candidate samples are not persisted.
 
 ### DTO
 
@@ -365,9 +368,9 @@ BatchExecutionResult + TestCaseCatalog
   -> one representative TC* per current-round Failure (run-local only)
   -> fresh FailureSolveAgent
   -> optional Catalog, Parameter-memory, and HTTP tools
-  -> internal ParameterPatchAgent tool
-  -> compile + solve + case_count local samples
-  -> Solve selects a session-local P* candidate
+  -> internal ParameterPatchCoordinator tool
+  -> Patch proposal + compile/sample + independent Review
+  -> Solve returns apply_patch with a session-local P* candidate
   -> atomic current Generator/Constraint + Solve Attempt + change event write
   -> remaining Dedup items
   -> next complete Batch

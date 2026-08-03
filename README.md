@@ -403,12 +403,14 @@ internally by Operation Smoke.
    Empty Review issues accept the candidate; concrete issues return to the
    original Patch proposal call for revision. A validated result becomes the
    same session-local `P*` candidate reference used by Solve.
-5. Solve finishes with `apply_patch(P*)`, `no_patch`, or `conflict`. Only the
-   first action changes Generator or Constraint state. A successful Patch
-   commits the current-state changes, one Solve Attempt, validated input links,
-   and one append-only Generator change event in one transaction. A state
-   conflict records a separate `conflict` Solve Attempt without applying the
-   stale candidate.
+5. Solve finishes with flat JSON containing only `action`, `candidate_ref`, and
+   `reason`. `apply_patch` must select a validated session-local `P*`; its
+   terminal reason is ignored. `no_patch` requires a reason and ignores any
+   candidate reference. A successful Patch commits current state, one Solve
+   Attempt, candidate-derived root cause and input links, and one append-only
+   Generator change event in one transaction. `conflict` is not a model action:
+   deterministic runtime records it only when a selected candidate loses the
+   atomic current-state comparison.
 
 Every item in the fixed Dedup result finishes before another Batch is allowed.
 If no Patch was applied, Smoke passes with `no_patch_applied`. Otherwise the next
@@ -423,16 +425,20 @@ decision. Each Solve has a 50-output budget that also counts every nested
 Parameter Patch proposal and Review output; one Patch tool call shares a
 single cap of 20 outputs across both Agents.
 Malformed replies and invalid tool-requesting model outputs count.
-Solve outputs 10, 20, 30, and 40 are tool-free continuation checks. Dedup or
-Solve exhaustion is a technical error; one Patch-tool exhaustion is recoverable
+Every valid tool call naturally continues the same Solve investigation; the
+50-output maximum is the only Solve-level continuation bound. Dedup or Solve
+exhaustion is a technical error; one Patch-tool exhaustion is recoverable
 feedback within its Solve session.
 
 The database keeps stable structured Failures, append-only Solve Attempts,
 current input Generators and Constraints, and append-only deterministic change
-events. Rejected session candidates, Patch samples, raw Batches/responses, HTTP
-transcripts, and LLM transcripts are not persisted. Public results contain
-Batch run IDs plus bounded round, Solve Attempt, and Generator change-event
-summaries. Request/response reports are intentionally absent.
+events. Applied and runtime-conflict Attempts inherit root cause and Parameter
+attribution from the reviewed candidate; a no-Patch Attempt stores only its
+reason and therefore does not enter Parameter-specific history. Rejected
+session candidates, Patch samples, raw Batches/responses, HTTP transcripts, and
+LLM transcripts are not persisted. Public results contain Batch run IDs plus
+bounded round, Solve Attempt, and Generator change-event summaries.
+Request/response reports are intentionally absent.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.

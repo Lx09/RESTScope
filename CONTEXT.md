@@ -49,8 +49,9 @@ write effects are not rolled back.
 _Avoid_: Read-only Probe, separate HTTP tool
 
 **Investigation**:
-One Solve session that records its trigger conditions, parameter attribution,
-root-cause conclusion, proposed resolution, and terminal outcome.
+One Solve session that can gather evidence and create reviewed Patch candidates
+before ending with apply-Patch or no-Patch. Its model terminal output contains
+only action, candidate reference, and reason.
 _Avoid_: Solve output, reasoning
 
 **Parameter**:
@@ -72,8 +73,9 @@ _Avoid_: Candidate, resolved Patch
 
 - One Failure has exactly one representative Observation.
 - Every Batch round creates new Failure identities; Dedup does not reuse history.
-- One Investigation belongs to one Failure and may attribute several
-  Parameters as causes.
+- One Investigation belongs to one Failure. Its applied Patch or runtime
+  conflict may attribute several Parameters from the selected candidate; a
+  no-Patch conclusion attributes none.
 - One Parameter may appear in many Failures and Investigations.
 - An Applied Patch belongs to one Investigation and stores its accepted
   Generator revision, before/after summaries, Constraints, and validation

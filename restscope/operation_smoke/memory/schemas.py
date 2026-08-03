@@ -70,25 +70,25 @@ class SolveAttemptParameterWrite(_MemoryModel):
 
 
 class SolveAttemptWrite(_MemoryModel):
-    """Append one terminal Solve conclusion without embedding Patch payloads."""
+    """Append one terminal conclusion with only facts trustworthy for it.
+
+    Applied and runtime-conflict Attempts receive root cause and Parameter
+    attribution from a reviewed candidate. A no-Patch Attempt has neither and
+    records only the model's explanation in ``reason``.
+    """
 
     operation_key: str = Field(min_length=1)
     failure_id: str = Field(min_length=1)
     round_number: int = Field(ge=1)
     outcome: Literal["applied_patch", "no_patch", "conflict"]
-    trigger_conditions: str = Field(min_length=1)
-    root_cause: str = Field(min_length=1)
-    solution: str = Field(min_length=1)
-    evidence_source: Literal["batch", "memory", "http_probe", "mixed"]
+    reason: str = Field(min_length=1)
+    root_cause: str | None = None
     parameters: list[SolveAttemptParameterWrite] = Field(default_factory=list)
-    conflict_reason: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_outcome(self) -> "SolveAttemptWrite":
-        """Require conflict detail exactly for a conflict conclusion."""
+        """Reject duplicate Parameter attribution within one Attempt."""
 
-        if (self.outcome == "conflict") != (self.conflict_reason is not None):
-            raise ValueError("conflict_reason must exist exactly for conflict")
         input_ids = [item.input_node_id for item in self.parameters]
         if len(input_ids) != len(set(input_ids)):
             raise ValueError("Solve Attempt parameters must be unique")
@@ -110,11 +110,8 @@ class SolveAttemptMemory(_MemoryModel):
     solve_attempt_id: str
     round_number: int
     outcome: Literal["applied_patch", "no_patch", "conflict"]
-    trigger_conditions: str
-    root_cause: str
-    solution: str
-    evidence_source: Literal["batch", "memory", "http_probe", "mixed"]
-    conflict_reason: str | None = None
+    reason: str
+    root_cause: str | None = None
     parameters: list[SolveAttemptParameterWrite] = Field(default_factory=list)
     generator_change: GeneratorChangeMemory | None = None
 

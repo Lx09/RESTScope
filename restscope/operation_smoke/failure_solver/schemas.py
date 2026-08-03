@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from restscope.operation_smoke.memory import SolveAttemptParameterWrite
 from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
     GeneratorPatchDraft,
@@ -37,81 +38,34 @@ class FailureSolveRequest(_Model):
     reference_options: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class ParameterCauseDecision(_Model):
-    """Explain how one semantic input contributes to the Failure."""
-
-    input_handle: str = Field(min_length=1)
-    cause_summary: str = Field(min_length=1)
-
-
 class FailureSolveDecision(_Model):
-    """Return one terminal Solve conclusion or a checkpoint choice."""
+    """Choose one terminal outcome without repeating candidate-owned facts.
 
-    action: Literal["apply_patch", "no_patch", "conflict", "continue"]
-    candidate_ref: str | None = Field(
-        default=None,
-        pattern=r"^P[1-9][0-9]*$",
-    )
-    trigger_conditions: str | None = Field(default=None, min_length=1)
-    root_cause: str | None = Field(default=None, min_length=1)
-    solution: str | None = Field(default=None, min_length=1)
-    evidence_source: Literal["batch", "memory", "http_probe", "mixed"] | None = None
-    parameters: list[ParameterCauseDecision] = Field(default_factory=list)
-    conflict_reason: str | None = Field(default=None, min_length=1)
-    reason: str | None = Field(default=None, min_length=1)
-    next_step: str | None = Field(default=None, min_length=1)
+    Action-specific checks intentionally live in the Solve session. Keeping
+    this DTO flat gives OpenAI-compatible providers one ordinary object Schema
+    while deterministic runtime decides whether the supplied reference or
+    reason matters for the selected action.
+    """
 
-    @model_validator(mode="after")
-    def validate_action_fields(self) -> "FailureSolveDecision":
-        """Require complete durable facts for terminal decisions."""
-        if self.action == "continue":
-            if self.reason is None or self.next_step is None:
-                raise ValueError("continue requires reason and next_step")
-            forbidden = (
-                self.candidate_ref,
-                self.trigger_conditions,
-                self.root_cause,
-                self.solution,
-                self.evidence_source,
-                self.conflict_reason,
-            )
-            if any(value is not None for value in forbidden) or self.parameters:
-                raise ValueError("continue cannot include terminal fields")
-            return self
-
-        required = (
-            self.trigger_conditions,
-            self.root_cause,
-            self.solution,
-            self.evidence_source,
-        )
-        if any(value is None for value in required):
-            raise ValueError(
-                "terminal decision requires trigger_conditions, root_cause, "
-                "solution, and evidence_source"
-            )
-        if self.reason is not None or self.next_step is not None:
-            raise ValueError("terminal decision cannot include continuation fields")
-        if self.action == "apply_patch":
-            if self.candidate_ref is None:
-                raise ValueError("apply_patch requires candidate_ref")
-            if self.conflict_reason is not None:
-                raise ValueError("apply_patch cannot include conflict_reason")
-        elif self.action == "conflict":
-            if self.conflict_reason is None:
-                raise ValueError("conflict requires conflict_reason")
-            if self.candidate_ref is not None:
-                raise ValueError("conflict cannot include candidate_ref")
-        elif self.candidate_ref is not None or self.conflict_reason is not None:
-            raise ValueError("no_patch cannot include candidate or conflict fields")
-        return self
+    action: Literal["apply_patch", "no_patch"]
+    candidate_ref: str | None = None
+    reason: str | None = None
 
 
 class PatchCandidate(_Model):
-    """Keep one validated Patch private to its Solve session."""
+    """Keep one reviewed Patch and its derived facts in one Solve session.
+
+    The Patch task supplied the cause, desired behavior, and affected inputs to
+    both the Patch Agent and its independent Reviewer. Storing those facts on
+    the candidate lets deterministic runtime persist the selected evidence
+    without asking the Solve model to restate it in terminal JSON.
+    """
 
     candidate_ref: str
     patch: GeneratorPatchDraft
+    root_cause: str
+    change_reason: str
+    parameter_attributions: list[SolveAttemptParameterWrite]
     before_generators: dict[str, Any]
     after_generators: dict[str, Any]
     samples: list[dict[str, Any]]

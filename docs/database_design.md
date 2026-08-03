@@ -80,7 +80,8 @@ is rejected before an Attempt or event is written.
 Current Generator rows, Constraint replacement, the applied Solve Attempt, its
 input links, and the change event commit in one transaction. Exact current
 content provides optimistic locking; a stale candidate rolls back and becomes
-a separate `conflict` Solve Attempt.
+a separate `conflict` Solve Attempt whose root cause and input links come from
+that candidate.
 
 ## Resource Identifier: 6 tables
 
@@ -127,16 +128,17 @@ count, last-seen time, and last HTTP status.
 ### `smoke_solve_attempts`
 
 Every terminal `applied_patch`, `no_patch`, or `conflict` conclusion appends a
-row. It stores the trigger, root cause, solution, evidence source, and conflict
-reason when applicable. Attempts are never overwritten and there is no
-permanent resolved flag.
+row with one non-empty `reason`. Applied and runtime-conflict rows also store
+the selected reviewed candidate's root cause; no-Patch rows leave root cause
+null. Attempts are never overwritten and there is no permanent resolved flag.
 
 ### `smoke_solve_attempt_parameters`
 
-A composite Attempt/input key stores validated cause attribution in Agent
-order. An operation-level conclusion legitimately has no rows. Input links
-reference current operation input rows; the deterministic repository rejects
-unknown or cross-operation attribution.
+A composite Attempt/input key stores candidate-derived cause attribution in
+affected-input order. Applied and runtime-conflict Attempts retain these links;
+no-Patch has none and therefore does not appear in Parameter-specific history.
+Input links reference current operation input rows; the deterministic
+repository rejects unknown or cross-operation attribution.
 
 Failure Dedup uses only the current run's in-memory Test Case Catalog and
 persists messages, attribution state, and occurrence metadata—not the

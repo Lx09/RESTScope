@@ -1,10 +1,10 @@
-"""Evaluate Parameter Patch through its real compiler and sampler.
+"""Evaluate Parameter Patch through its real Coordinator and local checks.
 
 Unlike Solve, this suite does not script the Agent result.  The real
-``ParameterPatchAgent`` proposes a Patch, production code compiles semantic
-input handles into stable nodes, generates deterministic samples, validates
-Constraints, and asks the same model to accept or replace the proposal.  No
-database or target HTTP transport is imported by this Module.
+``ParameterPatchCoordinator`` asks one Patch Agent for a proposal, compiles
+semantic handles into stable nodes, generates deterministic samples, and asks
+a fresh Review Agent for its verdict. No database or target HTTP transport is
+imported by this Module.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
-    ParameterPatchAgent,
+    ParameterPatchCoordinator,
     ParameterPatchTask,
 )
 from restscope.operation_smoke.parameter_patch.prompts import EXPERT_SYSTEM_PROMPT
@@ -102,7 +102,7 @@ def build_task(
     """Build Phoenix's Patch task around production validation behavior."""
 
     def task(input: dict[str, Any]) -> dict[str, Any]:
-        """Run one fresh Patch Agent and return only JSON-safe evidence."""
+        """Run one fresh Patch/Review coordination and return JSON-safe evidence."""
         scenario = PatchScenarioInput.model_validate(input)
         semantic = build_semantic_input_map(scenario.config)
         try:
@@ -114,10 +114,13 @@ def build_task(
                     "todo_id": scenario.task.todo_id,
                 },
             ) as span:
-                result = ParameterPatchAgent(
+                result = ParameterPatchCoordinator(
                     client=client,
-                    model=model,
-                    system_prompt=system_prompt,
+                    patch_model=model,
+                    review_model=model.model_copy(
+                        update={"role": "parameter_patch_review_agent"}
+                    ),
+                    patch_system_prompt=system_prompt,
                     tracing_runtime=tracing_runtime,
                 ).run(
                     task=scenario.task,

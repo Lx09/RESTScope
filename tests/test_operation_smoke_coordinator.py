@@ -18,6 +18,7 @@ from restscope.operation_smoke.failure_solver import (
     FailureSolveOutcome,
     PatchCandidate,
 )
+from restscope.operation_smoke.memory import SolveAttemptParameterWrite
 from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
 from restscope.testing import InputGeneratorPatch
 from restscope.testing.models import ConstantGenerator
@@ -233,6 +234,14 @@ def _applied(number: int, value: str) -> FailureSolveOutcome:
                 )
             ]
         ),
+        root_cause="The generated project identifier is not accepted.",
+        change_reason="Use the reviewed project identifier Generator.",
+        parameter_attributions=[
+            SolveAttemptParameterWrite(
+                input_node_id="path/projectId",
+                cause_summary="The generated project identifier is not accepted.",
+            )
+        ],
         before_generators={"path.projectId": {"type": "random_string"}},
         after_generators={"path.projectId": {"type": "constant", "value": value}},
         samples=[{"values": {"path.projectId": value}}],

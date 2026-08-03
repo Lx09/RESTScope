@@ -263,19 +263,7 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
                 parsed_json={
                     "action": "apply_patch",
                     "candidate_ref": "P1",
-                    "trigger_conditions": "projectId is outside 3..100",
-                    "root_cause": "path.projectId has an overly broad Generator",
-                    "solution": "Apply the validated 3..100 Generator",
-                    "evidence_source": "memory",
-                    "parameters": [
-                        {
-                            "input_handle": "path.projectId",
-                            "cause_summary": "The generated identifier causes 404.",
-                        }
-                    ],
-                    "conflict_reason": None,
-                    "reason": None,
-                    "next_step": None,
+                    "reason": "This apply text is intentionally ignored.",
                 },
             ),
         ]
@@ -316,7 +304,7 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
 def test_patch_task_runs_real_compile_sampling_and_review() -> None:
     """Patch evaluation uses production validation before model acceptance."""
     from evaluations.registry import SUITES
-    from restscope.llm import LLMResponse
+    from restscope.llm import LLMResponse, ToolCall
     from restscope.observability import TracingRuntime
 
     scenario = next(
@@ -329,27 +317,39 @@ def test_patch_task_runs_real_compile_sampling_and_review() -> None:
             LLMResponse(
                 provider="stub",
                 model="stub-model",
-                parsed_json={
-                    "action": "propose",
-                    "patch": {
-                        "changes": [
-                            {
-                                "input": "path.projectId",
-                                "strategy": {
-                                    "type": "integer_range",
-                                    "minimum": 3,
-                                    "maximum": 100,
-                                },
-                            }
-                        ],
-                        "constraints": [],
-                    },
-                },
+                tool_calls=[
+                    ToolCall(
+                        id="patch-proposal",
+                        name="submit_parameter_patch_proposal",
+                        arguments={
+                            "action": "propose",
+                            "patch": {
+                                "changes": [
+                                    {
+                                        "input": "path.projectId",
+                                        "strategy": {
+                                            "type": "integer_range",
+                                            "minimum": 3,
+                                            "maximum": 100,
+                                        },
+                                    }
+                                ],
+                                "constraints": [],
+                            },
+                        },
+                    )
+                ],
             ),
             LLMResponse(
                 provider="stub",
                 model="stub-model",
-                parsed_json={"action": "accept", "patch": None},
+                tool_calls=[
+                    ToolCall(
+                        id="patch-review",
+                        name="submit_parameter_patch_review",
+                        arguments={"accepted": True, "issues": []},
+                    )
+                ],
             ),
         ]
     )

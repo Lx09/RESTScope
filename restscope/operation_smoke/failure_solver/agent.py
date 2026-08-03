@@ -209,13 +209,10 @@ class FailureSolveAgent:
         max_patch_outputs: int = 20,
         prepare_patch_updates: Callable | None = None,
         max_outputs: int = 50,
-        continuation_interval: int = 10,
     ) -> "FailureSolveSession":
         """Start a session after preloading the current Failure's full history."""
         if not 1 <= max_outputs <= 50:
             raise ValueError("max_outputs must be between 1 and 50")
-        if continuation_interval < 1:
-            raise ValueError("continuation_interval must be positive")
         if not 1 <= case_count <= 20:
             raise ValueError("case_count must be between 1 and 20")
         if not 1 <= max_patch_outputs <= 20:
@@ -248,7 +245,6 @@ class FailureSolveAgent:
             failure_history=history,
             system_prompt=self.system_prompt,
             max_outputs=max_outputs,
-            continuation_interval=continuation_interval,
         )
 
 
@@ -279,7 +275,6 @@ class FailureSolveSession:
         failure_history: FailureHistory,
         system_prompt: str,
         max_outputs: int,
-        continuation_interval: int,
     ) -> None:
         """Build prompt state without calling the LLM, HTTP, or Patch Module."""
         self.client = client
@@ -301,7 +296,6 @@ class FailureSolveSession:
         self.max_patch_outputs = max_patch_outputs
         self.prepare_patch_updates = prepare_patch_updates
         self.max_outputs = max_outputs
-        self.continuation_interval = continuation_interval
         self.outputs_used = 0
         self.candidates: dict[str, PatchCandidate] = {}
         self.queried_parameter_handles: set[str] = set()
@@ -355,18 +349,6 @@ class FailureSolveSession:
             for name, value in self.context.metrics.trace_attributes().items():
                 span.set_attribute(name, value)
             while self.outputs_used < self.max_outputs:
-                next_output = self.outputs_used + 1
-                checkpoint = (
-                    next_output % self.continuation_interval == 0
-                    and next_output < self.max_outputs
-                )
-                if checkpoint:
-                    self.context.append_feedback(
-                        "CONTINUATION CHECKPOINT\n"
-                        "Return action=continue with a genuinely new next_step, "
-                        "or finish with apply_patch, no_patch, or conflict. "
-                        "Tools are unavailable for this output."
-                    )
                 response = self.client.invoke(
                     LLMRequest(
                         provider=self.model.provider,
@@ -381,8 +363,8 @@ class FailureSolveSession:
                         response_format="json_schema",
                         json_schema=FailureSolveDecision.model_json_schema(),
                         json_schema_name="FailureSolveDecision",
-                        tools=[] if checkpoint else self.tools.specs(),
-                        tool_choice="none" if checkpoint else "auto",
+                        tools=self.tools.specs(),
+                        tool_choice="auto",
                         timeout_seconds=self.model.timeout_seconds,
                         reasoning=self.model.reasoning,
                         metadata={"role": "operation_smoke_failure_solve"},
@@ -391,7 +373,7 @@ class FailureSolveSession:
                 self.outputs_used += 1
 
                 if response.tool_calls:
-                    errors = self._tool_errors(response, checkpoint=checkpoint)
+                    errors = self._tool_errors(response)
                     if errors:
                         self._append_correction(response, errors)
                         continue
@@ -425,26 +407,13 @@ class FailureSolveSession:
 
                 decision, errors = self._decision(response)
                 if decision is not None:
-                    errors.extend(
-                        self._decision_errors(
-                            decision,
-                            checkpoint=checkpoint,
-                        )
-                    )
+                    errors.extend(self._decision_errors(decision))
                 if errors or decision is None:
                     self._append_correction(
                         response,
                         errors or ["The Solve output could not be used."],
                     )
                     continue
-                if decision.action == "continue":
-                    self.context.append_assistant(response)
-                    self.context.append_feedback(
-                        "Continue with the stated next_step. The scoped tools "
-                        "are available again."
-                    )
-                    continue
-
                 outcome = self._persist_terminal(decision)
                 for name, value in self.context.metrics.trace_attributes().items():
                     span.set_attribute(name, value)
@@ -486,8 +455,8 @@ class FailureSolveSession:
             "SOLVE OUTPUT INVALID\n"
             + "\n".join(f"issue | {error}" for error in errors)
             + (
-                "\nContinue with one or more read-only query calls, one "
-                "Patch/HTTP call, or one complete terminal JSON decision."
+                "\nUse read-only query calls, one Patch/HTTP call, or one "
+                "complete apply_patch/no_patch JSON decision."
             )
         )
 
@@ -566,13 +535,9 @@ class FailureSolveSession:
     def _tool_errors(
         self,
         response: LLMResponse,
-        *,
-        checkpoint: bool,
     ) -> list[str]:
         """Validate a whole model output before any tool has side effects."""
         errors: list[str] = []
-        if checkpoint:
-            errors.append("Tools are unavailable at a continuation checkpoint.")
         if response.parsed_json is not None or (
             response.content is not None and response.content.strip()
         ):
@@ -787,6 +752,15 @@ class FailureSolveSession:
             candidate = PatchCandidate(
                 candidate_ref=candidate_ref,
                 patch=result.patch,
+                root_cause=task.root_cause,
+                change_reason=task.desired_behavior,
+                parameter_attributions=[
+                    SolveAttemptParameterWrite(
+                        input_node_id=self.semantic_inputs.node_by_handle[handle],
+                        cause_summary=task.root_cause,
+                    )
+                    for handle in task.affected_inputs
+                ],
                 before_generators=before,
                 after_generators=after,
                 samples=result.samples,
@@ -857,59 +831,29 @@ class FailureSolveSession:
     def _decision_errors(
         self,
         decision: FailureSolveDecision,
-        *,
-        checkpoint: bool,
     ) -> list[str]:
-        """Reject forged candidates, unknown Parameters, and misplaced continue."""
-        errors: list[str] = []
-        if decision.action == "continue" and not checkpoint:
-            errors.append(
-                "action=continue is available only at a continuation checkpoint."
-            )
-        if checkpoint and decision.action not in {
-            "continue",
-            "apply_patch",
-            "no_patch",
-            "conflict",
-        }:
-            errors.append("Checkpoint decision is not terminal or continue.")
-        if (
-            decision.action == "apply_patch"
-            and decision.candidate_ref not in self.candidates
-        ):
-            errors.append(
-                f"{decision.candidate_ref} is not a candidate from this session."
-            )
-        supplied_handles = [
-            item.input_handle for item in decision.parameters
-        ]
-        if len(supplied_handles) != len(set(supplied_handles)):
-            errors.append("terminal Parameter causes must be unique.")
-        for handle in supplied_handles:
-            if handle not in self.semantic_inputs.node_by_handle:
-                errors.append(f"Unknown semantic input: {handle}")
-        return errors
+        """Apply only the two action-specific rules outside the flat DTO."""
+        if decision.action == "apply_patch":
+            if decision.candidate_ref in self.candidates:
+                return []
+            available = ", ".join(self.candidates) or "none"
+            return [
+                "apply_patch requires candidate_ref to name a validated "
+                "candidate from this Solve session. "
+                f"Available candidates: {available}."
+            ]
+        if decision.reason is None or not decision.reason.strip():
+            return [
+                "no_patch requires a non-empty reason. "
+                "candidate_ref is ignored for no_patch."
+            ]
+        return []
 
     def _persist_terminal(
         self,
         decision: FailureSolveDecision,
     ) -> FailureSolveOutcome:
         """Write one terminal Solve Attempt and atomically apply its Patch."""
-        assert decision.action != "continue"
-        assert decision.trigger_conditions is not None
-        assert decision.root_cause is not None
-        assert decision.solution is not None
-        assert decision.evidence_source is not None
-        parameters = [
-            SolveAttemptParameterWrite(
-                input_node_id=self.semantic_inputs.node_by_handle[
-                    item.input_handle
-                ],
-                cause_summary=item.cause_summary,
-            )
-            for item in decision.parameters
-        ]
-
         if decision.action == "apply_patch":
             assert decision.candidate_ref is not None
             candidate = self.candidates[decision.candidate_ref]
@@ -936,11 +880,9 @@ class FailureSolveSession:
                         operation_key=self.request.operation_key,
                         failure_id=self.request.todo.failure_id,
                         round_number=self.request.round_number,
-                        trigger_conditions=decision.trigger_conditions,
-                        root_cause=decision.root_cause,
-                        solution=decision.solution,
-                        evidence_source=decision.evidence_source,
-                        parameters=parameters,
+                        root_cause=candidate.root_cause,
+                        change_reason=candidate.change_reason,
+                        parameters=candidate.parameter_attributions,
                     ),
                 )
             except GeneratorConfigConcurrentWrite:
@@ -959,12 +901,9 @@ class FailureSolveSession:
                         failure_id=self.request.todo.failure_id,
                         round_number=self.request.round_number,
                         outcome="conflict",
-                        trigger_conditions=decision.trigger_conditions,
-                        root_cause=decision.root_cause,
-                        solution=decision.solution,
-                        evidence_source=decision.evidence_source,
-                        parameters=parameters,
-                        conflict_reason=conflict_reason,
+                        reason=conflict_reason,
+                        root_cause=candidate.root_cause,
+                        parameters=candidate.parameter_attributions,
                     )
                 )
                 return FailureSolveOutcome(
@@ -990,29 +929,22 @@ class FailureSolveSession:
                 ],
             )
 
+        assert decision.reason is not None
+        no_patch_reason = decision.reason.strip()
         solve_attempt_id = self.memory.record_solve_attempt(
             SolveAttemptWrite(
                 operation_key=self.request.operation_key,
                 failure_id=self.request.todo.failure_id,
                 round_number=self.request.round_number,
-                outcome=decision.action,
-                trigger_conditions=decision.trigger_conditions,
-                root_cause=decision.root_cause,
-                solution=decision.solution,
-                evidence_source=decision.evidence_source,
-                parameters=parameters,
-                conflict_reason=decision.conflict_reason,
+                outcome="no_patch",
+                reason=no_patch_reason,
             )
         )
         return FailureSolveOutcome(
-            status=decision.action,
+            status="no_patch",
             outputs_used=self.outputs_used,
             solve_attempt_id=solve_attempt_id,
-            reason=(
-                decision.conflict_reason
-                if decision.action == "conflict"
-                else decision.solution
-            ),
+            reason=no_patch_reason,
         )
 
 
@@ -1055,9 +987,12 @@ Investigate exactly one Operation Smoke Failure.
 - `generate_parameter_patch` has no side effects and returns a session `P` ref.
 - A successful HTTP probe returns a new `TC*`; query the Catalog for details.
 - HTTP probes may mutate the exact current operation and are not rolled back.
-- `apply_patch` is a final decision action, not a tool.
-- Other terminal actions are `no_patch` and `conflict`.
-- Use `candidate_ref` only with `apply_patch`.
+- A tool call continues the investigation.
+- Terminal JSON contains only `action`, `candidate_ref`, and `reason`.
+- For `apply_patch`, `candidate_ref` selects a validated candidate from this
+  Solve session and `reason` is ignored.
+- For `no_patch`, `reason` must explain why no Patch should be applied and
+  `candidate_ref` is ignored.
 - Do not invent aliases or database IDs.
 """
 
@@ -1212,7 +1147,7 @@ def _write_failure_history(
     *,
     handle_by_node,
 ) -> None:
-    """Write compatibility-critical outcomes and aggregate old no-Patch noise."""
+    """Write applied/conflict evidence and bounded no-Patch explanations."""
     writer.section("CURRENT FAILURE MEMORY", untrusted=True)
     outcomes: dict[str, int] = {}
     for attempt in history.attempts:
@@ -1243,11 +1178,9 @@ def _write_failure_history(
             writer.record(
                 f"round-{attempt.round_number}",
                 outcome=attempt.outcome,
-                trigger=attempt.trigger_conditions,
                 root_cause=attempt.root_cause,
-                solution=attempt.solution,
+                reason=attempt.reason,
                 parameters=handles,
-                conflict=attempt.conflict_reason,
                 generator_change_event=(
                     attempt.generator_change.event_id
                     if attempt.generator_change is not None
@@ -1263,9 +1196,7 @@ def _write_failure_history(
                     },
                 )
         else:
-            signature = (
-                ",".join(sorted(handles)) or "no-parameter"
-            ) + "|" + attempt.root_cause.casefold()[:120]
+            signature = attempt.reason.casefold()[:120]
             older_no_patch[signature] = older_no_patch.get(signature, 0) + 1
     for signature, count in sorted(older_no_patch.items()):
         writer.record(
@@ -1283,7 +1214,7 @@ def _parameter_history_text(
     config: OperationGeneratorConfig,
     handle_by_node,
 ):
-    """Render applied/conflict facts first and old no-Patch records optionally."""
+    """Render candidate-derived applied/conflict facts for one Parameter."""
     writer = CompactTextWriter(max_value_chars=800)
     config_by_node = {item.input_node_id: item for item in config.configs}
     for handle, history in zip(handles, histories, strict=True):
@@ -1303,21 +1234,15 @@ def _parameter_history_text(
             ),
             related_failures=len(history.failures),
         )
-        recent_no_patch: list[tuple[str, Any]] = []
         for failure in history.failures:
             writer.text("failure", failure.summary)
             for attempt in failure.attempts:
-                item = (
-                    attempt.root_cause,
-                    attempt,
-                )
                 if attempt.outcome in {"applied_patch", "conflict"}:
                     writer.record(
                         f"round-{attempt.round_number}",
                         outcome=attempt.outcome,
                         cause=attempt.root_cause,
-                        solution=attempt.solution,
-                        conflict=attempt.conflict_reason,
+                        reason=attempt.reason,
                         parameters=[
                             handle_by_node.get(
                                 parameter.input_node_id,
@@ -1339,21 +1264,6 @@ def _parameter_history_text(
                                 "constraints": attempt.generator_change.constraint_changes,
                             },
                         )
-                else:
-                    recent_no_patch.append(item)
-        for cause, attempt in recent_no_patch[-5:]:
-            writer.record(
-                f"no-patch-round-{attempt.round_number}",
-                cause=cause,
-                solution=attempt.solution,
-                required=False,
-            )
-        if len(recent_no_patch) > 5:
-            writer.record(
-                "older-no-patch",
-                count=len(recent_no_patch) - 5,
-                required=False,
-            )
     return writer.render(max_chars=8_000)
 
 

@@ -3,6 +3,10 @@
 Status: User-approved on 2026-07-27; implementation in progress on
 `codex/llm-led-operation-smoke`
 
+The original Plan/Effect and continuation design below is historical. Current
+runtime behavior is described by the amendments at the end of this document
+and by `README.md`.
+
 ## Decision
 
 Operation Smoke uses a complete-batch, LLM-led loop:
@@ -22,7 +26,7 @@ Code owns HTTP scope and authentication injection, strict structured outputs,
 Generator/Constraint compilation and satisfiability, reference-pool safety,
 complete preflight, Catalog candidate transactions, output counting, and final
 2xx calculation. LLM roles own semantic failure deduplication, investigation
-direction, root cause, Patch requirements, continuation, and Effect meaning.
+direction, root cause, Patch requirements, and Effect meaning.
 
 ## Role boundaries
 
@@ -42,17 +46,13 @@ Temporary case codes are valid only at the Plan boundary. Plan output is
 immediately expanded, and later prompts contain complete evidence rather than
 failure/case/observation aliases.
 
-## Budgets and continuation
+## Budgets
 
-The public request defaults to 50 Plan outputs, 50 Solve outputs per todo, 20
-Patch outputs per attempt, two Effect outputs, and a continuation interval of
-ten. Every model response consumes its role budget, including invalid responses
-and tool-call responses. HTTP execution itself does not consume an output.
-
-At default outputs 10, 20, 30, and 40, Solve receives a tool-free continuation
-prompt. It must provide a genuinely new direction or end the todo. Patch
-exhaustion returns full failure details to the same Solve conversation. Effect
-gets one protocol correction; a second invalid result is `unknown`.
+The current public request gives Failure Dedup 50 outputs, gives each Solve 50
+outputs, and caps one nested Patch/Review run at 20 outputs. Every successful
+model response consumes the owning budget, including invalid output and tool
+calls. Nested Patch and Review responses also consume the parent Solve budget;
+provider failures do not. HTTP execution itself does not consume an output.
 
 ## Candidate and state rules
 
@@ -92,3 +92,21 @@ This design supersedes the deterministic diagnosis state machine,
 ownership, Group-level partial acceptance, fixed ten-sample Patch review, and
 the former diagnosis/Group public DTOs and budgets. No compatibility layer is
 provided.
+
+## 2026-08-03 Failure Solve terminal amendment
+
+The checkpoint/continue protocol and model-selected conflict outcome are
+removed. Every Solve model request offers the same tools with automatic tool
+choice; a tool call itself continues investigation until the shared output
+budget ends.
+
+Terminal output is one flat object with only `action`, `candidate_ref`, and
+`reason`. `apply_patch` must name a reviewed candidate from the current Solve
+session and ignores reason. `no_patch` requires a non-blank reason and ignores
+candidate reference. Runtime conflict exists only when atomic application of a
+selected candidate detects changed Generator or Constraint state.
+
+Each reviewed candidate carries the Patch task's root cause, desired behavior,
+and affected-input attribution. Applied and runtime-conflict Solve Attempts
+derive durable facts from that candidate. A no-Patch Attempt stores only its
+reason and creates no Parameter attribution.

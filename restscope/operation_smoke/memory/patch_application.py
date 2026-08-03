@@ -52,15 +52,13 @@ class AtomicSmokePatchUnitOfWork(Protocol):
 
 @dataclass(frozen=True)
 class PatchSolveAttempt:
-    """Carry the validated final Solve explanation into persistence."""
+    """Carry reviewed candidate facts into the atomic persistence boundary."""
 
     operation_key: str
     failure_id: str
     round_number: int
-    trigger_conditions: str
     root_cause: str
-    solution: str
-    evidence_source: str
+    change_reason: str
     parameters: list[SolveAttemptParameterWrite]
 
 
@@ -171,17 +169,15 @@ class SmokePatchApplication:
                     failure_id=attempt.failure_id,
                     round_number=attempt.round_number,
                     outcome="applied_patch",
-                    trigger_conditions=attempt.trigger_conditions,
+                    reason=attempt.change_reason,
                     root_cause=attempt.root_cause,
-                    solution=attempt.solution,
-                    evidence_source=attempt.evidence_source,
                     parameters=attempt.parameters,
                 )
             )
             event_id = uow.generator_configs.record_change_event(
                 solve_attempt_id=solve_attempt_id,
                 operation_key=attempt.operation_key,
-                reason=attempt.solution,
+                reason=attempt.change_reason,
                 generator_changes=generator_changes,
                 constraint_changes=constraint_changes,
             )

@@ -309,9 +309,6 @@ class OperationSmokeCoordinator:
                                 request.max_solve_outputs_per_todo
                             ),
                             max_patch_outputs=request.max_patch_outputs,
-                            continuation_interval=(
-                                request.continuation_interval
-                            ),
                             prepare_patch_updates=lambda config, updates, selected: (
                                 _prepare_reference_updates(
                                     self.reference_values,
