@@ -1,6 +1,8 @@
 # Nest Parameter Patch Review
 
-Status: Implemented and locally verified; uncommitted
+Status: Completed
+
+Merged into local `main` on 2026-08-03.
 
 ## Objective
 
@@ -39,6 +41,9 @@ Fresh local verification on 2026-08-03:
 - Parameter Patch, DeepSeek serialization, model selection, Operation Smoke
   wiring, and package-boundary tests: `84 passed`.
 - Complete local suite: `550 passed, 18 skipped`.
+- The merged `main` tree matched the fully verified feature commit exactly;
+  `76` unaffected focused tests were also rerun successfully in the preserved
+  dirty main worktree.
 - Python compilation for `restscope`, `tests`, and `evaluations`: passed.
 - `git diff --check`: passed.
 
