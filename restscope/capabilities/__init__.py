@@ -10,11 +10,13 @@ from .openapi_lookup import (
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
     OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
     OPENAPI_LIST_INPUTS_TOOL_NAME,
+    OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
     OpenAPICapability,
     operation_input_references,
     openapi_get_input_schema_tool_spec,
     openapi_get_response_field_schema_tool_spec,
     openapi_list_inputs_tool_spec,
+    openapi_list_response_fields_tool_spec,
 )
 from .runtime import CapabilityRuntime, build_capabilities, build_capabilities_with_mcp_host
 from .skills import SkillManifest, SkillPolicy, SkillRegistry
@@ -40,11 +42,13 @@ __all__ = [
     "TargetHTTPRequestTool",
     "http_request_tool_spec",
     "OPENAPI_LIST_INPUTS_TOOL_NAME",
+    "OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME",
     "OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME",
     "OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME",
     "OpenAPICapability",
     "operation_input_references",
     "openapi_list_inputs_tool_spec",
+    "openapi_list_response_fields_tool_spec",
     "openapi_get_input_schema_tool_spec",
     "openapi_get_response_field_schema_tool_spec",
     "ToolSourceError",
