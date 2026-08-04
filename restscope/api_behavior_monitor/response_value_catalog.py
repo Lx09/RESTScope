@@ -68,6 +68,21 @@ class PersistedResponseValueSource(ResponseValueSource):
     value_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class ObservedResponseField:
+    """Identify one scalar selector that appeared in a retained response.
+
+    This read model contains no scalar value, timestamp, observation database
+    key, or response-value pool name. The concrete HTTP status is preserved so
+    OpenAPI lookup can apply its existing exact, class, and default matching.
+    """
+
+    operation_key: str
+    status_code: int
+    media_type: str
+    selector: str
+
+
 class _ResponseValueRepository(Protocol):
     """
     Define the collaborator contract for response value repository.
@@ -96,6 +111,8 @@ class _ResponseValueRepository(Protocol):
     ) -> list[PersistedResponseValueSource]: ...
 
     def list_monitors(self) -> list[ResponseValueMonitorRecord]: ...
+
+    def list_observed_response_fields(self) -> list[ObservedResponseField]: ...
 
     def record_values(
         self,
@@ -307,6 +324,17 @@ class ResponseValueCatalog:
         """
         with self.unit_of_work_factory() as uow:
             return uow.response_values.list_monitors()
+
+    def list_observed_response_fields(self) -> list[ObservedResponseField]:
+        """Return distinct retained scalar field identities without values.
+
+        The SQL Adapter performs the distinct projection, so repeated responses
+        cannot multiply the OpenAPI lookup candidate list. The Catalog does not
+        interpret selectors or decide whether they still exist in the current
+        OpenAPI IR; that belongs to the lookup Capability.
+        """
+        with self.unit_of_work_factory() as uow:
+            return uow.response_values.list_observed_response_fields()
 
     def record_values(
         self,

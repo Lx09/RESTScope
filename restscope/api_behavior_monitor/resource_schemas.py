@@ -238,6 +238,22 @@ class ResourceIdentifierSummary(BaseModel):
     last_seen_at: datetime
 
 
+class ResourceIdentifierPage(BaseModel):
+    """Return one bounded typed-ID page without unrelated Monitor evidence.
+
+    ``canonical_resource`` is absent when a query matches no canonical name or
+    alias. Identifiers retain their observation time inside the Catalog
+    Interface, while a model-facing Capability may deliberately project only
+    the value and scalar type.
+    """
+
+    status: Literal["found", "not_found"]
+    canonical_resource: str | None = None
+    identifiers: list[ResourceIdentifierSummary] = Field(default_factory=list)
+    total: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0)
+
+
 class ResourceOperationSummary(BaseModel):
     """
     Carry validated resource operation summary data across API response monitoring and

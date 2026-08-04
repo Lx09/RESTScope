@@ -16,6 +16,7 @@ from restscope.capabilities.mcp import (
 from restscope.capabilities.agent_tools import AgentToolbox
 from restscope.capabilities.http_request import TargetHTTPRequestTool
 from restscope.capabilities.openapi_lookup import OpenAPICapability
+from restscope.capabilities.resource_lookup import ResourceIdentifierCapability
 from restscope.capabilities.skills import SkillManifest, SkillPolicy, SkillRegistry
 from restscope.capabilities.tool_context import ToolContext, ToolContextError
 from restscope.capabilities.tool_sources import register_tool_source
@@ -47,6 +48,9 @@ class CapabilityRuntime:
     operation_testing_service: OperationTestingService | None = None
     api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None
     openapi_capability: OpenAPICapability = field(init=False)
+    resource_identifier_capability: ResourceIdentifierCapability | None = field(
+        init=False
+    )
     _tool_context: ToolContext | None = field(
         default=None,
         init=False,
@@ -54,9 +58,30 @@ class CapabilityRuntime:
     )
 
     def __post_init__(self) -> None:
-        """Bind the shared OpenAPI Module to this runtime's context lifecycle."""
+        """Bind shared lookup Modules to App context and Monitor Catalogs."""
+        monitor = self.api_behavior_monitor_coordinator
+        resource_catalog = (
+            monitor.resource_identifier_tracker.catalog
+            if monitor is not None
+            else None
+        )
+        response_catalog = (
+            monitor.response_value_tracker.catalog
+            if monitor is not None
+            else None
+        )
         self.openapi_capability = OpenAPICapability(
             context_provider=self.require_context,
+            observed_response_fields_provider=(
+                response_catalog.list_observed_response_fields
+                if response_catalog is not None
+                else None
+            ),
+        )
+        self.resource_identifier_capability = (
+            ResourceIdentifierCapability(catalog=resource_catalog)
+            if resource_catalog is not None
+            else None
         )
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:

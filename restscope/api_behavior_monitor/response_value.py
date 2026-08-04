@@ -18,6 +18,7 @@ from restscope.llm import (
 from restscope.observability import TracingRuntime
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import SchemaIR
+from restscope.response_fields import ResponseFieldReference
 
 from .contract_tracker import normalize_media_type
 from .prompts import (
@@ -578,7 +579,7 @@ def _source_candidates(
 def _schema_leaves(
     schema: SchemaIR,
     *,
-    selector: str = "$",
+    reference: ResponseFieldReference | None = None,
     visited: set[int] | None = None,
 ) -> list[
     tuple[
@@ -596,6 +597,7 @@ def _schema_leaves(
     This private helper keeps one transformation or policy decision explicit so the
     surrounding orchestration remains readable.
     """
+    reference = reference or ResponseFieldReference.body()
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []
@@ -614,7 +616,7 @@ def _schema_leaves(
             output.extend(
                 _schema_leaves(
                     child,
-                    selector=f"{selector}.{name}",
+                    reference=reference.property(name),
                     visited=visited,
                 )
             )
@@ -622,13 +624,17 @@ def _schema_leaves(
     if schema.type == "array" and schema.items is not None:
         return _schema_leaves(
             schema.items,
-            selector=f"{selector}[]",
+            reference=reference.items(),
             visited=visited,
         )
-    field_name = selector.rsplit(".", 1)[-1].removesuffix("[]")
+    field_name = (
+        reference.property_names[-1]
+        if reference.property_names
+        else "body"
+    )
     return [
         (
-            selector,
+            reference.selector,
             field_name,
             schema.type,
             schema.format,
@@ -664,7 +670,7 @@ def _extract_selector_values(body: Any, selector: str) -> list[object]:
 def _flatten_observed_scalars(
     value: Any,
     *,
-    selector: str = "$",
+    reference: ResponseFieldReference | None = None,
 ) -> list[tuple[str, object]]:
     """
     Handle flatten observed scalars as part of API response monitoring and its narrowly
@@ -673,13 +679,14 @@ def _flatten_observed_scalars(
     This private helper keeps one transformation or policy decision explicit so the
     surrounding orchestration remains readable.
     """
+    reference = reference or ResponseFieldReference.body()
     if isinstance(value, dict):
         output: list[tuple[str, object]] = []
         for name, child in value.items():
             output.extend(
                 _flatten_observed_scalars(
                     child,
-                    selector=f"{selector}.{name}",
+                    reference=reference.property(name),
                 )
             )
         return output
@@ -689,12 +696,12 @@ def _flatten_observed_scalars(
             output.extend(
                 _flatten_observed_scalars(
                     child,
-                    selector=f"{selector}[]",
+                    reference=reference.items(),
                 )
             )
         return output
     if isinstance(value, (str, int, float, bool)) and value is not None:
-        return [(selector, value)]
+        return [(reference.selector, value)]
     return []
 
 
@@ -732,11 +739,7 @@ def _source_identity(source: ResponseValueSource) -> tuple[str, str, str, str]:
 
 
 def _display_field_path(selector: str) -> str:
-    if selector == "$":
-        return "body"
-    if selector.startswith("$."):
-        return "body." + selector[2:]
-    return "body" + selector.removeprefix("$")
+    return ResponseFieldReference.from_selector(selector).handle
 
 
 def _declared_success(status_code: str) -> bool:

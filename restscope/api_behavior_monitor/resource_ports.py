@@ -13,6 +13,7 @@ from .resource_schemas import (
     MonitoredOperation,
     ResourceLookupRequest,
     ResourceLookupResult,
+    ResourceIdentifierPage,
     ResourceMonitorWarning,
     ResourceNameSummary,
 )
@@ -41,6 +42,21 @@ class ResourceCatalogRepository(Protocol):
         limit: int | None = None,
         aliases_per_resource: int | None = None,
     ) -> list[ResourceNameSummary]: ...
+
+    def list_resource_names(
+        self,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[str], int]: ...
+
+    def list_identifiers(
+        self,
+        *,
+        resource: str,
+        offset: int,
+        limit: int,
+    ) -> ResourceIdentifierPage: ...
 
     def record_error(
         self,

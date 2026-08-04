@@ -13,6 +13,7 @@ from .resource_schemas import (
     MonitoredOperation,
     ResourceLookupRequest,
     ResourceLookupResult,
+    ResourceIdentifierPage,
     ResourceMonitorWarning,
     ResourceNameSummary,
 )
@@ -83,6 +84,54 @@ class ResourceCatalog:
             return uow.resources.list_resources(
                 limit=limit,
                 aliases_per_resource=aliases_per_resource,
+            )
+
+    def list_resource_names(
+        self,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[str], int]:
+        """Return one alphabetical page of canonical resource names.
+
+        Args:
+            offset: Number of matching resources to skip.
+            limit: Maximum names to return in this page.
+
+        Returns:
+            The selected canonical names and the total resource count. Aliases,
+            identifiers, operation usage, and Monitor errors stay hidden behind
+            the Catalog because discovery callers do not need them.
+        """
+        with self.unit_of_work_factory() as uow:
+            return uow.resources.list_resource_names(
+                offset=offset,
+                limit=limit,
+            )
+
+    def list_identifiers(
+        self,
+        *,
+        resource: str,
+        offset: int,
+        limit: int,
+    ) -> ResourceIdentifierPage:
+        """Return a typed identifier page for one canonical name or alias.
+
+        Args:
+            resource: Canonical resource name or learned alias.
+            offset: Number of identifiers in recency order to skip.
+            limit: Maximum identifiers in this page.
+
+        Returns:
+            A found page or an explicit not-found page. Operation usage and
+            Monitor errors are deliberately outside this narrow read.
+        """
+        with self.unit_of_work_factory() as uow:
+            return uow.resources.list_identifiers(
+                resource=resource,
+                offset=offset,
+                limit=limit,
             )
 
     def record_error(

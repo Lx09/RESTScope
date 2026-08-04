@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -53,6 +56,63 @@ def test_capability_runtime_binds_context_once_and_exposes_exact_operations() ->
     with pytest.raises(ToolContextError) as exc_info:
         runtime.bind_context(context)
     assert exc_info.value.code == "tool_context_already_initialized"
+
+
+def test_capability_runtime_injects_monitor_catalogs_without_registering_tools(
+    tmp_path: Path,
+) -> None:
+    """The runtime exposes lookup implementations but owns no global toolbox."""
+    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.response_value_catalog import (
+        ResponseValueCatalog,
+    )
+    from restscope.capabilities import (
+        ResourceIdentifierCapability,
+        build_capabilities,
+    )
+    from restscope.db import (
+        Base,
+        SqlAlchemyResourceCatalogUnitOfWork,
+        SqlAlchemyResponseValueCatalogUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'catalogs.sqlite'}")
+    Base.metadata.create_all(engine)
+    session_factory = make_session_factory(engine)
+    resource_catalog = ResourceCatalog(
+        lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
+    )
+    response_catalog = ResponseValueCatalog(
+        lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
+    )
+    monitor = SimpleNamespace(
+        resource_identifier_tracker=SimpleNamespace(catalog=resource_catalog),
+        response_value_tracker=SimpleNamespace(catalog=response_catalog),
+    )
+
+    runtime = build_capabilities(api_behavior_monitor_coordinator=monitor)
+    runtime.bind_context(_context())
+
+    assert isinstance(
+        runtime.resource_identifier_capability,
+        ResourceIdentifierCapability,
+    )
+    assert runtime.resource_identifier_capability.list_resources()["structured"] == {
+        "resources": [],
+        "total": 0,
+        "offset": 0,
+    }
+    assert runtime.openapi_capability.find_observed_response_fields(
+        name="pet_id"
+    )["structured"] == {
+        "requested_name": "pet_id",
+        "responses": [],
+        "total": 0,
+        "offset": 0,
+    }
+    assert runtime.external_tools is None
 
 
 def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments() -> None:

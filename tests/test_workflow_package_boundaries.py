@@ -107,7 +107,6 @@ def test_workflow_facades_export_only_the_approved_interfaces() -> None:
         "APIBehaviorMonitorResult",
         "APIBehaviorResponseProcessor",
         "APIBehaviorWarning",
-        "RESOURCE_LOOKUP_TOOL_NAME",
         "ResourceLookupRequest",
         "ResourceLookupResult",
         "ResponseValueSource",

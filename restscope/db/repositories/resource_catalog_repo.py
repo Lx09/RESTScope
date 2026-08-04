@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         ResourceLookupResult,
         ResourceMonitorWarning,
         ResourceNameSummary,
+        ResourceIdentifierPage,
         ResourceOperationSummary,
     )
 
@@ -189,6 +190,85 @@ class SqlAlchemyResourceCatalogRepository:
                 )
             )
         return output
+
+    def list_resource_names(
+        self,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[str], int]:
+        """Return canonical names and the total count without loading aliases."""
+        order = (
+            func.lower(ResourceORM.canonical_name),
+            ResourceORM.canonical_name,
+        )
+        total = self.session.scalar(
+            select(func.count()).select_from(ResourceORM)
+        ) or 0
+        names = list(
+            self.session.scalars(
+                select(ResourceORM.canonical_name)
+                .order_by(*order)
+                .offset(offset)
+                .limit(limit)
+            ).all()
+        )
+        return names, total
+
+    def list_identifiers(
+        self,
+        *,
+        resource: str,
+        offset: int,
+        limit: int,
+    ) -> ResourceIdentifierPage:
+        """Resolve one name or alias and return only its typed identifier page."""
+        from restscope.api_behavior_monitor.resource_schemas import (
+            ResourceIdentifierPage,
+            ResourceIdentifierSummary,
+        )
+
+        alias = self.session.scalar(
+            select(ResourceAliasORM).where(
+                ResourceAliasORM.normalized_alias == _normalize_name(resource)
+            )
+        )
+        if alias is None:
+            return ResourceIdentifierPage(status="not_found", offset=offset)
+        canonical = cast(
+            ResourceORM | None,
+            self.session.get(ResourceORM, alias.resource_id),
+        )
+        assert canonical is not None
+        query = select(ResourceIdentifierORM).where(
+            ResourceIdentifierORM.resource_id == canonical.id
+        )
+        total = self.session.scalar(
+            select(func.count()).select_from(query.subquery())
+        ) or 0
+        rows = self.session.scalars(
+            query.order_by(
+                ResourceIdentifierORM.last_seen_at.desc(),
+                ResourceIdentifierORM.value_type,
+                ResourceIdentifierORM.value_text,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return ResourceIdentifierPage(
+            status="found",
+            canonical_resource=canonical.canonical_name,
+            identifiers=[
+                ResourceIdentifierSummary(
+                    value=_decode_identifier(row.value_type, row.value_text),
+                    value_type=row.value_type,
+                    last_seen_at=as_utc(row.last_seen_at),
+                )
+                for row in rows
+            ],
+            total=total,
+            offset=offset,
+        )
 
     def record_error(
         self,

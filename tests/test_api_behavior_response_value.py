@@ -89,6 +89,43 @@ def _response_value_ir():
     )
 
 
+def test_catalog_lists_distinct_observed_response_field_identities() -> None:
+    """Lookup receives metadata only once even when a scalar repeats over time."""
+    from restscope.api_behavior_monitor.response_value_catalog import (
+        ObservedResponseField,
+    )
+
+    catalog = _catalog()
+    for value in (7, 9):
+        catalog.record_observation(
+            operation_key="GET /users",
+            status_code=200,
+            media_type="application/json",
+            scalars=[("$.data[].user_id", value)],
+        )
+    catalog.record_observation(
+        operation_key="GET /users",
+        status_code=201,
+        media_type="application/json",
+        scalars=[("$.created_id", 10)],
+    )
+
+    assert catalog.list_observed_response_fields() == [
+        ObservedResponseField(
+            operation_key="GET /users",
+            status_code=200,
+            media_type="application/json",
+            selector="$.data[].user_id",
+        ),
+        ObservedResponseField(
+            operation_key="GET /users",
+            status_code=201,
+            media_type="application/json",
+            selector="$.created_id",
+        ),
+    ]
+
+
 def test_registers_ir_source_extracts_values_and_deduplicates_them() -> None:
     """Scenario: verify that registers ir source extracts values and deduplicates them."""
     from restscope.api_behavior_monitor.response_value import (

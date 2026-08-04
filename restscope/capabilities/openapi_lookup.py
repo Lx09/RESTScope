@@ -5,11 +5,11 @@ stores it in ``ToolContext``.  ``OpenAPICapability`` reads that trusted IR only
 when a registered Agent tool executes.  Models provide an exact operation key
 and a narrow query; they never receive the IR itself.
 
-The four public tool specifications cover listing request inputs, listing
-response-body fields, inspecting one input Schema, and inspecting one response
-field Schema. Their shared implementation owns handle construction, media-type
-selection, response-status fallback, array-path normalization, pagination, and
-safe failures.
+The five public tool specifications cover listing request inputs, listing
+response-body fields, finding observed response fields by name, inspecting one
+input Schema, and inspecting one response field Schema. Their shared
+implementation owns handle construction, media-type selection, response-status
+fallback, array-path normalization, pagination, and safe failures.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any
 
 from restscope.llm import ToolSpec
@@ -28,6 +29,7 @@ from restscope.openapi_parser.ir import (
     SchemaIR,
 )
 from restscope.request_inputs import RequestInputReference
+from restscope.response_fields import ResponseFieldReference
 
 from .agent_tools import ToolFailure
 from .tool_context import ToolContext
@@ -35,6 +37,9 @@ from .tool_context import ToolContext
 
 OPENAPI_LIST_INPUTS_TOOL_NAME = "openapi.list_inputs"
 OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME = "openapi.list_response_fields"
+OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME = (
+    "openapi.find_observed_response_fields"
+)
 OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME = "openapi.get_input_schema"
 OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME = (
     "openapi.get_response_field_schema"
@@ -45,8 +50,9 @@ _MAX_LIST_LIMIT = 200
 _MAX_ERROR_CHOICES = 10
 _MAX_ENUM_VALUES = 50
 _MAX_SCHEMA_TEXT_CHARS = 800
-_ARRAY_INDEX = re.compile(r"\[(\d*)\]")
-_COMBINERS = {"allOf", "anyOf", "oneOf"}
+_SIMILARITY_THRESHOLD = 0.95
+_NAME_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_NAME_TOKEN = re.compile(r"[A-Za-z0-9]+")
 
 
 def openapi_list_inputs_tool_spec() -> ToolSpec:
@@ -194,6 +200,96 @@ def openapi_list_response_fields_tool_spec() -> ToolSpec:
     )
 
 
+def openapi_find_observed_response_fields_tool_spec() -> ToolSpec:
+    """Describe name-based discovery over retained response-field evidence."""
+    return ToolSpec(
+        name=OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME,
+        description=(
+            "Find similarly named scalar response fields that have retained "
+            "successful-response evidence and still exist in the current "
+            "OpenAPI document. Results are paginated by field and grouped by "
+            "response contract."
+        ),
+        kind="local_function",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _MAX_LIST_LIMIT,
+                    "default": _DEFAULT_LIST_LIMIT,
+                },
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "requested_name": {"type": "string"},
+                "responses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "operation_key": {"type": "string"},
+                            "matched_status_code": {"type": "string"},
+                            "media_type": {"type": "string"},
+                            "fields": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "field": {"type": "string"},
+                                        "similarity_score": {
+                                            "type": "number",
+                                            "minimum": 0,
+                                            "maximum": 1,
+                                        },
+                                        "match_basis": {
+                                            "type": "string",
+                                            "enum": [
+                                                "normalized_exact",
+                                                "path_exact",
+                                                "high_similarity",
+                                            ],
+                                        },
+                                    },
+                                    "required": [
+                                        "field",
+                                        "similarity_score",
+                                        "match_basis",
+                                    ],
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "required": [
+                            "operation_key",
+                            "matched_status_code",
+                            "media_type",
+                            "fields",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+                "total": {"type": "integer", "minimum": 0},
+                "offset": {"type": "integer", "minimum": 0},
+                "next_offset": {"type": "integer", "minimum": 0},
+            },
+            "required": ["requested_name", "responses", "total", "offset"],
+            "additionalProperties": False,
+        },
+    )
+
+
 def openapi_get_input_schema_tool_spec() -> ToolSpec:
     """Describe the exact request-input Schema lookup tool."""
     return ToolSpec(
@@ -310,16 +406,31 @@ class _SchemaEntry:
     required: bool
     schema: SchemaIR | None
     media_type: str | None = None
-    reference: RequestInputReference | None = None
+    reference: RequestInputReference | ResponseFieldReference | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ObservedFieldMatch:
+    """Keep one globally unique observed field attached to its match score."""
+
+    operation_key: str
+    matched_status_code: str
+    media_type: str
+    field: str
+    similarity_score: float
+    match_basis: str
 
 
 class OpenAPICapability:
-    """Answer four compact queries against the App's current OpenAPI IR.
+    """Answer compact queries against current OpenAPI and response evidence.
 
     Args:
         context_provider: Trusted runtime callback that returns the App's
             initialized ``ToolContext``.  The model never receives or selects
             this dependency.
+        observed_response_fields_provider: Optional trusted callback returning
+            distinct retained response selector metadata. The four IR-only
+            lookups remain usable when no API Behavior Monitor Catalog exists.
 
     The methods return structured tool payloads without mutating the IR.  An
     Agent registers only the methods it needs in its own ``AgentToolbox``.
@@ -327,9 +438,17 @@ class OpenAPICapability:
     programming errors remain owned by the toolbox's protected error path.
     """
 
-    def __init__(self, *, context_provider: Callable[[], ToolContext]) -> None:
-        """Retain the trusted context callback without reading App state early."""
+    def __init__(
+        self,
+        *,
+        context_provider: Callable[[], ToolContext],
+        observed_response_fields_provider: Callable[[], list[Any]] | None = None,
+    ) -> None:
+        """Retain trusted callbacks without reading App or Catalog state early."""
         self._context_provider = context_provider
+        self._observed_response_fields_provider = (
+            observed_response_fields_provider
+        )
 
     def list_inputs(
         self,
@@ -413,6 +532,7 @@ class OpenAPICapability:
             location="body",
             media_type=selected_media_type,
             skip_write_only=True,
+            reference=ResponseFieldReference.body(),
         )
         entries.sort(key=lambda item: item.name)
         page = entries[offset : offset + limit]
@@ -427,6 +547,151 @@ class OpenAPICapability:
         }
         next_offset = offset + len(page)
         if next_offset < len(entries):
+            result["next_offset"] = next_offset
+        return {"structured": result}
+
+    def find_observed_response_fields(
+        self,
+        *,
+        name: str,
+        offset: int = 0,
+        limit: int = _DEFAULT_LIST_LIMIT,
+    ) -> dict[str, Any]:
+        """Find similarly named fields backed by retained scalar observations.
+
+        Args:
+            name: Natural field name or nested property path to compare after
+                deterministic camel/snake/kebab normalization.
+            offset: Number of ranked field matches to skip before grouping.
+            limit: Maximum field matches in the returned page.
+
+        Returns:
+            One structured result grouped by OpenAPI response contract. The
+            total and offsets count fields, not response groups. Stored scalar
+            values, Schemas, timestamps, and database keys are never returned.
+
+        Raises:
+            ToolFailure: No observation Catalog was injected or ``name`` has no
+                alphanumeric identifier content.
+        """
+        if self._observed_response_fields_provider is None:
+            raise ToolFailure(
+                code="openapi_observation_catalog_unavailable",
+                message="Observed response-field evidence is unavailable.",
+            )
+        normalized_name = _normalized_name(name)
+        if not normalized_name:
+            raise ToolFailure(
+                code="openapi_response_field_name_invalid",
+                message="Response field name must contain letters or numbers.",
+            )
+        ir = self._context_provider().ir
+        matches: dict[
+            tuple[str, str, str, str],
+            _ObservedFieldMatch,
+        ] = {}
+        for observed in self._observed_response_fields_provider():
+            operation = ir.operations.get(observed.operation_key)
+            if operation is None:
+                continue
+            try:
+                matched_status, response = _select_response(
+                    operation,
+                    requested_status=str(observed.status_code),
+                )
+            except ToolFailure:
+                continue
+            selected = _observed_media_schema(
+                response.contents,
+                observed_media_type=observed.media_type,
+            )
+            if selected is None:
+                continue
+            selected_media_type, schema = selected
+            entries = _schema_entries(
+                schema,
+                name="body",
+                required=False,
+                location="body",
+                media_type=selected_media_type,
+                skip_write_only=True,
+                reference=ResponseFieldReference.body(),
+            )
+            for entry in entries:
+                reference = entry.reference
+                if (
+                    not isinstance(reference, ResponseFieldReference)
+                    or reference.selector != observed.selector
+                    or not _scalar_schema(entry.schema)
+                ):
+                    continue
+                similarity = _field_similarity(
+                    normalized_name,
+                    reference,
+                )
+                if similarity is None:
+                    continue
+                score, basis = similarity
+                key = (
+                    operation.operation_key,
+                    matched_status,
+                    selected_media_type,
+                    reference.handle,
+                )
+                candidate = _ObservedFieldMatch(
+                    operation_key=operation.operation_key,
+                    matched_status_code=matched_status,
+                    media_type=selected_media_type,
+                    field=reference.handle,
+                    similarity_score=score,
+                    match_basis=basis,
+                )
+                current = matches.get(key)
+                if current is None or candidate.similarity_score > current.similarity_score:
+                    matches[key] = candidate
+
+        ranked = sorted(
+            matches.values(),
+            key=lambda item: (
+                -item.similarity_score,
+                item.operation_key,
+                item.matched_status_code,
+                item.media_type,
+                item.field,
+            ),
+        )
+        page = ranked[offset : offset + limit]
+        groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in page:
+            group_key = (
+                item.operation_key,
+                item.matched_status_code,
+                item.media_type,
+            )
+            group = groups.setdefault(
+                group_key,
+                {
+                    "operation_key": item.operation_key,
+                    "matched_status_code": item.matched_status_code,
+                    "media_type": item.media_type,
+                    "fields": [],
+                },
+            )
+            group["fields"].append(
+                {
+                    "field": item.field,
+                    "similarity_score": item.similarity_score,
+                    "match_basis": item.match_basis,
+                }
+            )
+        result: dict[str, Any] = {
+            "requested_name": name,
+            "responses": list(groups.values()),
+            "total": len(ranked),
+            "offset": offset,
+        }
+        next_offset = offset + len(page)
+        if next_offset < len(ranked):
             result["next_offset"] = next_offset
         return {"structured": result}
 
@@ -524,6 +789,7 @@ class OpenAPICapability:
             location="body",
             media_type=selected_media_type,
             skip_write_only=True,
+            reference=ResponseFieldReference.body(),
         )
         entry = next(
             (item for item in entries if item.name == normalized_field),
@@ -657,7 +923,7 @@ def _schema_entries(
     skip_read_only: bool = False,
     skip_write_only: bool = False,
     visited: frozenset[int] = frozenset(),
-    reference: RequestInputReference | None = None,
+    reference: RequestInputReference | ResponseFieldReference | None = None,
 ) -> list[_SchemaEntry]:
     """Flatten one resolved Schema into stable, model-facing semantic handles."""
     item = _SchemaEntry(
@@ -836,33 +1102,83 @@ def _normalize_status_code(status_code: int | str) -> str:
 
 def _normalize_response_field(field: str) -> str:
     """Convert concrete runtime array indexes to semantic ``[]`` handles."""
-    if field == "body":
-        return field
-    segments = field.split(".")
-    if not segments or not segments[0].startswith("body"):
+    try:
+        return ResponseFieldReference.from_handle(field).handle
+    except ValueError as exc:
         raise ToolFailure(
             code="openapi_response_field_invalid",
-            message="Response field must start with body.",
-        )
-    normalized: list[str] = []
-    for segment in segments:
-        name = segment.split("[", 1)[0]
-        suffix = segment[len(name) :]
-        if name in _COMBINERS:
-            if not re.fullmatch(r"\[\d+\]", suffix):
-                raise ToolFailure(
-                    code="openapi_response_field_invalid",
-                    message=f"Invalid OpenAPI combiner field segment: {segment}",
-                )
-            normalized.append(segment)
-            continue
-        if suffix and not re.fullmatch(r"(?:\[\d*\])+", suffix):
-            raise ToolFailure(
-                code="openapi_response_field_invalid",
-                message=f"Invalid response field segment: {segment}",
-            )
-        normalized.append(name + _ARRAY_INDEX.sub("[]", suffix))
-    return ".".join(normalized)
+            message=str(exc),
+        ) from exc
+
+
+def _observed_media_schema(
+    contents: Mapping[str, MediaTypeIR],
+    *,
+    observed_media_type: str,
+) -> tuple[str, SchemaIR] | None:
+    """Map one normalized observation media type to one current Schema."""
+    normalized = _normalized_media_type(observed_media_type)
+    candidates = [
+        (name, media.schema)
+        for name, media in contents.items()
+        if media.schema is not None
+        and _normalized_media_type(name) == normalized
+    ]
+    if len(candidates) != 1:
+        return None
+    name, schema = candidates[0]
+    assert schema is not None
+    return name, schema
+
+
+def _normalized_media_type(value: str) -> str:
+    """Normalize one media type without importing Monitor workflow policy."""
+    return value.split(";", 1)[0].strip().casefold()
+
+
+def _scalar_schema(schema: SchemaIR | None) -> bool:
+    """Return whether an observed selector ends at one scalar Schema node."""
+    if schema is None:
+        return False
+    if schema.properties or schema.items is not None:
+        return False
+    if schema.all_of or schema.any_of or schema.one_of:
+        return False
+    schema_types = (
+        {schema.type}
+        if isinstance(schema.type, str)
+        else set(schema.type or [])
+    )
+    return bool(schema_types & {"string", "integer", "number", "boolean"})
+
+
+def _field_similarity(
+    requested: str,
+    reference: ResponseFieldReference,
+) -> tuple[float, str] | None:
+    """Return one high-precision deterministic match or no candidate."""
+    property_names = reference.property_names
+    if not property_names:
+        return None
+    leaf = _normalized_name(property_names[-1])
+    path = "".join(_normalized_name(item) for item in property_names)
+    if requested == leaf:
+        return (1.0, "normalized_exact")
+    if requested == path:
+        return (1.0, "path_exact")
+    score = max(
+        SequenceMatcher(None, requested, leaf).ratio(),
+        SequenceMatcher(None, requested, path).ratio(),
+    )
+    if score < _SIMILARITY_THRESHOLD:
+        return None
+    return (round(score, 6), "high_similarity")
+
+
+def _normalized_name(value: str) -> str:
+    """Normalize camel, snake, kebab, and dotted names for exact comparison."""
+    separated = _NAME_BOUNDARY.sub(" ", value)
+    return "".join(_NAME_TOKEN.findall(separated)).casefold()
 
 
 def _schema_summary(schema: SchemaIR | None) -> dict[str, Any]:

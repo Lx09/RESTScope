@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from restscope.api_behavior_monitor.response_value_catalog import (
+    ObservedResponseField,
     PersistedResponseValueSource,
     ResponseValueCatalogRegistration,
     ResponseValueMonitorRecord,
@@ -145,6 +146,38 @@ class SqlAlchemyResponseValueCatalogRepository:
             )
         ).all()
         return [_monitor_record(row, created=False) for row in rows]
+
+    def list_observed_response_fields(self) -> list[ObservedResponseField]:
+        """Return distinct retained response selectors without their values."""
+        rows = self.session.execute(
+            select(
+                ResponseObservationORM.operation_key,
+                ResponseObservationORM.status_code,
+                ResponseObservationORM.media_type,
+                ResponseObservationScalarORM.selector,
+            )
+            .join(
+                ResponseObservationScalarORM,
+                ResponseObservationScalarORM.observation_id
+                == ResponseObservationORM.id,
+            )
+            .distinct()
+            .order_by(
+                ResponseObservationORM.operation_key,
+                ResponseObservationORM.status_code,
+                ResponseObservationORM.media_type,
+                ResponseObservationScalarORM.selector,
+            )
+        ).all()
+        return [
+            ObservedResponseField(
+                operation_key=operation_key,
+                status_code=status_code,
+                media_type=media_type,
+                selector=selector,
+            )
+            for operation_key, status_code, media_type, selector in rows
+        ]
 
     def record_values(
         self,

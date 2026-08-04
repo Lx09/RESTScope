@@ -20,7 +20,6 @@ __all__ = [
     "ResponseValueSource",
     "ResourceLookupRequest",
     "ResourceLookupResult",
-    "RESOURCE_LOOKUP_TOOL_NAME",
     "build_api_behavior_monitor_coordinator",
 ]
 
@@ -33,7 +32,6 @@ _PUBLIC_MODULE_BY_NAME = {
     "ResponseValueSource": ".response_value_catalog",
     "ResourceLookupRequest": ".resource_schemas",
     "ResourceLookupResult": ".resource_schemas",
-    "RESOURCE_LOOKUP_TOOL_NAME": ".tool",
     "build_api_behavior_monitor_coordinator": ".factory",
 }
 

@@ -362,9 +362,10 @@ eviction. Raw response bodies, LLM reasoning, and response-contract pending
 state are never persisted. The current normalized OpenAPI and append-only
 contract change events are the audit exception; bounded flattened response
 scalar evidence is another narrow exception, and all non-null scalar fields,
-including sensitive-looking names, may be retained. `restscope.resource.lookup`
-remains the explicit read-only lookup tool; Response Value pools are consumed
-internally by Operation Smoke.
+including sensitive-looking names, may be retained. The public read-only
+Capability exposes `resource.list_resources`, `resource.list_ids`, and
+`openapi.find_observed_response_fields`; no current Agent receives these tools.
+Response Value pools continue to be consumed internally by Operation Smoke.
 
 ## Operation Smoke workflow
 

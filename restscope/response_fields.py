@@ -1,0 +1,213 @@
+"""Define semantic response-field references shared across runtime workflows.
+
+OpenAPI lookup describes response fields with ``body`` handles, while the API
+Behavior Monitor stores the same paths as ``$`` selectors and Test Case evidence
+may contain concrete array indexes. ``ResponseFieldReference`` owns conversion
+between those spellings so every caller uses one field identity grammar. It is
+pure in-memory code and never reads an OpenAPI document or stored response.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+
+_SchemaVariant = Literal["oneOf", "anyOf", "allOf"]
+_COMBINERS = {"oneOf", "anyOf", "allOf"}
+
+
+@dataclass(frozen=True, slots=True)
+class _PathStep:
+    """Retain one property, array, or Schema-variant traversal step."""
+
+    kind: Literal["property", "items", "variant"]
+    name: str | None = None
+    index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseFieldReference:
+    """Connect one semantic response handle to its observation selector.
+
+    Property and array steps exist in both the Schema and actual response JSON.
+    A combiner branch such as ``oneOf[1]`` makes an OpenAPI field unique but is
+    not a JSON key, so ``selector`` deliberately omits that step.
+
+    Field names are assumed not to contain dots or square brackets, matching
+    the existing request-input and response-observation grammar.
+    """
+
+    _steps: tuple[_PathStep, ...] = ()
+
+    @classmethod
+    def body(cls) -> "ResponseFieldReference":
+        """Create the root response Body reference."""
+        return cls()
+
+    @classmethod
+    def from_selector(cls, selector: str) -> "ResponseFieldReference":
+        """Parse one stored ``$`` observation selector.
+
+        Args:
+            selector: A selector such as ``$.items[].id``.
+
+        Returns:
+            The equivalent semantic reference.
+
+        Raises:
+            ValueError: The selector uses unsupported syntax or has no ``$``
+                root. Observation selectors cannot encode Schema variants.
+        """
+        if not selector.startswith("$"):
+            raise ValueError("Response selector must start with $")
+        reference = cls.body()
+        remainder = selector[1:]
+        while remainder:
+            if remainder.startswith("[]"):
+                reference = reference.items()
+                remainder = remainder[2:]
+                continue
+            if not remainder.startswith("."):
+                raise ValueError(f"Invalid response selector: {selector}")
+            remainder = remainder[1:]
+            boundary = min(
+                (
+                    index
+                    for marker in (".", "[")
+                    if (index := remainder.find(marker)) >= 0
+                ),
+                default=len(remainder),
+            )
+            name = remainder[:boundary]
+            if not name:
+                raise ValueError(f"Invalid response selector: {selector}")
+            reference = reference.property(name)
+            remainder = remainder[boundary:]
+        return reference
+
+    @classmethod
+    def from_handle(cls, handle: str) -> "ResponseFieldReference":
+        """Parse a semantic handle or normalize its concrete array indexes.
+
+        Args:
+            handle: A path beginning with ``body``. Non-combiner indexes such
+                as ``[3]`` become the semantic array step ``[]``; combiner
+                indexes remain exact Schema branches.
+
+        Returns:
+            The normalized immutable reference.
+
+        Raises:
+            ValueError: The handle is malformed or does not start at ``body``.
+        """
+        if not handle.startswith("body"):
+            raise ValueError("Response field handle must start with body")
+        reference = cls.body()
+        remainder = handle[4:]
+        while remainder:
+            if remainder.startswith("["):
+                _raw_index, remainder = _take_index(remainder, handle=handle)
+                reference = reference.items()
+                continue
+            if not remainder.startswith("."):
+                raise ValueError(f"Invalid response field handle: {handle}")
+            remainder = remainder[1:]
+            boundary = min(
+                (
+                    index
+                    for marker in (".", "[")
+                    if (index := remainder.find(marker)) >= 0
+                ),
+                default=len(remainder),
+            )
+            name = remainder[:boundary]
+            if not name:
+                raise ValueError(f"Invalid response field handle: {handle}")
+            remainder = remainder[boundary:]
+            if name in _COMBINERS:
+                if not remainder.startswith("["):
+                    raise ValueError(
+                        f"Schema combiner requires one branch index: {handle}"
+                    )
+                raw_index, remainder = _take_index(remainder, handle=handle)
+                if not raw_index.isdigit():
+                    raise ValueError(
+                        f"Schema combiner requires a numeric index: {handle}"
+                    )
+                reference = reference.variant(name, int(raw_index))
+                continue
+            reference = reference.property(name)
+        return reference
+
+    @property
+    def handle(self) -> str:
+        """Return the stable model-facing ``body`` field handle."""
+        output = "body"
+        for step in self._steps:
+            if step.kind == "property":
+                output += f".{step.name}"
+            elif step.kind == "items":
+                output += "[]"
+            else:
+                output += f".{step.name}[{step.index}]"
+        return output
+
+    @property
+    def selector(self) -> str:
+        """Return the persisted ``$`` selector for actual response JSON."""
+        output = "$"
+        for step in self._steps:
+            if step.kind == "property":
+                output += f".{step.name}"
+            elif step.kind == "items":
+                output += "[]"
+        return output
+
+    @property
+    def property_names(self) -> tuple[str, ...]:
+        """Return direct JSON property names without arrays or Schema branches."""
+        return tuple(
+            step.name
+            for step in self._steps
+            if step.kind == "property" and step.name is not None
+        )
+
+    def property(self, name: str) -> "ResponseFieldReference":
+        """Return an immutable child for one direct JSON property name."""
+        if not name or any(marker in name for marker in (".", "[", "]")):
+            raise ValueError("Response property name is not representable")
+        return self._child(_PathStep(kind="property", name=name))
+
+    def items(self) -> "ResponseFieldReference":
+        """Return the semantic item reference for one array level."""
+        return self._child(_PathStep(kind="items"))
+
+    def variant(
+        self,
+        kind: _SchemaVariant,
+        index: int,
+    ) -> "ResponseFieldReference":
+        """Return one exact OpenAPI Schema-combination branch."""
+        if kind not in _COMBINERS:
+            raise ValueError(f"Unsupported Schema variant: {kind}")
+        if index < 0:
+            raise ValueError("Schema variant index must be non-negative")
+        return self._child(
+            _PathStep(kind="variant", name=kind, index=index)
+        )
+
+    def _child(self, step: _PathStep) -> "ResponseFieldReference":
+        """Append one trusted path step without changing the current reference."""
+        return ResponseFieldReference((*self._steps, step))
+
+
+def _take_index(value: str, *, handle: str) -> tuple[str, str]:
+    """Remove one leading square-bracket index from a response handle."""
+    closing = value.find("]")
+    if not value.startswith("[") or closing < 0:
+        raise ValueError(f"Invalid response field index: {handle}")
+    raw_index = value[1:closing]
+    if raw_index and not raw_index.isdigit():
+        raise ValueError(f"Invalid response field index: {handle}")
+    return raw_index, value[closing + 1 :]

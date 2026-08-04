@@ -221,6 +221,15 @@ lookup, Testing, and the Test Case Catalog. It constructs semantic handles such
 as `query.sort`, reads the corresponding direct-name request JSON, and projects
 bounded evidence fragments. It owns no operation registry or persistent state.
 
+### `restscope/response_fields.py`
+
+Owns the pure in-memory `ResponseFieldReference` Interface shared by OpenAPI
+lookup and API Behavior Monitor response-value handling. It gives one response
+field the same identity when OpenAPI spells it as a `body...` handle and stored
+observations spell it as a `$...` selector, including arrays and Schema
+combination branches. It owns no OpenAPI registry, response values, or
+persistent state.
+
 ### `restscope/supervisor/`
 
 Owns the dynamic top-level loop. It chooses operations from current runtime
@@ -299,7 +308,11 @@ persists raw responses or general Agent memory.
 Defines model-callable tools and the executor that applies policies, tracing,
 redaction, and error translation. `http_request.py` contains the bounded
 open-world HTTP tool; Operation Smoke wraps it with a stricter current-operation
-scope.
+scope. `openapi_lookup.py` exposes narrow current-contract queries, including
+name-based discovery restricted to response fields that were actually observed.
+`resource_lookup.py` exposes canonical resource names and typed identifiers
+already retained by the API Behavior Monitor. Constructing these Capabilities
+does not register their tools with an Agent.
 
 ### `restscope/http_transport.py`
 

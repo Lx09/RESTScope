@@ -15,6 +15,7 @@ from restscope.openapi_parser import (
     match_operation,
 )
 from restscope.openapi_parser.ir import OperationIR, SchemaIR
+from restscope.response_fields import ResponseFieldReference
 from restscope.observability import TracingRuntime
 
 from .contract_tracker import (
@@ -495,7 +496,7 @@ def _response_for_status(operation: OperationIR, status_code: int):
 def _schema_fields(
     schema: SchemaIR,
     *,
-    selector: str = "$",
+    reference: ResponseFieldReference | None = None,
     path_segments: tuple[str, ...] = (),
     required: bool = False,
     resource_name: str | None = None,
@@ -508,6 +509,7 @@ def _schema_fields(
     This private helper keeps one transformation or policy decision explicit so the
     surrounding orchestration remains readable.
     """
+    reference = reference or ResponseFieldReference.body()
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []
@@ -516,10 +518,30 @@ def _schema_fields(
     current_resource_name = schema.title or resource_name
     if schema.type == "object" or schema.properties:
         for name, child in schema.properties.items():
+            try:
+                child_reference = reference.property(name)
+            except ValueError:
+                # Dots and brackets make a property impossible to distinguish
+                # from selector syntax. Preserve a bounded marker so the
+                # Resource Monitor reports its established evidence-limit
+                # warning instead of treating the whole monitor as broken.
+                output.append(
+                    {
+                        "selector": f"{reference.selector}.{name}",
+                        "name": name,
+                        "path_segments": [*path_segments, name],
+                        "type": child.type,
+                        "format": child.format,
+                        "description": child.description,
+                        "required": name in schema.required,
+                        "resource_name": current_resource_name,
+                    }
+                )
+                continue
             output.extend(
                 _schema_fields(
                     child,
-                    selector=f"{selector}.{name}",
+                    reference=child_reference,
                     path_segments=(*path_segments, name),
                     required=name in schema.required,
                     resource_name=current_resource_name,
@@ -530,16 +552,20 @@ def _schema_fields(
     if schema.type == "array" and schema.items is not None:
         return _schema_fields(
             schema.items,
-            selector=f"{selector}[]",
+            reference=reference.items(),
             path_segments=path_segments,
             required=required,
             resource_name=schema.items.title or current_resource_name,
             visited=visited,
         )
-    name = selector.rsplit(".", 1)[-1].removesuffix("[]")
+    name = (
+        reference.property_names[-1]
+        if reference.property_names
+        else "body"
+    )
     output.append(
         {
-            "selector": selector,
+            "selector": reference.selector,
             "name": name,
             "path_segments": list(path_segments),
             "type": schema.type,
