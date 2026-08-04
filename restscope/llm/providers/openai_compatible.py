@@ -1,4 +1,10 @@
-"""OpenAI-compatible chat completions provider adapter."""
+"""Adapt provider-neutral model requests to OpenAI-compatible SDK clients.
+
+The Adapter receives :class:`LLMRequest` values from ``LLMClient``, translates
+them to Chat Completions arguments, and returns normalized :class:`LLMResponse`
+values. The SDK owns short retries for one request; after exhaustion this
+module exposes a safe provider-unavailable classification to workflows.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +14,19 @@ import re
 import time
 from typing import Any
 
-from restscope.llm.exceptions import InvalidProviderResponseError, ProviderAuthError, ProviderInvokeError
+from restscope.llm.exceptions import (
+    InvalidProviderResponseError,
+    ProviderAuthError,
+    ProviderInvokeError,
+    ProviderUnavailableError,
+)
 from restscope.llm.providers.base import BaseLLMProvider
 from restscope.llm.schemas import LLMMessage, LLMRequest, LLMResponse, ToolCall, ToolSpec
+
+
+# The SDK applies these retries only to a model request that has not returned.
+# RESTScope deliberately does not retry an Agent turn, tool call, or workflow.
+_PROVIDER_RETRY_LIMIT = 3
 
 
 class OpenAICompatibleProvider(BaseLLMProvider):
@@ -25,6 +41,16 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         base_url: str | None = None,
         client: Any | None = None,
     ) -> None:
+        """Create or accept one OpenAI-compatible SDK client.
+
+        Args:
+            api_key: Provider credential used only when building a client.
+            base_url: Optional provider endpoint override.
+            client: Optional injected compatible client, primarily for tests.
+
+        Raises:
+            ProviderAuthError: Neither an API key nor an injected client exists.
+        """
         if not api_key and client is None:
             raise ProviderAuthError("OpenAI-compatible provider requires an API key")
         self.api_key = api_key
@@ -32,12 +58,18 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.client = client or self._build_client(api_key=api_key, base_url=base_url)
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
-        """
-        Invoke the configured collaborator for provider-independent language-model
-        invocation.
+        """Send one provider-neutral request through the configured SDK client.
 
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
+        Args:
+            request: Messages, model, tools, and output controls for one call.
+
+        Returns:
+            A provider-neutral response safe for workflow Agents.
+
+        Raises:
+            ProviderUnavailableError: SDK retryable failures exhausted the
+                configured request retry limit.
+            ProviderInvokeError: Another SDK call failure occurred.
         """
         return self._invoke_with_client(request, client=self.client)
 
@@ -69,18 +101,39 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         try:
             raw_response = client.chat.completions.create(**kwargs)
         except Exception as exc:  # pragma: no cover - SDK-specific branches are provider dependent.
+            status_code = _http_status_code(exc)
+            if _is_provider_unavailable(exc, status_code=status_code):
+                raise ProviderUnavailableError(
+                    status_code=status_code,
+                    retry_limit=_PROVIDER_RETRY_LIMIT,
+                ) from exc
             raise ProviderInvokeError(str(exc)) from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         return self._normalize_response(request, raw_response, latency_ms)
 
     def _build_client(self, *, api_key: str, base_url: str | None):
+        """Create one SDK client with the bounded request retry policy.
+
+        Args:
+            api_key: Credential passed only to the provider SDK.
+            base_url: Optional standard or Beta-compatible endpoint.
+
+        Returns:
+            An OpenAI SDK client used for synchronous Chat Completions.
+
+        Raises:
+            ProviderInvokeError: The required SDK package is unavailable.
+        """
         try:
             from openai import OpenAI
         except ImportError as exc:  # pragma: no cover - covered by dependency metadata.
             raise ProviderInvokeError("The openai package is required for OpenAICompatibleProvider") from exc
 
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "max_retries": _PROVIDER_RETRY_LIMIT,
+        }
         if base_url:
             kwargs["base_url"] = base_url
         return OpenAI(**kwargs)
@@ -248,3 +301,50 @@ def _provider_tool_name(name: str) -> str:
     digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
     prefix = sanitized[: 64 - len(digest) - 1]
     return f"{prefix}_{digest}"
+
+
+def _http_status_code(error: Exception) -> int | None:
+    """Return an SDK error's usable HTTP status without reading its body.
+
+    Args:
+        error: Exception raised after the SDK finishes its own retry policy.
+
+    Returns:
+        A positive integer status code, or ``None`` for transport failures and
+        exception shapes that do not expose an HTTP response status.
+    """
+
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int) and status_code > 0:
+        return status_code
+    return None
+
+
+def _is_provider_unavailable(
+    error: Exception,
+    *,
+    status_code: int | None,
+) -> bool:
+    """Classify retryable SDK failures after its retry budget is exhausted.
+
+    Args:
+        error: Original SDK or transport exception.
+        status_code: Sanitized HTTP status extracted from ``error``.
+
+    Returns:
+        ``True`` only for the HTTP and transport failures that the OpenAI SDK
+        itself treats as retryable.
+    """
+
+    if status_code in {408, 409, 429}:
+        return True
+    if status_code is not None and status_code >= 500:
+        return True
+
+    # The class-name check recognizes the public OpenAI SDK exception names
+    # without requiring fake clients in tests to construct SDK response data.
+    exception_name = type(error).__name__
+    return isinstance(error, (ConnectionError, TimeoutError)) or exception_name in {
+        "APIConnectionError",
+        "APITimeoutError",
+    }

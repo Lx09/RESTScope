@@ -1,4 +1,10 @@
-"""Public contracts for round-based Operation Smoke runs."""
+"""Define public input and output contracts for a Supervisor run.
+
+The Supervisor receives one bounded run request and returns chronological
+Operation Smoke attempts plus final status, stop reason, and unattempted
+operations. These DTOs cross the top-level App boundary but do not persist the
+runtime scheduler queue.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ OperationFailureKind = Literal[
     "solve_budget_exhausted",
     "unsupported_operation",
     "operation_error",
+    "provider_unavailable",
 ]
 StopReason = Literal[
     "completed",

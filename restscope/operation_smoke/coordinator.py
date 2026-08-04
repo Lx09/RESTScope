@@ -18,6 +18,7 @@ from typing import Protocol
 
 from restscope.capabilities.tool_context import ToolContext
 from restscope.capabilities import operation_input_references
+from restscope.llm import ProviderUnavailableError
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.failure_solver import (
     FailureSolveAgentFactory,
@@ -413,13 +414,21 @@ class OperationSmokeCoordinator:
                 # At least one Patch was committed.  Only now does control
                 # return to the top for the next complete Batch.
         except Exception as exc:
+            # A provider-capacity failure has a stronger meaning than an
+            # operation-local error: Supervisor must end the whole run instead
+            # of trying this operation or a later operation again.
+            failure_kind: OperationSmokeFailureKind = (
+                "provider_unavailable"
+                if isinstance(exc, ProviderUnavailableError)
+                else "operation_error"
+            )
             return _errored_result(
                 request=request,
                 current=current,
                 success_rate=success_rate,
                 batch_run_ids=batch_run_ids,
                 rounds=rounds,
-                failure_kind="operation_error",
+                failure_kind=failure_kind,
                 error=exc,
             )
 

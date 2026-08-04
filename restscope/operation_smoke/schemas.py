@@ -40,6 +40,7 @@ OperationSmokeFailureKind: TypeAlias = Literal[
     "solve_budget_exhausted",
     "unsupported_operation",
     "operation_error",
+    "provider_unavailable",
 ]
 
 
@@ -123,6 +124,7 @@ class OperationSmokeResult(_PublicModel):
                 "dedup_budget_exhausted",
                 "solve_budget_exhausted",
                 "operation_error",
+                "provider_unavailable",
             }:
                 raise ValueError("errored result requires a technical failure_kind")
             if self.stop_reason is not None or self.error is None:

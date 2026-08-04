@@ -1,4 +1,9 @@
-"""RESTScope LLM module."""
+"""Expose RESTScope's provider-neutral language-model Interface.
+
+Workflow Agents import request/response schemas, the synchronous client,
+configuration builders, and stable errors from here. Concrete SDK translation
+remains inside ``restscope.llm.providers``.
+"""
 
 from .client import LLMClient
 from .config import build_llm_client, build_llm_registry
@@ -7,6 +12,7 @@ from .exceptions import (
     LLMError,
     ProviderAuthError,
     ProviderInvokeError,
+    ProviderUnavailableError,
     StrictToolUnavailableError,
     UnknownProviderError,
 )
@@ -34,6 +40,7 @@ __all__ = [
     "LLMError",
     "ProviderAuthError",
     "ProviderInvokeError",
+    "ProviderUnavailableError",
     "StrictToolUnavailableError",
     "UnknownProviderError",
     "ModelSelector",

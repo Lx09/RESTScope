@@ -106,7 +106,10 @@ class StubDeduplicator:
         del catalog
         self.events.append(f"dedup:{request.round_number}")
         self.requests.append((request, max_outputs))
-        return self.results.pop(0)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class StubSolveFactory:
@@ -413,6 +416,41 @@ def test_solve_budget_exhaustion_is_a_technical_error() -> None:
 
     assert result.status == "errored"
     assert result.failure_kind == "solve_budget_exhausted"
+
+
+def test_provider_unavailable_preserves_completed_batch_and_round_evidence() -> None:
+    """Capacity exhaustion stops Smoke without losing earlier run evidence."""
+    from restscope.llm import ProviderUnavailableError
+
+    coordinator, _, _, _ = _coordinator(
+        reports=[
+            _report("batch-1", status_code=404),
+            _report("batch-2", status_code=404),
+        ],
+        dedup_results=[
+            _dedup("T1"),
+            ProviderUnavailableError(status_code=503, retry_limit=3),
+        ],
+        outcomes=[_applied(1, "project-123")],
+        events=[],
+    )
+
+    result = coordinator.run(
+        _context(),
+        OperationSmokeRequest(operation_key=smoke_config().operation_key),
+    )
+
+    assert result.status == "errored"
+    assert result.failure_kind == "provider_unavailable"
+    assert result.batch_run_ids == ["batch-1", "batch-2"]
+    assert [round_.batch_run_id for round_ in result.rounds] == ["batch-1"]
+    assert result.error == {
+        "type": "ProviderUnavailableError",
+        "message": (
+            "provider_unavailable: Model provider remained unavailable after "
+            "3 SDK retries (HTTP 503)."
+        ),
+    }
 
 
 def test_public_summaries_require_current_event_and_attempt_id_names() -> None:

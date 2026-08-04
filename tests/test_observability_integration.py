@@ -178,6 +178,61 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert reasoning not in rendered
 
 
+def test_llm_provider_unavailable_span_records_only_stable_failure_facts() -> None:
+    """Capacity traces omit the provider body retained on the internal cause."""
+    from opentelemetry.trace.status import StatusCode
+
+    from restscope.llm import (
+        LLMClient,
+        LLMMessage,
+        LLMProviderRegistry,
+        LLMRequest,
+        ProviderUnavailableError,
+    )
+    from restscope.llm.providers.base import BaseLLMProvider
+
+    provider_body = "unregistered private provider response body"
+    original = RuntimeError(provider_body)
+    unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
+    unavailable.__cause__ = original
+
+    class UnavailableProvider(BaseLLMProvider):
+        name = "unavailable"
+
+        def invoke(self, request: LLMRequest):
+            del request
+            raise unavailable
+
+    registry = LLMProviderRegistry()
+    registry.register(UnavailableProvider())
+    runtime, exporter = _recording_runtime()
+
+    with pytest.raises(ProviderUnavailableError):
+        LLMClient(registry, tracing_runtime=runtime).invoke(
+            LLMRequest(
+                provider="unavailable",
+                model="only-model",
+                messages=[LLMMessage(role="user", content="bounded")],
+            )
+        )
+    runtime.close()
+
+    span = exporter.get_finished_spans()[0]
+    rendered = json.dumps(
+        {
+            "attributes": dict(span.attributes),
+            "events": [dict(event.attributes) for event in span.events],
+        },
+        default=str,
+    )
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["restscope.llm.error_code"] == "provider_unavailable"
+    assert span.attributes["http.response.status_code"] == 503
+    assert span.attributes["restscope.llm.provider_retry_limit"] == 3
+    assert "restscope.llm.provider_retry_count" not in span.attributes
+    assert provider_body not in rendered
+
+
 def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> None:
     """The Agent-owned execution boundary emits safe tool spans."""
     from opentelemetry.trace.status import StatusCode

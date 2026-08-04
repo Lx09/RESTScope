@@ -98,6 +98,44 @@ def test_deepseek_provider_uses_official_endpoint_by_default() -> None:
     assert provider.base_url == "https://api.deepseek.com"
 
 
+def test_deepseek_standard_and_beta_clients_share_three_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both official endpoints apply the same bounded model-request policy."""
+    import openai
+
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    constructed: list[dict[str, Any]] = []
+
+    class FakeSDKClient(RecordingClient):
+        """Record SDK constructor options while serving one harmless response."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            constructed.append(kwargs)
+            super().__init__()
+
+    monkeypatch.setattr(openai, "OpenAI", FakeSDKClient)
+    provider = DeepSeekProvider(api_key="test-key")
+    provider.invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Submit")],
+            tools=[_strict_submit_tool()],
+            tool_choice="required",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    assert [options["max_retries"] for options in constructed] == [3, 3]
+    assert [str(options["base_url"]) for options in constructed] == [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/beta",
+    ]
+
+
 def test_deepseek_provider_translates_reasoning_and_json_schema_request() -> None:
     """Scenario: verify that deepseek provider translates reasoning and json schema request."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
@@ -294,6 +332,45 @@ def test_deepseek_strict_tools_use_only_the_beta_endpoint() -> None:
     assert response.metadata["strict_tool_beta"] is True
 
 
+@pytest.mark.parametrize("status_code", [408, 409, 429, 500, 503, 599])
+def test_deepseek_strict_beta_capacity_failure_retries_standard_url_once(
+    status_code: int,
+) -> None:
+    """A Beta capacity outage gets one pre-tool fallback on the standard URL."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    beta_error = RuntimeError("service too busy")
+    beta_error.status_code = status_code  # type: ignore[attr-defined]
+    standard_client = RecordingClient(
+        deepseek_response(
+            content="",
+            tool_calls=[_strict_tool_call()],
+        )
+    )
+    beta_client = FailingClient(beta_error)
+    response = DeepSeekProvider(
+        api_key="test-key",
+        client=standard_client,
+        beta_client=beta_client,
+    ).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Submit acceptance")],
+            response_format="text",
+            tools=[_strict_submit_tool()],
+            tool_choice="required",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    assert len(beta_client.chat.completions.requests) == 1
+    assert standard_client.chat.completions.kwargs is not None
+    assert response.tool_calls[0].arguments == {"action": "accept"}
+    assert response.metadata["strict_tool_beta"] is False
+
+
 def test_deepseek_rejects_mixed_strict_tools_before_network() -> None:
     """DeepSeek Beta requires every function in one request to be strict."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
@@ -357,11 +434,11 @@ def test_deepseek_custom_gateway_reports_strict_endpoint_unavailable() -> None:
     assert client.chat.completions.kwargs is None
 
 
-@pytest.mark.parametrize("status_code", [400, 404, 405, 422, 500, 503])
+@pytest.mark.parametrize("status_code", [400, 404, 405, 422])
 def test_deepseek_beta_compatibility_failures_are_fallback_eligible(
     status_code: int,
 ) -> None:
-    """Schema, route, and server failures expose the narrow fallback error."""
+    """Schema and route failures expose the narrow compatibility error."""
     from restscope.llm import (
         LLMMessage,
         LLMReasoningConfig,
@@ -391,7 +468,7 @@ def test_deepseek_beta_compatibility_failures_are_fallback_eligible(
         )
 
 
-@pytest.mark.parametrize("status_code", [401, 403, 429])
+@pytest.mark.parametrize("status_code", [401, 403])
 def test_deepseek_beta_account_failures_do_not_enable_fallback(
     status_code: int,
 ) -> None:
@@ -432,25 +509,62 @@ def test_deepseek_beta_account_failures_do_not_enable_fallback(
     "network_error",
     [ConnectionError("connection refused"), TimeoutError("request timed out")],
 )
-def test_deepseek_beta_network_failures_are_fallback_eligible(
+def test_deepseek_beta_network_failures_retry_standard_url_once(
     network_error: Exception,
 ) -> None:
-    """Connection and timeout failures expose the same bounded fallback seam."""
+    """Beta connection and timeout exhaustion use the standard endpoint once."""
     from restscope.llm import (
         LLMMessage,
         LLMReasoningConfig,
         LLMRequest,
-        StrictToolUnavailableError,
     )
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
+    standard_client = RecordingClient()
     provider = DeepSeekProvider(
         api_key="test-key",
-        client=RecordingClient(),
+        client=standard_client,
         beta_client=FailingClient(network_error),
     )
 
-    with pytest.raises(StrictToolUnavailableError) as exc_info:
+    response = provider.invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Submit")],
+            tools=[_strict_submit_tool()],
+            tool_choice="required",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    assert standard_client.chat.completions.kwargs is not None
+    assert response.metadata["strict_tool_beta"] is False
+
+
+def test_deepseek_strict_standard_fallback_capacity_failure_propagates() -> None:
+    """A second endpoint outage ends the model call without a third endpoint try."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMReasoningConfig,
+        LLMRequest,
+        ProviderUnavailableError,
+    )
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    beta_error = RuntimeError("beta busy")
+    beta_error.status_code = 503  # type: ignore[attr-defined]
+    standard_error = RuntimeError("standard busy")
+    standard_error.status_code = 503  # type: ignore[attr-defined]
+    beta_client = FailingClient(beta_error)
+    standard_client = FailingClient(standard_error)
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        client=standard_client,
+        beta_client=beta_client,
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
         provider.invoke(
             LLMRequest(
                 provider="deepseek",
@@ -462,7 +576,9 @@ def test_deepseek_beta_network_failures_are_fallback_eligible(
             )
         )
 
-    assert exc_info.value.code == "deepseek_strict_endpoint_unavailable"
+    assert caught.value.__cause__ is standard_error
+    assert len(beta_client.chat.completions.requests) == 1
+    assert len(standard_client.chat.completions.requests) == 1
 
 
 def test_deepseek_configured_beta_url_keeps_normal_calls_on_standard_url() -> None:

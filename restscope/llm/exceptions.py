@@ -1,4 +1,9 @@
-"""Exceptions raised by the provider-neutral LLM layer."""
+"""Define failures that cross the provider-neutral LLM Interface.
+
+Provider Adapters convert SDK exceptions into these types before workflow code
+sees them. Callers use the stable class and fields to choose a stop path; raw
+provider response data remains inside the Adapter exception chain.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +18,30 @@ class UnknownProviderError(LLMError):
 
 class ProviderInvokeError(LLMError):
     """Raised when a provider call fails."""
+
+
+class ProviderUnavailableError(ProviderInvokeError):
+    """Report a transient provider failure after bounded SDK retries.
+
+    This error is safe to expose in workflow results and traces. It keeps only
+    a stable classification, an optional HTTP status, and the configured SDK
+    retry limit; the provider response stays on the internal exception cause.
+
+    Args:
+        status_code: HTTP status returned by the provider, when one exists.
+        retry_limit: Number of retries configured for the single model request.
+    """
+
+    code = "provider_unavailable"
+
+    def __init__(self, *, status_code: int | None, retry_limit: int) -> None:
+        self.status_code = status_code
+        self.retry_limit = retry_limit
+        status_detail = f" (HTTP {status_code})" if status_code is not None else ""
+        super().__init__(
+            f"{self.code}: Model provider remained unavailable after "
+            f"{retry_limit} SDK retries{status_detail}."
+        )
 
 
 class StrictToolUnavailableError(ProviderInvokeError):

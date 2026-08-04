@@ -57,12 +57,12 @@ class _SmokeCoordinator:
             "passed"
             if status in passed_stop_reasons
             else "errored"
-            if status == "dedup_budget_exhausted"
+            if status in {"dedup_budget_exhausted", "provider_unavailable"}
             else status
         )
         batch_run_ids = (
             [f"run_{len(self.requests)}"]
-            if result_status == "passed"
+            if result_status == "passed" or status == "provider_unavailable"
             else []
         )
         return OperationSmokeResult(
@@ -80,6 +80,8 @@ class _SmokeCoordinator:
             failure_kind=(
                 "dedup_budget_exhausted"
                 if status == "dedup_budget_exhausted"
+                else "provider_unavailable"
+                if status == "provider_unavailable"
                 else "unsupported_operation"
                 if result_status == "unsupported"
                 else "operation_error"
@@ -87,7 +89,19 @@ class _SmokeCoordinator:
                 else None
             ),
             error=(
-                {"type": "SmokeError", "message": "local operation failure"}
+                {
+                    "type": (
+                        "ProviderUnavailableError"
+                        if status == "provider_unavailable"
+                        else "SmokeError"
+                    ),
+                    "message": (
+                        "provider_unavailable: Model provider remained unavailable "
+                        "after 3 SDK retries (HTTP 503)."
+                        if status == "provider_unavailable"
+                        else "local operation failure"
+                    ),
+                }
                 if result_status == "errored"
                 else None
             ),
@@ -252,6 +266,45 @@ def test_operation_scoped_smoke_error_retries_after_other_operations() -> None:
         "satisfied",
     ]
     assert report.attempts[0].failure_kind == "operation_error"
+
+
+def test_provider_unavailable_records_attempt_and_stops_the_entire_run() -> None:
+    """One-model capacity exhaustion leaves later operations unattempted."""
+    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
+
+    smoke = _SmokeCoordinator(["provider_unavailable", "passed"])
+    report = RESTScopeMainGraph(
+        operation_smoke_coordinator=smoke,
+        tool_context=_context(),
+    ).run(RESTScopeRunRequest(max_operation_attempts=3))
+
+    assert (report.status, report.stop_reason) == (
+        "errored",
+        "technical_error",
+    )
+    assert [request.operation_key for request in smoke.requests] == [
+        "GET /first"
+    ]
+    assert report.attempt_count == 1
+    assert report.attempts[0].disposition == "errored"
+    assert report.attempts[0].failure_kind == "provider_unavailable"
+    assert report.attempts[0].smoke_result.batch_run_ids == ["run_1"]
+    assert [operation.path for operation in report.unattempted_operations] == [
+        "/second"
+    ]
+    assert report.error == {
+        "type": "ProviderUnavailableError",
+        "message": (
+            "provider_unavailable: Model provider remained unavailable after "
+            "3 SDK retries (HTTP 503)."
+        ),
+        "stage": "run_next_operation",
+        "operation": {
+            "method": "GET",
+            "path": "/first",
+            "operation_id": "first",
+        },
+    }
 
 
 def test_smoke_runtime_exception_is_a_global_technical_error() -> None:

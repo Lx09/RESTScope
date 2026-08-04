@@ -1,4 +1,10 @@
-"""Round-based FIFO Supervisor for Operation Smoke execution."""
+"""Schedule Operation Smoke work in an App-lifetime FIFO graph.
+
+The graph discovers operations from the current OpenAPI IR, receives bounded
+Smoke results, and returns a complete run report. It retries operation-local
+failures by round but stops immediately when shared infrastructure such as the
+single model provider is unavailable; no queue state is persisted.
+"""
 
 from __future__ import annotations
 
@@ -238,6 +244,26 @@ class RESTScopeMainGraph:
                     ],
                 }
             )
+            if smoke_result.failure_kind == "provider_unavailable":
+                # The current attempt is evidence and must reach the report,
+                # but a single-provider outage cannot improve by retrying an
+                # operation or continuing with a later operation in this run.
+                error = smoke_result.error or {}
+                updates.update(
+                    {
+                        "status": "errored",
+                        "stop_reason": "technical_error",
+                        "last_error": {
+                            "stage": "run_next_operation",
+                            "type": "ProviderUnavailableError",
+                            "message": error.get(
+                                "message",
+                                "provider_unavailable: Model provider is unavailable.",
+                            ),
+                            "operation": operation.model_dump(mode="json"),
+                        },
+                    }
+                )
             return updates
 
         def node(state: RESTScopeMainState) -> RESTScopeMainState:
@@ -458,6 +484,8 @@ def _attempt_disposition(
         return "satisfied"
     if result.status == "unsupported":
         return "unsupported"
+    if result.failure_kind == "provider_unavailable":
+        return "errored"
     if attempt_number < max_attempts:
         return "retrying"
     return "errored" if result.status == "errored" else "failed"

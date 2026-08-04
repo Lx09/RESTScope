@@ -179,6 +179,15 @@ def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
     assert not hasattr(BaseLLMProvider, "ainvoke")
 
 
+def test_openai_compatible_provider_configures_three_sdk_retries() -> None:
+    """The standard client gives one model request three SDK-managed retries."""
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider = OpenAICompatibleProvider(api_key="test-key")
+
+    assert provider.client.max_retries == 3
+
+
 def test_tool_call_does_not_retain_raw_provider_payload() -> None:
     """Scenario: verify that tool call does not retain raw provider payload."""
     from restscope.llm import ToolCall
@@ -227,6 +236,149 @@ class _FakeChat:
 class _FakeOpenAIClient:
     def __init__(self) -> None:
         self.chat = _FakeChat()
+
+
+class _FailingCompletions:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def create(self, **kwargs: Any) -> None:
+        del kwargs
+        raise self.error
+
+
+class _FailingOpenAIClient:
+    def __init__(self, error: Exception) -> None:
+        self.chat = SimpleNamespace(completions=_FailingCompletions(error))
+
+
+def test_openai_compatible_provider_classifies_exhausted_503_without_leaking_body() -> None:
+    """A busy provider becomes a stable capacity error after SDK retries end."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMRequest,
+        ProviderUnavailableError,
+    )
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider_body = "secret provider response body"
+    sdk_error = RuntimeError(provider_body)
+    sdk_error.status_code = 503  # type: ignore[attr-defined]
+    provider = OpenAICompatibleProvider(
+        api_key="test-key",
+        client=_FailingOpenAIClient(sdk_error),
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        provider.invoke(
+            LLMRequest(
+                provider="openai_compatible",
+                model="gpt-test",
+                messages=[LLMMessage(role="user", content="bounded")],
+            )
+        )
+
+    assert caught.value.code == "provider_unavailable"
+    assert caught.value.status_code == 503
+    assert caught.value.retry_limit == 3
+    assert provider_body not in str(caught.value)
+    assert caught.value.__cause__ is sdk_error
+
+
+@pytest.mark.parametrize(
+    "transport_error",
+    [ConnectionError("connection refused"), TimeoutError("request timed out")],
+)
+def test_openai_compatible_provider_classifies_exhausted_transport_failure(
+    transport_error: Exception,
+) -> None:
+    """Connection and timeout exhaustion use the same safe capacity result."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMRequest,
+        ProviderUnavailableError,
+    )
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    provider = OpenAICompatibleProvider(
+        api_key="test-key",
+        client=_FailingOpenAIClient(transport_error),
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        provider.invoke(
+            LLMRequest(
+                provider="openai_compatible",
+                model="gpt-test",
+                messages=[LLMMessage(role="user", content="bounded")],
+            )
+        )
+
+    assert caught.value.status_code is None
+    assert caught.value.__cause__ is transport_error
+
+
+@pytest.mark.parametrize("status_code", [408, 409, 429, 500, 599])
+def test_openai_compatible_provider_classifies_retryable_http_statuses(
+    status_code: int,
+) -> None:
+    """Every HTTP status retried by the SDK shares one terminal result."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMRequest,
+        ProviderUnavailableError,
+    )
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    sdk_error = RuntimeError("provider detail")
+    sdk_error.status_code = status_code  # type: ignore[attr-defined]
+    provider = OpenAICompatibleProvider(
+        api_key="test-key",
+        client=_FailingOpenAIClient(sdk_error),
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        provider.invoke(
+            LLMRequest(
+                provider="openai_compatible",
+                model="gpt-test",
+                messages=[LLMMessage(role="user", content="bounded")],
+            )
+        )
+
+    assert caught.value.status_code == status_code
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+def test_openai_compatible_provider_preserves_nonretryable_http_failures(
+    status_code: int,
+) -> None:
+    """Caller, auth, permission, route, and validation errors stay nontransient."""
+    from restscope.llm import (
+        LLMMessage,
+        LLMRequest,
+        ProviderInvokeError,
+        ProviderUnavailableError,
+    )
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    sdk_error = RuntimeError("request rejected")
+    sdk_error.status_code = status_code  # type: ignore[attr-defined]
+    provider = OpenAICompatibleProvider(
+        api_key="test-key",
+        client=_FailingOpenAIClient(sdk_error),
+    )
+
+    with pytest.raises(ProviderInvokeError) as caught:
+        provider.invoke(
+            LLMRequest(
+                provider="openai_compatible",
+                model="gpt-test",
+                messages=[LLMMessage(role="user", content="bounded")],
+            )
+        )
+
+    assert not isinstance(caught.value, ProviderUnavailableError)
 
 
 def test_openai_compatible_provider_converts_schema_and_tools_without_network() -> None:

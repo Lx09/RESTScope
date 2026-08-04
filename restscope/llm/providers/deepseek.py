@@ -1,4 +1,10 @@
-"""Official DeepSeek Chat Completions provider adapter."""
+"""Route provider-neutral requests across official DeepSeek endpoints.
+
+Ordinary requests use the standard URL and strict function requests first use
+the Beta URL. Both return normalized LLM responses to ``LLMClient``; a bounded
+Beta capacity failure may fall back to the standard URL before workflow code
+or an Agent receives any tool call.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,7 @@ from typing import Any
 
 from restscope.llm.exceptions import (
     ProviderInvokeError,
+    ProviderUnavailableError,
     StrictToolUnavailableError,
 )
 from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
@@ -73,10 +80,11 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         """Route strict tools to Beta and retry incomplete reasoning once.
 
         A DeepSeek strict request must contain only strict functions. The
-        official Beta endpoint validates those schemas before generation.
-        Custom gateways are not assumed to implement that endpoint; callers
-        receive :class:`StrictToolUnavailableError` and may use an explicitly
-        owned fallback.
+        official Beta endpoint validates those schemas before generation. If
+        that endpoint remains unavailable after SDK retries, the same request
+        gets one attempt through the standard official URL before any tool
+        call can be returned to an Agent. Custom gateways are not assumed to
+        expose Beta and still report :class:`StrictToolUnavailableError`.
 
         DeepSeek requires ``reasoning_content`` from a tool-calling assistant
         message to be replayed verbatim in every later request.  The field
@@ -84,8 +92,8 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         is safe here because normalization fails before RESTScope returns the
         tool call to an Agent, so no tool or target-API side effect has run.
 
-        Any second incomplete response, or any other provider error, still
-        propagates to the caller instead of creating an unbounded retry loop.
+        Any second incomplete response, or any error from the standard
+        fallback, still propagates instead of creating an unbounded loop.
         """
         strict_tools = [tool for tool in request.tools if tool.strict]
         if strict_tools and len(strict_tools) != len(request.tools):
@@ -99,11 +107,21 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                     "deepseek_strict_endpoint_unavailable",
                     "the configured DeepSeek gateway has no declared Beta endpoint",
                 )
+            used_beta = True
             try:
                 response = self._invoke_with_reasoning_retry(
                     request,
                     client=self._get_beta_client(),
                 )
+            except ProviderUnavailableError:
+                # Beta and standard are two endpoints for the same configured
+                # provider/model. This one fallback remains safe because the
+                # failed model request has returned no Agent-visible tool call.
+                response = self._invoke_with_reasoning_retry(
+                    request,
+                    client=self.client,
+                )
+                used_beta = False
             except ProviderInvokeError as exc:
                 reason = _strict_unavailable_reason(exc.__cause__)
                 if reason is None:
@@ -116,7 +134,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 update={
                     "metadata": {
                         **response.metadata,
-                        "strict_tool_beta": True,
+                        "strict_tool_beta": used_beta,
                     }
                 }
             )
@@ -324,9 +342,10 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 def _strict_unavailable_reason(exc: BaseException | None) -> str | None:
     """Classify failures for which a caller-owned legacy fallback is safe.
 
-    Authentication, permission, and rate-limit failures intentionally return
-    ``None``. Retrying those requests through the standard endpoint would hide
-    the real operational problem rather than provide compatibility.
+    Authentication and permission failures intentionally return ``None``.
+    Retryable capacity failures normally take the standard-URL fallback before
+    reaching this helper; the 429 check remains defensive so rate limits can
+    never be mislabeled as schema compatibility failures.
 
     Args:
         exc: Original SDK exception wrapped by the compatible Adapter.
