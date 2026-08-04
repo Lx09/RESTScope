@@ -199,15 +199,18 @@ def _input_text(
 ):
     """Render the operation's known handles and representative Failures."""
     writer = CompactTextWriter(max_value_chars=4_096)
-    writer.section("Operation")
+    writer.section(
+        "OPERATION WHOSE FAILURES MUST BE GROUPED",
+        untrusted=True,
+    )
     writer.text("operation", operation_key)
     # The run-local Catalog already owns the exact handles accepted by its
     # evidence tools. Supplying that authority once avoids a second, possibly
     # paginated OpenAPI copy that can hide valid handles from the model.
-    writer.section("Semantic Parameters", untrusted=True)
+    writer.section("ONLY INPUTS ALLOWED FOR ATTRIBUTION", untrusted=True)
     for handle in semantic_parameters:
         writer.text("parameter", handle)
-    writer.section("Current Failure Cases", untrusted=True)
+    writer.section("FAILURE OBSERVATIONS TO GROUP", untrusted=True)
     for observation in observations:
         writer.record(
             str(observation["case_id"]),
@@ -310,15 +313,13 @@ def _canonicalize(decision: FailureDedupDecision) -> FailureDedupDecision:
 def _correction_text(errors: list[str]) -> str:
     """Encode deterministic problems as Markdown without internal references."""
     writer = CompactTextWriter(max_value_chars=1_000)
-    writer.section("Correction Required")
-    writer.text(
-        "result",
-        "Your previous FailureDedupDecision was rejected.",
+    writer.section(
+        "REASONS THE PREVIOUS FAILURE GROUPING WAS REJECTED",
+        untrusted=True,
     )
-    writer.section("Problems", untrusted=True)
     for error in errors:
         writer.text("problem", error)
-    writer.section("Required Fix")
+    writer.section("REQUIRED REPLACEMENT FAILURE GROUPING")
     writer.text(
         "instruction",
         "Return one complete replacement FailureDedupDecision JSON object. "

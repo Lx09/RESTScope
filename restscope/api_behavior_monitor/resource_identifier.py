@@ -674,12 +674,13 @@ class ResourceIdentifierTracker:
         if errors:
             first_context.append_assistant(response)
             feedback = CompactTextWriter(max_value_chars=500)
-            feedback.section("Correction Required")
-            feedback.text("result", "The previous JSON could not be used.")
-            feedback.section("Problems", untrusted=True)
+            feedback.section(
+                "REASONS THE PREVIOUS IDENTIFIER SELECTION WAS REJECTED",
+                untrusted=True,
+            )
             for error in errors[:10]:
                 feedback.text("problem", error)
-            feedback.section("Required Fix")
+            feedback.section("REQUIRED REPLACEMENT IDENTIFIER SELECTION")
             feedback.text(
                 "instruction",
                 "Return one complete corrected JSON object.",

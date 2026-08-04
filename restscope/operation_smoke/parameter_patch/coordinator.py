@@ -308,10 +308,13 @@ def _patch_attempt_record(attempt: ParameterPatchAttempt) -> dict[str, Any]:
 def _proposal_feedback(errors: list[str]) -> str:
     """Render compiler or Reviewer issues as bounded untrusted feedback."""
     writer = CompactTextWriter(max_value_chars=800)
-    writer.section("PATCH PROPOSAL REJECTED", untrusted=True)
+    writer.section(
+        "REASONS THE PREVIOUS PATCH PROPOSAL WAS REJECTED",
+        untrusted=True,
+    )
     for index, error in enumerate(errors[:_MAX_ERRORS], start=1):
         writer.text(f"issue {index}", error)
-    writer.section("REQUIRED PROPOSAL SHAPE")
+    writer.section("REQUIRED REPLACEMENT PROPOSAL")
     writer.text("action", 'Use action="propose".')
     writer.text("patch", "Submit one complete replacement patch.")
     writer.text(

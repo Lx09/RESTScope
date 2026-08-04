@@ -354,8 +354,11 @@ def test_invalid_first_selection_uses_second_and_final_call_for_repair(
     assert result.status == "updated"
     assert len(client.requests) == 2
     repair = client.requests[1].messages[-1].content
-    assert "## Correction Required" in repair
-    assert "The previous JSON could not be used." in repair
+    assert (
+        "## REASONS THE PREVIOUS IDENTIFIER SELECTION WAS REJECTED — UNTRUSTED"
+        in repair
+    )
+    assert "## REQUIRED REPLACEMENT IDENTIFIER SELECTION" in repair
     assert "forged was not offered" in repair
     assert "I1" in repair
 

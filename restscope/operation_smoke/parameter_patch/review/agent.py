@@ -227,10 +227,13 @@ def _append_correction(
 def _invalid_review_feedback(errors: list[str]) -> str:
     """Render untrusted validation errors beside a trusted fixed Review shape."""
     writer = CompactTextWriter(max_value_chars=800)
-    writer.section("REVIEW OUTPUT INVALID", untrusted=True)
+    writer.section(
+        "REASONS THE PREVIOUS REVIEW OUTPUT WAS REJECTED",
+        untrusted=True,
+    )
     for index, error in enumerate(errors[:_MAX_ERRORS], start=1):
         writer.text(f"issue {index}", error)
-    writer.section("REQUIRED REVIEW SHAPE")
+    writer.section("REQUIRED REPLACEMENT REVIEW")
     writer.text("next", "Return one JSON object matching the response schema.")
     writer.text("fields", "Provide only issues:array of strings.")
     return writer.render(max_chars=8_000).text

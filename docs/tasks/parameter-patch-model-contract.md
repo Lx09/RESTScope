@@ -2,8 +2,9 @@
 
 ## Status
 
-Implemented and freshly verified. Local commit, merge, and cleanup were
-explicitly authorized on 2026-08-04.
+The model contract was implemented, verified, committed, and merged. The
+direct-title and cross-prompt trust-label follow-ups are also implemented and
+freshly verified. Their local commit was explicitly authorized on 2026-08-04.
 
 ## Objective
 
@@ -51,3 +52,38 @@ Agent system prompt.
 - `uv run python -m compileall -q restscope tests evaluations`: passed.
 - `git diff --check`: passed.
 - No GitLab, DeepSeek, or Phoenix live call was made.
+
+## Direct-title follow-up
+
+- Renamed each Patch prompt section and requirement field to state the action
+  the model must take: produce the required outcome, inspect allowed-input
+  state, preserve existing relationships, select available observed values,
+  and preserve or avoid prior Patch results.
+- Kept `UNTRUSTED` only on the four runtime-data sections. The required outcome,
+  system DSL, and deterministic correction instructions remain trusted control
+  content. The system prompt explains the marker once.
+- RED: three prompt-rendering assertions observed the old labels and missing
+  safety explanation.
+- Focused Parameter Patch and evaluation command: 68 passed.
+- Full suite with evaluation dependencies: 659 passed and 5 skipped.
+- Compileall and `git diff --check`: passed.
+
+## Cross-prompt trust-label follow-up
+
+- Audited every direct model prompt in Failure Dedup, Failure Solve, Parameter
+  Patch, Parameter Patch Review, identifier selection, and response-value
+  source selection.
+- `UNTRUSTED` now identifies every section containing runtime, OpenAPI, HTTP,
+  Memory, tool, upstream-model, or generated-candidate data. It does not mark
+  trusted static instructions or required replacement shapes.
+- Replaced generic headings such as `TASK`, `ACTIVE CONSTRAINTS`, `Problems`,
+  and `Correction Required` with titles that state how the model should use the
+  enclosed facts. Rejection reasons and trusted replacement instructions now
+  occupy separate sections.
+- Corrected one Solve instruction typo without changing its decision protocol.
+- RED: 11 focused tests failed only on the old headings, missing markers, or
+  mixed rejection/replacement structure. GREEN: the same 11 tests passed.
+- Prompt-related Agent, Context, Monitor, and evaluation suites: 161 passed.
+- Full suite with evaluation dependencies: 660 passed and 5 skipped.
+- No DTO, persistence, HTTP, tool, sampling, or runtime decision behavior was
+  changed. No live call was made.
