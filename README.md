@@ -59,12 +59,10 @@ FAST_REASONING_MODE=disabled
 `https://api.deepseek.com` is used by default. Third-party DeepSeek gateways
 are not part of the supported contract.
 
-Parameter Patch decisions use one strict function call. The DeepSeek Adapter
-routes only that strict request to the official `/beta` endpoint; all ordinary
-Agent calls stay on the standard endpoint. If Beta rejects the strict schema
-or route, the Patch session switches once to its locally validated legacy JSON
-representation. Parameter Patch deliberately disables thinking for these
-requests so `tool_choice=required` can guarantee one structured submission.
+Parameter Patch Proposal and Review decisions use JSON Schema responses on the
+standard endpoint and are validated again locally before compilation or
+acceptance. Parameter Patch deliberately disables thinking for these compact
+structured decisions.
 
 ## Development
 
@@ -379,9 +377,9 @@ internally by Operation Smoke.
    keeps only the first test case for each exact Fingerprint. One Fingerprint
    bypasses the LLM. With several Fingerprints, `FailureDedupAgent` groups them
    by equal complete suspected causal Parameter sets. Its initial Markdown
-   context contains only the operation, each Failure Message, and a
-   representative `TC*` reference. It discovers Parameter handles through
-   `openapi.list_inputs` and queries exact case evidence through five
+   context contains the operation, the complete Catalog-valid semantic
+   Parameter handles, each Failure Message, and a representative `TC*`
+   reference. It queries exact case evidence through five
    single-purpose `test_case.*` tools for request JSON fragments, reverse
    Parameter matches, response JSON fragments, reverse response matches, and
    Failure Messages. Native structured results use explicit statuses such as

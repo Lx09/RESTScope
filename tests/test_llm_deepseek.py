@@ -294,63 +294,6 @@ def test_deepseek_strict_tools_use_only_the_beta_endpoint() -> None:
     assert response.metadata["strict_tool_beta"] is True
 
 
-def test_deepseek_beta_serializes_both_parameter_patch_strict_tools() -> None:
-    """The two actual fixed-root ToolSpecs can share one strict Beta request."""
-    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
-    from restscope.llm.providers.deepseek import DeepSeekProvider
-    from restscope.operation_smoke.parameter_patch import (
-        parameter_patch_proposal_tool_spec,
-    )
-    from restscope.operation_smoke.parameter_patch.review import (
-        parameter_patch_review_tool_spec,
-    )
-
-    response_call = SimpleNamespace(
-        id="call_review",
-        type="function",
-        function=SimpleNamespace(
-            name="submit_parameter_patch_review",
-            arguments='{"accepted":true,"issues":[]}',
-        ),
-    )
-    standard_client = RecordingClient()
-    beta_client = RecordingClient(
-        deepseek_response(content="", tool_calls=[response_call])
-    )
-    response = DeepSeekProvider(
-        api_key="test-key",
-        client=standard_client,
-        beta_client=beta_client,
-    ).invoke(
-        LLMRequest(
-            provider="deepseek",
-            model="deepseek-v4-flash",
-            messages=[LLMMessage(role="user", content="Validate both schemas")],
-            response_format="text",
-            tools=[
-                parameter_patch_proposal_tool_spec(),
-                parameter_patch_review_tool_spec(),
-            ],
-            tool_choice="required",
-            reasoning=LLMReasoningConfig(mode="disabled"),
-        )
-    )
-
-    kwargs = beta_client.chat.completions.kwargs
-    assert kwargs is not None
-    assert standard_client.chat.completions.kwargs is None
-    assert [tool["function"]["name"] for tool in kwargs["tools"]] == [
-        "submit_parameter_patch_proposal",
-        "submit_parameter_patch_review",
-    ]
-    assert all(tool["function"]["strict"] is True for tool in kwargs["tools"])
-    assert all(
-        tool["function"]["parameters"]["type"] == "object"
-        for tool in kwargs["tools"]
-    )
-    assert response.tool_calls[0].arguments == {"accepted": True, "issues": []}
-
-
 def test_deepseek_rejects_mixed_strict_tools_before_network() -> None:
     """DeepSeek Beta requires every function in one request to be strict."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest

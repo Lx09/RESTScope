@@ -276,11 +276,6 @@ class OperationSmokeCoordinator:
                 # remaining Failures are investigated against the updated
                 # Generator state; no intermediate Batch interrupts the round.
                 for todo in dedup.todos:
-                    reference_options = _available_reference_options(
-                        self.reference_values,
-                        context=context,
-                        config=current,
-                    )
                     solve = (
                         self.failure_solver_factory.create()
                         .start(
@@ -295,10 +290,9 @@ class OperationSmokeCoordinator:
                                 generator_config=current.model_dump(
                                     mode="json"
                                 ),
-                                reference_options=[
-                                    option.model_dump(mode="json")
-                                    for option in reference_options
-                                ],
+                                # Response sources are selected lazily after
+                                # Solve identifies the exact Patch inputs.
+                                reference_options=[],
                             ),
                             catalog=catalog,
                             config=current,
@@ -316,6 +310,16 @@ class OperationSmokeCoordinator:
                                     config=config,
                                     updates=updates,
                                     selected_reference_options=selected,
+                                )
+                            ),
+                            reference_options_for_inputs=(
+                                lambda handles, config=current: (
+                                    _available_reference_options(
+                                        self.reference_values,
+                                        context=context,
+                                        config=config,
+                                        input_handles=handles,
+                                    )
                                 )
                             ),
                         )
@@ -506,14 +510,17 @@ def _available_reference_options(
     *,
     context: ToolContext,
     config: OperationGeneratorConfig,
+    input_handles: list[str],
 ) -> list[AvailableReferenceOption]:
-    """Return populated reference sources for every active configurable input."""
+    """Return populated reference sources only for confirmed Patch inputs."""
+    semantic = build_semantic_input_map(config)
     return list(
         reference_values.available_options(
             ir=context.ir,
             config=config,
             input_node_ids={
-                item.input_node_id for item in config.configs
+                semantic.node_by_handle[handle]
+                for handle in input_handles
             },
         )
     )

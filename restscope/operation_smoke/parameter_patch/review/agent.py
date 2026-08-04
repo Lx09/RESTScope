@@ -19,14 +19,9 @@ from restscope.llm import (
     LLMRequest,
     LLMResponse,
     OutputValidator,
-    StrictToolUnavailableError,
 )
 from restscope.observability import TracingRuntime
 
-from .decision_tool import (
-    PARAMETER_PATCH_REVIEW_TOOL,
-    parameter_patch_review_tool_spec,
-)
 from .prompts import build_parameter_patch_review_prompt
 from .schemas import (
     ParameterPatchReviewCandidate,
@@ -40,7 +35,7 @@ _MAX_ERRORS = 20
 
 
 class ParameterPatchReviewAgent:
-    """Review one candidate with strict output and bounded protocol correction."""
+    """Review one candidate with structured output and bounded correction."""
 
     def __init__(
         self,
@@ -68,8 +63,9 @@ class ParameterPatchReviewAgent:
         """Review one candidate without importing any prior Agent conversation.
 
         Invalid Reviewer protocol is corrected in this same fresh context. The
-        raw ``accepted`` value is retained only in ephemeral attempt history;
-        returned acceptance is always normalized to ``not issues``.
+        The model returns only concrete issues. Runtime code derives acceptance
+        from whether that list is empty, so contradictory verdict fields cannot
+        enter the Parameter Patch flow.
         """
         if not 1 <= max_outputs <= 20:
             raise ValueError("max_outputs must be between 1 and 20")
@@ -91,7 +87,6 @@ class ParameterPatchReviewAgent:
             ),
             metrics=prompt.metrics,
         )
-        legacy_json_mode = False
         attempts: list[dict] = []
         latest_errors: list[str] = []
         last_fingerprint: str | None = None
@@ -105,27 +100,13 @@ class ParameterPatchReviewAgent:
                 "max_outputs": max_outputs,
             },
             attributes={
-                "restscope.patch.review.strict_tool_requested": True,
-                "restscope.patch.review.strict_fallback_used": False,
                 "restscope.patch.shared_outputs_used": shared_outputs_used,
             },
         ) as span:
             for output_number in range(1, max_outputs + 1):
-                try:
-                    response = self._invoke(context, legacy_json_mode)
-                except StrictToolUnavailableError as exc:
-                    legacy_json_mode = True
-                    span.set_attribute(
-                        "restscope.patch.review.strict_fallback_used", True
-                    )
-                    span.set_attribute(
-                        "restscope.patch.review.strict_fallback_reason", exc.code
-                    )
-                    response = self._invoke(context, True)
-                submission, errors = self._parse(response, legacy_json_mode)
-                transport = (
-                    "legacy_json" if legacy_json_mode else "strict_tool"
-                )
+                response = self._invoke(context)
+                submission, errors = self._parse(response)
+                transport = "json_schema"
                 span.set_attribute(
                     "restscope.patch.review.transport",
                     transport,
@@ -139,9 +120,6 @@ class ParameterPatchReviewAgent:
                             for call in response.tool_calls
                         ],
                         "transport": transport,
-                        "raw_accepted": (
-                            submission.accepted if submission is not None else None
-                        ),
                     }
                 )
                 if submission is not None:
@@ -180,7 +158,6 @@ class ParameterPatchReviewAgent:
                     context,
                     response,
                     _invalid_review_feedback(latest_errors),
-                    legacy_json_mode,
                 )
 
             return ParameterPatchReviewFailure(
@@ -190,56 +167,33 @@ class ParameterPatchReviewAgent:
                 attempt_history=attempts,
             )
 
-    def _invoke(self, context: AgentContext, legacy_json_mode: bool) -> LLMResponse:
-        """Request one strict Review call or one legacy JSON response."""
-        common = {
-            "provider": self.model.provider,
-            "model": self.model.model,
-            "messages": context.messages_for_request(self.model),
-            "temperature": 0,
-            "max_tokens": self.model.max_tokens,
-            "timeout_seconds": self.model.timeout_seconds,
-            "metadata": {"role": "parameter_patch_review_agent"},
-            "reasoning": LLMReasoningConfig(mode="disabled"),
-        }
-        if legacy_json_mode:
-            return self.client.invoke(
-                LLMRequest(
-                    **common,
-                    response_format="json_schema",
-                    json_schema=ParameterPatchReviewSubmission.model_json_schema(),
-                    json_schema_name="ParameterPatchReviewSubmission",
-                    tools=[],
-                    tool_choice="none",
-                )
-            )
+    def _invoke(self, context: AgentContext) -> LLMResponse:
+        """Request one issue list through the provider's JSON Schema boundary."""
         return self.client.invoke(
             LLMRequest(
-                **common,
-                response_format="text",
-                tools=[parameter_patch_review_tool_spec()],
-                tool_choice="required",
+                provider=self.model.provider,
+                model=self.model.model,
+                messages=context.messages_for_request(self.model),
+                temperature=0,
+                max_tokens=self.model.max_tokens,
+                timeout_seconds=self.model.timeout_seconds,
+                metadata={"role": "parameter_patch_review_agent"},
+                reasoning=LLMReasoningConfig(mode="disabled"),
+                response_format="json_schema",
+                json_schema=ParameterPatchReviewSubmission.model_json_schema(),
+                json_schema_name="ParameterPatchReviewSubmission",
+                tools=[],
+                tool_choice="none",
             )
         )
 
     def _parse(
         self,
         response: LLMResponse,
-        legacy_json_mode: bool,
     ) -> tuple[ParameterPatchReviewSubmission | None, list[str]]:
-        """Validate the exact Review tool name/count and DTO arguments."""
-        candidate = response
-        if not legacy_json_mode:
-            if len(response.tool_calls) != 1:
-                return None, [
-                    "exactly one submit_parameter_patch_review tool call is required"
-                ]
-            call = response.tool_calls[0]
-            if call.name != PARAMETER_PATCH_REVIEW_TOOL:
-                return None, [f"unexpected Patch review tool: {call.name}"]
-            candidate = response.model_copy(update={"parsed_json": call.arguments})
+        """Validate one structured Review issue list."""
         validated = self.validator.validate(
-            response=candidate,
+            response=response,
             output_model=ParameterPatchReviewSubmission,
         )
         if not validated.valid:
@@ -261,16 +215,11 @@ def _append_correction(
     context: AgentContext,
     response: LLMResponse,
     text: str,
-    legacy_json_mode: bool,
 ) -> None:
-    """Keep valid provider tool groups paired while correcting the Reviewer."""
-    if not legacy_json_mode and len(response.tool_calls) == 1:
-        call = response.tool_calls[0]
-        if call.name == PARAMETER_PATCH_REVIEW_TOOL:
-            context.append_assistant(response)
-            context.append_tool_result(call.name, call.id, text)
-            return
-    if legacy_json_mode:
+    """Preserve the invalid JSON response before appending trusted guidance."""
+    # No Review tool was offered or executed. Discard any unexpected provider
+    # tool call so the next request never contains an orphan tool-call group.
+    if not response.tool_calls:
         context.append_assistant(response)
     context.append_feedback(text)
 
@@ -282,8 +231,8 @@ def _invalid_review_feedback(errors: list[str]) -> str:
     for index, error in enumerate(errors[:_MAX_ERRORS], start=1):
         writer.text(f"issue {index}", error)
     writer.section("REQUIRED REVIEW SHAPE")
-    writer.text("next", "Call submit_parameter_patch_review once.")
-    writer.text("fields", "Provide accepted:boolean and issues:array of strings.")
+    writer.text("next", "Return one JSON object matching the response schema.")
+    writer.text("fields", "Provide only issues:array of strings.")
     return writer.render(max_chars=8_000).text
 
 

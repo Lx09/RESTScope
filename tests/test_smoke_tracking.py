@@ -283,8 +283,6 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
         HTTPFailure,
         TestCaseCatalog,
     )
-    from restscope.capabilities import ToolContext, build_capabilities
-    from restscope.openapi_parser import OpenAPIParser
     from restscope.llm import (
         LLMClient,
         LLMModelConfig,
@@ -317,35 +315,6 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
     registry.register(DedupProvider())
     runtime, exporter = _recording_runtime()
 
-    ir = OpenAPIParser.parse(
-        {
-            "openapi": "3.0.3",
-            "info": {"title": "Dedup trace", "version": "1"},
-            "paths": {
-                "/items": {
-                    "post": {
-                        "requestBody": {
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "name": {"type": "string"}
-                                        },
-                                    }
-                                }
-                            }
-                        },
-                        "responses": {"400": {"description": "bad"}},
-                    }
-                }
-            },
-        }
-    )
-    capabilities = build_capabilities(tracing_runtime=runtime)
-    capabilities.bind_context(
-        ToolContext(ir=ir, baseline_schema_source={})
-    )
     from restscope.request_inputs import RequestInputReference
 
     catalog = TestCaseCatalog(
@@ -379,7 +348,6 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
             model="think",
             enabled=True,
         ),
-        openapi_capability=capabilities.openapi_capability,
         tracing_runtime=runtime,
     )
     result, outputs, corrections, errors = agent.deduplicate(

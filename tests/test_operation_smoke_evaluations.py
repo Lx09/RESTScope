@@ -304,7 +304,7 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
 def test_patch_task_runs_real_compile_sampling_and_review() -> None:
     """Patch evaluation uses production validation before model acceptance."""
     from evaluations.registry import SUITES
-    from restscope.llm import LLMResponse, ToolCall
+    from restscope.llm import LLMResponse
     from restscope.observability import TracingRuntime
 
     scenario = next(
@@ -317,39 +317,27 @@ def test_patch_task_runs_real_compile_sampling_and_review() -> None:
             LLMResponse(
                 provider="stub",
                 model="stub-model",
-                tool_calls=[
-                    ToolCall(
-                        id="patch-proposal",
-                        name="submit_parameter_patch_proposal",
-                        arguments={
-                            "action": "propose",
-                            "patch": {
-                                "changes": [
-                                    {
-                                        "input": "path.projectId",
-                                        "strategy": {
-                                            "type": "integer_range",
-                                            "minimum": 3,
-                                            "maximum": 100,
-                                        },
-                                    }
-                                ],
-                                "constraints": [],
-                            },
-                        },
-                    )
-                ],
+                parsed_json={
+                    "action": "propose",
+                    "patch": {
+                        "changes": [
+                            {
+                                "input": "path.projectId",
+                                "strategy": {
+                                    "type": "integer_range",
+                                    "minimum": 3,
+                                    "maximum": 100,
+                                },
+                            }
+                        ],
+                        "constraints": [],
+                    },
+                },
             ),
             LLMResponse(
                 provider="stub",
                 model="stub-model",
-                tool_calls=[
-                    ToolCall(
-                        id="patch-review",
-                        name="submit_parameter_patch_review",
-                        arguments={"accepted": True, "issues": []},
-                    )
-                ],
+                parsed_json={"issues": []},
             ),
         ]
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
 
 from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
 
@@ -20,24 +21,11 @@ class StubClient:
         """Return the next proposal or Review submission for its role."""
         self.requests.append(request)
         arguments = self.responses.pop(0)
-        role = request.metadata["role"]
-        tool_name = (
-            "submit_parameter_patch_review"
-            if role == "parameter_patch_review_agent"
-            else "submit_parameter_patch_proposal"
-        )
         return LLMResponse(
             provider="stub",
             model="fast-model",
-            tool_calls=[
-                ToolCall(
-                    id=f"call_patch_{len(self.requests)}",
-                    name=tool_name,
-                    arguments=arguments,
-                    provider="stub",
-                )
-            ],
-            finish_reason="tool_calls",
+            parsed_json=arguments,
+            finish_reason="stop",
         )
 
 
@@ -47,45 +35,6 @@ class StubReferenceValues:
     def values_for(self, strategy):
         """Return the value expected by the reference-backed sample."""
         return ["known-project"]
-
-
-class StrictUnavailableThenJsonClient:
-    """Fail the first strict request, then return legacy JSON decisions."""
-
-    def __init__(self, responses: list[dict]) -> None:
-        self.responses = list(responses)
-        self.requests = []
-
-    def invoke(self, request):
-        """Expose one compatibility failure followed by content JSON."""
-        from restscope.llm import StrictToolUnavailableError
-
-        self.requests.append(request)
-        if len(self.requests) == 1:
-            raise StrictToolUnavailableError(
-                "deepseek_strict_schema_or_route_rejected",
-                "scripted Beta rejection",
-            )
-        arguments = self.responses.pop(0)
-        if request.tools:
-            return LLMResponse(
-                provider="stub",
-                model="fast-model",
-                tool_calls=[
-                    ToolCall(
-                        id=f"call_{len(self.requests)}",
-                        name=request.tools[0].name,
-                        arguments=arguments,
-                    )
-                ],
-                finish_reason="tool_calls",
-            )
-        return LLMResponse(
-            provider="stub",
-            model="fast-model",
-            parsed_json=arguments,
-            finish_reason="stop",
-        )
 
 
 class RawResponseClient:
@@ -99,34 +48,6 @@ class RawResponseClient:
         """Retain the request and return the next exact response."""
         self.requests.append(request)
         return self.responses.pop(0)
-
-
-class PerRoleFallbackClient:
-    """Make each strict Agent fall back once, then return legacy JSON."""
-
-    def __init__(self, responses: list[dict]) -> None:
-        self.responses = list(responses)
-        self.requests = []
-        self.failed_roles: set[str] = set()
-
-    def invoke(self, request):
-        """Fail the first strict request independently for each Agent role."""
-        from restscope.llm import StrictToolUnavailableError
-
-        self.requests.append(request)
-        role = request.metadata["role"]
-        if request.tools and role not in self.failed_roles:
-            self.failed_roles.add(role)
-            raise StrictToolUnavailableError(
-                "deepseek_strict_schema_or_route_rejected",
-                f"scripted {role} Beta rejection",
-            )
-        return LLMResponse(
-            provider="stub",
-            model="fast-model",
-            parsed_json=self.responses.pop(0),
-            finish_reason="stop",
-        )
 
 
 class CapturingSpan:
@@ -558,113 +479,33 @@ def _variant_patch(*, include_parent: bool) -> dict:
     }
 
 
-def test_patch_strict_tool_schema_preserves_wire_shape_and_server_rules() -> None:
-    """The strict schema keeps Patch decisions while using only Beta keywords."""
-    from jsonschema import Draft202012Validator
-
-    from restscope.operation_smoke.parameter_patch.decision_tool import (
-        parameter_patch_proposal_tool_spec,
+def test_patch_proposal_returns_recursive_json_without_a_submission_tool() -> None:
+    """The Patch Module accepts a recursive proposal through JSON Schema."""
+    from restscope.operation_smoke.parameter_patch import (
+        ParameterPatchCoordinator,
+        ValidatedParameterPatch,
     )
 
-    tool = parameter_patch_proposal_tool_spec()
-    schema = tool.input_schema
-    unsupported = {
-        "default",
-        "discriminator",
-        "maxItems",
-        "maxLength",
-        "minItems",
-        "minLength",
-        "oneOf",
-    }
-    seen_unsupported: list[str] = []
-    invalid_objects: list[str] = []
-
-    def inspect(value: dict, path: str = "$") -> None:
-        """Collect unsupported keywords and invalid DeepSeek schema nodes."""
-        if not {"type", "anyOf", "$ref"} & set(value):
-            invalid_objects.append(f"{path}:missing schema kind")
-        seen_unsupported.extend(
-            f"{path}.{key}" for key in value if key in unsupported
-        )
-        if value.get("type") == "object":
-            properties = set(value.get("properties", {}))
-            required = set(value.get("required", []))
-            if properties != required or value.get("additionalProperties") is not False:
-                invalid_objects.append(path)
-        for name, item in value.get("properties", {}).items():
-            inspect(item, f"{path}.properties.{name}")
-        if isinstance(value.get("items"), dict):
-            inspect(value["items"], f"{path}.items")
-        for index, item in enumerate(value.get("anyOf", [])):
-            inspect(item, f"{path}.anyOf[{index}]")
-        for name, item in value.get("$defs", {}).items():
-            inspect(item, f"{path}.$defs.{name}")
-
-    inspect(schema)
-
-    assert tool.strict is True
-    assert schema["type"] == "object"
-    assert set(schema["properties"]) == {"action", "patch"}
-    assert set(schema["required"]) == {"action", "patch"}
-    assert not seen_unsupported
-    assert not invalid_objects
-    Draft202012Validator.check_schema(schema)
-    validator = Draft202012Validator(schema)
-    validator.validate(_constant_patch())
-    validator.validate(
+    proposal = _constant_patch()
+    proposal["patch"]["constraints"] = [
         {
-            "action": "propose",
-            "patch": {
-                "constraints": [
-                    {
-                        "expression": {
-                            "type": "implies",
-                            "condition": {
-                                "type": "present",
-                                "input": "path.projectId",
-                            },
-                            "consequence": {
-                                "type": "compare",
-                                "operator": "==",
-                                "left": {
-                                    "type": "input_value",
-                                    "input": "path.projectId",
-                                },
-                                "right": {
-                                    "type": "literal",
-                                    "value": ["known-project", None],
-                                },
-                            },
-                        }
-                    }
-                ]
-            },
+            "expression": {
+                "type": "implies",
+                "condition": {"type": "present", "input": "path.projectId"},
+                "consequence": {
+                    "type": "compare",
+                    "operator": "==",
+                    "left": {
+                        "type": "input_value",
+                        "input": "path.projectId",
+                    },
+                    "right": {"type": "literal", "value": "known-project"},
+                },
+            }
         }
-    )
+    ]
+    client = StubClient([proposal, {"issues": []}])
 
-    from restscope.operation_smoke.parameter_patch.review import (
-        parameter_patch_review_tool_spec,
-    )
-
-    review_schema = parameter_patch_review_tool_spec().input_schema
-    assert review_schema["type"] == "object"
-    assert set(review_schema["properties"]) == {"accepted", "issues"}
-    assert set(review_schema["required"]) == {"accepted", "issues"}
-    assert review_schema["additionalProperties"] is False
-    Draft202012Validator.check_schema(review_schema)
-    Draft202012Validator(review_schema).validate(
-        {"accepted": True, "issues": []}
-    )
-
-
-def test_patch_and_review_fall_back_independently() -> None:
-    """Each Agent gets one strict-to-legacy fallback without extra outputs."""
-    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
-
-    client = PerRoleFallbackClient(
-        [_constant_patch(), {"accepted": True, "issues": []}]
-    )
     outcome = ParameterPatchCoordinator(
         client=client,
         patch_model=_model(),
@@ -673,31 +514,42 @@ def test_patch_and_review_fall_back_independently() -> None:
         task=_task(),
         config=_sampleable_config(),
         active_constraints=[],
-        case_count=1,
+        case_count=2,
         max_outputs=2,
     )
 
-    assert outcome.status == "validated"
-    assert outcome.outputs_used == 2
-    assert client.failed_roles == {
-        "parameter_patch_agent",
-        "parameter_patch_review_agent",
-    }
-    assert len(client.requests) == 4
+    assert isinstance(outcome, ValidatedParameterPatch)
+    proposal_request = client.requests[0]
+    assert proposal_request.tools == []
+    assert proposal_request.tool_choice == "none"
+    assert proposal_request.response_format == "json_schema"
+    assert proposal_request.json_schema_name == "ParameterPatchSubmission"
+    assert outcome.attempt_history[0]["transport"] == "json_schema"
 
 
-def test_patch_falls_back_once_then_keeps_legacy_json_for_the_session() -> None:
-    """One strict compatibility failure does not recur after JSON fallback."""
+def test_patch_repairs_one_truncated_structured_json_object() -> None:
+    """One uniquely implied final brace may be repaired before validation."""
     from restscope.operation_smoke.parameter_patch import (
         ParameterPatchCoordinator,
         ValidatedParameterPatch,
     )
 
-    client = StrictUnavailableThenJsonClient(
-        [_constant_patch(), {"accepted": True, "issues": []}]
+    truncated = json.dumps(_constant_patch())[:-1]
+    structured = LLMResponse(
+        provider="stub",
+        model="fast-model",
+        content=truncated,
+        finish_reason="stop",
     )
+    review = LLMResponse(
+        provider="stub",
+        model="fast-model",
+        parsed_json={"issues": []},
+        finish_reason="stop",
+    )
+
     outcome = ParameterPatchCoordinator(
-        client=client,
+        client=RawResponseClient([structured, review]),
         patch_model=_model(),
         review_model=_review_model(),
     ).run(
@@ -710,49 +562,37 @@ def test_patch_falls_back_once_then_keeps_legacy_json_for_the_session() -> None:
 
     assert isinstance(outcome, ValidatedParameterPatch)
     assert outcome.outputs_used == 2
-    assert client.requests[0].tools[0].strict is True
-    assert client.requests[0].tool_choice == "required"
-    assert client.requests[1].tools == []
-    assert client.requests[1].metadata["role"] == "parameter_patch_agent"
-    assert client.requests[2].tools[0].name == "submit_parameter_patch_review"
-    assert [item["transport"] for item in outcome.attempt_history] == [
-        "legacy_json",
-        "strict_tool",
-    ]
 
 
-def test_patch_rejects_wrong_or_multiple_submission_tools_safely() -> None:
-    """Invalid tool groups are discarded instead of creating orphan history."""
+def test_patch_correction_does_not_replay_an_unexpected_tool_call() -> None:
+    """A stray provider tool call cannot create orphan conversation history."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
-    wrong = LLMResponse(
-        provider="stub",
-        model="fast-model",
-        tool_calls=[
-            ToolCall(
-                id="wrong-call",
-                name="other_tool",
-                arguments=_constant_patch(),
-            )
-        ],
-    )
-    multiple = LLMResponse(
-        provider="stub",
-        model="fast-model",
-        tool_calls=[
-            ToolCall(
-                id="first-call",
-                name="submit_parameter_patch_proposal",
-                arguments=_constant_patch(),
+    client = RawResponseClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                tool_calls=[
+                    ToolCall(
+                        id="unexpected-proposal-tool",
+                        name="unexpected.tool",
+                        arguments={},
+                    )
+                ],
             ),
-            ToolCall(
-                id="second-call",
-                name="submit_parameter_patch_proposal",
-                arguments=_constant_patch(),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=_constant_patch(),
             ),
-        ],
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json={"issues": []},
+            ),
+        ]
     )
-    client = RawResponseClient([wrong, multiple])
 
     outcome = ParameterPatchCoordinator(
         client=client,
@@ -763,17 +603,12 @@ def test_patch_rejects_wrong_or_multiple_submission_tools_safely() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=2,
+        max_outputs=3,
     )
 
-    assert outcome.status == "failed"
-    assert outcome.reason == "output_budget_exhausted"
-    assert "exactly one" in outcome.errors[0]
-    # Neither rejected assistant call is replayed. Each new request therefore
-    # contains only trusted user correction text after the initial task.
+    assert outcome.status == "validated"
     assert all(
-        all(not message.tool_calls for message in request.messages)
-        for request in client.requests[1:]
+        not message.tool_calls for message in client.requests[1].messages
     )
 
 
@@ -785,7 +620,7 @@ def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
         ValidatedParameterPatch,
     )
 
-    client = StubClient([_constant_patch(), {"accepted": True, "issues": []}])
+    client = StubClient([_constant_patch(), {"issues": []}])
 
     outcome = ParameterPatchCoordinator(
         client=client,
@@ -841,6 +676,35 @@ def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
     assert "affected_inputs.1" not in initial
 
 
+def test_review_returns_issues_without_an_output_submission_tool() -> None:
+    """The Patch Module accepts Review issues through its JSON result seam."""
+    from restscope.operation_smoke.parameter_patch import (
+        ParameterPatchCoordinator,
+        ValidatedParameterPatch,
+    )
+
+    client = StubClient([_constant_patch(), {"issues": []}])
+
+    outcome = ParameterPatchCoordinator(
+        client=client,
+        patch_model=_model(),
+        review_model=_review_model(),
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        max_outputs=2,
+    )
+
+    assert isinstance(outcome, ValidatedParameterPatch)
+    review_request = client.requests[1]
+    assert review_request.tools == []
+    assert review_request.tool_choice == "none"
+    assert review_request.response_format == "json_schema"
+    assert set(review_request.json_schema["properties"]) == {"issues"}
+
+
 def test_review_issues_return_to_the_original_patch_session_for_revision() -> None:
     """Reviewer rejection revises the Patch without sharing Reviewer dialogue."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
@@ -851,11 +715,10 @@ def test_review_issues_return_to_the_original_patch_session_for_revision() -> No
         [
             _constant_patch(),
             {
-                "accepted": False,
                 "issues": ["The constant does not satisfy the stated behavior."],
             },
             replacement,
-            {"accepted": True, "issues": []},
+            {"issues": []},
         ]
     )
 
@@ -875,37 +738,12 @@ def test_review_issues_return_to_the_original_patch_session_for_revision() -> No
     assert outcome.outputs_used == 4
     revision_request = client.requests[2]
     feedback = revision_request.messages[-1]
-    assert feedback.role == "tool"
-    assert feedback.tool_call_id == "call_patch_1"
+    assert feedback.role == "user"
     assert "does not satisfy" in feedback.content
     assert all(
-        call.name != "submit_parameter_patch_review"
+        not message.tool_calls
         for message in revision_request.messages
-        for call in message.tool_calls
     )
-
-
-def test_empty_review_issues_override_a_false_accepted_flag() -> None:
-    """Local normalization makes issues, not the raw boolean, authoritative."""
-    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
-
-    outcome = ParameterPatchCoordinator(
-        client=StubClient(
-            [_constant_patch(), {"accepted": False, "issues": []}]
-        ),
-        patch_model=_model(),
-        review_model=_review_model(),
-    ).run(
-        task=_task(),
-        config=_sampleable_config(),
-        active_constraints=[],
-        case_count=1,
-        max_outputs=2,
-    )
-
-    assert outcome.status == "validated"
-    review_attempt = outcome.attempt_history[-1]
-    assert review_attempt["raw_accepted"] is False
 
 
 def test_patch_traces_separate_coordinator_proposal_and_review() -> None:
@@ -915,7 +753,7 @@ def test_patch_traces_separate_coordinator_proposal_and_review() -> None:
     tracing = CapturingTracingRuntime()
     outcome = ParameterPatchCoordinator(
         client=StubClient(
-            [_constant_patch(), {"accepted": True, "issues": []}]
+            [_constant_patch(), {"issues": []}]
         ),
         patch_model=_model(),
         review_model=_review_model(),
@@ -936,8 +774,8 @@ def test_patch_traces_separate_coordinator_proposal_and_review() -> None:
     ]
     coordinator, proposal, review = tracing.spans
     assert coordinator.output["outputs_used"] == 2
-    assert proposal.output["transport"] == "strict_tool"
-    assert review.attributes["restscope.patch.review.transport"] == "strict_tool"
+    assert proposal.output["transport"] == "json_schema"
+    assert review.attributes["restscope.patch.review.transport"] == "json_schema"
     assert review.attributes["restscope.patch.review.issue_count"] == 0
     assert review.attributes["restscope.patch.shared_outputs_used"] == 2
 
@@ -951,35 +789,23 @@ def test_invalid_review_protocol_is_corrected_without_reproposing() -> None:
             LLMResponse(
                 provider="stub",
                 model="fast-model",
-                tool_calls=[
-                    ToolCall(
-                        id="proposal-1",
-                        name="submit_parameter_patch_proposal",
-                        arguments=_constant_patch(),
-                    )
-                ],
+                parsed_json=_constant_patch(),
             ),
             LLMResponse(
                 provider="stub",
                 model="fast-model",
                 tool_calls=[
                     ToolCall(
-                        id="wrong-review",
-                        name="other_tool",
-                        arguments={"accepted": True, "issues": []},
+                        id="unexpected-review-tool",
+                        name="unexpected.tool",
+                        arguments={},
                     )
                 ],
             ),
             LLMResponse(
                 provider="stub",
                 model="fast-model",
-                tool_calls=[
-                    ToolCall(
-                        id="review-2",
-                        name="submit_parameter_patch_review",
-                        arguments={"accepted": True, "issues": []},
-                    )
-                ],
+                parsed_json={"issues": []},
             ),
         ]
     )
@@ -1003,6 +829,9 @@ def test_invalid_review_protocol_is_corrected_without_reproposing() -> None:
         "parameter_patch_review_agent",
         "parameter_patch_review_agent",
     ]
+    assert all(
+        not message.tool_calls for message in client.requests[2].messages
+    )
     assert "REVIEW OUTPUT INVALID" in client.requests[2].messages[-1].content
 
 
@@ -1016,8 +845,27 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
             "patch": _constant_patch()["patch"],
         }
     }
-    client = StubClient(
-        [nested_wrapper, _constant_patch(), {"accepted": True, "issues": []}]
+    client = RawResponseClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=nested_wrapper,
+                finish_reason="stop",
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=_constant_patch(),
+                finish_reason="stop",
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json={"issues": []},
+                finish_reason="stop",
+            ),
+        ]
     )
 
     outcome = ParameterPatchCoordinator(
@@ -1035,19 +883,38 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert outcome.status == "validated"
     assert outcome.outputs_used == 3
     first_request = client.requests[0]
-    assert first_request.response_format == "text"
-    assert first_request.tool_choice == "required"
+    assert first_request.response_format == "json_schema"
+    assert first_request.tool_choice == "none"
     assert first_request.reasoning.mode == "disabled"
-    assert [tool.name for tool in first_request.tools] == [
-        "submit_parameter_patch_proposal"
-    ]
-    assert first_request.tools[0].strict is True
+    assert first_request.tools == []
     correction = client.requests[1].messages[-1].content
-    assert client.requests[1].messages[-1].role == "tool"
-    assert client.requests[1].messages[-1].tool_call_id == "call_patch_1"
+    assert client.requests[1].messages[-1].role == "user"
     assert correction.startswith("## PATCH PROPOSAL REJECTED — UNTRUSTED")
     assert r'Use action=\"propose\"' in correction
     assert "Submit one complete replacement patch" in correction
+    assert "changes and constraints are the only patch keys" in correction
+    assert "generators, generator_changes, and constraint_changes" in correction
+    assert r'Each change uses \"input\", never \"input_handle\"' in correction
+    assert "constraint expression must be a recursive object" in correction
+
+    initial_system = client.requests[0].messages[0].content
+    # The provider receives the recursive contract through the response Schema.
+    # Repeating it in a long system prompt previously harmed complex proposals.
+    assert len(initial_system) < 1_000
+    assert "Generator Signatures" not in initial_system
+    assert "Constraint Signatures" not in initial_system
+    assert "Generator edits in patch.changes" in initial_system
+    assert "one complete corrected replacement" in initial_system
+
+    second_request = client.requests[1]
+    assert second_request.response_format == "json_schema"
+    assert second_request.tools == []
+    assert [message.role for message in second_request.messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
 
 
 def test_patch_repairs_a_reference_alias_embedded_in_strategy() -> None:
@@ -1098,7 +965,7 @@ def test_patch_repairs_a_reference_alias_embedded_in_strategy() -> None:
         },
     }
     client = StubClient(
-        [invalid_reference, valid_reference, {"accepted": True, "issues": []}]
+        [invalid_reference, valid_reference, {"issues": []}]
     )
 
     outcome = ParameterPatchCoordinator(
@@ -1152,7 +1019,7 @@ def test_complete_variant_patch_always_samples_the_selected_branch() -> None:
 
     outcome = ParameterPatchCoordinator(
         client=StubClient(
-            [_variant_patch(include_parent=True), {"accepted": True, "issues": []}]
+            [_variant_patch(include_parent=True), {"issues": []}]
         ),
         patch_model=_model(),
         review_model=_review_model(),
@@ -1181,7 +1048,7 @@ def test_patch_cannot_change_input_outside_solve_requirement() -> None:
         [
             _constant_patch("query.region"),
             _constant_patch(),
-            {"accepted": True, "issues": []},
+            {"issues": []},
         ]
     )
 
@@ -1212,7 +1079,7 @@ def test_patch_rejects_a_review_shape_submitted_as_a_proposal() -> None:
         [
             {"accepted": True, "issues": []},
             _constant_patch(),
-            {"accepted": True, "issues": []},
+            {"issues": []},
         ]
     )
 
@@ -1340,7 +1207,6 @@ def test_patch_stops_after_three_equivalent_review_rejections() -> None:
     )
 
     rejected_review = {
-        "accepted": False,
         "issues": ["The proposal does not satisfy the acceptance criteria."],
     }
     client = StubClient(
@@ -1460,7 +1326,7 @@ def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> No
             }
         }
     ]
-    client = StubClient([proposal, {"accepted": True, "issues": []}])
+    client = StubClient([proposal, {"issues": []}])
 
     outcome = ParameterPatchCoordinator(
         client=client,
@@ -1507,7 +1373,7 @@ def test_patch_uses_an_explicit_complete_system_prompt_override() -> None:
     """Scenario: evaluation can compare one candidate Patch prompt in isolation."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
-    client = StubClient([_constant_patch(), {"accepted": True, "issues": []}])
+    client = StubClient([_constant_patch(), {"issues": []}])
 
     ParameterPatchCoordinator(
         client=client,

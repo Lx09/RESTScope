@@ -24,6 +24,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import time
 from typing import Any
@@ -47,6 +48,7 @@ LIVE_OPERATION_KEYS = (
     "DELETE /api/v4/projects/{id}",
 )
 
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.live_e2e,
@@ -61,7 +63,13 @@ pytestmark = [
 
 
 def _initial_root_password() -> str:
-    """Read the disposable container password without logging or persisting it."""
+    """Acquire a disposable root password without logging or persisting it.
+
+    GitLab deletes ``initial_root_password`` after its first day. When that
+    bootstrap file is gone, the live test rotates root to a random in-memory
+    password through the container's trusted Rails runner. The password travels
+    over stdin rather than command arguments and exists only for this process.
+    """
 
     result = subprocess.run(
         [
@@ -72,13 +80,41 @@ def _initial_root_password() -> str:
             "-lc",
             "sed -n 's/^Password: //p' /etc/gitlab/initial_root_password",
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
     password = result.stdout.strip()
-    if not password:
-        raise RuntimeError("GitLab initial root password is unavailable")
+    if result.returncode == 0 and password:
+        return password
+
+    # The disposable container can outlive GitLab's one-day bootstrap file.
+    # Rotate the test-only root credential rather than depending on an expired
+    # installation artifact. No password is written to disk or command output.
+    password = secrets.token_urlsafe(36)
+    reset_script = """
+password = STDIN.read
+user = User.find_by!(username: "root")
+user.password = password
+user.password_confirmation = password
+user.password_automatically_set = false
+user.save!
+""".strip()
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            GITLAB_CONTAINER,
+            "gitlab-rails",
+            "runner",
+            reset_script,
+        ],
+        input=password,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return password
 
 

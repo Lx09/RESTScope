@@ -36,9 +36,8 @@ class ParameterPatchReviewCandidate(_Model):
 
 
 class ParameterPatchReviewSubmission(_Model):
-    """Capture the model's raw review before deterministic normalization."""
+    """Capture concrete semantic mismatches reported by the Reviewer."""
 
-    accepted: bool
     issues: list[ReviewIssue] = Field(max_length=20)
 
 

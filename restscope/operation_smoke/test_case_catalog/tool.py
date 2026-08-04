@@ -78,7 +78,7 @@ class _ParameterInput(_CaseIdsInput):
     parameter: str = Field(
         min_length=1,
         description=(
-            "Exact semantic input handle returned by openapi.list_inputs, for "
+            "Exact semantic input handle supplied by the owning Agent, for "
             "example query.sort. Test Case request JSON uses the direct key sort "
             "inside its query object."
         ),

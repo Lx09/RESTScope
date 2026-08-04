@@ -10,6 +10,7 @@ reference.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -18,12 +19,10 @@ from restscope.capabilities import (
     HTTP_REQUEST_TOOL_NAME,
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
     OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
-    OPENAPI_LIST_INPUTS_TOOL_NAME,
     OpenAPICapability,
     ToolFailure,
     openapi_get_input_schema_tool_spec,
     openapi_get_response_field_schema_tool_spec,
-    openapi_list_inputs_tool_spec,
 )
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
@@ -80,7 +79,6 @@ _MEMORY_TOOL_NAME = "lookup_parameter_history"
 _PATCH_TOOL_NAME = "generate_parameter_patch"
 _READ_ONLY_QUERY_TOOL_NAMES = {
     _MEMORY_TOOL_NAME,
-    OPENAPI_LIST_INPUTS_TOOL_NAME,
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
     OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
 } | TEST_CASE_TOOL_NAMES
@@ -208,9 +206,18 @@ class FailureSolveAgent:
         random_seed: int,
         max_patch_outputs: int = 20,
         prepare_patch_updates: Callable | None = None,
+        reference_options_for_inputs: Callable[
+            [list[str]], list[AvailableReferenceOption]
+        ]
+        | None = None,
         max_outputs: int = 50,
     ) -> "FailureSolveSession":
-        """Start a session after preloading the current Failure's full history."""
+        """Start a session after preloading the current Failure's full history.
+
+        ``reference_options_for_inputs`` delays expensive semantic response
+        source matching until Solve has named the exact Patch inputs. Static
+        request options remain supported for focused callers and evaluations.
+        """
         if not 1 <= max_outputs <= 50:
             raise ValueError("max_outputs must be between 1 and 50")
         if not 1 <= case_count <= 20:
@@ -242,6 +249,7 @@ class FailureSolveAgent:
             random_seed=random_seed,
             max_patch_outputs=max_patch_outputs,
             prepare_patch_updates=prepare_patch_updates,
+            reference_options_for_inputs=reference_options_for_inputs,
             failure_history=history,
             system_prompt=self.system_prompt,
             max_outputs=max_outputs,
@@ -272,6 +280,10 @@ class FailureSolveSession:
         random_seed: int,
         max_patch_outputs: int,
         prepare_patch_updates: Callable | None,
+        reference_options_for_inputs: Callable[
+            [list[str]], list[AvailableReferenceOption]
+        ]
+        | None,
         failure_history: FailureHistory,
         system_prompt: str,
         max_outputs: int,
@@ -295,6 +307,10 @@ class FailureSolveSession:
         self.random_seed = random_seed
         self.max_patch_outputs = max_patch_outputs
         self.prepare_patch_updates = prepare_patch_updates
+        self.reference_options_for_inputs = reference_options_for_inputs
+        self.reference_options_by_inputs: dict[
+            tuple[str, ...], list[AvailableReferenceOption]
+        ] = {}
         self.max_outputs = max_outputs
         self.outputs_used = 0
         self.candidates: dict[str, PatchCandidate] = {}
@@ -465,10 +481,6 @@ class FailureSolveSession:
         semantic_handles = sorted(self.semantic_inputs.node_by_handle)
         tools = AgentToolbox(tracing_runtime=self.tracing_runtime)
         tools.register(
-            spec=openapi_list_inputs_tool_spec(),
-            execute=self.openapi_capability.list_inputs,
-        )
-        tools.register(
             spec=openapi_get_input_schema_tool_spec(),
             execute=self.openapi_capability.get_input_schema,
         )
@@ -579,6 +591,11 @@ class FailureSolveSession:
             ):
                 errors.append("input_handles must be a non-empty string array.")
             else:
+                if len(handles) != 1:
+                    errors.append(
+                        "Read one handle per call; issue separate read-only "
+                        "Memory calls in the same output."
+                    )
                 if len(handles) != len(set(handles)):
                     errors.append("input_handles must be unique.")
                 for handle in handles:
@@ -600,7 +617,6 @@ class FailureSolveSession:
                         + ", ".join(missing_queries)
                     )
         elif call.name in TEST_CASE_TOOL_NAMES | {
-            OPENAPI_LIST_INPUTS_TOOL_NAME,
             OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
             OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
         }:
@@ -636,15 +652,29 @@ class FailureSolveSession:
             handle_by_node=self.semantic_inputs.handle_by_node,
         )
         if rendered.text.startswith("CLIPPED MESSAGE"):
+            grouped = len(handles) > 1
             raise ToolFailure(
                 code="history_too_large",
                 message=(
-                    "Compatibility-critical Patch/conflict history exceeds "
-                    "the safe feedback budget."
+                    (
+                        "The grouped compatibility history is too large; "
+                        "retry with exactly one input handle per call."
+                    )
+                    if grouped
+                    else (
+                        "Compatibility-critical Patch/conflict history exceeds "
+                        "the safe feedback budget."
+                    )
                 ),
                 content=(
                     "PARAMETER HISTORY UNAVAILABLE | "
                     "code=history_too_large | patching-blocked=bool:true"
+                    + (
+                        " | retry=string:\"Issue separate one-handle history "
+                        "calls in the same model output.\""
+                        if grouped
+                        else ""
+                    )
                 ),
             )
         prompt_histories = [
@@ -707,7 +737,7 @@ class FailureSolveSession:
                 active_constraints=self.active_constraints,
                 case_count=self.case_count,
                 reference_values=self.reference_values,
-                reference_options=self.reference_options,
+                reference_options=self._patch_reference_options(task),
                 random_seed=self.random_seed,
                 max_outputs=min(self.max_patch_outputs, remaining_outputs),
             )
@@ -804,6 +834,36 @@ class FailureSolveSession:
             # must also consider previously discovered Failures."
             prior_attempts=list(self.parameter_history_for_patch),
         )
+
+    def _patch_reference_options(
+        self,
+        task: ParameterPatchTask,
+    ) -> list[AvailableReferenceOption]:
+        """Load and cache observed-value sources only for confirmed Patch inputs.
+
+        Matching a consumer name to non-identical response fields may require
+        an LLM call. Large operations have hundreds of configurable inputs, so
+        precomputing every option before Solve knows the affected inputs turns
+        an unrelated convenience into the dominant runtime cost.
+        """
+        if self.reference_options_for_inputs is None:
+            affected_node_ids = {
+                self.semantic_inputs.node_by_handle[handle]
+                for handle in task.affected_inputs
+            }
+            return [
+                option
+                for option in self.reference_options
+                if option.input_node_id in affected_node_ids
+            ]
+
+        key = tuple(sorted(task.affected_inputs))
+        cached = self.reference_options_by_inputs.get(key)
+        if cached is not None:
+            return list(cached)
+        loaded = list(self.reference_options_for_inputs(list(key)))
+        self.reference_options_by_inputs[key] = loaded
+        return list(loaded)
 
     def _decision(
         self,
@@ -969,6 +1029,14 @@ Investigate exactly one Operation Smoke Failure.
 # Rules
 
 - One output may group only read-only OpenAPI/Catalog/Parameter Memory queries.
+- Group the smallest necessary read-only evidence into one output.
+- Do not broaden a case-specific lookup to every case after the exact request
+  value and Failure Message are already known.
+- When the request values and Failure Message establish a deterministic API
+  validation rule, do not probe HTTP or inspect response Schemas. Instead,
+  Then query Parameter Memory and generate the Patch for the confirmed inputs.
+- Each Parameter Memory call reads exactly one handle. Several independent
+  one-handle Memory calls may be grouped in the same output.
 - Absence statuses from a `test_case.*` tool are final evidence for the same TC
   and target. Do not repeat an identical query expecting a different result.
 - Patch and HTTP outputs call exactly one tool.
@@ -1004,9 +1072,9 @@ def _parameter_memory_tool_spec(
     return ToolSpec(
         name=_MEMORY_TOOL_NAME,
         description=(
-            "Read prior Failures, causes, conflicts, and applied Patches for one "
-            "or more semantic inputs in this operation. Copy handles exactly from "
-            "the schema enum."
+            "Read prior Failures, causes, conflicts, and applied Patches for "
+            "exactly one semantic input. To inspect several inputs, issue "
+            "separate calls in the same output. Copy the handle from the enum."
         ),
         kind="local_function",
         input_schema={
@@ -1019,6 +1087,7 @@ def _parameter_memory_tool_spec(
                         "enum": semantic_handles,
                     },
                     "minItems": 1,
+                    "maxItems": 1,
                     "uniqueItems": True,
                 }
             },
@@ -1222,6 +1291,11 @@ def _parameter_history_text(
         current = config_by_node.get(history.input_node_id)
         writer.record(
             "current",
+            # Current Generator configuration is supplied again to the Patch
+            # Coordinator. It helps Solve orient itself, but unlike persisted
+            # applied/conflict history it is safe to omit when several large
+            # enum-backed Generators would consume the whole feedback budget.
+            required=False,
             generator=(
                 current.strategy.model_dump(mode="python")
                 if current is not None
@@ -1316,6 +1390,11 @@ def _tool_result_text(result: ToolResult) -> str:
     """Project any scoped tool result into bounded text for the Solve model."""
     if result.content and result.name in {_MEMORY_TOOL_NAME, _PATCH_TOOL_NAME}:
         return result.content
+    if result.name in {
+        OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
+        OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
+    }:
+        return _openapi_tool_result_text(result)
     writer = CompactTextWriter(max_value_chars=1_200)
     writer.section(
         "HTTP PROBE" if result.status == "succeeded" else "TOOL FAILURE",
@@ -1344,51 +1423,294 @@ def _tool_result_text(result: ToolResult) -> str:
     return writer.render(max_chars=8_000).text
 
 
+def _openapi_tool_result_text(result: ToolResult) -> str:
+    """Render one exact OpenAPI Schema result as bounded untrusted evidence."""
+    titles = {
+        OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME: "OPENAPI INPUT SCHEMA",
+        OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME: (
+            "OPENAPI RESPONSE FIELD SCHEMA"
+        ),
+    }
+    writer = CompactTextWriter(max_value_chars=1_200)
+    writer.section(titles[result.name], untrusted=True)
+    error = result.error if isinstance(result.error, dict) else {}
+    writer.record(
+        result.name,
+        status=result.status,
+        error_code=error.get("code"),
+        error_message=error.get("message"),
+    )
+
+    structured = result.structured
+    if isinstance(structured, dict):
+        writer.detail("result", structured)
+    elif structured is not None:
+        writer.text("result", structured)
+    if result.content:
+        writer.text("body", result.content)
+    return writer.render(max_chars=8_000).text
+
+
 def _patch_candidate_text(candidate: PatchCandidate) -> str:
-    """Summarize a validated local Patch without dumping its DTO or all samples."""
+    """Explain one reviewed Patch without exposing its internal storage shape.
+
+    Solve needs to compare session-local candidates, but the complete DTO is
+    both too large and misleading for Constraint-only changes. This projection
+    separates effective Generator changes from replacement Constraints and
+    summarizes all generated samples by input coverage. The structured tool
+    result still carries the complete candidate unchanged.
+    """
     writer = CompactTextWriter(max_value_chars=600)
-    writer.section("PATCH CANDIDATE")
-    affected = sorted(
+    involved = sorted(
         {
             *candidate.before_generators,
             *candidate.after_generators,
         }
     )
+    generator_changes = _effective_generator_changes(candidate)
+    handle_by_node = _candidate_handle_by_node(candidate)
+
+    # Counts are the minimum evidence that must survive a tight Context budget.
+    # Long input names and detailed changes are optional and disappear first.
+    writer.section(f"PATCH CANDIDATE {candidate.candidate_ref}")
     writer.record(
-        candidate.candidate_ref,
-        affected_inputs=affected,
-        patch_outputs=candidate.patch_outputs,
-        sample_count=len(candidate.samples),
-        constraint_count=len(candidate.patch.constraints),
+        "summary",
+        involved_input_count=len(involved),
+        generator_changes=len(generator_changes),
+        constraint_replacements=len(candidate.patch.constraints),
+        generated_samples=len(candidate.samples),
+        model_outputs_used=candidate.patch_outputs,
     )
-    for handle in affected:
+    writer.record(
+        "scope",
+        required=False,
+        involved_inputs=involved,
+    )
+
+    writer.section("GENERATOR CHANGES")
+    if not generator_changes:
+        writer.record("none", count=0)
+    for handle, fields in generator_changes:
+        # Show only changed fields so an inclusion-only update does not repeat
+        # a potentially large, unchanged strategy.
+        writer.record(handle, required=False, **fields)
+
+    writer.section("CONSTRAINT REPLACEMENTS")
+    if not candidate.patch.constraints:
+        writer.record("none", count=0)
+    for index, constraint in enumerate(candidate.patch.constraints, start=1):
         writer.record(
-            handle,
-            before=candidate.before_generators.get(handle),
-            after=candidate.after_generators.get(handle),
+            f"C{index}",
+            required=False,
+            kind=constraint.kind,
+            rule=_readable_constraint(
+                constraint.constraint.model_dump(mode="python"),
+                handle_by_node,
+            ),
         )
-    for index, sample in enumerate(candidate.samples[:3], start=1):
-        writer.detail(f"sample-{index}", sample)
-    if len(candidate.samples) > 3:
-        writer.record(
-            "remaining-samples",
-            count=len(candidate.samples) - 3,
-            summary=_sample_value_summary(candidate.samples[3:]),
-        )
+
+    writer.section("GENERATED SAMPLE COVERAGE")
+    sample_summary = _sample_value_summary(
+        candidate.samples,
+        involved_inputs=involved,
+    )
+    if not sample_summary:
+        writer.record("none", count=0)
+    for handle, fields in sample_summary.items():
+        writer.record(handle, required=False, **fields)
     return writer.render(max_chars=8_000).text
 
 
-def _sample_value_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Describe omitted candidate values by type and presence only."""
+def _effective_generator_changes(
+    candidate: PatchCandidate,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return only Generator fields whose before and after values differ.
+
+    The Patch task names every input involved in a requirement, so candidate
+    snapshots contain unchanged inputs as well as modified ones. Comparing the
+    snapshots prevents involved-but-unchanged inputs from masquerading as
+    Generator changes in the summary.
+    """
+    changes: list[tuple[str, dict[str, Any]]] = []
+    handles = sorted(
+        {
+            *candidate.before_generators,
+            *candidate.after_generators,
+        }
+    )
+    for handle in handles:
+        before = candidate.before_generators.get(handle)
+        after = candidate.after_generators.get(handle)
+        if before == after:
+            continue
+
+        fields: dict[str, Any] = {}
+        if before is None or after is None:
+            # Current configs cannot normally add or remove an input, but keep
+            # an explicit boundary record if a future caller ever does.
+            fields["state"] = {"before": before, "after": after}
+        else:
+            if before.get("inclusion_probability") != after.get(
+                "inclusion_probability"
+            ):
+                fields["inclusion_probability"] = {
+                    "before": before.get("inclusion_probability"),
+                    "after": after.get("inclusion_probability"),
+                }
+            if before.get("strategy") != after.get("strategy"):
+                fields["strategy"] = {
+                    "before": before.get("strategy"),
+                    "after": after.get("strategy"),
+                }
+        changes.append((handle, fields))
+    return changes
+
+
+def _candidate_handle_by_node(candidate: PatchCandidate) -> dict[str, str]:
+    """Build the model-visible name lookup used by readable Constraint rules."""
+    handle_by_node: dict[str, str] = {}
+    for generators in (
+        candidate.before_generators,
+        candidate.after_generators,
+    ):
+        for handle, generator in generators.items():
+            node_id = generator.get("input_node_id")
+            if isinstance(node_id, str):
+                handle_by_node[node_id] = handle
+    return handle_by_node
+
+
+def _readable_constraint(
+    constraint_set: dict[str, Any],
+    handle_by_node: dict[str, str],
+) -> str:
+    """Render one normalized Constraint set as a compact deterministic rule."""
+    expressions = constraint_set.get("constraints")
+    if not isinstance(expressions, list):
+        return "UNKNOWN CONSTRAINT"
+    rendered = [
+        _readable_constraint_expression(expression, handle_by_node)
+        for expression in expressions
+    ]
+    return " AND ".join(rendered)
+
+
+def _readable_constraint_expression(
+    expression: Any,
+    handle_by_node: dict[str, str],
+) -> str:
+    """Recursively translate the executable Constraint AST into a rule DSL.
+
+    Every dynamic value returned here is later encoded by ``CompactTextWriter``.
+    Newlines, Markdown separators, and control characters therefore remain
+    ordinary string content instead of becoming model instructions.
+    """
+    if not isinstance(expression, dict):
+        return _constraint_literal(expression)
+
+    expression_type = expression.get("type")
+    if expression_type == "input_value":
+        return handle_by_node.get(
+            expression.get("input_node_id"),
+            "<inactive-input>",
+        )
+    if expression_type == "literal":
+        return _constraint_literal(expression.get("value"))
+    if expression_type == "arithmetic":
+        left = _readable_constraint_expression(
+            expression.get("left"), handle_by_node
+        )
+        right = _readable_constraint_expression(
+            expression.get("right"), handle_by_node
+        )
+        return f"({left} {expression.get('operator')} {right})"
+    if expression_type == "present":
+        handle = handle_by_node.get(
+            expression.get("input_node_id"),
+            "<inactive-input>",
+        )
+        return f"PRESENT({handle})"
+    if expression_type == "compare":
+        left = _readable_constraint_expression(
+            expression.get("left"), handle_by_node
+        )
+        right = _readable_constraint_expression(
+            expression.get("right"), handle_by_node
+        )
+        return f"({left} {expression.get('operator')} {right})"
+    if expression_type == "matches":
+        value = _readable_constraint_expression(
+            expression.get("value"), handle_by_node
+        )
+        pattern = _constraint_literal(expression.get("pattern"))
+        return f"MATCHES({value}, {pattern})"
+    if expression_type == "implies":
+        condition = _readable_constraint_expression(
+            expression.get("condition"), handle_by_node
+        )
+        consequence = _readable_constraint_expression(
+            expression.get("consequence"), handle_by_node
+        )
+        return f"IF {condition} THEN {consequence}"
+    if expression_type == "cardinality":
+        expressions = expression.get("expressions") or []
+        members = ", ".join(
+            _readable_constraint_expression(item, handle_by_node)
+            for item in expressions
+        )
+        return (
+            f"COUNT_TRUE({members}) BETWEEN {expression.get('minimum')} "
+            f"AND {expression.get('maximum')}"
+        )
+    if expression_type in {"and", "or"}:
+        expressions = expression.get("expressions") or []
+        operator = expression_type.upper()
+        members = f" {operator} ".join(
+            _readable_constraint_expression(item, handle_by_node)
+            for item in expressions
+        )
+        return f"({members})"
+    if expression_type == "not":
+        child = _readable_constraint_expression(
+            expression.get("expression"), handle_by_node
+        )
+        return f"NOT ({child})"
+    return f"UNKNOWN({expression_type})"
+
+
+def _constraint_literal(value: Any) -> str:
+    """Encode a literal deterministically before the writer escapes its rule."""
+    if isinstance(value, str):
+        # The writer surrounds the complete rule with double quotes. Single
+        # quotes keep string literals readable without creating ambiguous
+        # nested quote boundaries such as ``rule="... == "value""``.
+        escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _sample_value_summary(
+    samples: list[dict[str, Any]],
+    *,
+    involved_inputs: list[str] | None = None,
+) -> dict[str, Any]:
+    """Describe presence and representative values across every Patch sample."""
     summary: dict[str, Any] = {}
-    handles = {
+    handles = set(involved_inputs or ())
+    handles.update(
         handle
         for sample in samples
         for handle in (sample.get("values") or {})
-    }
+    )
     for handle in sorted(handles):
         values = [
-            sample["values"][handle]
+            (sample.get("values") or {}).get(handle)
             for sample in samples
             if (sample.get("present") or {}).get(handle)
         ]
@@ -1397,13 +1719,49 @@ def _sample_value_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
             for value in values
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         ]
-        summary[handle] = {
-            "present": len(values),
-            "types": sorted({type(value).__name__ for value in values}),
-            "minimum": min(numeric) if numeric else None,
-            "maximum": max(numeric) if numeric else None,
+        fields: dict[str, Any] = {
+            "coverage": f"{len(values)}/{len(samples)}",
+            "types": (
+                sorted({type(value).__name__ for value in values})
+                if values
+                else CompactTextWriter.ABSENT
+            ),
         }
+        examples = _representative_sample_values(values, limit=3)
+        if examples:
+            fields["examples"] = examples
+        if numeric:
+            fields["minimum"] = min(numeric)
+            fields["maximum"] = max(numeric)
+        if not values:
+            fields["status"] = "never_exercised"
+        summary[handle] = fields
     return summary
+
+
+def _representative_sample_values(
+    values: list[Any],
+    *,
+    limit: int,
+) -> list[Any]:
+    """Return the first few distinct generated values in stable sample order."""
+    examples: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        identity = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        examples.append(value)
+        if len(examples) >= limit:
+            break
+    return examples
 
 
 def _single_line(value: str) -> str:

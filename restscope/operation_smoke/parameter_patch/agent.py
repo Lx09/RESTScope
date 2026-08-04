@@ -8,6 +8,7 @@ it does not compile, sample, review, persist, or accept a candidate itself.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from restscope.context import AgentContext, ContextLimits
 from restscope.llm import (
@@ -17,20 +18,16 @@ from restscope.llm import (
     LLMRequest,
     LLMResponse,
     OutputValidator,
-    StrictToolUnavailableError,
-    ToolCall,
 )
 from restscope.observability import TracingRuntime
 
-from .decision_tool import (
-    PARAMETER_PATCH_PROPOSAL_TOOL,
-    parameter_patch_proposal_tool_spec,
-)
 from .prompts import ParameterPatchPrompt
 from .schemas import ParameterPatchSubmission
 
 
 _MAX_ERRORS = 20
+_MAX_STRUCTURED_JSON_CHARS = 65_536
+_MAX_INSERTED_DELIMITERS = 8
 
 
 @dataclass(slots=True, frozen=True)
@@ -81,45 +78,30 @@ class ParameterPatchAgent:
             ),
             metrics=prompt.metrics,
         )
-        self.legacy_json_mode = False
-
     def propose(self, *, shared_output_number: int) -> ParameterPatchAttempt:
         """Request one full proposal and validate its transport-level shape.
 
-        A strict transport compatibility failure switches this session once to
-        legacy JSON and does not itself consume a model output. Provider errors
-        outside that narrow category propagate to the owning Coordinator.
+        The provider receives the same recursive DTO Schema used by local
+        validation. Provider errors propagate to the owning Coordinator.
         """
         if not self.model.enabled:
             raise RuntimeError("The Parameter Patch model is not configured")
-        fallback_reason: str | None = None
         with self.tracing_runtime.span(
             "ParameterPatchAgent.propose",
             kind="AGENT",
             input_value={"shared_output_number": shared_output_number},
             attributes={
                 "restscope.patch.shared_output_number": shared_output_number,
-                "restscope.patch.strict_tool_requested": True,
-                "restscope.patch.strict_fallback_used": False,
             },
         ) as span:
-            try:
-                response = self._invoke()
-            except StrictToolUnavailableError as exc:
-                self.legacy_json_mode = True
-                fallback_reason = exc.code
-                span.set_attribute("restscope.patch.strict_fallback_used", True)
-                span.set_attribute("restscope.patch.strict_fallback_reason", exc.code)
-                response = self._invoke()
-
+            response = self._invoke()
             submission, errors = self._parse(response)
-            transport = "legacy_json" if self.legacy_json_mode else "strict_tool"
+            transport = "json_schema"
             span.set_output(
                 {
                     "valid": submission is not None,
                     "error_count": len(errors),
                     "transport": transport,
-                    "fallback_reason": fallback_reason,
                 }
             )
             return ParameterPatchAttempt(
@@ -132,48 +114,32 @@ class ParameterPatchAgent:
     def append_feedback(self, attempt: ParameterPatchAttempt, text: str) -> None:
         """Return bounded compiler or Reviewer feedback to this same session.
 
-        Strict tool calls are paired with a matching tool result. Invalid tool
-        groups cannot be replayed safely, so their correction is a user message.
-        Legacy JSON likewise uses an assistant message followed by feedback.
+        The invalid structured response remains in the conversation, followed
+        by trusted compiler or Reviewer feedback requesting one replacement.
         """
-        call = _submission_call(attempt.response)
-        if not self.legacy_json_mode and call is not None:
-            self.context.append_assistant(attempt.response)
-            self.context.append_tool_result(call.name, call.id, text)
-            return
-        if self.legacy_json_mode:
+        # A tool call was never offered or executed, so replaying an unexpected
+        # provider call would create an orphan assistant/tool group.
+        if not attempt.response.tool_calls:
             self.context.append_assistant(attempt.response)
         self.context.append_feedback(text)
 
     def _invoke(self) -> LLMResponse:
-        """Call strict submission or the session's one-way legacy fallback."""
-        common = {
-            "provider": self.model.provider,
-            "model": self.model.model,
-            "messages": self.context.messages_for_request(self.model),
-            "temperature": 0,
-            "max_tokens": self.model.max_tokens,
-            "timeout_seconds": self.model.timeout_seconds,
-            "metadata": {"role": "parameter_patch_agent"},
-            "reasoning": LLMReasoningConfig(mode="disabled"),
-        }
-        if self.legacy_json_mode:
-            return self.client.invoke(
-                LLMRequest(
-                    **common,
-                    response_format="json_schema",
-                    json_schema=ParameterPatchSubmission.model_json_schema(),
-                    json_schema_name="ParameterPatchSubmission",
-                    tools=[],
-                    tool_choice="none",
-                )
-            )
+        """Request one proposal through the provider's JSON Schema boundary."""
         return self.client.invoke(
             LLMRequest(
-                **common,
-                response_format="text",
-                tools=[parameter_patch_proposal_tool_spec()],
-                tool_choice="required",
+                provider=self.model.provider,
+                model=self.model.model,
+                messages=self.context.messages_for_request(self.model),
+                temperature=0,
+                max_tokens=self.model.max_tokens,
+                timeout_seconds=self.model.timeout_seconds,
+                metadata={"role": "parameter_patch_agent"},
+                reasoning=LLMReasoningConfig(mode="disabled"),
+                response_format="json_schema",
+                json_schema=ParameterPatchSubmission.model_json_schema(),
+                json_schema_name="ParameterPatchSubmission",
+                tools=[],
+                tool_choice="none",
             )
         )
 
@@ -181,17 +147,8 @@ class ParameterPatchAgent:
         self,
         response: LLMResponse,
     ) -> tuple[ParameterPatchSubmission | None, list[str]]:
-        """Convert one exact proposal tool call or legacy JSON object to a DTO."""
-        candidate = response
-        if not self.legacy_json_mode:
-            if len(response.tool_calls) != 1:
-                return None, [
-                    "exactly one submit_parameter_patch_proposal tool call is required"
-                ]
-            call = response.tool_calls[0]
-            if call.name != PARAMETER_PATCH_PROPOSAL_TOOL:
-                return None, [f"unexpected Patch proposal tool: {call.name}"]
-            candidate = response.model_copy(update={"parsed_json": call.arguments})
+        """Convert one structured response into the Proposal DTO."""
+        candidate = _structured_candidate(response)
         result = self.validator.validate(
             response=candidate,
             output_model=ParameterPatchSubmission,
@@ -206,9 +163,88 @@ class ParameterPatchAgent:
         return ParameterPatchSubmission.model_validate(result.validated_object), []
 
 
-def _submission_call(response: LLMResponse) -> ToolCall | None:
-    """Return the sole correctly named proposal call, if one exists."""
-    if len(response.tool_calls) != 1:
+def _structured_candidate(response: LLMResponse) -> LLMResponse:
+    """Parse one narrowly repairable structured JSON object before validation.
+
+    DeepSeek occasionally returns an otherwise complete Patch with one closing
+    object delimiter omitted. The repair only inserts delimiters uniquely
+    implied by the existing bracket stack. It never changes names, values,
+    quotes, commas, or provider text, and the resulting object still passes the
+    normal DTO, compiler, sampling, and Review boundaries.
+    """
+    if response.parsed_json is not None or response.content is None:
+        return response
+    repaired = _complete_truncated_json_object(response.content)
+    if repaired is None:
+        return response
+    try:
+        parsed = json.loads(repaired)
+    except json.JSONDecodeError:
+        return response
+    return response.model_copy(update={"parsed_json": parsed})
+
+
+def _complete_truncated_json_object(text: str) -> str | None:
+    """Insert at most eight uniquely implied closing braces or brackets."""
+    source = text.strip()
+    if (
+        not source.startswith("{")
+        or len(source) > _MAX_STRUCTURED_JSON_CHARS
+    ):
         return None
-    call = response.tool_calls[0]
-    return call if call.name == PARAMETER_PATCH_PROPOSAL_TOOL else None
+
+    output: list[str] = []
+    stack: list[str] = []
+    closing_for = {"{": "}", "[": "]"}
+    opening_for = {"}": "{", "]": "["}
+    in_string = False
+    escaped = False
+    inserted = 0
+    root_complete = False
+
+    for character in source:
+        if root_complete:
+            # Any non-whitespace suffix is provider text, not truncated JSON.
+            if not character.isspace():
+                return None
+            output.append(character)
+            continue
+        if in_string:
+            output.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+            output.append(character)
+            continue
+        if character in closing_for:
+            stack.append(character)
+            output.append(character)
+            continue
+        if character in opening_for:
+            while stack and stack[-1] != opening_for[character]:
+                inserted += 1
+                if inserted > _MAX_INSERTED_DELIMITERS:
+                    return None
+                output.append(closing_for[stack.pop()])
+            if not stack:
+                return None
+            stack.pop()
+            output.append(character)
+            root_complete = not stack
+            continue
+        output.append(character)
+
+    if in_string:
+        return None
+    while stack:
+        inserted += 1
+        if inserted > _MAX_INSERTED_DELIMITERS:
+            return None
+        output.append(closing_for[stack.pop()])
+    return "".join(output)

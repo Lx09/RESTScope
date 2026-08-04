@@ -23,59 +23,14 @@ from .schemas import (
 
 
 EXPERT_SYSTEM_PROMPT = """
-# Purpose
-Convert one confirmed Failure requirement into the smallest complete Generator
-and/or Constraint replacement. Do not diagnose a new cause or change target
-inputs.
-
-# Protocol
-Call ``submit_parameter_patch_proposal`` exactly once per response. Its
-``action`` and ``patch`` arguments are top-level fields. ``action`` is always
-``"propose"`` and ``patch`` is one complete replacement containing changes and
-constraints. Never wrap the submission under another property and never emit
-an acceptance decision. A later proposal replaces the earlier proposal. Never
-mix prose with the tool call.
-
-# Generator Signatures
-constant | value
-choice | values(non-empty); weights?(same length, non-negative, some positive)
-integer_range | minimum:int; maximum:int; inclusive
-number_range | minimum:number; maximum:number; inclusive
-random_string | min_length:int; max_length:int; alphabet(non-empty when needed)
-regex | pattern(Python search, <=2000 chars); min_length; max_length
-boolean | true_probability:0..1
-format | format:uuid|date|date-time|email
-array | min_items:int; max_items:int
-variant | branch_weights(non-empty, frozen branch count)
-object | system-managed; never construct
-request_body | system-managed; never construct
-resource_identifier | system-selected through supplied R alias only
-response_value | system-selected through supplied R alias only
-
-Each change names one supplied semantic input and may set
-inclusion_probability, strategy, or reference. strategy and reference are
-mutually exclusive. A response-value or resource-identifier change places the
-supplied R alias in ``reference`` beside ``input`` and omits ``strategy``.
-Use only supplied R aliases; never emit raw input_node_id.
-
-# Constraint Signatures
-value: input_value(input) | literal(value) |
-  arithmetic(operator:+|-|*|/, left:value, right:value)
-boolean: present(input) |
-  compare(operator:==|!=|<|<=|>|>=, left:value, right:value) |
-  matches(value, pattern) |
-  implies(condition:boolean, consequence:boolean) |
-  cardinality(expressions:1..100, minimum, maximum) |
-  and/or(expressions:1..100) | not(expression:boolean)
-Each top-level constraint has exactly expression. Use at most 20. Ordered
-comparisons and arithmetic require compatible numeric values; matches requires
-a string-compatible value.
-
-# Revision
-The runtime validates DTO shape, schema compatibility, references, Constraints,
-and samples. When it returns a compile error or independent review issue,
-submit one complete replacement proposal that resolves that feedback. Do not
-call any other tool, send HTTP, persist state, or emit prose.
+Convert the supplied requirement into the smallest complete Parameter Patch
+proposal. Return one JSON object matching the supplied response Schema and emit
+no prose. Change only affected inputs. Put Generator edits in patch.changes and
+request relationships in patch.constraints. Each change may set
+inclusion_probability, strategy, or an R alias reference; strategy and
+reference are mutually exclusive. Use only supplied semantic input handles and
+aliases, and preserve compatible existing behavior. When compiler or Reviewer
+feedback follows, submit one complete corrected replacement.
 """.strip()
 
 

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from restscope.llm import (
     LLMModelConfig,
     LLMResponse,
@@ -384,6 +388,46 @@ def _validated_patch(value: str, *, outputs_used: int = 2):
     )
 
 
+def _summary_candidate(
+    *,
+    before_generators,
+    after_generators,
+    constraints=(),
+    samples=(),
+    updates=(),
+    patch_outputs: int = 4,
+):
+    """Build one candidate for the model-facing readable-summary scenarios."""
+    from restscope.operation_smoke.failure_solver import PatchCandidate
+    from restscope.operation_smoke.parameter_patch import CompiledConstraintPatch
+    from restscope.testing import ConstraintSet
+
+    compiled = [
+        CompiledConstraintPatch(
+            constraint_id=f"internal-constraint-{index}",
+            kind="Complex",
+            constraint=ConstraintSet.model_validate(
+                {"constraints": [expression]}
+            ),
+        )
+        for index, expression in enumerate(constraints, start=1)
+    ]
+    return PatchCandidate(
+        candidate_ref="P1",
+        patch=GeneratorPatchDraft(
+            updates=list(updates),
+            constraints=compiled,
+        ),
+        root_cause="Generated parameters do not satisfy their relationship.",
+        change_reason="Generate only compatible parameter combinations.",
+        parameter_attributions=[],
+        before_generators=before_generators,
+        after_generators=after_generators,
+        samples=list(samples),
+        patch_outputs=patch_outputs,
+    )
+
+
 def _terminal(
     action: str,
     *,
@@ -406,7 +450,14 @@ def _terminal(
     }
 
 
-def _agent(client, memory, patch_factory, application):
+def _agent(
+    client,
+    memory,
+    patch_factory,
+    application,
+    *,
+    openapi_capability=None,
+):
     """Wire one production Agent with focused deterministic collaborators."""
     from restscope.operation_smoke.failure_solver import FailureSolveAgent
 
@@ -417,7 +468,7 @@ def _agent(client, memory, patch_factory, application):
         memory=memory,
         patch_coordinator_factory=patch_factory,
         patch_application=application,
-        openapi_capability=_openapi_capability(),
+        openapi_capability=openapi_capability or _openapi_capability(),
     )
 
 
@@ -483,6 +534,283 @@ def _start(agent, **kwargs):
     )
 
 
+def test_patch_candidate_summary_explains_constraint_only_changes() -> None:
+    """A Constraint-only Patch shows its rules instead of fake Generator diffs."""
+    from restscope.operation_smoke.failure_solver.agent import _patch_candidate_text
+
+    before = {
+        "query.order_by": {
+            "input_node_id": "node-order",
+            "inclusion_probability": 0.5,
+            "strategy": {
+                "type": "choice",
+                "values": ["id", "name", "updated_at"],
+                "weights": None,
+            },
+        },
+        "query.updated_after": {
+            "input_node_id": "node-after",
+            "inclusion_probability": 0.5,
+            "strategy": {"type": "format", "format": "date-time"},
+        },
+        "query.updated_before": {
+            "input_node_id": "node-before",
+            "inclusion_probability": 0.5,
+            "strategy": {"type": "format", "format": "date-time"},
+        },
+    }
+    date_present = {
+        "type": "or",
+        "expressions": [
+            {"type": "present", "input_node_id": "node-after"},
+            {"type": "present", "input_node_id": "node-before"},
+        ],
+    }
+    order_is_updated = {
+        "type": "compare",
+        "operator": "==",
+        "left": {"type": "input_value", "input_node_id": "node-order"},
+        "right": {"type": "literal", "value": "updated_at"},
+    }
+    samples = [
+        {
+            "values": {
+                "query.order_by": "name" if index < 6 else None,
+                "query.updated_after": None,
+                "query.updated_before": None,
+            },
+            "present": {
+                "query.order_by": index < 6,
+                "query.updated_after": False,
+                "query.updated_before": False,
+            },
+        }
+        for index in range(10)
+    ]
+    candidate = _summary_candidate(
+        before_generators=before,
+        after_generators=dict(before),
+        constraints=[
+            {
+                "type": "implies",
+                "condition": date_present,
+                "consequence": order_is_updated,
+            },
+            {
+                "type": "implies",
+                "condition": order_is_updated,
+                "consequence": date_present,
+            },
+        ],
+        samples=samples,
+    )
+
+    summary = _patch_candidate_text(candidate)
+
+    assert summary.startswith("## PATCH CANDIDATE P1")
+    assert "involved inputs" in summary
+    assert "generator changes: 0" in summary
+    assert "constraint replacements: 2" in summary
+    assert "generated samples: 10" in summary
+    assert "model outputs used: 4" in summary
+    assert "## GENERATOR CHANGES" in summary
+    assert "- `none`" in summary
+    assert "count: 0" in summary
+    assert "## CONSTRAINT REPLACEMENTS" in summary
+    assert "IF" in summary and "THEN" in summary
+    assert "query.updated_after" in summary
+    assert "query.updated_before" in summary
+    assert "query.order_by" in summary
+    assert "updated_at" in summary
+    assert "node-order" not in summary
+    assert "internal-constraint" not in summary
+    assert "before." not in summary
+    assert "after." not in summary
+    assert "## GENERATED SAMPLE COVERAGE" in summary
+    assert 'coverage: "6/10"' in summary
+    assert summary.count('status: "never_exercised"') == 2
+
+
+def test_patch_candidate_summary_omits_unchanged_generator_fields() -> None:
+    """An inclusion-only update does not repeat one long unchanged strategy."""
+    from restscope.operation_smoke.failure_solver.agent import _patch_candidate_text
+
+    values = [f"unchanged-enum-{index}" for index in range(40)]
+    before = {
+        "query.order_by": {
+            "input_node_id": "node-order",
+            "inclusion_probability": 0.5,
+            "strategy": {"type": "choice", "values": values, "weights": None},
+        }
+    }
+    after = {
+        "query.order_by": {
+            **before["query.order_by"],
+            "inclusion_probability": 1.0,
+        }
+    }
+    candidate = _summary_candidate(
+        before_generators=before,
+        after_generators=after,
+        updates=[
+            InputGeneratorPatch(
+                input_node_id="node-order",
+                inclusion_probability=1.0,
+            )
+        ],
+        samples=[
+            {
+                "values": {"query.order_by": "updated_at"},
+                "present": {"query.order_by": True},
+            }
+        ],
+        patch_outputs=2,
+    )
+
+    summary = _patch_candidate_text(candidate)
+
+    assert "generator changes: 1" in summary
+    assert "inclusion probability:" in summary
+    assert "- before: 0.5" in summary
+    assert "- after: 1" in summary
+    assert "unchanged-enum" not in summary
+    assert "strategy.before" not in summary
+    assert "strategy.after" not in summary
+
+
+def test_patch_candidate_summary_renders_complex_mixed_patch_safely() -> None:
+    """Every Constraint expression has a readable, injection-safe rendering."""
+    from restscope.operation_smoke.failure_solver.agent import (
+        _patch_candidate_text,
+        _readable_constraint_expression,
+    )
+
+    before = {
+        "query.value": {
+            "input_node_id": "node-value",
+            "inclusion_probability": 0.5,
+            "strategy": {"type": "integer_range", "minimum": 0, "maximum": 10},
+        }
+    }
+    after = {
+        "query.value": {
+            "input_node_id": "node-value",
+            "inclusion_probability": 0.5,
+            "strategy": {"type": "constant", "value": 3},
+        }
+    }
+    input_value = {"type": "input_value", "input_node_id": "node-value"}
+    complex_rule = {
+        "type": "and",
+        "expressions": [
+            {
+                "type": "matches",
+                "value": input_value,
+                "pattern": "^[0-9]+$\n## FORGED SECTION",
+            },
+            {
+                "type": "not",
+                "expression": {"type": "present", "input_node_id": "node-value"},
+            },
+            {
+                "type": "compare",
+                "operator": ">=",
+                "left": {
+                    "type": "arithmetic",
+                    "operator": "+",
+                    "left": input_value,
+                    "right": {"type": "literal", "value": 1},
+                },
+                "right": {"type": "literal", "value": 4},
+            },
+            {
+                "type": "cardinality",
+                "expressions": [
+                    {"type": "present", "input_node_id": "node-value"}
+                ],
+                "minimum": 0,
+                "maximum": 1,
+            },
+        ],
+    }
+    candidate = _summary_candidate(
+        before_generators=before,
+        after_generators=after,
+        updates=[
+            InputGeneratorPatch(
+                input_node_id="node-value",
+                strategy=ConstantGenerator(type="constant", value=3),
+            )
+        ],
+        constraints=[complex_rule],
+        samples=[
+            {
+                "values": {"query.value": 3},
+                "present": {"query.value": True},
+            }
+        ],
+        patch_outputs=2,
+    )
+
+    summary = _patch_candidate_text(candidate)
+
+    assert "generator changes: 1" in summary
+    assert "constraint replacements: 1" in summary
+    assert "MATCHES" in summary
+    assert "NOT" in summary
+    assert "COUNT_TRUE" in summary
+    assert "BETWEEN 0 AND 1" in summary
+    assert "query.value + 1" in summary
+    assert "\\n## FORGED SECTION" in summary
+    assert "\n## FORGED SECTION" not in summary
+    assert "node-value" not in summary
+    assert _readable_constraint_expression(
+        {"type": "present", "input_node_id": "unknown-node"},
+        {},
+    ) == "PRESENT(<inactive-input>)"
+
+
+def test_patch_candidate_summary_is_bounded_and_keeps_core_counts() -> None:
+    """Large readable rules are omitted before the Patch identity and counts."""
+    from restscope.operation_smoke.failure_solver.agent import _patch_candidate_text
+
+    before = {
+        "query.value": {
+            "input_node_id": "node-value",
+            "inclusion_probability": 1.0,
+            "strategy": {"type": "random_string", "min_length": 1, "max_length": 8},
+        }
+    }
+    candidate = _summary_candidate(
+        before_generators=before,
+        after_generators=dict(before),
+        constraints=[
+            {
+                "type": "matches",
+                "value": {"type": "input_value", "input_node_id": "node-value"},
+                "pattern": f"rule-{index}-" + ("x" * 1_900),
+            }
+            for index in range(20)
+        ],
+        samples=[
+            {
+                "values": {"query.value": "ok"},
+                "present": {"query.value": True},
+            }
+        ],
+        patch_outputs=2,
+    )
+
+    summary = _patch_candidate_text(candidate)
+
+    assert len(summary) <= 8_000
+    assert summary.startswith("## PATCH CANDIDATE P1")
+    assert "generator changes: 0" in summary
+    assert "constraint replacements: 20" in summary
+    assert "generated samples: 1" in summary
+    assert "optional history" in summary
+
+
 def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch() -> None:
     """Scenario: selected candidate changes state only after final Solve output."""
     memory = StubMemory()
@@ -541,6 +869,59 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
     assert '{"' not in initial_prompt
+
+
+def test_response_reference_options_are_loaded_only_for_patch_inputs() -> None:
+    """Expensive semantic source matching waits for confirmed affected inputs."""
+    from restscope.operation_smoke.parameter_patch import AvailableReferenceOption
+
+    calls = []
+
+    def options_for_inputs(handles):
+        """Return one observed source and record the narrowed lazy request."""
+        calls.append(list(handles))
+        return [
+            AvailableReferenceOption(
+                option_id="ref-a",
+                input_node_id="path/projectId",
+                kind="response_value",
+                value_name="known_project_id",
+                compatible_scalar_type="string",
+                value_count=1,
+                producer_operation_keys=["GET /projects"],
+                producer_status_code="200",
+                producer_media_type="application/json",
+                source_field="id",
+                source_selector="$[].id",
+            )
+        ]
+
+    patch_factory = StubPatchFactory([_validated_patch("known-project")])
+    client = StubClient(
+        [_memory_call(), _patch_call(), _terminal("apply_patch", candidate_ref="P1")]
+    )
+    session = _agent(
+        client,
+        StubMemory(),
+        patch_factory,
+        StubPatchApplication(),
+    ).start(
+        _request(),
+        catalog=_catalog(),
+        config=smoke_config(),
+        active_constraints=[],
+        case_count=2,
+        random_seed=731,
+        reference_options_for_inputs=options_for_inputs,
+    )
+
+    assert not calls
+    outcome = session.advance()
+
+    assert outcome.status == "applied_patch"
+    assert calls == [["path.projectId"]]
+    supplied = patch_factory.created[0].calls[0]["reference_options"]
+    assert [option.option_id for option in supplied] == ["ref-a"]
 
 
 def test_apply_patch_ignores_every_terminal_reason_shape() -> None:
@@ -971,6 +1352,49 @@ def test_solve_executes_independent_memory_queries_concurrently_in_call_order() 
     assert "query.region" in (tool_messages[1].content or "")
 
 
+def test_parameter_memory_requires_one_handle_per_parallel_tool_call() -> None:
+    """Compatibility history is bounded per handle, not per arbitrary batch."""
+    memory = StubMemory()
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="grouped-memory",
+                        name="lookup_parameter_history",
+                        arguments={
+                            "input_handles": ["path.projectId", "query.region"]
+                        },
+                    )
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            memory,
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    assert not memory.parameter_lookups
+    memory_tool = next(
+        tool
+        for tool in client.requests[0].tools
+        if tool.name == "lookup_parameter_history"
+    )
+    assert memory_tool.input_schema["properties"]["input_handles"]["maxItems"] == 1
+    assert "one handle per call" in client.requests[1].messages[-1].content
+    assert "same output" in client.requests[1].messages[-1].content
+
+
 def test_invalid_tool_arguments_are_not_replayed_without_a_result() -> None:
     """A rejected single call also stays out of the provider conversation."""
     client = StubClient(
@@ -1051,8 +1475,8 @@ def test_solve_tool_contract_exposes_the_shortest_valid_tool_path() -> None:
     assert len(client.requests) == 3
 
 
-def test_solve_registers_and_groups_all_three_read_only_openapi_tools() -> None:
-    """Solve may inspect independent input and response contracts in one output."""
+def test_solve_uses_exact_openapi_tools_without_listing_known_inputs() -> None:
+    """Known handles and exact Schema reads are enough for one Solve session."""
     client = StubClient(
         [
             LLMResponse(
@@ -1060,10 +1484,11 @@ def test_solve_registers_and_groups_all_three_read_only_openapi_tools() -> None:
                 model="think-model",
                 tool_calls=[
                     ToolCall(
-                        id="list-inputs",
-                        name="openapi.list_inputs",
+                        id="input-schema",
+                        name="openapi.get_input_schema",
                         arguments={
                             "operation_key": "GET /projects/{projectId}",
+                            "input": "path.projectId",
                         },
                     ),
                     ToolCall(
@@ -1097,19 +1522,100 @@ def test_solve_registers_and_groups_all_three_read_only_openapi_tools() -> None:
         if spec.name.startswith("openapi.")
     }
     assert openapi_names == {
-        "openapi.list_inputs",
         "openapi.get_input_schema",
         "openapi.get_response_field_schema",
     }
+    tools_by_name = {spec.name: spec for spec in client.requests[0].tools}
+    assert tools_by_name["lookup_parameter_history"].input_schema[
+        "properties"
+    ]["input_handles"]["items"]["enum"] == [
+        "path.projectId",
+        "query.region",
+    ]
+    assert tools_by_name["generate_parameter_patch"].input_schema[
+        "properties"
+    ]["affected_inputs"]["items"]["enum"] == [
+        "path.projectId",
+        "query.region",
+    ]
     tool_messages = [
         message
         for message in client.requests[1].messages
         if message.role == "tool"
     ]
     assert [message.tool_call_id for message in tool_messages] == [
-        "list-inputs",
+        "input-schema",
         "response-schema",
     ]
+
+
+def test_parameter_history_omits_large_current_generators_before_blocking_patch() -> None:
+    """Large current choices are not compatibility history and may be omitted.
+
+    A GitLab body field can have a long enum-backed choice Generator. Reading
+    several such Parameters must preserve applied/conflict history first and
+    must not report ``history_too_large`` merely because current Generator
+    snapshots exceed the feedback allowance.
+    """
+    from restscope.operation_smoke.failure_solver.agent import (
+        _parameter_history_text,
+    )
+    from restscope.testing.models import ChoiceGenerator
+
+    base = smoke_config()
+    choice = ChoiceGenerator(
+        type="choice",
+        values=[f"long-enum-value-{index:03d}-" + ("x" * 80) for index in range(80)]
+    )
+    node_ids = [f"body/field_{index}" for index in range(4)]
+    configs = [
+        base.configs[0].model_copy(
+            update={"input_node_id": node_id, "strategy": choice}
+        )
+        for node_id in node_ids
+    ]
+    config = base.model_copy(update={"configs": configs})
+    histories = [ParameterHistory(input_node_id=node_id) for node_id in node_ids]
+
+    rendered = _parameter_history_text(
+        handles=[f"body.field_{index}" for index in range(4)],
+        histories=histories,
+        config=config,
+        handle_by_node=dict(zip(node_ids, node_ids, strict=True)),
+    )
+
+    assert len(rendered.text) <= 8_000
+    assert not rendered.text.startswith("CLIPPED MESSAGE")
+    assert "optional history" in rendered.text
+    assert "omitted to fit the context budget" in rendered.text
+
+
+def test_grouped_oversized_parameter_history_tells_solve_to_split_the_read(
+    monkeypatch,
+) -> None:
+    """Complete compatibility history remains required but can be read alone."""
+    from restscope.capabilities import ToolFailure
+    from restscope.operation_smoke.failure_solver import agent as agent_module
+
+    session = _start(
+        _agent(
+            StubClient([]),
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    )
+    monkeypatch.setattr(
+        agent_module,
+        "_parameter_history_text",
+        lambda **_arguments: SimpleNamespace(text="CLIPPED MESSAGE"),
+    )
+
+    with pytest.raises(ToolFailure) as raised:
+        session._read_parameter_history(["path.projectId", "query.region"])
+
+    assert "one input handle per call" in raised.value.safe_message
+    assert "same model output" in (raised.value.content or "")
 
 
 def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
@@ -1143,6 +1649,9 @@ def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
     assert "query.sort" in system_prompt
     assert "request.query.sort" in system_prompt
     assert "json_body" in system_prompt
+    assert "Do not broaden a case-specific lookup" in system_prompt
+    assert "do not probe HTTP or inspect response Schemas" in system_prompt
+    assert "query Parameter Memory and generate the Patch" in system_prompt
 
 
 def test_solve_always_offers_tools_with_a_flat_three_field_terminal_schema() -> None:
@@ -1218,7 +1727,6 @@ def test_mutating_failure_solve_receives_the_exact_operation_probe_tool() -> Non
     assert {
         tool.name for tool in client.requests[0].tools
     } == {
-        "openapi.list_inputs",
         "openapi.get_input_schema",
         "openapi.get_response_field_schema",
         "lookup_parameter_history",

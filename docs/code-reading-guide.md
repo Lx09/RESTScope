@@ -111,9 +111,9 @@ maximum”, or “exactly one of these fields is included”.
 
 Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
 Dedup receives exact messages and representative `TC*` references without
-item IDs or Fingerprint references. It uses the global `openapi.list_inputs`
-tool and five run-local `test_case.*` tools instead of receiving full HTTP
-JSON. Each tool performs one exact query and returns only the selected request
+item IDs or Fingerprint references. It receives the current Catalog's complete
+semantic Parameter list once and uses five run-local `test_case.*` tools
+instead of receiving full HTTP JSON. Each tool performs one exact query and returns only the selected request
 or response JSON fragment. Inside JSON, `sort` is a direct key at
 `request.query.sort`; `query.sort` remains the unique semantic handle used by
 OpenAPI, Catalog, Memory, Patch, and Agent output. An unused request Parameter
@@ -258,14 +258,13 @@ testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and coordinates a separate semantic Reviewer.
 `agent.py` owns one continuing proposal/revision conversation;
 `coordinator.py` owns deterministic checks, shared output budget, and feedback.
-`decision_tool.py` exposes the fixed-root proposal-only strict schema. Provider
-routing and fallback errors stay in `restscope.llm`. Its private `review/`
+Both Proposal and Review return JSON Schema responses that are validated again
+locally. Its private `review/`
 subpackage owns the FAST Review Agent. Every compiled candidate receives a
 fresh context containing only normalized requirement, Generator, Constraint,
 reference-provenance, and sample facts. Review issues are authoritative: an
-empty array passes, while non-empty issues return to the Patch Agent. The raw
-`accepted` flag is normalized locally and retained only in short-lived
-diagnostics; no separate Operation Smoke Review Interface is exposed.
+empty array passes, while non-empty issues return to the Patch Agent; no
+separate Operation Smoke Review Interface is exposed.
 
 ### `restscope/context/`
 

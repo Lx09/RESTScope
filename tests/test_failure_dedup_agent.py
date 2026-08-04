@@ -64,41 +64,6 @@ def _model() -> LLMModelConfig:
     )
 
 
-def _runtime():
-    """Build the global OpenAPI Capability used by Dedup."""
-    from restscope.capabilities import OpenAPICapability, ToolContext
-    from restscope.openapi_parser import OpenAPIParser
-
-    ir = OpenAPIParser.parse(
-        {
-            "openapi": "3.0.3",
-            "info": {"title": "Dedup", "version": "1"},
-            "paths": {
-                "/projects": {
-                    "post": {
-                        "requestBody": {
-                            "content": {
-                                "application/json": {
-                                    "schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "name": {"type": "string"},
-                                            "namespace_id": {"type": "integer"},
-                                        },
-                                    }
-                                }
-                            }
-                        },
-                        "responses": {"201": {"description": "created"}},
-                    }
-                }
-            },
-        }
-    )
-    context = ToolContext(ir=ir, baseline_schema_source={})
-    return OpenAPICapability(context_provider=lambda: context)
-
-
 def _catalog(*cases: tuple[int, str, str]):
     """Record failed Catalog cases and return the run-local store."""
     from restscope.operation_smoke.test_case_catalog import (
@@ -151,11 +116,10 @@ def _request(case_ids: list[str]) -> FailureDedupRequest:
 
 
 def _agent(client: StubClient) -> FailureDedupAgent:
-    """Build Dedup with the explicitly registered global OpenAPI Capability."""
+    """Build Dedup with only its model boundary collaborators."""
     return FailureDedupAgent(
         client=client,
         model=_model(),
-        openapi_capability=_runtime(),
     )
 
 
@@ -190,19 +154,8 @@ def test_exact_duplicate_bypasses_llm_and_keeps_first_test_case() -> None:
 
 
 def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
-    """Several messages may merge, but only the earliest case reaches Solve."""
+    """Known handles support grouping without a duplicate OpenAPI listing."""
     client = StubClient([
-        LLMResponse(
-            provider="stub",
-            model="dedup-model",
-            tool_calls=[
-                ToolCall(
-                    id="lookup-1",
-                    name="openapi.list_inputs",
-                    arguments={"operation_key": "POST /projects"},
-                )
-            ],
-        ),
         LLMResponse(
             provider="stub",
             model="dedup-model",
@@ -248,7 +201,7 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     )
 
     assert result.status == "deduplicated"
-    assert result.outputs_used == 3
+    assert result.outputs_used == 2
     assert len(result.todos) == 1
     assert result.todos[0].test_case_id == "TC1"
     assert result.todos[0].suspected_parameters == ["body.name"]
@@ -267,7 +220,12 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     assert "## Current Failure Cases — UNTRUSTED" in prompt
     assert "TC1" in prompt
     assert "HTTP 400: name already exists" in prompt
-    assert "body.name" not in prompt
+    assert "## Semantic Parameters" in prompt
+    assert "body.name" in prompt
+    assert "body.namespace_id" in prompt
+    assert all(
+        spec.name != "openapi.list_inputs" for spec in client.requests[0].tools
+    )
     assert "```json" not in prompt
     assert "fingerprint_ref" not in prompt.casefold()
     assert "item_id" not in prompt
@@ -347,88 +305,6 @@ def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:
         "first-query",
         "second-query",
     ]
-
-
-def test_dedup_registers_input_listing_and_five_test_case_tools() -> None:
-    """Dedup receives one OpenAPI listing tool plus five exact evidence reads."""
-    import json
-
-    client = StubClient(
-        [
-            LLMResponse(
-                provider="stub",
-                model="dedup-model",
-                tool_calls=[
-                    ToolCall(
-                        id="current-operation",
-                        name="openapi.list_inputs",
-                        arguments={"operation_key": "POST /projects"},
-                    )
-                ],
-            ),
-            {
-                "failures": [
-                    {
-                        "summary": "Both failures concern the project name.",
-                        "suspected_parameters": ["body.name"],
-                        "messages": [
-                            "HTTP 400: name already exists",
-                            "HTTP 409: name conflicts",
-                        ],
-                    }
-                ],
-                "reason": "The current operation declares body.name.",
-            },
-        ]
-    )
-    catalog = _catalog(
-        (400, "name already exists", "a"),
-        (409, "name conflicts", "b"),
-    )
-
-    decision, _outputs, corrections, errors = _agent(client).deduplicate(
-        operation_key="POST /projects",
-        semantic_parameters=["body.name", "body.namespace_id"],
-        observations=[
-            {"case_id": "TC1", "message": "HTTP 400: name already exists"},
-            {"case_id": "TC2", "message": "HTTP 409: name conflicts"},
-        ],
-        catalog=catalog,
-        max_outputs=2,
-    )
-
-    assert decision is not None
-    assert corrections == 0
-    assert errors == []
-    openapi_spec = next(
-        spec
-        for spec in client.requests[0].tools
-        if spec.name == "openapi.list_inputs"
-    )
-    assert openapi_spec.input_schema["required"] == ["operation_key"]
-    assert {
-        spec.name for spec in client.requests[0].tools if spec.name.startswith("openapi.")
-    } == {"openapi.list_inputs"}
-    assert {
-        spec.name
-        for spec in client.requests[0].tools
-        if spec.name.startswith("test_case.")
-    } == {
-        "test_case.get_parameter_value",
-        "test_case.find_parameters_by_value",
-        "test_case.get_response_field_value",
-        "test_case.find_response_fields_by_value",
-        "test_case.get_failure_messages",
-    }
-    tool_message = next(
-        message
-        for message in client.requests[1].messages
-        if message.role == "tool"
-    )
-    tool_result = json.loads(tool_message.content or "{}")
-    assert tool_result["status"] == "succeeded"
-    assert tool_result["structured"]["operation_key"] == "POST /projects"
-    assert "schema" not in repr(tool_result["structured"])
 
 
 def test_field_keyed_json_errors_remain_distinct_fingerprints() -> None:

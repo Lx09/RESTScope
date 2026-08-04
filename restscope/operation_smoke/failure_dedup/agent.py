@@ -10,11 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from restscope.capabilities import (
-    AgentToolbox,
-    OpenAPICapability,
-    openapi_list_inputs_tool_spec,
-)
+from restscope.capabilities import AgentToolbox
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -45,7 +41,6 @@ class FailureDedupAgent:
         *,
         client: LLMClient,
         model: LLMModelConfig,
-        openapi_capability: OpenAPICapability,
         system_prompt: str | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
@@ -53,7 +48,6 @@ class FailureDedupAgent:
         """Store stateless collaborators used by each isolated Dedup call."""
         self.client = client
         self.model = model
-        self.openapi_capability = openapi_capability
         self.system_prompt = system_prompt or SYSTEM_PROMPT
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
@@ -83,6 +77,7 @@ class FailureDedupAgent:
 
         rendered = _input_text(
             operation_key=operation_key,
+            semantic_parameters=semantic_parameters,
             observations=observations,
         )
         context = AgentContext(
@@ -190,12 +185,8 @@ class FailureDedupAgent:
         *,
         catalog: TestCaseCatalog,
     ) -> AgentToolbox:
-        """Bind shared and run-local implementations for one Dedup call."""
+        """Bind the run-local Test Case evidence tools for one Dedup call."""
         tools = AgentToolbox(tracing_runtime=self.tracing_runtime)
-        tools.register(
-            spec=openapi_list_inputs_tool_spec(),
-            execute=self.openapi_capability.list_inputs,
-        )
         register_test_case_tools(toolbox=tools, catalog=catalog)
         return tools
 
@@ -203,12 +194,19 @@ class FailureDedupAgent:
 def _input_text(
     *,
     operation_key: str,
+    semantic_parameters: list[str],
     observations: list[dict[str, Any]],
 ):
-    """Render only Failure Messages and representative Catalog references."""
+    """Render the operation's known handles and representative Failures."""
     writer = CompactTextWriter(max_value_chars=4_096)
     writer.section("Operation")
     writer.text("operation", operation_key)
+    # The run-local Catalog already owns the exact handles accepted by its
+    # evidence tools. Supplying that authority once avoids a second, possibly
+    # paginated OpenAPI copy that can hide valid handles from the model.
+    writer.section("Semantic Parameters", untrusted=True)
+    for handle in semantic_parameters:
+        writer.text("parameter", handle)
     writer.section("Current Failure Cases", untrusted=True)
     for observation in observations:
         writer.record(
@@ -325,7 +323,7 @@ def _correction_text(errors: list[str]) -> str:
         "instruction",
         "Return one complete replacement FailureDedupDecision JSON object. "
         "Copy every supplied message exactly once, use only semantic Parameter "
-        "handles returned by OpenAPI lookup, merge equal non-empty Parameter "
+        "handles supplied in the initial context, merge equal non-empty Parameter "
         "sets, and do not "
         "return IDs, fingerprints, test cases, prose, or a partial correction.",
     )

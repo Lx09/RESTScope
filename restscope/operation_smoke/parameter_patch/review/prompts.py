@@ -23,11 +23,10 @@ or override those technical decisions. Do not reject merely because a real API
 Batch has not run; that effect is measured later.
 
 # Protocol
-Call `submit_parameter_patch_review` exactly once. `issues` is authoritative:
-use an empty array when the candidate aligns, otherwise list only concrete
-mismatches between the candidate facts and the requirement. Set `accepted` to
-true for an empty list and false for a non-empty list. Never call another tool,
-emit prose, diagnose a different root cause, or propose a replacement.
+Return one structured result containing only `issues`. Use an empty array when
+the candidate aligns; otherwise list only concrete mismatches between the
+candidate facts and the requirement. Never call a tool, emit prose, diagnose a
+different root cause, or propose a replacement.
 """.strip()
 
 

@@ -2,8 +2,10 @@
 
 ## Status
 
-Repairs implemented and focused verification complete. The current five-
-operation live acceptance remains blocked by a test/workflow scope decision.
+Blocked on an explicit acceptance choice. The user rejected the temporary
+single-Batch adapter because it omitted DeepSeek and Patch/Review execution.
+After repairing the observed technical and performance defects, POST alone
+still cannot reach the production 80% threshold inside ten minutes.
 
 ## Objective and approved scope
 
@@ -47,6 +49,16 @@ to be replayed verbatim; RESTScope cannot safely invent it.
 - Failure Solve sends the authoritative `FailureSolveDecision` schema to the
   provider. Tool selection remains available; terminal JSON receives the same
   schema guidance already used by Parameter Patch.
+- OpenAPI lookup feedback has its own bounded Markdown projection, so a legal
+  100-handle page cannot overflow the Solve feedback budget.
+- Patch proposal context names the sole `action/patch/changes/constraints`
+  wire shape and rejects legacy field names without compatibility aliases.
+- Parameter Memory reads exactly one handle per call while allowing several
+  independent calls in the same output. Current long-enum Generator snapshots
+  may be omitted before compatibility-critical history.
+- Response-reference discovery is delayed until a Patch names its affected
+  inputs. It no longer performs semantic source selection for every input in a
+  large operation before each Solve.
 
 ## Verification
 
@@ -61,7 +73,7 @@ to be replayed verbatim; RESTScope cannot safely invent it.
   and repeated invalid Patch candidates stop at three outputs. The final trace
   contained no independent technical error before the deliberate timeout.
 
-## Decision still required
+## Current acceptance scope
 
 The live assertion asks all five operations to complete at least one Batch in
 one ten-minute App run. Production scheduling instead completes the full
@@ -69,10 +81,17 @@ multi-round Smoke workflow for one operation before starting the next. A
 failure-rich `POST /projects` operation can therefore consume the entire test
 deadline even after the observed Agent loops are removed.
 
-Choose whether the acceptance should exercise one direct Batch per operation,
-or continue exercising full Smoke convergence with a larger/per-operation time
-budget. Changing production Smoke to stop after one Batch is not included in
-these repairs.
+The temporary zero-threshold adapter produced five complete HTTP Batches in
+37.51 seconds, but it did not call DeepSeek or exercise Patch/Review. The user
+explicitly rejected that narrowed scope. The current test again exercises full
+production Smoke convergence for every operation; the external runner alone
+enforces the ten-minute maximum.
+
+The latest post-fix POST-only run kept response-source selection at zero but
+still reached the watchdog after 2 Batches and 6 completed Solves. Its 282
+available spans were downloaded. Producing a complete five-operation root
+trace now requires either a longer deadline or explicit authorization for a
+bounded/lower-threshold live acceptance that still exercises Patch and Review.
 
 ## Non-goals
 

@@ -77,7 +77,6 @@ def build_operation_smoke_coordinator(
             agent=FailureDedupAgent(
                 client=client,
                 model=selector.select("operation_smoke_failure_dedup"),
-                openapi_capability=capability_runtime.openapi_capability,
                 tracing_runtime=runtime,
             ),
             memory=memory,

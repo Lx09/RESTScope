@@ -314,6 +314,29 @@ def _proposal_feedback(errors: list[str]) -> str:
     writer.text("action", 'Use action="propose".')
     writer.text("patch", "Submit one complete replacement patch.")
     writer.text(
+        "patch keys",
+        "changes and constraints are the only patch keys.",
+    )
+    writer.text(
+        "forbidden keys",
+        "Never use generators, generator_changes, and constraint_changes.",
+    )
+    # DeepSeek's strict transport currently accepts calls whose nested fields
+    # still violate the recursive schema. State the two observed corrections
+    # only after a rejected proposal; putting the recursive contract into the
+    # initial system prompt caused the provider to return empty arguments.
+    writer.text(
+        "change input",
+        'Each change uses "input", never "input_handle".',
+    )
+    writer.text(
+        "constraint expression",
+        (
+            "Each constraint expression must be a recursive object, never a "
+            "string expression."
+        ),
+    )
+    writer.text(
         "reference",
         "For an R alias, set reference beside input and omit strategy.",
     )
@@ -326,10 +349,14 @@ def _invalid_attempt_fingerprint(
 ) -> str:
     """Identify the same proposal receiving the same rejection three times."""
     response = attempt.response
-    value: Any = [
-        {"name": call.name, "arguments": call.arguments}
-        for call in response.tool_calls
-    ] or response.parsed_json or response.content
+    value: Any = (
+        [
+            {"name": call.name, "arguments": call.arguments}
+            for call in response.tool_calls
+        ]
+        or response.parsed_json
+        or response.content
+    )
     normalized = json.dumps(
         {"candidate": value, "errors": errors},
         ensure_ascii=False,
