@@ -210,6 +210,44 @@ def _capability():
     return OpenAPICapability(context_provider=lambda: context)
 
 
+def _operation_candidate_capability():
+    """Build GitLab-like operation names used to recover from model guesses."""
+    from restscope.capabilities import OpenAPICapability, ToolContext
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Candidate lookup", "version": "1"},
+            "paths": {
+                "/api/v4/projects": {
+                    "post": {
+                        "operationId": "postApiV4Projects",
+                        "summary": "Create a project",
+                        "responses": {"201": {"description": "created"}},
+                    }
+                },
+                "/api/v4/project_aliases": {
+                    "post": {
+                        "operationId": "postApiV4ProjectAliases",
+                        "summary": "Create a project alias",
+                        "responses": {"201": {"description": "created"}},
+                    }
+                },
+                "/health": {
+                    "get": {
+                        "operationId": "getHealth",
+                        "summary": "Check service health",
+                        "responses": {"200": {"description": "healthy"}},
+                    }
+                },
+            },
+        }
+    )
+    context = ToolContext(ir=ir, baseline_schema_source={})
+    return OpenAPICapability(context_provider=lambda: context)
+
+
 def _observed_catalog(tmp_path: Path):
     """Create the real retained-response Catalog injected into OpenAPI lookup."""
     from restscope.api_behavior_monitor.response_value_catalog import (
@@ -321,6 +359,162 @@ def _execute(name: str, arguments: dict):
 
     return _toolbox().execute(
         ToolCall(id="openapi-query", name=name, arguments=arguments)
+    )
+
+
+def test_operation_lookup_specs_explain_exact_key_format_without_limiting_keys() -> None:
+    """Models see RESTScope's key syntax while every existing operation stays queryable."""
+    from restscope.capabilities import (
+        openapi_get_input_schema_tool_spec,
+        openapi_get_response_field_schema_tool_spec,
+        openapi_list_inputs_tool_spec,
+        openapi_list_response_fields_tool_spec,
+    )
+
+    specs = [
+        openapi_list_inputs_tool_spec(),
+        openapi_list_response_fields_tool_spec(),
+        openapi_get_input_schema_tool_spec(),
+        openapi_get_response_field_schema_tool_spec(),
+    ]
+
+    for spec in specs:
+        operation_key = spec.input_schema["properties"]["operation_key"]
+        description = operation_key["description"]
+        assert "METHOD /path" in description
+        assert "POST /api/v4/projects" in description
+        assert "operationId" in description
+        assert "camelCase" in description
+        assert "snake_case" in description
+        assert "enum" not in operation_key
+        assert "const" not in operation_key
+
+
+def test_unknown_operation_returns_the_closest_real_operation_key() -> None:
+    """An operationId-like guess receives a real METHOD/path recovery choice."""
+    import pytest
+
+    from restscope.capabilities import ToolFailure
+
+    with pytest.raises(ToolFailure) as caught:
+        _operation_candidate_capability().get_input_schema(
+            operation_key="createProject",
+            input="body.name",
+        )
+
+    assert caught.value.code == "openapi_operation_not_found"
+    assert caught.value.safe_message == (
+        "OpenAPI operation was not found: createProject. Closest existing "
+        "operation keys: POST /api/v4/projects, "
+        "POST /api/v4/project_aliases, GET /health"
+    )
+
+
+def test_operation_candidates_normalize_common_model_guess_styles() -> None:
+    """Camel, snake, and operationId-like guesses rank the same real key first."""
+    import pytest
+
+    from restscope.capabilities import ToolFailure
+
+    capability = _operation_candidate_capability()
+    for guessed_key in (
+        "createProject",
+        "create_projects",
+        "post_api_v4_projects",
+        "createProjectV4",
+    ):
+        with pytest.raises(ToolFailure) as caught:
+            capability.get_input_schema(
+                operation_key=guessed_key,
+                input="body.name",
+            )
+
+        candidates = caught.value.safe_message.split(
+            "Closest existing operation keys: ",
+            maxsplit=1,
+        )[1]
+        assert candidates.split(", ", maxsplit=1)[0] == (
+            "POST /api/v4/projects"
+        )
+
+
+def test_operation_candidates_are_bounded_stable_and_expose_only_real_keys() -> None:
+    """Large documents return ten deterministic METHOD/path choices, not aliases."""
+    import pytest
+
+    from restscope.capabilities import OpenAPICapability, ToolContext, ToolFailure
+    from restscope.openapi_parser import OpenAPIParser
+
+    paths = {
+        f"/items/{index:02d}": {
+            "get": {
+                "operationId": f"lookupAlias{index:02d}",
+                "summary": f"Read item {index:02d}",
+                "responses": {"200": {"description": "found"}},
+            }
+        }
+        for index in range(12)
+    }
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Bounded candidates", "version": "1"},
+            "paths": paths,
+        }
+    )
+    capability = OpenAPICapability(
+        context_provider=lambda: ToolContext(
+            ir=ir,
+            baseline_schema_source={},
+        )
+    )
+
+    messages = []
+    for _attempt in range(2):
+        with pytest.raises(ToolFailure) as caught:
+            capability.get_input_schema(
+                operation_key="lookup_alias_11",
+                input="query.id",
+            )
+        messages.append(caught.value.safe_message)
+
+    assert messages[0] == messages[1]
+    candidates = messages[0].split(
+        "Closest existing operation keys: ",
+        maxsplit=1,
+    )[1].split(", ")
+    assert len(candidates) == 10
+    assert candidates[0] == "GET /items/11"
+    assert all(candidate.startswith("GET /items/") for candidate in candidates)
+    assert all("lookupAlias" not in candidate for candidate in candidates)
+
+
+def test_unknown_operation_keeps_plain_error_when_the_ir_has_no_operations() -> None:
+    """An empty document cannot offer a fabricated recovery choice."""
+    import pytest
+
+    from restscope.capabilities import OpenAPICapability, ToolContext, ToolFailure
+    from restscope.openapi_parser import OpenAPIParser
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Empty lookup", "version": "1"},
+            "paths": {},
+        }
+    )
+    capability = OpenAPICapability(
+        context_provider=lambda: ToolContext(
+            ir=ir,
+            baseline_schema_source={},
+        )
+    )
+
+    with pytest.raises(ToolFailure) as caught:
+        capability.list_inputs(operation_key="getAnything")
+
+    assert caught.value.safe_message == (
+        "OpenAPI operation was not found: getAnything"
     )
 
 

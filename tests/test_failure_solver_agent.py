@@ -569,7 +569,19 @@ def _openapi_capability():
                             }
                         },
                     }
-                }
+                },
+                "/health": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "verbose",
+                                "in": "query",
+                                "schema": {"type": "boolean"},
+                            }
+                        ],
+                        "responses": {"204": {"description": "healthy"}},
+                    }
+                },
             },
         }
     )
@@ -1665,6 +1677,89 @@ def test_solve_uses_exact_openapi_tools_without_listing_known_inputs() -> None:
         input_schema_result
     )
     assert "group/project" in input_schema_result
+
+
+def test_solve_recovers_from_operation_alias_guess_without_scoping_lookup() -> None:
+    """A failed alias suggests real keys, then current and other operations work."""
+    client = StubClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="guessed-operation",
+                        name="openapi.get_input_schema",
+                        arguments={
+                            "operation_key": "getProject",
+                            "input": "path.projectId",
+                        },
+                    )
+                ],
+            ),
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="current-operation",
+                        name="openapi.get_input_schema",
+                        arguments={
+                            "operation_key": "GET /projects/{projectId}",
+                            "input": "path.projectId",
+                        },
+                    )
+                ],
+            ),
+            LLMResponse(
+                provider="stub",
+                model="think-model",
+                tool_calls=[
+                    ToolCall(
+                        id="other-operation",
+                        name="openapi.get_input_schema",
+                        arguments={
+                            "operation_key": "GET /health",
+                            "input": "query.verbose",
+                        },
+                    )
+                ],
+            ),
+            _terminal("no_patch"),
+        ]
+    )
+
+    outcome = _start(
+        _agent(
+            client,
+            StubMemory(),
+            StubPatchFactory([]),
+            StubPatchApplication(),
+        )
+    ).advance()
+
+    assert outcome.status == "no_patch"
+    guessed_result = next(
+        message
+        for message in client.requests[1].messages
+        if message.tool_call_id == "guessed-operation"
+    )
+    assert "Closest existing operation keys" in guessed_result.content
+    assert "GET /projects/{projectId}" in guessed_result.content
+    current_result = next(
+        message
+        for message in client.requests[2].messages
+        if message.tool_call_id == "current-operation"
+    )
+    assert "Stable project identifier accepted by this operation." in (
+        current_result.content
+    )
+    other_result = next(
+        message
+        for message in client.requests[3].messages
+        if message.tool_call_id == "other-operation"
+    )
+    assert 'input: "query.verbose"' in other_result.content
 
 
 def test_parameter_history_omits_large_current_generators_before_blocking_patch() -> None:

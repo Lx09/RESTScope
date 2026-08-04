@@ -53,6 +53,15 @@ _MAX_SCHEMA_TEXT_CHARS = 800
 _SIMILARITY_THRESHOLD = 0.95
 _NAME_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _NAME_TOKEN = re.compile(r"[A-Za-z0-9]+")
+_OPERATION_KEY_SCHEMA = {
+    "type": "string",
+    "minLength": 1,
+    "description": (
+        "Use an exact RESTScope operation key in METHOD /path format, such as "
+        "POST /api/v4/projects. This is not an OpenAPI operationId; do not "
+        "convert it to an alias, camelCase, or snake_case variant."
+    ),
+}
 
 
 def openapi_list_inputs_tool_spec() -> ToolSpec:
@@ -72,7 +81,7 @@ def openapi_list_inputs_tool_spec() -> ToolSpec:
         input_schema={
             "type": "object",
             "properties": {
-                "operation_key": {"type": "string", "minLength": 1},
+                "operation_key": dict(_OPERATION_KEY_SCHEMA),
                 "media_type": {"type": "string", "minLength": 1},
                 "prefix": {"type": "string", "minLength": 1},
                 "offset": {
@@ -134,7 +143,7 @@ def openapi_list_response_fields_tool_spec() -> ToolSpec:
         input_schema={
             "type": "object",
             "properties": {
-                "operation_key": {"type": "string", "minLength": 1},
+                "operation_key": dict(_OPERATION_KEY_SCHEMA),
                 "status_code": {
                     "oneOf": [
                         {
@@ -303,7 +312,7 @@ def openapi_get_input_schema_tool_spec() -> ToolSpec:
         input_schema={
             "type": "object",
             "properties": {
-                "operation_key": {"type": "string", "minLength": 1},
+                "operation_key": dict(_OPERATION_KEY_SCHEMA),
                 "input": {"type": "string", "minLength": 1},
                 "media_type": {"type": "string", "minLength": 1},
             },
@@ -347,7 +356,7 @@ def openapi_get_response_field_schema_tool_spec() -> ToolSpec:
         input_schema={
             "type": "object",
             "properties": {
-                "operation_key": {"type": "string", "minLength": 1},
+                "operation_key": dict(_OPERATION_KEY_SCHEMA),
                 "status_code": {
                     "oneOf": [
                         {
@@ -823,9 +832,18 @@ class OpenAPICapability:
         try:
             return ir.operations[operation_key]
         except KeyError as exc:
+            candidates = _closest_operation_keys(operation_key, ir.operations)
+            recovery = (
+                ". Closest existing operation keys: " + ", ".join(candidates)
+                if candidates
+                else ""
+            )
             raise ToolFailure(
                 code="openapi_operation_not_found",
-                message=f"OpenAPI operation was not found: {operation_key}",
+                message=(
+                    f"OpenAPI operation was not found: {operation_key}"
+                    f"{recovery}"
+                ),
             ) from exc
 
     def _current_ir(self) -> OpenAPISpecIR:
@@ -1180,6 +1198,42 @@ def _normalized_name(value: str) -> str:
     """Normalize camel, snake, kebab, and dotted names for exact comparison."""
     separated = _NAME_BOUNDARY.sub(" ", value)
     return "".join(_NAME_TOKEN.findall(separated)).casefold()
+
+
+def _closest_operation_keys(
+    requested: str,
+    operations: Mapping[str, OperationIR],
+) -> list[str]:
+    """Rank real operation keys against one model-provided spelling.
+
+    Models sometimes confuse RESTScope's ``METHOD /path`` key with an OpenAPI
+    ``operationId`` or a human summary. Those alternate spellings help rank
+    recovery choices, but only exact real keys are returned so this lookup
+    never silently creates an alias.
+    """
+    normalized = _normalized_name(requested)
+    ranked: list[tuple[float, str]] = []
+    for operation in operations.values():
+        spellings = (
+            operation.operation_key,
+            operation.operation_id or "",
+            operation.summary or "",
+        )
+        score = max(
+            (
+                SequenceMatcher(
+                    None,
+                    normalized,
+                    _normalized_name(spelling),
+                ).ratio()
+                for spelling in spellings
+                if spelling
+            ),
+            default=0.0,
+        )
+        ranked.append((score, operation.operation_key))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [key for _score, key in ranked[:_MAX_ERROR_CHOICES]]
 
 
 def _schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
