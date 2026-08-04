@@ -5,10 +5,11 @@ stores it in ``ToolContext``.  ``OpenAPICapability`` reads that trusted IR only
 when a registered Agent tool executes.  Models provide an exact operation key
 and a narrow query; they never receive the IR itself.
 
-The three public tool specifications cover listing request inputs, inspecting
-one input Schema, and inspecting one response-body field Schema.  Their shared
-implementation owns handle construction, media-type selection, response-status
-fallback, array-path normalization, pagination, and safe failures.
+The four public tool specifications cover listing request inputs, listing
+response-body fields, inspecting one input Schema, and inspecting one response
+field Schema. Their shared implementation owns handle construction, media-type
+selection, response-status fallback, array-path normalization, pagination, and
+safe failures.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from .tool_context import ToolContext
 
 
 OPENAPI_LIST_INPUTS_TOOL_NAME = "openapi.list_inputs"
+OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME = "openapi.list_response_fields"
 OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME = "openapi.get_input_schema"
 OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME = (
     "openapi.get_response_field_schema"
@@ -103,6 +105,90 @@ def openapi_list_inputs_tool_spec() -> ToolSpec:
                 "next_offset": {"type": "integer", "minimum": 0},
             },
             "required": ["operation_key", "inputs", "total", "offset"],
+            "additionalProperties": False,
+        },
+    )
+
+
+def openapi_list_response_fields_tool_spec() -> ToolSpec:
+    """Describe the paginated response-field discovery tool.
+
+    The result contains semantic field handles rather than Schemas. A caller
+    can pass one returned handle to ``openapi.get_response_field_schema`` when
+    it needs the exact contract for that field.
+    """
+    return ToolSpec(
+        name=OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
+        description=(
+            "List semantic response-body field handles for one status of an "
+            "exact OpenAPI operation. Results are paginated and do not include "
+            "Schemas."
+        ),
+        kind="local_function",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "operation_key": {"type": "string", "minLength": 1},
+                "status_code": {
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 100,
+                            "maximum": 599,
+                        },
+                        {
+                            "type": "string",
+                            "pattern": (
+                                "^(?:[1-5][0-9]{2}|[1-5][xX]{2}|"
+                                "[dD][eE][fF][aA][uU][lL][tT])$"
+                            ),
+                        },
+                    ]
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _MAX_LIST_LIMIT,
+                    "default": _DEFAULT_LIST_LIMIT,
+                },
+            },
+            "required": ["operation_key", "status_code"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "operation_key": {"type": "string"},
+                "requested_status_code": {"type": "string"},
+                "matched_status_code": {"type": "string"},
+                "media_type": {"type": "string"},
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                },
+                "total": {"type": "integer", "minimum": 0},
+                "offset": {"type": "integer", "minimum": 0},
+                "next_offset": {"type": "integer", "minimum": 0},
+            },
+            "required": [
+                "operation_key",
+                "requested_status_code",
+                "matched_status_code",
+                "media_type",
+                "fields",
+                "total",
+                "offset",
+            ],
             "additionalProperties": False,
         },
     )
@@ -228,7 +314,7 @@ class _SchemaEntry:
 
 
 class OpenAPICapability:
-    """Answer three compact queries against the App's current OpenAPI IR.
+    """Answer four compact queries against the App's current OpenAPI IR.
 
     Args:
         context_provider: Trusted runtime callback that returns the App's
@@ -286,6 +372,56 @@ class OpenAPICapability:
         result: dict[str, Any] = {
             "operation_key": operation.operation_key,
             "inputs": inputs,
+            "total": len(entries),
+            "offset": offset,
+        }
+        next_offset = offset + len(page)
+        if next_offset < len(entries):
+            result["next_offset"] = next_offset
+        return {"structured": result}
+
+    def list_response_fields(
+        self,
+        *,
+        operation_key: str,
+        status_code: int | str,
+        offset: int = 0,
+        limit: int = _DEFAULT_LIST_LIMIT,
+    ) -> dict[str, Any]:
+        """Return one deterministic page of response-body field handles.
+
+        The operation and response status select one response contract. The
+        selected response is expected to have one Schema-bearing media type;
+        existing lookup failures report missing or ambiguous contracts. The
+        toolbox validates pagination values before this method runs.
+        """
+        operation = self._operation(operation_key)
+        requested_status = _normalize_status_code(status_code)
+        matched_status, response = _select_response(
+            operation,
+            requested_status=requested_status,
+        )
+        selected_media_type, schema = _select_media_schema(
+            response.contents,
+            requested=None,
+            subject=f"response {matched_status}",
+        )
+        entries = _schema_entries(
+            schema,
+            name="body",
+            required=False,
+            location="body",
+            media_type=selected_media_type,
+            skip_write_only=True,
+        )
+        entries.sort(key=lambda item: item.name)
+        page = entries[offset : offset + limit]
+        result: dict[str, Any] = {
+            "operation_key": operation.operation_key,
+            "requested_status_code": requested_status,
+            "matched_status_code": matched_status,
+            "media_type": selected_media_type,
+            "fields": [{"name": entry.name} for entry in page],
             "total": len(entries),
             "offset": offset,
         }
@@ -437,7 +573,7 @@ def operation_parameter_handles(operation: OperationIR) -> frozenset[str]:
     query for an inactive-but-valid Body field returns the explicit
     ``parameter_not_used_in_request`` status instead of being mistaken for a
     forged name. This direct runtime consumer shares the exact traversal used
-    by the three model-facing tools.
+    by the model-facing request lookup tools.
     """
     return frozenset(
         reference.handle
