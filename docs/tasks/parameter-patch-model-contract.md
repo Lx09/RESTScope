@@ -87,3 +87,20 @@ Agent system prompt.
 - Full suite with evaluation dependencies: 660 passed and 5 skipped.
 - No DTO, persistence, HTTP, tool, sampling, or runtime decision behavior was
   changed. No live call was made.
+
+## Input Schema guidance follow-up
+
+- `openapi.get_input_schema` now returns the selected Schema node's bounded
+  `description` and singular `example` alongside its structural and validation
+  facts when those annotations exist.
+- The annotations remain inside `schema`; the tool still omits sibling fields
+  and the complete Schema subtree. `openapi.get_response_field_schema` remains
+  unchanged.
+- Both annotations reuse the existing Schema-value size and depth limits before
+  they can reach Failure Solve as untrusted tool evidence.
+- RED: the exact-node Capability result and Failure Solve tool-message tests
+  both showed the annotations were absent. GREEN: both passed after the change.
+- OpenAPI lookup and Failure Solve suites: 48 passed.
+- Full suite with evaluation dependencies: 672 passed and 5 skipped.
+- No live call was made. This follow-up is included in the authorized local
+  checkpoint before the next Failure Solve contract change.

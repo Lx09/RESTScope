@@ -537,7 +537,14 @@ def _openapi_capability():
                                 "name": "projectId",
                                 "in": "path",
                                 "required": True,
-                                "schema": {"type": "string"},
+                                "schema": {
+                                    "type": "string",
+                                    "description": (
+                                        "Stable project identifier accepted "
+                                        "by this operation."
+                                    ),
+                                    "example": "group/project",
+                                },
                             },
                             {
                                 "name": "region",
@@ -1645,6 +1652,11 @@ def test_solve_uses_exact_openapi_tools_without_listing_known_inputs() -> None:
         "input-schema",
         "response-schema",
     ]
+    input_schema_result = tool_messages[0].content or ""
+    assert "Stable project identifier accepted by this operation." in (
+        input_schema_result
+    )
+    assert "group/project" in input_schema_result
 
 
 def test_parameter_history_omits_large_current_generators_before_blocking_patch() -> None:

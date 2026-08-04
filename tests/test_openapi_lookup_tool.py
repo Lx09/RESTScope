@@ -50,8 +50,11 @@ def _ir():
                                             "name": {
                                                 "type": "string",
                                                 "minLength": 3,
-                                                "description": "Not model-visible",
-                                                "example": "secret-example",
+                                                "description": (
+                                                    "Project name accepted by "
+                                                    "this operation."
+                                                ),
+                                                "example": "example-project",
                                             }
                                         },
                                     }
@@ -762,10 +765,14 @@ def test_get_input_schema_returns_only_the_exact_node_summary() -> None:
         "location": "body",
         "required": True,
         "media_type": "application/json",
-        "schema": {"type": "string", "min_length": 3},
+        "schema": {
+            "type": "string",
+            "description": "Project name accepted by this operation.",
+            "example": "example-project",
+            "min_length": 3,
+        },
     }
-    assert "description" not in repr(result.structured)
-    assert "example" not in repr(result.structured)
+    assert "avatar" not in repr(result.structured)
 
 
 def test_non_body_input_rejects_an_irrelevant_media_type() -> None:

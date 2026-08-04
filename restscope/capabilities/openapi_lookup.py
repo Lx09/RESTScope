@@ -295,8 +295,9 @@ def openapi_get_input_schema_tool_spec() -> ToolSpec:
     return ToolSpec(
         name=OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
         description=(
-            "Return the compact Schema for one exact semantic request input. "
-            "Body inputs may need an explicit media_type."
+            "Return one exact semantic request input's compact Schema, "
+            "including its description and example when supplied. Body "
+            "inputs may need an explicit media_type."
         ),
         kind="local_function",
         input_schema={
@@ -751,7 +752,7 @@ class OpenAPICapability:
                 if selected_media_type is not None
                 else {}
             ),
-            "schema": _schema_summary(entry.schema),
+            "schema": _input_schema_summary(entry.schema),
         }
         return {"structured": result}
 
@@ -1219,6 +1220,23 @@ def _schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
         ),
     }
     return {name: value for name, value in values.items() if value is not None}
+
+
+def _input_schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
+    """Add request-input guidance to one exact, bounded Schema summary.
+
+    Descriptions and examples help Failure Solve interpret an otherwise terse
+    contract. They remain bounded because both fields originate in the
+    caller-supplied OpenAPI document and may contain large or hostile values.
+    """
+    summary = _schema_summary(schema)
+    if schema is None:
+        return summary
+    if schema.description is not None:
+        summary["description"] = _bound_schema_value(schema.description)
+    if schema.example is not None:
+        summary["example"] = _bound_schema_value(schema.example)
+    return summary
 
 
 def _additional_properties_summary(value: bool | SchemaIR | None) -> Any | None:
