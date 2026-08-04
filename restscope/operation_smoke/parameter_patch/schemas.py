@@ -8,12 +8,23 @@ failure aliases, Patch Groups, or cross-failure ownership appear here.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from restscope.testing import ConstraintSet, InputGeneratorPatch
-from restscope.testing.models import GeneratorStrategy
+from restscope.testing.models import (
+    ArrayGenerator,
+    BooleanGenerator,
+    ChoiceGenerator,
+    ConstantGenerator,
+    FormatGenerator,
+    IntegerRangeGenerator,
+    NumberRangeGenerator,
+    RandomStringGenerator,
+    RegexGenerator,
+    VariantGenerator,
+)
 
 
 class _Model(BaseModel):
@@ -78,12 +89,201 @@ class ParameterPatchTask(_Model):
         return self
 
 
+# Reuse the Testing Module's field-level validation for strategies whose model
+# and runtime meanings are identical. The narrower union is the Patch model's
+# authority: system-managed and observed-value strategies are deliberately not
+# choices here.
+SemanticGeneratorStrategy = Annotated[
+    ConstantGenerator
+    | ChoiceGenerator
+    | IntegerRangeGenerator
+    | NumberRangeGenerator
+    | RandomStringGenerator
+    | RegexGenerator
+    | BooleanGenerator
+    | FormatGenerator
+    | ArrayGenerator
+    | VariantGenerator,
+    Field(discriminator="type"),
+]
+
+
+class SemanticInputValue(_Model):
+    """Read one affected request input as a value inside a Constraint.
+
+    ``input`` is the semantic handle shown to the model. Compilation later
+    replaces it with the frozen input-node identity used by request generation.
+    """
+
+    type: Literal["input_value"]
+    input: str = Field(min_length=1, max_length=1000)
+
+
+class SemanticLiteralValue(_Model):
+    """Use one JSON literal inside a comparison or arithmetic expression.
+
+    ``value`` remains typed JSON data; no text parsing or runtime state change
+    occurs while this proposal DTO is validated.
+    """
+
+    type: Literal["literal"]
+    value: Any
+
+
+class SemanticArithmeticValue(_Model):
+    """Combine two numeric values before another Constraint compares them.
+
+    ``operator`` selects one supported arithmetic operation. ``left`` and
+    ``right`` may recursively read an input, use a literal, or calculate a value.
+    Executable validation later rejects incompatible operand types.
+    """
+
+    type: Literal["arithmetic"]
+    operator: Literal["+", "-", "*", "/"]
+    left: "SemanticValueExpression"
+    right: "SemanticValueExpression"
+
+
+SemanticValueExpression: TypeAlias = Annotated[
+    SemanticInputValue | SemanticLiteralValue | SemanticArithmeticValue,
+    Field(discriminator="type"),
+]
+
+
+class SemanticPresentPredicate(_Model):
+    """Test whether one affected request input is included in a generated case.
+
+    ``input`` must be a semantic handle in the current Patch requirement;
+    compilation rejects unknown or out-of-scope handles.
+    """
+
+    type: Literal["present"]
+    input: str = Field(min_length=1, max_length=1000)
+
+
+class SemanticComparePredicate(_Model):
+    """Compare two typed values using one equality or ordering rule.
+
+    ``left`` and ``right`` use the recursive value DSL. Executable validation
+    later rejects ordered comparisons whose operand types are incompatible.
+    """
+
+    type: Literal["compare"]
+    operator: Literal["==", "!=", "<", "<=", ">", ">="]
+    left: SemanticValueExpression
+    right: SemanticValueExpression
+
+
+class SemanticMatchesPredicate(_Model):
+    """Require a string-compatible value to match a regular expression.
+
+    ``pattern`` is bounded in size at the model Interface. Executable validation
+    later confirms that ``value`` can produce strings.
+    """
+
+    type: Literal["matches"]
+    value: SemanticValueExpression
+    pattern: str = Field(max_length=2000)
+
+
+class SemanticImplicationConstraint(_Model):
+    """Require one consequence whenever its Boolean condition is true.
+
+    Both fields recursively accept any Boolean DSL node, which lets a proposal
+    express presence and value relationships without string expressions.
+    """
+
+    type: Literal["implies"]
+    condition: "SemanticBooleanExpression"
+    consequence: "SemanticBooleanExpression"
+
+
+class SemanticCardinalityConstraint(_Model):
+    """Bound how many expressions in one related group may be true.
+
+    ``expressions`` is the group; ``minimum`` and ``maximum`` are inclusive
+    true-count bounds. Executable validation rejects impossible bounds.
+    """
+
+    type: Literal["cardinality"]
+    expressions: list["SemanticBooleanExpression"] = Field(
+        min_length=1,
+        max_length=100,
+    )
+    minimum: int = Field(ge=0)
+    maximum: int = Field(ge=0)
+
+
+class SemanticAndConstraint(_Model):
+    """Require every expression in a non-empty recursive group to be true.
+
+    The child field is always named ``expressions``; ``conditions`` is rejected
+    as an extra input at the model Interface.
+    """
+
+    type: Literal["and"]
+    expressions: list["SemanticBooleanExpression"] = Field(
+        min_length=1,
+        max_length=100,
+    )
+
+
+class SemanticOrConstraint(_Model):
+    """Require at least one expression in a non-empty recursive group to be true.
+
+    Like ``and``, this node uses the plural ``expressions`` field and forbids
+    undeclared alternatives such as ``conditions`` or ``children``.
+    """
+
+    type: Literal["or"]
+    expressions: list["SemanticBooleanExpression"] = Field(
+        min_length=1,
+        max_length=100,
+    )
+
+
+class SemanticNotConstraint(_Model):
+    """Invert one nested Boolean expression.
+
+    Unlike grouped nodes, ``not`` owns exactly one singular ``expression``.
+    """
+
+    type: Literal["not"]
+    expression: "SemanticBooleanExpression"
+
+
+SemanticBooleanExpression: TypeAlias = Annotated[
+    SemanticPresentPredicate
+    | SemanticComparePredicate
+    | SemanticMatchesPredicate
+    | SemanticImplicationConstraint
+    | SemanticCardinalityConstraint
+    | SemanticAndConstraint
+    | SemanticOrConstraint
+    | SemanticNotConstraint,
+    Field(discriminator="type"),
+]
+
+
+# Resolve the quoted recursive annotations only after both unions exist. This
+# keeps one finite generated JSON Schema while allowing Boolean nodes to nest.
+for _recursive_model in (
+    SemanticArithmeticValue,
+    SemanticImplicationConstraint,
+    SemanticCardinalityConstraint,
+    SemanticAndConstraint,
+    SemanticOrConstraint,
+    SemanticNotConstraint,
+):
+    _recursive_model.model_rebuild(_types_namespace=globals())
+
+
 class SemanticGeneratorChange(_Model):
     """One model-facing Generator change using a semantic input path."""
 
     input: str = Field(min_length=1, max_length=1000)
     inclusion_probability: float | None = Field(default=None, ge=0, le=1)
-    strategy: GeneratorStrategy | None = None
+    strategy: SemanticGeneratorStrategy | None = None
     reference: str | None = Field(default=None, min_length=1, max_length=20)
 
     @model_validator(mode="after")
@@ -103,7 +303,7 @@ class SemanticGeneratorChange(_Model):
 class SemanticConstraintChange(_Model):
     """One recursive semantic Constraint expression."""
 
-    expression: dict[str, Any]
+    expression: SemanticBooleanExpression
 
 
 class ParameterPatchProposal(_Model):

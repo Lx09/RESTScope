@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 
+import pytest
+
 from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
 
 from tests._operation_smoke_dedup_solve_fixtures import smoke_config
@@ -527,6 +529,298 @@ def test_patch_proposal_returns_recursive_json_without_a_submission_tool() -> No
     assert outcome.attempt_history[0]["transport"] == "json_schema"
 
 
+def test_patch_response_schema_exposes_only_constructible_generators() -> None:
+    """The model sees direct strategies while system-owned ones stay private."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
+
+    schema = ParameterPatchSubmission.model_json_schema()
+    strategy = schema["$defs"]["SemanticGeneratorChange"]["properties"][
+        "strategy"
+    ]["anyOf"][0]
+
+    assert set(strategy["discriminator"]["mapping"]) == {
+        "array",
+        "boolean",
+        "choice",
+        "constant",
+        "format",
+        "integer_range",
+        "number_range",
+        "random_string",
+        "regex",
+        "variant",
+    }
+    encoded = json.dumps(schema, sort_keys=True)
+    for forbidden_definition in (
+        "ObjectGenerator",
+        "RequestBodyGenerator",
+        "ResourceIdentifierGenerator",
+        "ResponseValueGenerator",
+    ):
+        assert forbidden_definition not in encoded
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        {"type": "constant", "value": "known"},
+        {"type": "choice", "values": ["known"], "weights": [1]},
+        {"type": "integer_range", "minimum": 1, "maximum": 2},
+        {"type": "number_range", "minimum": 1.5, "maximum": 2.5},
+        {
+            "type": "random_string",
+            "min_length": 1,
+            "max_length": 2,
+            "alphabet": "ab",
+        },
+        {"type": "regex", "pattern": "a+", "min_length": 1, "max_length": 2},
+        {"type": "boolean", "true_probability": 0.5},
+        {"type": "format", "format": "uuid"},
+        {"type": "array", "min_items": 1, "max_items": 2},
+        {"type": "variant", "branch_weights": [1]},
+    ],
+)
+def test_patch_submission_accepts_every_model_constructible_generator(
+    strategy: dict,
+) -> None:
+    """Every Generator advertised by the model Interface validates locally."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
+
+    submission = ParameterPatchSubmission.model_validate(
+        {
+            "action": "propose",
+            "patch": {
+                "changes": [{"input": "query.value", "strategy": strategy}],
+                "constraints": [],
+            },
+        }
+    )
+
+    assert submission.patch.changes[0].strategy is not None
+    assert submission.patch.changes[0].strategy.type == strategy["type"]
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        {"type": "object"},
+        {"type": "request_body"},
+        {"type": "resource_identifier", "resource": "project"},
+        {"type": "response_value", "value_name": "project_id"},
+    ],
+)
+def test_patch_submission_rejects_system_owned_generator_strategies(
+    strategy: dict,
+) -> None:
+    """System-managed and observed Generators cannot bypass the R alias seam."""
+    from pydantic import ValidationError
+
+    from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
+
+    with pytest.raises(ValidationError):
+        ParameterPatchSubmission.model_validate(
+            {
+                "action": "propose",
+                "patch": {
+                    "changes": [{"input": "query.value", "strategy": strategy}],
+                    "constraints": [],
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"input": "query.value"},
+        {
+            "input": "query.value",
+            "strategy": {"type": "constant", "value": "known"},
+            "reference": "R1",
+        },
+        {
+            "input": "query.value",
+            "strategy": {
+                "type": "choice",
+                "values": ["first", "second"],
+                "weights": [1],
+            },
+        },
+        {
+            "input": "query.value",
+            "strategy": {"type": "integer_range", "minimum": 2, "maximum": 1},
+        },
+        {
+            "input": "query.value",
+            "strategy": {"type": "array", "min_items": 2, "max_items": 1},
+        },
+    ],
+)
+def test_patch_submission_rejects_invalid_generator_changes(change: dict) -> None:
+    """The model contract rejects empty, ambiguous, and internally invalid edits."""
+    from pydantic import ValidationError
+
+    from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
+
+    with pytest.raises(ValidationError):
+        ParameterPatchSubmission.model_validate(
+            {
+                "action": "propose",
+                "patch": {"changes": [change], "constraints": []},
+            }
+        )
+
+
+def test_patch_response_schema_describes_the_recursive_constraint_dsl() -> None:
+    """The model sees every Boolean node and each node's exact child fields."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
+
+    schema = ParameterPatchSubmission.model_json_schema()
+    expression = schema["$defs"]["SemanticConstraintChange"]["properties"][
+        "expression"
+    ]
+
+    assert set(expression["discriminator"]["mapping"]) == {
+        "and",
+        "cardinality",
+        "compare",
+        "implies",
+        "matches",
+        "not",
+        "or",
+        "present",
+    }
+    assert set(schema["$defs"]["SemanticAndConstraint"]["properties"]) == {
+        "type",
+        "expressions",
+    }
+    assert set(schema["$defs"]["SemanticNotConstraint"]["properties"]) == {
+        "type",
+        "expression",
+    }
+    assert set(
+        schema["$defs"]["SemanticImplicationConstraint"]["properties"]
+    ) == {"type", "condition", "consequence"}
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        {"type": "present", "input": "query.value"},
+        {
+            "type": "compare",
+            "operator": "<=",
+            "left": {
+                "type": "arithmetic",
+                "operator": "+",
+                "left": {"type": "input_value", "input": "query.value"},
+                "right": {"type": "literal", "value": 1},
+            },
+            "right": {"type": "literal", "value": 10},
+        },
+        {
+            "type": "matches",
+            "value": {"type": "input_value", "input": "query.value"},
+            "pattern": "^[a-z]+$",
+        },
+        {
+            "type": "implies",
+            "condition": {"type": "present", "input": "query.value"},
+            "consequence": {"type": "present", "input": "query.other"},
+        },
+        {
+            "type": "cardinality",
+            "expressions": [
+                {"type": "present", "input": "query.value"},
+                {"type": "present", "input": "query.other"},
+            ],
+            "minimum": 1,
+            "maximum": 1,
+        },
+        {
+            "type": "and",
+            "expressions": [{"type": "present", "input": "query.value"}],
+        },
+        {
+            "type": "or",
+            "expressions": [{"type": "present", "input": "query.value"}],
+        },
+        {
+            "type": "not",
+            "expression": {"type": "present", "input": "query.value"},
+        },
+    ],
+)
+def test_patch_submission_accepts_every_recursive_constraint_node(
+    expression: dict,
+) -> None:
+    """Every Boolean DSL node validates through the exported response DTO."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
+
+    submission = ParameterPatchSubmission.model_validate(
+        {
+            "action": "propose",
+            "patch": {
+                "changes": [],
+                "constraints": [{"expression": expression}],
+            },
+        }
+    )
+
+    assert submission.patch.constraints[0].expression.type == expression["type"]
+
+
+def test_patch_corrects_conditions_to_the_dsl_expressions_field() -> None:
+    """A rejected logical node receives exact field guidance and can recover."""
+    from restscope.operation_smoke.parameter_patch import (
+        ParameterPatchCoordinator,
+        ValidatedParameterPatch,
+    )
+
+    invalid = _constant_patch()
+    invalid["patch"]["constraints"] = [
+        {
+            "expression": {
+                "type": "and",
+                "conditions": [
+                    {"type": "present", "input": "path.projectId"},
+                ],
+            }
+        }
+    ]
+    replacement = _constant_patch()
+    replacement["patch"]["constraints"] = [
+        {
+            "expression": {
+                "type": "and",
+                "expressions": [
+                    {"type": "present", "input": "path.projectId"},
+                ],
+            }
+        }
+    ]
+    client = StubClient([invalid, replacement, {"issues": []}])
+
+    outcome = ParameterPatchCoordinator(
+        client=client,
+        patch_model=_model(),
+        review_model=_review_model(),
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        max_outputs=3,
+    )
+
+    assert isinstance(outcome, ValidatedParameterPatch)
+    assert outcome.outputs_used == 3
+    correction = client.requests[1].messages[-1].content
+    assert "and, or, and cardinality use expressions, never conditions" in correction
+    assert "not uses expression" in correction
+    assert "implies uses condition and consequence" in correction
+
+
 def test_patch_repairs_one_truncated_structured_json_object() -> None:
     """One uniquely implied final brace may be repaired before validation."""
     from restscope.operation_smoke.parameter_patch import (
@@ -898,11 +1192,15 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert "constraint expression must be a recursive object" in correction
 
     initial_system = client.requests[0].messages[0].content
-    # The provider receives the recursive contract through the response Schema.
-    # Repeating it in a long system prompt previously harmed complex proposals.
-    assert len(initial_system) < 1_000
-    assert "Generator Signatures" not in initial_system
-    assert "Constraint Signatures" not in initial_system
+    # The Schema remains authoritative while this compact DSL makes the exact
+    # field vocabulary readable without copying the full generated document.
+    assert len(initial_system) < 2_000
+    assert "Generator DSL:" in initial_system
+    assert "Constraint DSL:" in initial_system
+    assert "and(expressions), or(expressions)" in initial_system
+    assert "cardinality(expressions, minimum, maximum)" in initial_system
+    assert "not(expression)" in initial_system
+    assert "implies(condition, consequence)" in initial_system
     assert "Generator edits in patch.changes" in initial_system
     assert "one complete corrected replacement" in initial_system
 
@@ -1351,8 +1649,6 @@ def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> No
 
 def test_patch_requires_case_count_within_testing_boundary() -> None:
     """Scenario: local review uses the same 1-20 case limit as Smoke execution."""
-    import pytest
-
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     with pytest.raises(ValueError, match="case_count"):
