@@ -529,8 +529,8 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert patch_factory.created[0].calls[0]["random_seed"] == 731
     assert patch_factory.created[0].calls[0]["task"].prior_attempts
     initial_prompt = client.requests[0].messages[1].content
-    assert "representative_case=string:\"TC1\"" in initial_prompt
-    assert "catalog=string:\"TC1\"" in initial_prompt
+    assert 'representative case: "TC1"' in initial_prompt
+    assert 'catalog: "TC1"' in initial_prompt
     assert "SEMANTIC INPUTS" not in initial_prompt
     assert "path.projectId" not in initial_prompt
     assert "random_string" not in initial_prompt
@@ -1270,10 +1270,11 @@ def test_solve_reference_cards_distinguish_response_sources() -> None:
     ).advance()
 
     prompt = client.requests[0].messages[1].content
-    assert "producers=string:\"GET /projects\"" in prompt
-    assert "status=string:\"200\"" in prompt
-    assert "media=string:\"application/json\"" in prompt
-    assert "selector=string:\"$[].id\"" in prompt
+    assert 'producers: "GET /projects"' in prompt
+    assert 'status: "200"' in prompt
+    assert 'media: "application/json"' in prompt
+    assert 'selector: "$[].id"' in prompt
+    assert "string:" not in prompt
 
 
 def test_solve_uses_an_explicit_complete_system_prompt_override() -> None:

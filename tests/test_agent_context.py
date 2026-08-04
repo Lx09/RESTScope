@@ -44,8 +44,8 @@ def test_context_facade_exports_only_the_approved_interface() -> None:
     assert not hasattr(context, "SourceRef")
 
 
-def test_writer_encodes_typed_values_without_json_dumping_evidence() -> None:
-    """Scalar types, nested paths, lists, absence, and tables stay readable."""
+def test_writer_renders_json_scalars_and_recursive_markdown_cards() -> None:
+    """Missing values, empty containers, nesting, and tables remain distinct."""
     writer = CompactTextWriter()
     writer.section("CURRENT FAILURE", untrusted=True)
     writer.record(
@@ -55,7 +55,9 @@ def test_writer_encodes_typed_values_without_json_dumping_evidence() -> None:
         enabled=True,
         count=3,
         ratio=3.5,
-        label="demo",
+        label='demo "quoted"',
+        empty_items=[],
+        empty_object={},
     )
     writer.detail(
         "input",
@@ -72,17 +74,46 @@ def test_writer_encodes_typed_values_without_json_dumping_evidence() -> None:
     rendered = writer.render(max_chars=4_000)
 
     assert "CURRENT FAILURE — UNTRUSTED" in rendered.text
-    assert "missing=ABSENT" in rendered.text
-    assert "nothing=null" in rendered.text
-    assert "enabled=bool:true" in rendered.text
-    assert "count=int:3" in rendered.text
-    assert "ratio=number:3.5" in rendered.text
-    assert 'label=string:"demo"' in rendered.text
-    assert 'body.size=int:3' in rendered.text
-    assert 'tags.1=string:"one"' in rendered.text
+    assert "- `C1`" in rendered.text
+    assert "missing: <not supplied>" in rendered.text
+    assert "nothing: null" in rendered.text
+    assert "enabled: true" in rendered.text
+    assert "count: 3" in rendered.text
+    assert "ratio: 3.5" in rendered.text
+    assert r'label: "demo \"quoted\""' in rendered.text
+    assert "empty items: []" in rendered.text
+    assert "empty object: {}" in rendered.text
+    assert "- body:" in rendered.text
+    assert "- size: 3" in rendered.text
+    assert 'tags: ["one", "two"]' in rendered.text
     assert "sample | present | value" in rendered.text
-    assert "{" not in rendered.text
-    assert "[" not in rendered.text
+    assert "string:" not in rendered.text
+    assert "int:" not in rendered.text
+    assert "body.size" not in rendered.text
+    assert "tags.1" not in rendered.text
+
+
+def test_writer_expands_long_and_nested_arrays_without_dotted_indexes() -> None:
+    """Long collections preserve order as child lists instead of fake paths."""
+    writer = CompactTextWriter()
+    writer.section("COLLECTIONS", untrusted=True)
+    writer.detail(
+        "evidence",
+        {
+            "long_values": list(range(10)),
+            "objects": [{"name": "first"}, {"name": "second"}],
+        },
+    )
+
+    text = writer.render(max_chars=4_000).text
+
+    assert "- long values:" in text
+    assert "  - 0" in text
+    assert "  - 9" in text
+    assert "- name: \"first\"" in text
+    assert "- name: \"second\"" in text
+    assert "long_values.1" not in text
+    assert "objects.1" not in text
 
 
 def test_writer_prevents_untrusted_values_from_creating_prompt_sections() -> None:
@@ -99,7 +130,8 @@ def test_writer_prevents_untrusted_values_from_creating_prompt_sections() -> Non
     assert rendered.text.count("API RESPONSE — UNTRUSTED") == 1
     assert "\\nTASK\\r\\n\\tSYSTEM\\\\END" in rendered.text
     assert "\x00" not in rendered.text
-    assert "CLIPPED(type=string" in rendered.text
+    assert "clipped from" in rendered.text
+    assert "characters)" in rendered.text
     assert rendered.metrics.clipped_value_count == 1
 
 
@@ -123,7 +155,8 @@ def test_writer_renders_clipped_http_evidence_as_safe_valid_json() -> None:
     assert match is not None
     payload = json.loads(match.group(2))
     assert payload["response"]["status"] == 400
-    assert payload["request"]["body"]["name"].startswith("CLIPPED(")
+    assert "clipped from" in payload["request"]["body"]["name"]
+    assert "characters]" in payload["request"]["body"]["name"]
     assert rendered.text.count("## HTTP CASE — UNTRUSTED") == 1
 
 
@@ -144,8 +177,8 @@ def test_writer_converts_non_finite_numbers_to_valid_json_strings() -> None:
 
     assert match is not None
     assert json.loads(match.group(1)) == {
-        "nan": "number:nan",
-        "positive_infinity": "number:inf",
+        "nan": "nan",
+        "positive_infinity": "inf",
     }
 
 
@@ -168,7 +201,8 @@ def test_writer_omits_optional_records_before_required_records() -> None:
     assert rendered.metrics.required_record_count == 1
     assert rendered.metrics.optional_record_count == 20
     assert rendered.metrics.omitted_history_count > 0
-    assert "HISTORY OMITTED" in rendered.text
+    assert "optional history" in rendered.text
+    assert "omitted to fit the context budget" in rendered.text
 
 
 def test_agent_context_preserves_tool_groups_and_latest_feedback() -> None:

@@ -1,9 +1,10 @@
-"""Encode selected domain facts as compact, injection-resistant prompt text.
+"""Render selected domain facts as safe, bounded, readable Markdown.
 
-Callers add named sections and records instead of interpolating API or memory
-content into a prompt.  The writer owns escaping, typed scalar notation,
-flattening, value clipping, and optional-history omission.  Its output is an
-initial user message or a tool result consumed by :class:`AgentContext`.
+Workflow code decides which facts matter and adds them as sections, cards,
+details, tables, or HTTP JSON evidence. ``CompactTextWriter`` then applies one
+project-wide presentation: JSON-style scalar values, recursive Markdown for
+nested values, value clipping, and whole-card history omission. Its output is
+an initial user message or tool result consumed by :class:`AgentContext`.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from .context import ContextMetrics
 
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SECTION_SEPARATOR = re.compile(r"(?:^|\s)(?:-{3,}|={3,})(?:\s|$)")
+_INLINE_SEQUENCE_ITEMS = 8
+_INLINE_SEQUENCE_CHARS = 240
 
 
 class _AbsentValue:
@@ -70,8 +73,8 @@ class CompactTextWriter:
 
         Args:
             max_value_chars: Largest untrusted scalar retained verbatim. Longer
-                strings become a typed head/tail marker that records original
-                length.
+                strings become a readable head/tail preview that records the
+                original character count.
         """
         if max_value_chars < 24:
             raise ValueError("max_value_chars must be at least 24")
@@ -103,36 +106,44 @@ class CompactTextWriter:
         required: bool = True,
         **fields: Any,
     ) -> None:
-        """Add one compact ``label | key=value`` record.
+        """Add one self-contained Markdown card.
 
         Args:
             record_label: Request-local identifier such as ``C1`` or ``F2``.
             required: Whether the complete record must survive output budgeting.
                 Historical candidates should normally pass ``False``.
-            **fields: Flat scalar fields. Nested values are accepted but are
-                expanded to dotted paths.
+            **fields: Scalar or nested facts. Nested mappings and collections
+                remain nested instead of becoming dotted implementation paths.
         """
-        pieces = [f"- {_escape_label(record_label)}"]
-        for path, value in _flatten(fields):
-            pieces.append(f"{path}={self._encode(value)}")
-        self._add_entry((" | ".join(pieces),), required=required)
+        lines = [f"- {_code_label(record_label)}"]
+        for key, value in fields.items():
+            lines.extend(
+                self._named_value_lines(
+                    key,
+                    value,
+                    indent=2,
+                    capitalize=False,
+                )
+            )
+        self._add_entry(tuple(lines), required=required)
 
     def detail(
         self,
         label: str,
-        values: Mapping[str, Any],
+        values: Any,
         *,
         required: bool = True,
     ) -> None:
-        """Add indented dotted-path fields beneath a conceptual label."""
-        parts = [
-            f"{path}={self._encode(value)}"
-            for path, value in _flatten(values)
-        ]
-        line = f"  - {_escape_label(label)}"
-        if parts:
-            line += " | " + "; ".join(parts)
-        self._add_entry((line,), required=required)
+        """Add a named recursive Markdown tree without dotted field paths.
+
+        ``values`` is normally a mapping, but a workflow may supply a sequence
+        when the label itself already names the collection, such as “affected
+        inputs”. This keeps list structure explicit without adding another
+        public Writer method.
+        """
+        lines = [f"{_display_label(label, capitalize=True)}:"]
+        lines.extend(self._value_lines(values, indent=0))
+        self._add_entry(tuple(lines), required=required)
 
     def table(
         self,
@@ -141,7 +152,7 @@ class CompactTextWriter:
         *,
         required: bool = True,
     ) -> None:
-        """Add a small typed table used for samples and regular evidence.
+        """Add a small Markdown table used for samples and regular evidence.
 
         Every row must have the same width as ``headers``.  The writer encodes
         each cell, including strings, so a cell cannot escape the table.
@@ -159,15 +170,23 @@ class CompactTextWriter:
                 raise ValueError("table row width must match headers")
             lines.append(
                 "| "
-                + " | ".join(self._encode(value) for value in row_tuple)
+                + " | ".join(self._table_cell(value) for value in row_tuple)
                 + " |"
             )
         self._add_entry(tuple(lines), required=required)
 
     def text(self, label: str, value: Any, *, required: bool = True) -> None:
-        """Add one controlled label and one encoded scalar value."""
+        """Add one controlled label with a scalar or recursive value."""
         self._add_entry(
-            (f"{_escape_label(label)} | {self._encode(value)}",),
+            tuple(
+                self._named_value_lines(
+                    label,
+                    value,
+                    indent=0,
+                    capitalize=True,
+                    bullet=False,
+                )
+            ),
             required=required,
         )
 
@@ -246,7 +265,12 @@ class CompactTextWriter:
 
         text = self._render_entries(selected)
         if omitted:
-            marker = f"\nHISTORY OMITTED | records=int:{omitted}"
+            noun = "record" if omitted == 1 else "records"
+            marker = (
+                "\n\n> "
+                f"{omitted} optional history {noun} omitted to fit the context "
+                "budget."
+            )
             if len(text) + len(marker) <= max_chars:
                 text += marker
             else:
@@ -300,7 +324,10 @@ class CompactTextWriter:
                 if output:
                     output.append("")
                 output.append(heading)
+                output.append("")
                 previous_section = entry.section_index
+            elif output and output[-1] != "":
+                output.append("")
             output.extend(entry.lines)
         return "\n".join(output)
 
@@ -317,85 +344,151 @@ class CompactTextWriter:
             if len(value) <= self.max_value_chars:
                 return value
             self._clipped_values += 1
-            head_chars = max(8, (self.max_value_chars - 80) // 2)
-            tail_chars = max(8, self.max_value_chars - 80 - head_chars)
+            head_chars, tail_chars = _preview_lengths(self.max_value_chars)
             return (
-                "CLIPPED(type=string, "
-                f"chars={len(value)}, "
-                f"head={value[:head_chars]!r}, "
-                f"tail={value[-tail_chars:]!r})"
+                f"{value[:head_chars]} … {value[-tail_chars:]} "
+                f"[clipped from {len(value)} characters]"
             )
         if value is self.ABSENT:
-            return "ABSENT"
+            return "<not supplied>"
         if isinstance(value, float) and not math.isfinite(value):
             # JSON permits no NaN or Infinity literal. Preserve the diagnostic
             # value as text so HTTP evidence remains standards-compliant JSON.
-            return f"number:{value}"
+            return str(value)
         if value is None or isinstance(value, (bool, int, float)):
             return value
         return self._bounded_json(str(value))
 
-    def _encode(self, value: Any) -> str:
-        """Encode one scalar and account for any value-level clipping."""
+    def _encode_scalar(self, value: Any) -> str:
+        """Encode one leaf as JSON-style text and account for clipping."""
         if value is self.ABSENT:
-            return "ABSENT"
+            return "<not supplied>"
         if value is None:
             return "null"
         if isinstance(value, bool):
-            return f"bool:{str(value).lower()}"
+            return str(value).lower()
         if isinstance(value, int):
-            return f"int:{value}"
+            return str(value)
         if isinstance(value, float):
             if not math.isfinite(value):
-                return f"number:{value}"
-            return f"number:{format(value, '.15g')}"
+                return json.dumps(str(value), ensure_ascii=False)
+            return format(value, ".15g")
         if isinstance(value, bytes):
             value = value.decode("utf-8", errors="replace")
 
         raw_text = str(value)
         original_chars = len(raw_text)
-        text = _escape_text(raw_text)
-        if len(text) <= self.max_value_chars:
-            return f'string:"{text}"'
+        safe_text = _clean_scalar(raw_text)
+        if len(safe_text) <= self.max_value_chars:
+            return json.dumps(safe_text, ensure_ascii=False)
 
         self._clipped_values += 1
-        # Keep most of the allowance at the head because service error codes
-        # and field names usually occur before a long payload or stack trace.
-        head_chars = max(12, int(self.max_value_chars * 0.875))
-        tail_chars = max(6, self.max_value_chars - head_chars)
-        head = text[:head_chars]
-        tail = text[-tail_chars:]
+        head_chars, tail_chars = _preview_lengths(self.max_value_chars)
+        preview = f"{safe_text[:head_chars]} … {safe_text[-tail_chars:]}"
         return (
-            "CLIPPED("
-            f'type=string, chars={original_chars}, head="{head}", tail="{tail}"'
-            ")"
+            f"{json.dumps(preview, ensure_ascii=False)} "
+            f"(clipped from {original_chars} characters)"
         )
 
+    def _named_value_lines(
+        self,
+        label: str,
+        value: Any,
+        *,
+        indent: int,
+        capitalize: bool,
+        bullet: bool = True,
+    ) -> list[str]:
+        """Render one trusted field name and any scalar or nested value."""
+        prefix = " " * indent + ("- " if bullet else "")
+        safe_label = _display_label(label, capitalize=capitalize)
+        if (
+            _is_scalar(value)
+            or self._can_inline_sequence(value)
+            or isinstance(value, Mapping) and not value
+        ):
+            return [f"{prefix}{safe_label}: {self._inline_value(value)}"]
 
-def _flatten(
-    values: Mapping[str, Any],
-    *,
-    prefix: str = "",
-) -> list[tuple[str, Any]]:
-    """Expand nested mappings and lists into stable, one-based dotted paths."""
-    flattened: list[tuple[str, Any]] = []
-    for raw_key, value in values.items():
-        key = _escape_path_part(str(raw_key))
-        path = f"{prefix}.{key}" if prefix else key
+        lines = [f"{prefix}{safe_label}:"]
+        child_indent = indent + (2 if bullet else 0)
+        lines.extend(self._value_lines(value, indent=child_indent))
+        return lines
+
+    def _value_lines(self, value: Any, *, indent: int) -> list[str]:
+        """Recursively render a collection while preserving source order."""
         if isinstance(value, Mapping):
-            flattened.extend(_flatten(value, prefix=path))
-        elif isinstance(value, (list, tuple)):
+            return self._mapping_lines(value, indent=indent)
+        if isinstance(value, (list, tuple)):
             if not value:
-                flattened.append((path, CompactTextWriter.ABSENT))
-            for index, item in enumerate(value, start=1):
-                item_path = f"{path}.{index}"
-                if isinstance(item, Mapping):
-                    flattened.extend(_flatten(item, prefix=item_path))
-                else:
-                    flattened.append((item_path, item))
+                return [" " * indent + "[]"]
+            lines: list[str] = []
+            for item in value:
+                if _is_scalar(item) or self._can_inline_sequence(item):
+                    lines.append(
+                        " " * indent + f"- {self._inline_value(item)}"
+                    )
+                    continue
+                lines.append(" " * indent + "-")
+                lines.extend(self._value_lines(item, indent=indent + 2))
+            return lines
+        return [" " * indent + self._encode_scalar(value)]
+
+    def _mapping_lines(
+        self,
+        values: Mapping[Any, Any],
+        *,
+        indent: int,
+    ) -> list[str]:
+        """Render a mapping as nested field bullets or an explicit empty map."""
+        if not values:
+            return [" " * indent + "{}"]
+        lines: list[str] = []
+        for key, value in values.items():
+            lines.extend(
+                self._named_value_lines(
+                    str(key),
+                    value,
+                    indent=indent,
+                    capitalize=False,
+                )
+            )
+        return lines
+
+    def _can_inline_sequence(self, value: Any) -> bool:
+        """Return whether a short leaf-only sequence is clearer on one line."""
+        if not isinstance(value, (list, tuple)):
+            return False
+        if len(value) > _INLINE_SEQUENCE_ITEMS:
+            return False
+        if not all(_is_scalar(item) for item in value):
+            return False
+        # This check must not call the encoder because encoding records clipping
+        # metrics. The selected sequence is encoded exactly once when rendered.
+        if any(len(str(item)) > self.max_value_chars for item in value):
+            return False
+        estimated_chars = 2 + sum(len(str(item)) + 2 for item in value)
+        return estimated_chars <= _INLINE_SEQUENCE_CHARS
+
+    def _inline_value(self, value: Any) -> str:
+        """Render a scalar or already-approved short scalar sequence inline."""
+        if isinstance(value, (list, tuple)):
+            return "[" + ", ".join(
+                self._encode_scalar(item) for item in value
+            ) + "]"
+        if isinstance(value, Mapping):
+            if not value:
+                return "{}"
+            raise TypeError("non-empty mappings must be rendered recursively")
+        return self._encode_scalar(value)
+
+    def _table_cell(self, value: Any) -> str:
+        """Keep one encoded value inside its Markdown table column."""
+        if _is_scalar(value) or self._can_inline_sequence(value):
+            encoded = self._inline_value(value)
         else:
-            flattened.append((path, value))
-    return flattened
+            bounded = self._bounded_json(value)
+            encoded = json.dumps(bounded, ensure_ascii=False, separators=(",", ":"))
+        return encoded.replace("|", "\\|")
 
 
 def _escape_text(value: str) -> str:
@@ -417,9 +510,41 @@ def _escape_label(value: str) -> str:
     return _SECTION_SEPARATOR.sub(" ", safe).strip()
 
 
-def _escape_path_part(value: str) -> str:
-    """Keep a source field name recognizable inside a dotted path."""
-    return _escape_label(value).replace(".", "\\.")
+def _display_label(value: str, *, capitalize: bool) -> str:
+    """Turn a trusted field identifier into a short human-readable label."""
+    safe = _escape_label(str(value)).replace("_", " ")
+    if capitalize and safe:
+        return safe[0].upper() + safe[1:]
+    return safe
+
+
+def _code_label(value: str) -> str:
+    """Wrap a record handle in a fence that embedded backticks cannot close."""
+    safe = _escape_text(str(value))
+    longest_run = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", safe)),
+        default=0,
+    )
+    fence = "`" * max(1, longest_run + 1)
+    padding = " " if safe.startswith("`") or safe.endswith("`") else ""
+    return f"{fence}{padding}{safe}{padding}{fence}"
+
+
+def _clean_scalar(value: str) -> str:
+    """Replace unsupported controls before JSON handles visible escaping."""
+    return _CONTROL_CHARACTER.sub("\ufffd", value)
+
+
+def _is_scalar(value: Any) -> bool:
+    """Identify values that can be rendered without recursive structure."""
+    return not isinstance(value, (Mapping, list, tuple))
+
+
+def _preview_lengths(max_value_chars: int) -> tuple[int, int]:
+    """Allocate most of a clipped preview to its diagnostically useful head."""
+    head_chars = max(12, int(max_value_chars * 0.8))
+    tail_chars = max(6, max_value_chars - head_chars)
+    return head_chars, tail_chars
 
 
 def _clip_message(text: str, max_chars: int) -> str:
@@ -428,7 +553,7 @@ def _clip_message(text: str, max_chars: int) -> str:
         return text
     if max_chars < 48:
         return text[:max_chars]
-    marker = f"CLIPPED MESSAGE | original-chars={len(text)}\n"
+    marker = f"Context clipped from {len(text)} characters.\n"
     available = max_chars - len(marker) - len("\n...\n")
     head_chars = max(1, available // 2)
     tail_chars = max(1, available - head_chars)

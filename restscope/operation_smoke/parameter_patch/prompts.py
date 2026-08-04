@@ -120,7 +120,7 @@ def build_parameter_patch_prompt(
     current = {
         handle: {
             "inclusion_probability": configs[node_id].inclusion_probability,
-            "strategy": configs[node_id].strategy.model_dump(mode="python"),
+            "strategy": _generator_strategy_summary(configs[node_id].strategy),
         }
         for handle, node_id in semantic.node_by_handle.items()
         if handle in task.affected_inputs
@@ -143,14 +143,12 @@ def build_parameter_patch_prompt(
 
     writer = CompactTextWriter(max_value_chars=800)
     writer.section("PATCH REQUIREMENT")
-    writer.record(
-        task.todo_id,
-        failure=task.failure,
-        root_cause=task.root_cause,
-        affected_inputs=task.affected_inputs,
-    )
-    writer.text("desired_behavior", task.desired_behavior)
-    writer.text("acceptance_criteria", task.acceptance_criteria)
+    writer.text("task", task.todo_id)
+    writer.text("failure", task.failure)
+    writer.text("root cause", task.root_cause)
+    writer.detail("affected inputs", task.affected_inputs)
+    writer.text("desired behavior", task.desired_behavior)
+    writer.text("acceptance criteria", task.acceptance_criteria)
 
     writer.section("CURRENT GENERATORS", untrusted=True)
     for handle in task.affected_inputs:
@@ -159,7 +157,7 @@ def build_parameter_patch_prompt(
     writer.section("ACTIVE CONSTRAINTS", untrusted=True)
     constraints = list(active_constraints or [])
     if not constraints:
-        writer.record("none", count=0)
+        writer.text("constraints", "No active Constraints.")
     for constraint in constraints:
         writer.record(
             constraint.constraint_id,
@@ -172,7 +170,7 @@ def build_parameter_patch_prompt(
 
     writer.section("REFERENCE ALIASES", untrusted=True)
     if not references:
-        writer.record("none", count=0)
+        writer.text("references", "No populated reference aliases.")
     for alias, option in references.items():
         writer.record(
             alias,
@@ -189,13 +187,20 @@ def build_parameter_patch_prompt(
         )
 
     writer.section("PRIOR COMPATIBILITY", untrusted=True)
-    if not task.prior_attempts:
-        writer.record("none", count=0)
-    for index, attempt in enumerate(task.prior_attempts, start=1):
+    history = _relevant_history(
+        task.prior_attempts,
+        affected_inputs=set(task.affected_inputs),
+    )
+    if not history:
+        writer.text(
+            "history",
+            "No relevant applied or conflicting Patch history.",
+        )
+    for index, attempt in enumerate(history, start=1):
         writer.record(
             f"H{index}",
             required=False,
-            **_bounded_history_fields(attempt),
+            **attempt,
         )
     rendered = writer.render(max_chars=18_000)
     return ParameterPatchPrompt(
@@ -206,23 +211,114 @@ def build_parameter_patch_prompt(
     )
 
 
-def _bounded_history_fields(value: dict[str, Any]) -> dict[str, Any]:
-    """Keep compatibility facts while dropping transcript-like historical noise."""
-    preferred = (
-        "outcome",
-        "failure",
-        "root_cause",
-        "reason",
-        "affected_inputs",
-        "before_generators",
-        "after_generators",
-    )
-    selected = {key: value[key] for key in preferred if key in value}
-    if selected:
-        return selected
-    # Evaluation scenarios may use a concise custom compatibility record. The
-    # writer still bounds and escapes every field.
-    return dict(list(value.items())[:12])
+def _generator_strategy_summary(strategy: Any) -> dict[str, Any]:
+    """Show one Generator without null fields or an unbounded choice line.
+
+    Choice Generators can contain hundreds of OpenAPI enum values. A short
+    choice remains a normal array; a longer choice shows its exact size plus a
+    stable head/tail preview selected by this workflow.
+    """
+    summary = strategy.model_dump(mode="python", exclude_none=True)
+    if not summary.get("weights"):
+        summary.pop("weights", None)
+    values = summary.get("values")
+    if isinstance(values, list) and len(values) > 20:
+        summary["value_count"] = len(values)
+        summary["values"] = {
+            "first": values[:16],
+            "omitted_count": len(values) - 20,
+            "last": values[-4:],
+        }
+    return summary
+
+
+def _relevant_history(
+    histories: list[dict[str, Any]],
+    *,
+    affected_inputs: set[str],
+) -> list[dict[str, Any]]:
+    """Keep only real applied/conflict facts for the current Patch inputs.
+
+    Parameter Memory may return an empty entry for every requested input. Those
+    entries prove only that no history exists, so rendering one `H*` card per
+    input adds noise. Internal database identities and event identities are
+    also intentionally excluded from the model-facing projection.
+    """
+    selected: list[dict[str, Any]] = []
+    for history in histories:
+        input_handle = history.get("input_handle")
+        if input_handle not in affected_inputs:
+            continue
+        failures: list[dict[str, Any]] = []
+        for failure in history.get("failures") or []:
+            attempts = [
+                _history_attempt_summary(attempt)
+                for attempt in failure.get("attempts") or []
+                if attempt.get("outcome") in {"applied_patch", "conflict"}
+            ]
+            if not attempts:
+                continue
+            failures.append(
+                {
+                    "failure": failure.get("summary"),
+                    "attempts": attempts,
+                }
+            )
+        if failures:
+            selected.append(
+                {
+                    "input": input_handle,
+                    "failures": failures,
+                }
+            )
+    return selected
+
+
+def _history_attempt_summary(attempt: dict[str, Any]) -> dict[str, Any]:
+    """Remove storage identities while retaining compatibility evidence."""
+    summary = {
+        key: attempt[key]
+        for key in ("round_number", "outcome", "root_cause", "reason")
+        if key in attempt and attempt[key] is not None
+    }
+    parameters = [
+        parameter.get("input_handle")
+        for parameter in attempt.get("parameters") or []
+        if parameter.get("input_handle")
+    ]
+    if parameters:
+        summary["affected_inputs"] = parameters
+    change = attempt.get("generator_change")
+    if change:
+        if change.get("generator_changes"):
+            summary["generator_changes"] = _without_internal_ids(
+                change["generator_changes"]
+            )
+        if change.get("constraint_changes"):
+            summary["constraint_changes"] = _without_internal_ids(
+                change["constraint_changes"]
+            )
+    return summary
+
+
+def _without_internal_ids(value: Any) -> Any:
+    """Recursively remove persistence and runtime identities from history."""
+    if isinstance(value, list):
+        return [_without_internal_ids(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    hidden = {
+        "constraint_id",
+        "event_id",
+        "failure_id",
+        "input_node_id",
+        "solve_attempt_id",
+    }
+    return {
+        key: _without_internal_ids(item)
+        for key, item in value.items()
+        if key not in hidden
+    }
 
 
 def _semantic_constraint(value: Any, handle_by_node) -> Any:

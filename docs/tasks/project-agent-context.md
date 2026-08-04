@@ -2,6 +2,11 @@
 
 Status: Implemented and verified
 
+> Readability update (2026-08-04): the original typed-line presentation is
+> superseded by the single Markdown-card format recorded in
+> `readable-agent-context.md`. The public Context facade, safety ownership,
+> budgets, tool-group preservation, and metrics remain unchanged.
+
 ## Objective
 
 Give every direct RESTScope LLM decision one small, reusable Context Interface
@@ -15,8 +20,8 @@ same-operation candidate retrieval.
   `CompactTextWriter`, `ContextLimits`, and `ContextMetrics`.
 - Composition only: no Agent base class, role registry, Context persistence,
   snapshot, checksum, or database dependency.
-- Typed line text for runtime-generated DTO, Memory, API, tool, and sample
-  evidence. Final Agent output and provider tool protocols remain JSON.
+- Bounded Markdown cards for runtime-generated DTO, Memory, API, tool, and
+  sample evidence. Final Agent output and provider tool protocols remain JSON.
 - Injection-resistant value encoding, explicit clipping/omission markers,
   complete assistant/tool groups, newest validation feedback, and numeric trace
   metrics.
@@ -43,9 +48,10 @@ same-operation candidate retrieval.
 
 ## Implemented design
 
-`CompactTextWriter` owns typed scalar notation, nested path expansion, tables,
-untrusted section labels, control-character escaping, per-value clipping, and
-optional-history omission. `AgentContext` owns the initial system/task pair,
+`CompactTextWriter` owns JSON-style scalar notation, recursive Markdown cards,
+tables, untrusted section labels, control-character escaping, per-value
+clipping, and optional-history omission. `AgentContext` owns the initial
+system/task pair,
 assistant/tool groups, validation feedback, provider-window projection, and
 trace-safe numeric metrics.
 
@@ -57,10 +63,11 @@ or transport match. Runtime ranks and merges at most three per observation,
 then Planner caps the combined request at 24 `F` cards.
 
 Solve preloads only the Todo's cases and compact current Failure history. Its
-Parameter Memory, HTTP Probe, and Patch candidate feedback are typed text;
+Parameter Memory, HTTP Probe, and Patch candidate feedback are bounded text;
 compatibility-critical applied Patch/conflict history is never silently
 discarded. Patch receives affected Generators, active Constraints, reference
-aliases, and compatibility facts, then reviews typed presence/value samples.
+aliases, and compatibility facts, then reviews normalized presence/value
+samples.
 
 The two Behavior Monitor selectors use the same writer/context boundary, which
 keeps the shared Module independent from Operation Smoke.

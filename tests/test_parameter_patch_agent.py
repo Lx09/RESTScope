@@ -221,6 +221,250 @@ def _task():
     )
 
 
+def _updated_at_filter_config():
+    """Build the three optional GitLab query inputs from the reported trace."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.testing.snapshot import build_initial_operation_config
+
+    operation = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "GitLab prompt fixture", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "get": {
+                        "parameters": [
+                            {
+                                "name": "updated_after",
+                                "in": "query",
+                                "schema": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                },
+                            },
+                            {
+                                "name": "updated_before",
+                                "in": "query",
+                                "schema": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                },
+                            },
+                            {
+                                "name": "order_by",
+                                "in": "query",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "id",
+                                        "name",
+                                        "path",
+                                        "created_at",
+                                        "updated_at",
+                                        "last_activity_at",
+                                        "similarity",
+                                        "star_count",
+                                        "storage_size",
+                                        "repository_size",
+                                        "wiki_size",
+                                        "packages_size",
+                                    ],
+                                },
+                            },
+                        ],
+                        "responses": {"200": {"description": "ok"}},
+                    }
+                }
+            },
+        }
+    ).operations["GET /projects"]
+    return build_initial_operation_config(operation)
+
+
+def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
+    """The reported updated-at case must not regress to typed dotted lines."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchTask
+    from restscope.operation_smoke.parameter_patch.prompts import (
+        build_parameter_patch_prompt,
+    )
+
+    affected = [
+        "query.updated_after",
+        "query.updated_before",
+        "query.order_by",
+    ]
+    task = ParameterPatchTask(
+        todo_id="T1",
+        failure=(
+            "HTTP 400: `updated_at` filter and `updated_at` sorting must be "
+            "paired"
+        ),
+        root_cause=(
+            'The filter Generators are independent from order_by="id".'
+        ),
+        affected_inputs=affected,
+        desired_behavior=(
+            "Whenever either updated_at filter is present, order_by must equal "
+            "updated_at."
+        ),
+        acceptance_criteria=(
+            "Requests with a filter use updated_at sorting; other requests may "
+            "use any valid order_by choice."
+        ),
+        prior_attempts=[
+            {"input_handle": handle, "failures": []}
+            for handle in [*affected, "query.sort"]
+        ],
+    )
+
+    prompt = build_parameter_patch_prompt(
+        task=task,
+        config=_updated_at_filter_config(),
+        reference_options=[],
+        model=_model(),
+    ).user
+
+    assert 'Task: "T1"' in prompt
+    assert 'Failure: "HTTP 400:' in prompt
+    assert "Affected inputs:" in prompt
+    assert '- "query.updated_after"' in prompt
+    assert '- `query.order_by`' in prompt
+    assert '- strategy:' in prompt
+    assert '- type: "choice"' in prompt
+    assert '- values:' in prompt
+    assert '"updated_at"' in prompt
+    assert "No relevant applied or conflicting Patch history." in prompt
+    for forbidden in (
+        "string:",
+        "int:",
+        "number:",
+        "affected_inputs.1",
+        "failures=ABSENT",
+        "input_node_id",
+        "solve_attempt_id",
+        "event_id",
+        "query.sort",
+    ):
+        assert forbidden not in prompt
+    assert max(map(len, prompt.splitlines())) < 240
+
+
+def test_patch_prompt_summarizes_large_choice_generators() -> None:
+    """A large enum shows a deterministic 16/4 preview and its omitted count."""
+    from restscope.operation_smoke.parameter_patch.prompts import (
+        _generator_strategy_summary,
+    )
+    from restscope.testing.models import ChoiceGenerator
+
+    values = [f"choice-{index}" for index in range(25)]
+
+    summary = _generator_strategy_summary(
+        ChoiceGenerator(type="choice", values=values)
+    )
+
+    assert summary["value_count"] == 25
+    assert summary["values"] == {
+        "first": values[:16],
+        "omitted_count": 5,
+        "last": values[-4:],
+    }
+    assert "weights" not in summary
+
+
+def test_patch_prompt_keeps_only_relevant_compatibility_history() -> None:
+    """Applied facts survive while no-Patch facts and internal IDs stay hidden."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchTask
+    from restscope.operation_smoke.parameter_patch.prompts import (
+        build_parameter_patch_prompt,
+    )
+
+    task = ParameterPatchTask(
+        todo_id="T-history",
+        failure="The current sort conflicts with the updated_at filter.",
+        root_cause="The optional inputs are selected independently.",
+        affected_inputs=["query.order_by"],
+        desired_behavior="Preserve a previously compatible sort repair.",
+        acceptance_criteria="Filtered requests use updated_at sorting.",
+        prior_attempts=[
+            {
+                "input_handle": "query.order_by",
+                "failures": [
+                    {
+                        "failure_id": "db-failure-secret",
+                        "summary": "Earlier sort mismatch",
+                        "attempts": [
+                            {
+                                "solve_attempt_id": "db-no-patch-secret",
+                                "round_number": 1,
+                                "outcome": "no_patch",
+                                "reason": "No change was proposed.",
+                                "parameters": [],
+                            },
+                            {
+                                "solve_attempt_id": "db-applied-secret",
+                                "round_number": 2,
+                                "outcome": "applied_patch",
+                                "root_cause": "Sorting was independent.",
+                                "reason": "Pair sorting with the filter.",
+                                "parameters": [
+                                    {"input_handle": "query.order_by"}
+                                ],
+                                "generator_change": {
+                                    "event_id": "db-event-secret",
+                                    "generator_changes": [
+                                        {
+                                            "input_node_id": "query/order_by",
+                                            "before": {"type": "choice"},
+                                            "after": {"type": "constant"},
+                                        }
+                                    ],
+                                    "constraint_changes": [],
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+            {
+                "input_handle": "query.sort",
+                "failures": [
+                    {
+                        "summary": "Unrelated history",
+                        "attempts": [
+                            {
+                                "outcome": "conflict",
+                                "reason": "Must not be shown.",
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+    )
+
+    prompt = build_parameter_patch_prompt(
+        task=task,
+        config=_updated_at_filter_config(),
+        reference_options=[],
+        model=_model(),
+    ).user
+
+    assert "Earlier sort mismatch" in prompt
+    assert 'outcome: "applied_patch"' in prompt
+    assert "Pair sorting with the filter." in prompt
+    assert 'affected inputs: ["query.order_by"]' in prompt
+    assert "No change was proposed." not in prompt
+    assert "Unrelated history" not in prompt
+    for internal_id in (
+        "db-failure-secret",
+        "db-no-patch-secret",
+        "db-applied-secret",
+        "db-event-secret",
+        "query/order_by",
+    ):
+        assert internal_id not in prompt
+
+
 def _constant_patch(input_name: str = "path.projectId"):
     """Return one complete model-shaped constant Generator proposal."""
     return {
@@ -585,13 +829,16 @@ def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
     assert "GENERATED SAMPLES" in review_context
     assert "known-project" in review_context
     assert "PATCH PROPOSAL REJECTED" not in review_context
+    assert "string:" not in review_context
+    assert "values.1" not in review_context
     initial = client.requests[0].messages[1].content
     assert "PATCH REQUIREMENT" in initial
     assert "CURRENT GENERATORS" in initial
-    assert "status=string:\"200\"" in initial
-    assert "media=string:\"application/json\"" in initial
-    assert "selector=string:\"$[].id\"" in initial
-    assert '{"' not in initial
+    assert 'status: "200"' in initial
+    assert 'media: "application/json"' in initial
+    assert 'selector: "$[].id"' in initial
+    assert "string:" not in initial
+    assert "affected_inputs.1" not in initial
 
 
 def test_review_issues_return_to_the_original_patch_session_for_revision() -> None:
@@ -799,7 +1046,7 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert client.requests[1].messages[-1].role == "tool"
     assert client.requests[1].messages[-1].tool_call_id == "call_patch_1"
     assert correction.startswith("## PATCH PROPOSAL REJECTED — UNTRUSTED")
-    assert 'Use action="propose"' in correction
+    assert r'Use action=\"propose\"' in correction
     assert "Submit one complete replacement patch" in correction
 
 
@@ -984,7 +1231,7 @@ def test_patch_rejects_a_review_shape_submitted_as_a_proposal() -> None:
     assert outcome.status == "validated"
     assert outcome.outputs_used == 3
     assert len(outcome.attempt_history) == 3
-    assert 'Use action="propose"' in client.requests[1].messages[-1].content
+    assert r'Use action=\"propose\"' in client.requests[1].messages[-1].content
 
 
 def test_patch_output_budget_returns_complete_failure_to_solve() -> None:

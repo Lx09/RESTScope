@@ -274,6 +274,8 @@ def test_agent_groups_by_parameter_and_each_failure_keeps_one_case() -> None:
     assert "query.sort" in prompt
     assert "request.query.sort" in prompt
     assert '"sort"' in prompt
+    assert "string:" not in prompt
+    assert "int:" not in prompt
 
 
 def test_dedup_executes_multiple_independent_tool_calls_in_one_output() -> None:

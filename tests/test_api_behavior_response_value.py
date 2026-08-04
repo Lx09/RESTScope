@@ -635,10 +635,13 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     request = client.requests[1]
     assert request.metadata["role"] == "api_behavior_monitor"
     prompt = request.messages[1].content
-    assert 'P1 | parameter=string:"commitId"' in prompt
-    assert 'S1 | producer=string:"GET /commits"' in prompt
-    assert 'field=string:"body.sha"' in prompt
+    assert "- `P1`" in prompt
+    assert 'parameter: "commitId"' in prompt
+    assert "- `S1`" in prompt
+    assert 'producer: "GET /commits"' in prompt
+    assert 'field: "body.sha"' in prompt
     assert "Commit object identifier" in prompt
+    assert "string:" not in prompt
     assert request.response_format == "json"
     assert request.json_schema is None
     for forbidden in (

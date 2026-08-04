@@ -172,11 +172,16 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     request = client.requests[0]
     assert request.metadata["role"] == "api_behavior_monitor"
     prompt = request.messages[1].content
-    assert 'operation | method=string:"POST" | path=string:"/commits"' in prompt
-    assert 'resource=string:"commit"' in prompt
-    assert 'response_group=string:"root"' in prompt
-    assert 'I1 | field=string:"sha"' in prompt
-    assert 'I2 | field=string:"message"' in prompt
+    assert "- `operation`" in prompt
+    assert 'method: "POST"' in prompt
+    assert 'path: "/commits"' in prompt
+    assert 'resource: "commit"' in prompt
+    assert 'response group: "root"' in prompt
+    assert "- `I1`" in prompt
+    assert 'field: "sha"' in prompt
+    assert "- `I2`" in prompt
+    assert 'field: "message"' in prompt
+    assert "string:" not in prompt
     assert request.response_format == "json"
     assert request.json_schema is None
     for forbidden in (
@@ -231,8 +236,9 @@ def test_non_exact_id_suffix_candidates_are_preferred_but_require_llm(
 
     assert result.status == "updated"
     prompt = client.requests[0].messages[1].content
-    assert 'I1 | field=string:"userId"' in prompt
-    assert 'field=string:"sha"' not in prompt
+    assert "- `I1`" in prompt
+    assert 'field: "userId"' in prompt
+    assert 'field: "sha"' not in prompt
 
 
 def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
@@ -265,8 +271,9 @@ def test_prompt_excludes_invalid_scalar_types_and_mixed_schema_types(
 
     assert tracker.observe(observation).status == "updated"
     prompt = client.requests[0].messages[1].content
-    assert 'I1 | field=string:"sha"' in prompt
-    assert 'field=string:"mixed"' not in prompt
+    assert "- `I1`" in prompt
+    assert 'field: "sha"' in prompt
+    assert 'field: "mixed"' not in prompt
 
 
 def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
@@ -286,8 +293,9 @@ def test_invalid_exact_id_type_does_not_hide_a_valid_semantic_candidate(
 
     assert result.status == "updated"
     prompt = client.requests[0].messages[1].content
-    assert 'I1 | field=string:"sha"' in prompt
-    assert 'field=string:"id"' not in prompt
+    assert "- `I1`" in prompt
+    assert 'field: "sha"' in prompt
+    assert 'field: "id"' not in prompt
 
 
 def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
@@ -305,9 +313,10 @@ def test_semantic_identifier_uses_two_stable_batches_of_50_candidates(
     first = client.requests[0].messages[1].content
     second = client.requests[1].messages[1].content
     for index in range(1, 51):
-        assert f"I{index} |" in first
-    assert 'I51 | field=string:"field50"' in second
-    assert "I50 |" not in second
+        assert f"- `I{index}`" in first
+    assert "- `I51`" in second
+    assert 'field: "field50"' in second
+    assert "- `I50`" not in second
 
 
 def test_semantic_identifier_ignores_candidates_after_first_100(
@@ -509,7 +518,7 @@ def test_schema_only_semantic_identifier_retries_until_value_is_observed(
         for message in request.messages
     )
     assert "Canonical commit hash" in prompt
-    assert 'format=string:"sha1"' in prompt
+    assert 'format: "sha1"' in prompt
     assert catalog.lookup(
         ResourceLookupRequest(resource="commit")
     ).recommended_id == "abc123"
@@ -644,7 +653,7 @@ def test_existing_alias_resolves_canonical_name_locally(tmp_path: Path) -> None:
 
     assert result.status == "updated"
     prompt = client.requests[0].messages[1].content
-    assert 'resource=string:"user"' in prompt
+    assert 'resource: "user"' in prompt
     lookup = catalog.lookup(ResourceLookupRequest(resource="owner", limit=100))
     assert lookup.canonical_resource == "user"
     assert {item.value for item in lookup.identifiers} == {1, 2}

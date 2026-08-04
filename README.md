@@ -123,11 +123,14 @@ the runtime package does not register an offline fake provider.
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
 
-All five direct LLM decision sites construct messages through
-`restscope.context`. Workflow adapters first select typed facts, then
-`CompactTextWriter` encodes untrusted API, Memory, tool, and sample values as
-bounded Markdown. Bounded HTTP request/response evidence is rendered as JSON
-inside safe Markdown fences so a complete test case stays easy to inspect.
+Every direct LLM decision constructs messages through `restscope.context`.
+Workflow adapters first select the domain facts that matter, then
+`CompactTextWriter` safely renders untrusted API, Memory, tool, and sample
+values as bounded, readable Markdown cards. Scalars use normal JSON notation,
+nested values remain nested, and missing values are distinct from null and
+empty containers. Bounded HTTP request/response evidence is the sole JSON
+prompt exception and is rendered inside a safe Markdown fence so a complete
+test case stays easy to inspect.
 `AgentContext` preserves complete tool exchanges and newest validation feedback
 inside the role and model windows. Strict Agent outputs and provider tool
 protocols also remain JSON.

@@ -271,8 +271,12 @@ diagnostics; no separate Operation Smoke Review Interface is exposed.
 
 The project-level message-construction Module used by every direct LLM
 decision. `CompactTextWriter` turns already-selected DTO, Memory, tool, and
-sample facts into bounded Markdown while escaping untrusted values. HTTP
-request/response evidence uses safe JSON blocks inside that Markdown.
+sample facts into bounded Markdown cards while escaping untrusted values.
+Strings are JSON-quoted, nested mappings and lists stay visibly nested, and
+missing, null, empty-list, and empty-object values remain distinguishable. The
+Writer does not decide which domain facts matter; the owning workflow makes
+that choice before rendering. HTTP request/response evidence uses safe JSON
+blocks inside that Markdown.
 `AgentContext` keeps the system/task pair, complete tool-call groups, newest
 feedback, explicit clipping, and numeric trace metrics inside each role's
 budget. It knows no Operation Smoke, Behavior Monitor, database, or Agent
