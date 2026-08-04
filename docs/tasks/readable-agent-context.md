@@ -2,8 +2,9 @@
 
 ## Status
 
-Implemented and verified in the feature worktree; intentionally uncommitted
-pending separate Git delivery authorization.
+Completed. Commit `f68fe87` was fast-forwarded into local `main`, the merged
+Context/Patch tests passed, and the feature worktree and branch were removed.
+The local branch has not been pushed.
 
 ## Objective and approved scope
 
@@ -52,6 +53,9 @@ reference aliases, and relevant applied or conflicting history.
   tests/test_operation_smoke_evaluations.py
   tests/test_workflow_package_boundaries.py`: `118 passed, 2 skipped`.
 - Complete local suite: `uv run pytest -q`: `560 passed, 18 skipped`.
+- Clean merged-main Context and Parameter Patch tests: `39 passed`.
+- After restoring the pre-existing main-worktree changes, the combined Context,
+  Dedup, Solve, Patch/Review, and Behavior Monitor tests passed: `116 passed`.
 - `uv run python -m compileall -q restscope evaluations tests`: passed.
 - `git diff --check`: passed.
 - A local rendering of the reported GitLab updated-at case was inspected. It
@@ -64,5 +68,4 @@ reference aliases, and relevant applied or conflicting history.
 
 - Model readability has been checked through deterministic prompt rendering,
   not a separately authorized live model call.
-- The change is not yet preserved in Git because commit, merge, cleanup, and
-  push were explicitly left for separate authorization.
+- The local commits have not been pushed; push requires separate authorization.
