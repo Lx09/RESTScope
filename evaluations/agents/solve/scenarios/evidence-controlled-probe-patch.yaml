@@ -67,7 +67,7 @@ input:
           - input_node_id: path/projectId
             strategy: {type: constant, value: known-project}
         constraints: []
-        selected_reference_options: []
+        selected_reference_provenance: []
       samples:
         - values: {path.projectId: known-project}
       outputs_used: 2

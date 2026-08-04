@@ -68,6 +68,12 @@ def build_operation_smoke_coordinator(
         client=client,
         patch_model=selector.select("parameter_patch_agent"),
         review_model=selector.select("parameter_patch_review_agent"),
+        openapi_capability=capability_runtime.openapi_capability,
+        resource_capability=getattr(
+            capability_runtime,
+            "resource_identifier_capability",
+            None,
+        ),
         tracing_runtime=runtime,
     )
     return OperationSmokeCoordinator(

@@ -61,8 +61,9 @@ are not part of the supported contract.
 
 Parameter Patch Proposal and Review decisions use JSON Schema responses on the
 standard endpoint and are validated again locally before compilation or
-acceptance. Parameter Patch deliberately disables thinking for these compact
-structured decisions.
+acceptance. Proposal may first make bounded read-only resource and observed-
+response-field lookups; Review receives no tools. Parameter Patch deliberately
+disables thinking for these compact structured decisions.
 
 ## Development
 
@@ -364,8 +365,10 @@ contract change events are the audit exception; bounded flattened response
 scalar evidence is another narrow exception, and all non-null scalar fields,
 including sensitive-looking names, may be retained. The public read-only
 Capability exposes `resource.list_resources`, `resource.list_ids`, and
-`openapi.find_observed_response_fields`; no current Agent receives these tools.
-Response Value pools continue to be consumed internally by Operation Smoke.
+`openapi.find_observed_response_fields`. Only Parameter Patch receives these
+tools, and only for its short-lived proposal session. Response Value pools are
+read without registration while a candidate is sampled; applying the selected
+Patch performs the first producer-to-consumer pool registration.
 
 ## Operation Smoke workflow
 

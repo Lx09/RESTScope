@@ -502,4 +502,8 @@ def _status_matches(declared: str, actual: int) -> bool:
     """Match an exact or OpenAPI wildcard response status declaration."""
 
     normalized = declared.upper()
-    return normalized == str(actual) or normalized == f"{actual // 100}XX"
+    return (
+        normalized == "DEFAULT"
+        or normalized == str(actual)
+        or normalized == f"{actual // 100}XX"
+    )

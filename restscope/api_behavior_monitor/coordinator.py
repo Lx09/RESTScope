@@ -369,6 +369,28 @@ class APIBehaviorMonitorCoordinator:
             expected_type=expected_type,
         )
 
+    def preview_selected_response_value_source(
+        self,
+        *,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        expected_type: str | None,
+        source: ResponseValueSource,
+    ) -> ResponseValueSourceOption | None:
+        """Read one exact producer field for Patch sampling without writes.
+
+        Parameter Patch has already checked that ``source`` was copied from its
+        current OpenAPI lookup session. This method re-reads retained scalar
+        evidence and derives the consumer-owned private pool name, but it does
+        not register that pool.
+        """
+        return self.response_value_tracker.preview_selected_source(
+            consumer_operation_key=consumer_operation_key,
+            consumer_input_node_id=consumer_input_node_id,
+            expected_type=expected_type,
+            source=source,
+        )
+
     def register_response_value_sources(
         self,
         *,

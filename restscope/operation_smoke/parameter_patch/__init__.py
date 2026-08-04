@@ -4,7 +4,7 @@ from .agent import ParameterPatchAgent
 from .coordinator import ParameterPatchCoordinator
 from .factory import ParameterPatchCoordinatorFactory
 from .schemas import (
-    AvailableReferenceOption,
+    SelectedReferenceProvenance,
     CompiledConstraintPatch,
     GeneratorPatchDraft,
     ParameterPatchFailure,
@@ -15,7 +15,7 @@ from .schemas import (
 )
 
 __all__ = [
-    "AvailableReferenceOption",
+    "SelectedReferenceProvenance",
     "CompiledConstraintPatch",
     "GeneratorPatchDraft",
     "ParameterPatchAgent",

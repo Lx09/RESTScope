@@ -74,7 +74,7 @@ input:
           - input_node_id: path/projectId
             strategy: {type: integer_range, minimum: 3, maximum: 100}
         constraints: []
-        selected_reference_options: []
+        selected_reference_provenance: []
       samples:
         - values: {path.projectId: 3}
         - values: {path.projectId: 100}

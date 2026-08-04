@@ -214,6 +214,46 @@ def test_registers_ir_source_extracts_values_and_deduplicates_them() -> None:
     assert catalog.values_for(registration.value_name) == [7, 9]
 
 
+def test_selected_default_response_source_backfills_and_tracks_success_values() -> None:
+    """A lookup-matched default contract can supply concrete successful statuses."""
+    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
+    from restscope.api_behavior_monitor.response_value_catalog import (
+        ResponseValueSource,
+    )
+
+    catalog = _catalog()
+    tracker = ResponseValueTracker(catalog=catalog)
+    tracker.observe(
+        producer_operation_key="POST /jobs",
+        status_code=201,
+        media_type="application/json",
+        body={"sha": "first"},
+    )
+    registration = tracker.register_selected_sources(
+        consumer_operation_key="GET /commits/{sha}",
+        consumer_input_node_id="path/sha",
+        parameter_name="sha",
+        expected_type="string",
+        sources=[
+            ResponseValueSource(
+                producer_operation_key="POST /jobs",
+                status_code="default",
+                media_type="application/json",
+                selector="$.sha",
+                field_name="sha",
+            )
+        ],
+    )
+
+    tracker.observe(
+        producer_operation_key="POST /jobs",
+        status_code=202,
+        media_type="application/json",
+        body={"sha": "second"},
+    )
+
+    assert catalog.values_for(registration.value_name) == ["first", "second"]
+
 def test_observation_history_flattens_all_scalars_and_keeps_latest_100() -> None:
     """Scenario: verify that observation history flattens all scalars and keeps latest 100."""
     from restscope.api_behavior_monitor.response_value import (

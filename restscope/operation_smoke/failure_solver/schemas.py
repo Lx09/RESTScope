@@ -35,7 +35,6 @@ class FailureSolveRequest(_Model):
     todo: FailureTodo
     operation: dict[str, Any]
     generator_config: dict[str, Any]
-    reference_options: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FailureSolveDecision(_Model):

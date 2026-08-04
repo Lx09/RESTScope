@@ -13,9 +13,15 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from restscope.capabilities import (
+    OpenAPICapability,
+    ResourceIdentifierCapability,
+    ToolFailure,
+)
 from restscope.context import CompactTextWriter
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
+from restscope.response_fields import ResponseFieldReference
 from restscope.testing import (
     ConstraintSet,
     InputGeneratorPatch,
@@ -42,18 +48,46 @@ from .review import (
     ParameterPatchReviewFailure,
 )
 from .schemas import (
-    AvailableReferenceOption,
+    SelectedReferenceProvenance,
     CompiledConstraintPatch,
     GeneratorPatchDraft,
     ParameterPatchFailure,
     ParameterPatchProposal,
     ParameterPatchTask,
+    SemanticResponseValueGenerator,
     SemanticBooleanExpression,
     ValidatedParameterPatch,
 )
 
 
 _MAX_ERRORS = 20
+
+
+class _CandidateReferenceValues:
+    """Overlay unregistered response values on the normal generation provider."""
+
+    def __init__(
+        self,
+        *,
+        delegate: ReferenceValueProvider | None,
+        response_values: Mapping[str, list[object]],
+    ) -> None:
+        """Keep candidate-only pools in memory for this coordination run."""
+        self.delegate = delegate
+        self.response_values = dict(response_values)
+
+    def values_for(
+        self,
+        strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
+    ) -> list[object]:
+        """Resolve candidate response pools first and delegate other strategies."""
+        if isinstance(strategy, ResponseValueGenerator):
+            values = self.response_values.get(strategy.value_name)
+            if values is not None:
+                return list(values)
+        if self.delegate is None:
+            return []
+        return list(self.delegate.values_for(strategy))
 
 
 class ParameterPatchCoordinator:
@@ -67,6 +101,8 @@ class ParameterPatchCoordinator:
         review_model: LLMModelConfig,
         patch_system_prompt: str | None = None,
         review_system_prompt: str | None = None,
+        openapi_capability: OpenAPICapability | None = None,
+        resource_capability: ResourceIdentifierCapability | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Store collaborators for one short-lived Patch coordination run."""
@@ -75,6 +111,8 @@ class ParameterPatchCoordinator:
         self.review_model = review_model
         self.patch_system_prompt = patch_system_prompt
         self.review_system_prompt = review_system_prompt
+        self.openapi_capability = openapi_capability
+        self.resource_capability = resource_capability
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(
@@ -85,7 +123,6 @@ class ParameterPatchCoordinator:
         active_constraints: list[CompiledConstraintPatch],
         case_count: int,
         reference_values: ReferenceValueProvider | None = None,
-        reference_options: list[AvailableReferenceOption] | None = None,
         random_seed: int = 0,
         max_outputs: int = 20,
     ) -> ValidatedParameterPatch | ParameterPatchFailure:
@@ -105,7 +142,6 @@ class ParameterPatchCoordinator:
         prompt = build_parameter_patch_prompt(
             task=task,
             config=config,
-            reference_options=list(reference_options or []),
             model=self.patch_model,
             active_constraints=active_constraints,
             system_prompt=self.patch_system_prompt,
@@ -114,6 +150,8 @@ class ParameterPatchCoordinator:
             client=self.client,
             model=self.patch_model,
             prompt=prompt,
+            openapi_capability=self.openapi_capability,
+            resource_capability=self.resource_capability,
             tracing_runtime=self.tracing_runtime,
         )
         outputs_used = 0
@@ -144,24 +182,44 @@ class ParameterPatchCoordinator:
                 outputs_used += 1
                 attempt_history.append(_patch_attempt_record(attempt))
                 errors = list(attempt.errors)
+
+                # Lookup turns spend the shared model-output budget but do not
+                # become candidate proposals. Tool execution remains read-only
+                # and its complete provider call/result group stays in Context.
+                if attempt.response.tool_calls and not errors:
+                    patch_agent.execute_tools(attempt)
+                    if outputs_used >= max_outputs:
+                        latest_errors = [
+                            "Lookup outputs exhausted the budget before a final "
+                            "Patch proposal."
+                        ]
+                    continue
                 patch: GeneratorPatchDraft | None = None
                 samples: list[dict[str, Any]] = []
 
                 if attempt.submission is not None and not errors:
                     proposal = attempt.submission.patch
                     try:
-                        patch = _compile_patch(
+                        patch, candidate_response_values = _compile_patch(
                             proposal,
                             task=task,
                             config=config,
-                            reference_by_alias=patch_agent.reference_by_alias,
+                            queried_resources=patch_agent.queried_resources,
+                            queried_response_fields=(
+                                patch_agent.queried_response_fields
+                            ),
+                            reference_values=reference_values,
+                            openapi_capability=self.openapi_capability,
                         )
                         samples = _sample_patch(
                             task=task,
                             config=config,
                             patch=patch,
                             active_constraints=active_constraints,
-                            reference_values=reference_values,
+                            reference_values=_CandidateReferenceValues(
+                                delegate=reference_values,
+                                response_values=candidate_response_values,
+                            ),
                             case_count=case_count,
                             random_seed=random_seed,
                         )
@@ -233,7 +291,7 @@ class ParameterPatchCoordinator:
                                 "sample_count": len(samples),
                                 "review_issue_count": 0,
                                 "reference_count": len(
-                                    patch.selected_reference_options
+                                    patch.selected_reference_provenance
                                 ),
                             }
                         )
@@ -345,10 +403,6 @@ def _proposal_feedback(errors: list[str]) -> str:
             "not uses expression; implies uses condition and consequence."
         ),
     )
-    writer.text(
-        "reference",
-        "For an R alias, set reference beside input and omit strategy.",
-    )
     return writer.render(max_chars=12_000).text
 
 
@@ -412,14 +466,14 @@ def _build_review_candidate(
                 "input": semantic.handle_by_node[option.input_node_id],
                 "kind": option.kind,
                 "resource": option.canonical_resource,
-                "value_name": option.value_name,
+                "value_count": option.value_count,
+                "compatible_type": option.compatible_scalar_type,
                 "producer_operations": option.producer_operation_keys,
                 "status": option.producer_status_code,
                 "media_type": option.producer_media_type,
                 "field": option.source_field,
-                "selector": option.source_selector,
             }
-            for option in patch.selected_reference_options
+            for option in patch.selected_reference_provenance
         ],
         active_constraints=[
             _constraint_summary(item, semantic.handle_by_node)
@@ -440,17 +494,19 @@ def _generator_summary(
     """Describe selected Generators with semantic handles for Reviewer use."""
     semantic = build_semantic_input_map(config)
     by_node = {item.input_node_id: item for item in config.configs}
-    return {
-        handle: {
-            "inclusion_probability": by_node[
-                semantic.node_by_handle[handle]
-            ].inclusion_probability,
-            "strategy": by_node[
-                semantic.node_by_handle[handle]
-            ].strategy.model_dump(mode="python"),
+    output: dict[str, Any] = {}
+    for handle in affected_inputs:
+        item = by_node[semantic.node_by_handle[handle]]
+        strategy = item.strategy.model_dump(mode="python")
+        # Internal response pool names are deterministic storage identities.
+        # The proposal and provenance show the producer field instead.
+        if strategy.get("type") == "response_value":
+            strategy = {"type": "response_value"}
+        output[handle] = {
+            "inclusion_probability": item.inclusion_probability,
+            "strategy": strategy,
         }
-        for handle in affected_inputs
-    }
+    return output
 
 
 def _constraint_summary(
@@ -491,16 +547,20 @@ def _compile_patch(
     *,
     task: ParameterPatchTask,
     config: OperationGeneratorConfig,
-    reference_by_alias: dict[str, AvailableReferenceOption],
-) -> GeneratorPatchDraft:
-    """Translate semantic model output into executable testing objects."""
+    queried_resources: Mapping[str, tuple[frozenset[str], int]],
+    queried_response_fields: set[tuple[str, str, str, str]],
+    reference_values: ReferenceValueProvider | None,
+    openapi_capability: OpenAPICapability | None,
+) -> tuple[GeneratorPatchDraft, dict[str, list[object]]]:
+    """Translate semantic output after revalidating any selected evidence."""
     semantic = build_semantic_input_map(config)
     allowed = set(task.affected_inputs)
     supplied = [change.input for change in proposal.changes]
     if len(supplied) != len(set(supplied)):
         raise ValueError("each semantic input may be changed at most once")
     updates: list[InputGeneratorPatch] = []
-    selected_options: list[AvailableReferenceOption] = []
+    selected_options: list[SelectedReferenceProvenance] = []
+    candidate_response_values: dict[str, list[object]] = {}
     for change in proposal.changes:
         if change.input not in allowed:
             raise ValueError(
@@ -510,28 +570,99 @@ def _compile_patch(
         if node_id is None:
             raise ValueError(f"Unknown semantic input: {change.input}")
         strategy = change.strategy
-        if change.reference is not None:
-            option = reference_by_alias.get(change.reference)
-            if option is None:
+        if isinstance(strategy, ResourceIdentifierGenerator):
+            if strategy.resource not in queried_resources:
                 raise ValueError(
-                    f"Unknown observed-value source: {change.reference}"
+                    "Call resource.list_ids successfully before using "
+                    f"canonical resource {strategy.resource!r}"
                 )
-            if option.input_node_id != node_id:
+            if reference_values is None:
+                raise ValueError("Resource Identifier values are unavailable")
+            current_values = reference_values.values_for(strategy)
+            if not current_values:
                 raise ValueError(
-                    f"{change.reference} is not available for {change.input}"
+                    f"Resource Identifier pool is empty: {strategy.resource}"
                 )
-            strategy = (
-                ResourceIdentifierGenerator(
-                    type="resource_identifier",
-                    resource=option.canonical_resource,
+            expected_type = _reference_expected_type_for_input(
+                config,
+                node_id,
+            )
+            value_types = [_json_scalar_type(value) for value in current_values]
+            if any(value_type is None for value_type in value_types) or not (
+                _reference_types_compatible(expected_type, value_types)
+            ):
+                raise ValueError(
+                    f"Resource Identifier values are incompatible with {change.input}"
                 )
-                if option.kind == "resource_identifier"
-                else ResponseValueGenerator(
-                    type="response_value",
-                    value_name=option.value_name,
+            selected_options.append(
+                SelectedReferenceProvenance(
+                    input_node_id=node_id,
+                    kind="resource_identifier",
+                    canonical_resource=strategy.resource,
+                    compatible_scalar_type=(
+                        expected_type
+                        or "|".join(
+                            sorted(
+                                {
+                                    item
+                                    for item in value_types
+                                    if item is not None
+                                }
+                            )
+                        )
+                    ),
+                    value_count=len(current_values),
                 )
             )
+        if isinstance(strategy, SemanticResponseValueGenerator):
+            source = strategy.source
+            identity = (
+                source.operation_key,
+                source.matched_status_code,
+                source.media_type,
+                source.field,
+            )
+            if identity not in queried_response_fields:
+                raise ValueError(
+                    "The response_value source must be copied exactly from "
+                    "openapi.find_observed_response_fields in this Patch session"
+                )
+            if not _response_source_is_current(openapi_capability, identity):
+                raise ValueError(
+                    "The selected response_value source is no longer available"
+                )
+            resolver = reference_values
+            if resolver is None or not hasattr(resolver, "resolve_response_source"):
+                raise ValueError("Response Value evidence is unavailable")
+            option, values = resolver.resolve_response_source(
+                config=config,
+                input_node_id=node_id,
+                operation_key=source.operation_key,
+                matched_status_code=source.matched_status_code,
+                media_type=source.media_type,
+                field=source.field,
+            )
+            expected_selector = ResponseFieldReference.from_handle(
+                source.field
+            ).selector
+            if (
+                option.kind != "response_value"
+                or option.producer_operation_keys != [source.operation_key]
+                or option.producer_status_code != source.matched_status_code
+                or option.producer_media_type != source.media_type
+                or option.source_field != source.field
+                or option.source_selector != expected_selector
+            ):
+                raise ValueError(
+                    "Resolved response provenance does not match the selected source"
+                )
+            assert option.value_name is not None
+            strategy = ResponseValueGenerator(
+                type="response_value",
+                value_name=option.value_name,
+            )
             selected_options.append(option)
+            candidate_response_values[option.value_name] = values
         updates.append(
             InputGeneratorPatch(
                 input_node_id=node_id,
@@ -556,10 +687,112 @@ def _compile_patch(
     patch = GeneratorPatchDraft(
         updates=updates,
         constraints=constraints,
-        selected_reference_options=selected_options,
+        selected_reference_provenance=selected_options,
     )
     preview_generator_patch(config, patch.updates)
-    return patch
+    return patch, candidate_response_values
+
+
+def _response_source_is_current(
+    capability: OpenAPICapability | None,
+    identity: tuple[str, str, str, str],
+) -> bool:
+    """Re-run current-IR observation lookup and require one exact source identity."""
+    if capability is None:
+        return False
+    reference = ResponseFieldReference.from_handle(identity[3])
+    query = ".".join(reference.property_names) or "body"
+    offset = 0
+    while True:
+        try:
+            result = capability.find_observed_response_fields(
+                name=query,
+                offset=offset,
+                limit=200,
+            )
+        except ToolFailure:
+            return False
+        structured = result.get("structured")
+        if not isinstance(structured, dict):
+            return False
+        for response in structured.get("responses", []):
+            if not isinstance(response, dict):
+                continue
+            prefix = (
+                response.get("operation_key"),
+                response.get("matched_status_code"),
+                response.get("media_type"),
+            )
+            for field in response.get("fields", []):
+                if (
+                    isinstance(field, dict)
+                    and (*prefix, field.get("field")) == identity
+                ):
+                    return True
+        next_offset = structured.get("next_offset")
+        if not isinstance(next_offset, int) or next_offset <= offset:
+            break
+        offset = next_offset
+    return False
+
+
+def _reference_expected_type_for_input(
+    config: OperationGeneratorConfig,
+    input_node_id: str,
+) -> str | None:
+    """Return the exact body scalar type, or ``None`` for stringified parameters.
+
+    OpenAPI path, query, header, and cookie parameters serialize scalar values
+    as text. JSON request-body fields retain their declared scalar type, so the
+    selected observed pool must match it exactly (integers may satisfy number).
+    """
+    parameter_ids = {
+        item.input_node_id for item in config.snapshot.parameters
+    }
+    if input_node_id in parameter_ids:
+        return None
+    node = next(
+        item
+        for item in config.snapshot.input_nodes
+        if item.input_node_id == input_node_id
+    )
+    schema = node.schema_contract
+    declared = schema.type if schema is not None else None
+    if isinstance(declared, list):
+        concrete = [item for item in declared if item != "null"]
+        declared = concrete[0] if len(concrete) == 1 else None
+    if declared not in {"string", "integer", "number", "boolean"}:
+        raise ValueError("Reference values can only target scalar inputs")
+    return declared
+
+
+def _json_scalar_type(value: object) -> str | None:
+    """Classify one observed JSON scalar without treating Boolean as integer."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    return None
+
+
+def _reference_types_compatible(
+    expected_type: str | None,
+    value_types: list[str | None],
+) -> bool:
+    """Require every value that the Generator may choose to fit the consumer."""
+    if not value_types or any(item is None for item in value_types):
+        return False
+    if expected_type is None:
+        return True
+    return all(
+        item == expected_type
+        or (expected_type == "number" and item == "integer")
+        for item in value_types
+    )
 
 
 def _validate_variant_branch_updates(

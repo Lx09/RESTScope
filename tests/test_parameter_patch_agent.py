@@ -52,6 +52,111 @@ class RawResponseClient:
         return self.responses.pop(0)
 
 
+class StubPatchResourceCapability:
+    """Return one canonical resource and its populated string-ID pool."""
+
+    def list_resources(self, *, offset=0, limit=100):
+        """Expose the one canonical name used by the proposal session."""
+        assert offset == 0
+        assert limit == 20
+        return {
+            "structured": {
+                "resources": [{"name": "project"}],
+                "total": 1,
+                "offset": 0,
+            }
+        }
+
+    def list_ids(self, *, resource, offset=0, limit=100):
+        """Expose a non-empty typed pool without changing Catalog state."""
+        assert resource == "project"
+        assert offset == 0
+        assert limit == 20
+        return {
+            "structured": {
+                "requested_resource": resource,
+                "status": "found",
+                "canonical_resource": "project",
+                "ids": [{"value": "known-project", "value_type": "string"}],
+                "total": 1,
+                "offset": 0,
+            }
+        }
+
+
+class StubPatchOpenAPICapability:
+    """Keep the observed-field tool present while this scenario uses resources."""
+
+    def find_observed_response_fields(self, **_arguments):
+        """Return an empty observed-field page for unrelated queries."""
+        return {
+            "structured": {
+                "requested_name": "unused",
+                "responses": [],
+                "total": 0,
+                "offset": 0,
+            }
+        }
+
+
+class StubObservedResponseReferenceValues(StubReferenceValues):
+    """Resolve one exact producer field without registering its private pool."""
+
+    def __init__(self) -> None:
+        self.resolve_calls = []
+
+    def resolve_response_source(self, **arguments):
+        """Return candidate-only values and their internal selected provenance."""
+        from restscope.operation_smoke.parameter_patch import SelectedReferenceProvenance
+
+        self.resolve_calls.append(arguments)
+        return (
+            SelectedReferenceProvenance(
+                input_node_id=arguments["input_node_id"],
+                kind="response_value",
+                value_name="response_private_digest",
+                compatible_scalar_type=None,
+                value_count=2,
+                producer_operation_keys=[arguments["operation_key"]],
+                producer_status_code=arguments["matched_status_code"],
+                producer_media_type=arguments["media_type"],
+                source_field=arguments["field"],
+                source_selector="$[].id",
+            ),
+            ["known-project", "second-project"],
+        )
+
+
+class StubObservedFieldCapability:
+    """Return one currently observed response field for model and compiler reads."""
+
+    def find_observed_response_fields(self, *, name, offset=0, limit=100):
+        """Expose the exact producer identity regardless of equivalent query path."""
+        assert offset == 0
+        assert limit in {20, 200}
+        return {
+            "structured": {
+                "requested_name": name,
+                "responses": [
+                    {
+                        "operation_key": "GET /api/v4/projects",
+                        "matched_status_code": "200",
+                        "media_type": "application/json",
+                        "fields": [
+                            {
+                                "field": "body[].id",
+                                "similarity_score": 1.0,
+                                "match_basis": "path_exact",
+                            }
+                        ],
+                    }
+                ],
+                "total": 1,
+                "offset": 0,
+            }
+        }
+
+
 class CapturingSpan:
     """Collect trace attributes and output without an observability backend."""
 
@@ -279,7 +384,6 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     prompt = build_parameter_patch_prompt(
         task=task,
         config=_updated_at_filter_config(),
-        reference_options=[],
         model=_model(),
     ).user
 
@@ -303,8 +407,9 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
         in prompt
     )
     assert "No existing request relationships need to be preserved." in prompt
-    assert "## AVAILABLE OBSERVED-VALUE REFERENCES — UNTRUSTED" in prompt
-    assert "No observed-value references are available for this Patch." in prompt
+    assert "AVAILABLE OBSERVED-VALUE REFERENCES" not in prompt
+    assert "REFERENCE ALIASES" not in prompt
+    assert "`R1`" not in prompt
     assert (
         "## PREVIOUS PATCH RESULTS TO PRESERVE OR AVOID — UNTRUSTED"
         in prompt
@@ -426,7 +531,6 @@ def test_patch_prompt_keeps_only_relevant_compatibility_history() -> None:
     prompt = build_parameter_patch_prompt(
         task=task,
         config=_updated_at_filter_config(),
-        reference_options=[],
         model=_model(),
     ).user
 
@@ -463,6 +567,267 @@ def _constant_patch(input_name: str = "path.projectId"):
             "constraints": [],
         },
     }
+
+
+def _resource_patch(resource: str = "project") -> dict:
+    """Return one direct model-facing Resource Identifier proposal."""
+    return {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "strategy": {
+                        "type": "resource_identifier",
+                        "resource": resource,
+                    },
+                }
+            ],
+            "constraints": [],
+        },
+    }
+
+
+def _response_value_patch(field: str = "body[].id") -> dict:
+    """Return a producer-field strategy without exposing a private value name."""
+    return {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "strategy": {
+                        "type": "response_value",
+                        "source": {
+                            "operation_key": "GET /api/v4/projects",
+                            "matched_status_code": "200",
+                            "media_type": "application/json",
+                            "field": field,
+                        },
+                    },
+                }
+            ],
+            "constraints": [],
+        },
+    }
+
+
+def test_patch_agent_queries_resource_ids_before_compiling_a_resource_generator() -> None:
+    """Only a successful sequential canonical-ID lookup authorizes compilation."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
+
+    client = RawResponseClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                tool_calls=[
+                    ToolCall(
+                        id="list-resources",
+                        name="resource.list_resources",
+                        arguments={"offset": 0, "limit": 20},
+                    )
+                ],
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                tool_calls=[
+                    ToolCall(
+                        id="list-project-ids",
+                        name="resource.list_ids",
+                        arguments={
+                            "resource": "project",
+                            "offset": 0,
+                            "limit": 20,
+                        },
+                    )
+                ],
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=_resource_patch(),
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json={"issues": []},
+            ),
+        ]
+    )
+
+    outcome = ParameterPatchCoordinator(
+        client=client,
+        patch_model=_model(),
+        review_model=_review_model(),
+        openapi_capability=StubPatchOpenAPICapability(),
+        resource_capability=StubPatchResourceCapability(),
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        reference_values=StubReferenceValues(),
+        max_outputs=4,
+    )
+
+    assert outcome.status == "validated"
+    assert outcome.outputs_used == 4
+    assert outcome.patch.updates[0].strategy.model_dump(mode="json") == {
+        "type": "resource_identifier",
+        "resource": "project",
+    }
+    assert {tool.name for tool in client.requests[0].tools} == {
+        "resource.list_resources",
+        "resource.list_ids",
+        "openapi.find_observed_response_fields",
+    }
+    assert client.requests[0].tool_choice == "auto"
+    assert [message.role for message in client.requests[2].messages][-4:] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+    ]
+    tool_messages = [
+        message
+        for message in client.requests[2].messages
+        if message.role == "tool"
+    ]
+    assert all(
+        message.content.startswith("## PATCH LOOKUP RESULT — UNTRUSTED")
+        for message in tool_messages
+    )
+
+
+def test_patch_rejects_a_resource_generator_without_a_successful_id_lookup() -> None:
+    """A model cannot guess a resource name even when that name sounds plausible."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
+
+    outcome = ParameterPatchCoordinator(
+        client=StubClient([_resource_patch(), _resource_patch()]),
+        patch_model=_model(),
+        review_model=_review_model(),
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        reference_values=StubReferenceValues(),
+        max_outputs=2,
+    )
+
+    assert outcome.status == "failed"
+    assert any("resource.list_ids" in error for error in outcome.errors)
+
+
+def test_patch_samples_a_queried_response_field_without_registering_a_pool() -> None:
+    """Proposal compilation uses preview values and retains producer provenance."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
+
+    references = StubObservedResponseReferenceValues()
+    client = RawResponseClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                tool_calls=[
+                    ToolCall(
+                        id="find-project-id",
+                        name="openapi.find_observed_response_fields",
+                        arguments={"name": "project_id", "limit": 20},
+                    )
+                ],
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=_response_value_patch(),
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json={"issues": []},
+            ),
+        ]
+    )
+
+    outcome = ParameterPatchCoordinator(
+        client=client,
+        patch_model=_model(),
+        review_model=_review_model(),
+        openapi_capability=StubObservedFieldCapability(),
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=2,
+        reference_values=references,
+        max_outputs=3,
+    )
+
+    assert outcome.status == "validated"
+    assert len(references.resolve_calls) == 1
+    assert {sample["values"]["path.projectId"] for sample in outcome.samples} <= {
+        "known-project",
+        "second-project",
+    }
+    selected = outcome.patch.selected_reference_provenance[0]
+    assert selected.source_field == "body[].id"
+    review_text = client.requests[-1].messages[1].content
+    assert "GET /api/v4/projects" in review_text
+    assert "body[].id" in review_text
+    assert "response_private_digest" not in review_text
+
+
+def test_patch_rejects_a_response_field_not_returned_by_its_lookup_session() -> None:
+    """A near-looking field cannot replace the exact producer identity returned."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
+
+    tampered = _response_value_patch(field="body[].project_id")
+    client = RawResponseClient(
+        [
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                tool_calls=[
+                    ToolCall(
+                        id="find-project-id",
+                        name="openapi.find_observed_response_fields",
+                        arguments={"name": "project_id", "limit": 20},
+                    )
+                ],
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=tampered,
+            ),
+            LLMResponse(
+                provider="stub",
+                model="fast-model",
+                parsed_json=tampered,
+            ),
+        ]
+    )
+
+    outcome = ParameterPatchCoordinator(
+        client=client,
+        patch_model=_model(),
+        review_model=_review_model(),
+        openapi_capability=StubObservedFieldCapability(),
+    ).run(
+        task=_task(),
+        config=_sampleable_config(),
+        active_constraints=[],
+        case_count=1,
+        reference_values=StubObservedResponseReferenceValues(),
+        max_outputs=3,
+    )
+
+    assert outcome.status == "failed"
+    assert any("copied exactly" in error for error in outcome.errors)
 
 
 def _variant_config():
@@ -583,15 +948,19 @@ def test_patch_proposal_returns_recursive_json_without_a_submission_tool() -> No
 
     assert isinstance(outcome, ValidatedParameterPatch)
     proposal_request = client.requests[0]
-    assert proposal_request.tools == []
-    assert proposal_request.tool_choice == "none"
+    assert {tool.name for tool in proposal_request.tools} == {
+        "resource.list_resources",
+        "resource.list_ids",
+        "openapi.find_observed_response_fields",
+    }
+    assert proposal_request.tool_choice == "auto"
     assert proposal_request.response_format == "json_schema"
     assert proposal_request.json_schema_name == "ParameterPatchSubmission"
     assert outcome.attempt_history[0]["transport"] == "json_schema"
 
 
-def test_patch_response_schema_exposes_only_constructible_generators() -> None:
-    """The model sees direct strategies while system-owned ones stay private."""
+def test_patch_response_schema_exposes_direct_reference_generators() -> None:
+    """The model writes queried references as Generators without R aliases."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
 
     schema = ParameterPatchSubmission.model_json_schema()
@@ -609,16 +978,21 @@ def test_patch_response_schema_exposes_only_constructible_generators() -> None:
         "number_range",
         "random_string",
         "regex",
+        "resource_identifier",
+        "response_value",
         "variant",
     }
-    encoded = json.dumps(schema, sort_keys=True)
+    definitions = set(schema["$defs"])
     for forbidden_definition in (
         "ObjectGenerator",
         "RequestBodyGenerator",
-        "ResourceIdentifierGenerator",
         "ResponseValueGenerator",
     ):
-        assert forbidden_definition not in encoded
+        assert forbidden_definition not in definitions
+    assert "ResourceIdentifierGenerator" in definitions
+    assert "SemanticResponseValueGenerator" in definitions
+    encoded = json.dumps(schema, sort_keys=True)
+    assert '"reference"' not in encoded
 
 
 @pytest.mark.parametrize(
@@ -639,6 +1013,16 @@ def test_patch_response_schema_exposes_only_constructible_generators() -> None:
         {"type": "format", "format": "uuid"},
         {"type": "array", "min_items": 1, "max_items": 2},
         {"type": "variant", "branch_weights": [1]},
+        {"type": "resource_identifier", "resource": "project"},
+        {
+            "type": "response_value",
+            "source": {
+                "operation_key": "GET /projects",
+                "matched_status_code": "200",
+                "media_type": "application/json",
+                "field": "body[].id",
+            },
+        },
     ],
 )
 def test_patch_submission_accepts_every_model_constructible_generator(
@@ -666,14 +1050,13 @@ def test_patch_submission_accepts_every_model_constructible_generator(
     [
         {"type": "object"},
         {"type": "request_body"},
-        {"type": "resource_identifier", "resource": "project"},
         {"type": "response_value", "value_name": "project_id"},
     ],
 )
-def test_patch_submission_rejects_system_owned_generator_strategies(
+def test_patch_submission_rejects_internal_generator_strategies(
     strategy: dict,
 ) -> None:
-    """System-managed and observed Generators cannot bypass the R alias seam."""
+    """Internal response pool names and structural Generators stay private."""
     from pydantic import ValidationError
 
     from restscope.operation_smoke.parameter_patch import ParameterPatchSubmission
@@ -919,8 +1302,8 @@ def test_patch_repairs_one_truncated_structured_json_object() -> None:
     assert outcome.outputs_used == 2
 
 
-def test_patch_correction_does_not_replay_an_unexpected_tool_call() -> None:
-    """A stray provider tool call cannot create orphan conversation history."""
+def test_patch_returns_an_unknown_lookup_as_a_complete_tool_result_group() -> None:
+    """An unknown call is denied without creating an orphan provider message."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     client = RawResponseClient(
@@ -962,15 +1345,17 @@ def test_patch_correction_does_not_replay_an_unexpected_tool_call() -> None:
     )
 
     assert outcome.status == "validated"
-    assert all(
-        not message.tool_calls for message in client.requests[1].messages
-    )
+    assert [message.role for message in client.requests[1].messages][-2:] == [
+        "assistant",
+        "tool",
+    ]
+    assert client.requests[1].messages[-1].name == "unexpected.tool"
+    assert "unknown_tool" in client.requests[1].messages[-1].content
 
 
 def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
     """The Reviewer sees samples but no Patch Agent conversation history."""
     from restscope.operation_smoke.parameter_patch import (
-        AvailableReferenceOption,
         ParameterPatchCoordinator,
         ValidatedParameterPatch,
     )
@@ -987,21 +1372,6 @@ def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
         active_constraints=[],
         case_count=3,
         max_outputs=20,
-        reference_options=[
-            AvailableReferenceOption(
-                option_id="ref-a",
-                input_node_id="path/projectId",
-                kind="response_value",
-                value_name="known_project_id",
-                compatible_scalar_type="string",
-                value_count=4,
-                producer_operation_keys=["GET /projects"],
-                producer_status_code="200",
-                producer_media_type="application/json",
-                source_field="id",
-                source_selector="$[].id",
-            )
-        ],
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -1032,9 +1402,7 @@ def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
     initial = client.requests[0].messages[1].content
     assert "PATCH REQUIREMENT TO SATISFY" in initial
     assert "CURRENT STATE OF ALLOWED INPUTS" in initial
-    assert 'status: "200"' in initial
-    assert 'media: "application/json"' in initial
-    assert 'selector: "$[].id"' in initial
+    assert "AVAILABLE OBSERVED-VALUE REFERENCES" not in initial
     assert "string:" not in initial
     assert "affected_inputs.1" not in initial
 
@@ -1252,9 +1620,9 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert outcome.outputs_used == 3
     first_request = client.requests[0]
     assert first_request.response_format == "json_schema"
-    assert first_request.tool_choice == "none"
+    assert first_request.tool_choice == "auto"
     assert first_request.reasoning.mode == "disabled"
-    assert first_request.tools == []
+    assert len(first_request.tools) == 3
     correction = client.requests[1].messages[-1].content
     assert client.requests[1].messages[-1].role == "user"
     assert correction.startswith(
@@ -1271,7 +1639,7 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     initial_system = client.requests[0].messages[0].content
     # The Schema remains authoritative while this compact DSL makes the exact
     # field vocabulary readable without copying the full generated document.
-    assert len(initial_system) < 2_000
+    assert len(initial_system) < 5_000
     assert "Generator DSL:" in initial_system
     assert "Constraint DSL:" in initial_system
     normalized_system = " ".join(initial_system.split())
@@ -1286,10 +1654,21 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert "implies(condition, consequence)" in initial_system
     assert "Generator edits in patch.changes" in initial_system
     assert "one complete corrected replacement" in normalized_system
+    assert "resource.list_resources" in initial_system
+    assert "resource.list_ids" in initial_system
+    assert "openapi.find_observed_response_fields" in initial_system
+    assert "commit_id -> sha or hash" in initial_system
+    assert "only a search query, never evidence" in initial_system
+    assert "resource_identifier" in initial_system
+    assert "Smoke round" in initial_system
+    assert "Do not invent a finite choice set" in initial_system
+    assert "Compiler, sampling, or Reviewer" in initial_system
+    assert "Constraints express only cross-input relationships" in initial_system
+    assert "single-input enum, range, length, regex, format, or constant" in initial_system
 
     second_request = client.requests[1]
     assert second_request.response_format == "json_schema"
-    assert second_request.tools == []
+    assert len(second_request.tools) == 3
     assert [message.role for message in second_request.messages] == [
         "system",
         "user",
@@ -1298,26 +1677,9 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     ]
 
 
-def test_patch_repairs_a_reference_alias_embedded_in_strategy() -> None:
-    """A supplied R alias belongs beside the semantic input, not in strategy."""
-    from restscope.operation_smoke.parameter_patch import (
-        AvailableReferenceOption,
-        ParameterPatchCoordinator,
-    )
-
-    option = AvailableReferenceOption(
-        option_id="ref-a",
-        input_node_id="path/projectId",
-        kind="response_value",
-        value_name="known_project_id",
-        compatible_scalar_type="string",
-        value_count=1,
-        producer_operation_keys=["GET /projects"],
-        producer_status_code="200",
-        producer_media_type="application/json",
-        source_field="id",
-        source_selector="$[].id",
-    )
+def test_patch_rejects_the_removed_reference_alias_protocol() -> None:
+    """Legacy R aliases are invalid instead of silently selecting a pool."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
     invalid_reference = {
         "action": "propose",
         "patch": {
@@ -1333,21 +1695,7 @@ def test_patch_repairs_a_reference_alias_embedded_in_strategy() -> None:
             "constraints": [],
         },
     }
-    valid_reference = {
-        "action": "propose",
-        "patch": {
-            "changes": [
-                {
-                    "input": "path.projectId",
-                    "reference": "R1",
-                }
-            ],
-            "constraints": [],
-        },
-    }
-    client = StubClient(
-        [invalid_reference, valid_reference, {"issues": []}]
-    )
+    client = StubClient([invalid_reference, invalid_reference, invalid_reference])
 
     outcome = ParameterPatchCoordinator(
         client=client,
@@ -1358,16 +1706,14 @@ def test_patch_repairs_a_reference_alias_embedded_in_strategy() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        reference_values=StubReferenceValues(),
-        reference_options=[option],
         max_outputs=3,
     )
 
-    assert outcome.status == "validated"
+    assert outcome.status == "failed"
+    assert outcome.reason == "repeated_invalid_output"
     assert outcome.outputs_used == 3
-    assert outcome.patch.updates[0].strategy.type == "response_value"
     correction = client.requests[1].messages[-1].content
-    assert "set reference beside input and omit strategy" in correction
+    assert "R alias" not in correction
 
 
 def test_variant_child_patch_requires_explicit_parent_branch_selection() -> None:

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import re
-from hashlib import sha256
-
 from restscope.api_behavior_monitor import (
     APIBehaviorMonitorCoordinator,
     ResourceLookupRequest,
     ResponseValueSource,
 )
-from restscope.operation_smoke.parameter_patch import AvailableReferenceOption
+from restscope.api_behavior_monitor.contract_tracker import normalize_media_type
+from restscope.operation_smoke.parameter_patch import SelectedReferenceProvenance
 from restscope.openapi_parser import OpenAPISpecIR
+from restscope.response_fields import ResponseFieldReference
 from restscope.testing import (
     InputGeneratorPatch,
     InputNodeSnapshot,
@@ -21,7 +20,6 @@ from restscope.testing import (
     ResponseValueGenerator,
 )
 
-_MAX_REFERENCE_OPTIONS = 100
 _SCALAR_REFERENCE_TYPES = frozenset(
     {"string", "integer", "number", "boolean"}
 )
@@ -54,159 +52,118 @@ class BehaviorMonitorReferenceValues:
         )
         return [item.value for item in result.identifiers]
 
-    def available_options(
+    def resolve_response_source(
         self,
         *,
-        ir: OpenAPISpecIR,
         config: OperationGeneratorConfig,
-        input_node_ids: set[str] | None = None,
-    ) -> list[AvailableReferenceOption]:
-        """Describe only reference generators whose persistent pool is non-empty."""
+        input_node_id: str,
+        operation_key: str,
+        matched_status_code: str,
+        media_type: str,
+        field: str,
+        ir: OpenAPISpecIR | None = None,
+    ) -> tuple[SelectedReferenceProvenance, list[object]]:
+        """Re-read one exact producer field for candidate-only Patch sampling.
 
+        Args:
+            config: Current consumer operation Generator configuration.
+            input_node_id: Target request input selected by the Patch model.
+            operation_key: Producer operation copied from the lookup result.
+            matched_status_code: Exact, status-class, or default OpenAPI
+                response contract copied from the lookup result.
+            media_type: Normalized producer response media type.
+            field: Model-facing ``body...`` producer field handle.
+            ir: Optional current OpenAPI document used by Apply to reject a
+                source whose response contract changed after proposal.
+
+        Returns:
+            Internal provenance and the current compatible historical scalars.
+            No response-value monitor or consumer pool is created.
+
+        Raises:
+            ValueError: The consumer is not scalar, the field handle is invalid,
+                or the retained compatible pool is empty.
+        """
         nodes = {
             item.input_node_id: item for item in config.snapshot.input_nodes
         }
         parameters = {
-            item.input_node_id: item
-            for item in config.snapshot.parameters
+            item.input_node_id: item for item in config.snapshot.parameters
         }
-        options: list[AvailableReferenceOption] = []
-
-        # A response option is consumer-specific, so expose it before the
-        # cross-product of resource pools and inputs reaches the hard bound.
-        for item in config.configs:
-            if (
-                input_node_ids is not None
-                and item.input_node_id not in input_node_ids
-            ):
-                continue
-            node = nodes.get(item.input_node_id)
-            if node is None:
-                continue
-            parameter = parameters.get(item.input_node_id)
-            compatible, expected_type = _reference_expected_type(
-                node=node,
-                parameter=parameter,
-            )
-            if not compatible:
-                continue
-            parameter_name = _input_name(
-                node=node,
-                parameter=parameter,
-            )
-            source_options = self.coordinator.available_response_value_sources(
-                ir=ir,
-                consumer_operation_key=config.operation_key,
-                consumer_input_node_id=item.input_node_id,
-                parameter_name=parameter_name,
-                expected_type=expected_type,
-            )
-            for source_option in source_options:
-                source = source_option.source
-                options.append(
-                    AvailableReferenceOption(
-                        option_id=_option_id(
-                            item.input_node_id,
-                            "response_value",
-                            "\0".join(
-                                (
-                                    source_option.value_name,
-                                    source.producer_operation_key,
-                                    source.status_code,
-                                    source.media_type,
-                                    source.selector,
-                                )
-                            ),
-                        ),
-                        input_node_id=item.input_node_id,
-                        kind="response_value",
-                        value_name=source_option.value_name,
-                        compatible_scalar_type=(
-                            source_option.compatible_scalar_type
-                        ),
-                        value_count=source_option.value_count,
-                        producer_operation_keys=[
-                            source.producer_operation_key
-                        ],
-                        producer_status_code=source.status_code,
-                        producer_media_type=source.media_type,
-                        source_field=source.field_name,
-                        source_selector=source.selector,
-                    )
-                )
-                if len(options) >= _MAX_REFERENCE_OPTIONS:
-                    return options
-
-        resources = self.coordinator.resource_identifier_tracker.catalog.list_resources(
-            limit=_MAX_REFERENCE_OPTIONS,
-            aliases_per_resource=0,
+        node = nodes.get(input_node_id)
+        if node is None:
+            raise ValueError(f"Unknown response-value input node: {input_node_id}")
+        compatible, expected_type = _reference_expected_type(
+            node=node,
+            parameter=parameters.get(input_node_id),
         )
-        populated_resources = []
-        for resource in resources:
-            lookup = self.coordinator.lookup(
-                ResourceLookupRequest(
-                    resource=resource.canonical_name,
-                    limit=100,
-                )
+        if not compatible:
+            raise ValueError("Response values can only target scalar inputs")
+        reference = ResponseFieldReference.from_handle(field)
+        if ir is not None and not _response_field_exists(
+            ir=ir,
+            operation_key=operation_key,
+            status_code=matched_status_code,
+            media_type=media_type,
+            field=field,
+        ):
+            raise ValueError(
+                "The selected response field is no longer in the current OpenAPI IR"
             )
-            if lookup.identifiers:
-                populated_resources.append((resource, lookup))
-
-        for item in config.configs:
-            if (
-                input_node_ids is not None
-                and item.input_node_id not in input_node_ids
-            ):
-                continue
-            node = nodes.get(item.input_node_id)
-            if node is None:
-                continue
-            compatible, expected_type = _reference_expected_type(
-                node=node,
-                parameter=parameters.get(item.input_node_id),
+        if not reference.property_names:
+            field_name = "body"
+        else:
+            field_name = reference.property_names[-1]
+        observation_media_type = normalize_media_type(media_type)
+        if observation_media_type is None:
+            raise ValueError("Response Value source media type is empty")
+        source = ResponseValueSource(
+            producer_operation_key=operation_key,
+            status_code=matched_status_code,
+            media_type=observation_media_type,
+            selector=reference.selector,
+            field_name=field_name,
+        )
+        preview = self.coordinator.preview_selected_response_value_source(
+            consumer_operation_key=config.operation_key,
+            consumer_input_node_id=input_node_id,
+            expected_type=expected_type,
+            source=source,
+        )
+        if preview is None:
+            raise ValueError(
+                "The selected response field has no current compatible values"
             )
-            if not compatible:
-                continue
-            for resource, lookup in populated_resources:
-                if not _resource_matches_input(
-                    canonical_resource=resource.canonical_name,
-                    aliases=lookup.aliases,
-                    input_names=_input_names(
-                        node=node,
-                        nodes=nodes,
-                        parameters=parameters,
-                    ),
-                    operation_path=config.snapshot.path,
-                ):
-                    continue
-                if not _resource_pool_compatible(
-                    expected_type,
-                    [value.value_type for value in lookup.identifiers],
-                ):
-                    continue
-                options.append(
-                    AvailableReferenceOption(
-                        option_id=_option_id(
-                            item.input_node_id,
-                            "resource_identifier",
-                            resource.canonical_name,
-                        ),
-                        input_node_id=item.input_node_id,
-                        kind="resource_identifier",
-                        canonical_resource=resource.canonical_name,
-                        compatible_scalar_type=expected_type,
-                        value_count=len(lookup.identifiers),
-                        producer_operation_keys=list(
-                            dict.fromkeys(
-                                operation.operation_key
-                                for operation in lookup.operations
-                            )
-                        ),
-                    )
-                )
-                if len(options) >= _MAX_REFERENCE_OPTIONS:
-                    return options
-        return options
+        values = [
+            value
+            for value in (
+                self.coordinator.response_value_tracker.catalog
+                .historical_values_for_source(source, limit=100)
+            )
+            if _observed_value_compatible(expected_type, value)
+        ]
+        values = _deduplicate_values(values)
+        if not values:
+            raise ValueError(
+                "The selected response field has no current compatible values"
+            )
+        return (
+            SelectedReferenceProvenance(
+                input_node_id=input_node_id,
+                kind="response_value",
+                value_name=preview.value_name,
+                compatible_scalar_type=(
+                    expected_type or "|".join(_observed_scalar_types(values))
+                ),
+                value_count=len(values),
+                producer_operation_keys=[operation_key],
+                producer_status_code=matched_status_code,
+                producer_media_type=media_type,
+                source_field=field,
+                source_selector=reference.selector,
+            ),
+            values,
+        )
 
     def prepare_updates(
         self,
@@ -214,9 +171,9 @@ class BehaviorMonitorReferenceValues:
         ir: OpenAPISpecIR,
         config: OperationGeneratorConfig,
         updates: list[InputGeneratorPatch],
-        selected_reference_options: list[AvailableReferenceOption] | None = None,
+        selected_reference_provenance: list[SelectedReferenceProvenance] | None = None,
     ) -> list[InputGeneratorPatch]:
-        """Register response pools and replace model-proposed names locally."""
+        """Revalidate selected response provenance and register it at Apply."""
 
         nodes = {
             item.input_node_id: item
@@ -228,11 +185,45 @@ class BehaviorMonitorReferenceValues:
         }
         selected_by_input = {
             item.input_node_id: item
-            for item in (selected_reference_options or [])
+            for item in (selected_reference_provenance or [])
         }
         prepared: list[InputGeneratorPatch] = []
         for update in updates:
             strategy = update.strategy
+            selected = selected_by_input.get(update.input_node_id)
+            if isinstance(strategy, ResourceIdentifierGenerator):
+                if (
+                    selected is None
+                    or selected.kind != "resource_identifier"
+                    or selected.canonical_resource != strategy.resource
+                ):
+                    raise ValueError(
+                        "Resource Identifier Generator requires selected "
+                        "canonical-resource provenance"
+                    )
+                node = nodes.get(update.input_node_id)
+                if node is None:
+                    raise ValueError(
+                        f"Unknown resource input node: {update.input_node_id}"
+                    )
+                compatible, expected_type = _reference_expected_type(
+                    node=node,
+                    parameter=parameters.get(update.input_node_id),
+                )
+                values = self.values_for(strategy)
+                if (
+                    not compatible
+                    or not values
+                    or not all(
+                        _observed_value_compatible(expected_type, value)
+                        for value in values
+                    )
+                ):
+                    raise ValueError(
+                        "Resource Identifier pool changed or became incompatible"
+                    )
+                prepared.append(update)
+                continue
             if not isinstance(strategy, ResponseValueGenerator):
                 prepared.append(update)
                 continue
@@ -251,19 +242,33 @@ class BehaviorMonitorReferenceValues:
                 raise ValueError(
                     "Response values can only be assigned to scalar inputs"
                 )
-            selected = selected_by_input.get(update.input_node_id)
-            if (
-                selected is not None
-                and selected.kind == "response_value"
-            ):
-                if selected.value_name != strategy.value_name:
-                    raise ValueError(
-                        "Selected response option does not match Generator"
-                    )
-                assert selected.producer_status_code is not None
-                assert selected.producer_media_type is not None
-                assert selected.source_selector is not None
-                assert selected.source_field is not None
+            if selected is None or selected.kind != "response_value":
+                raise ValueError(
+                    "Response Value Generator requires selected producer provenance"
+                )
+            if selected.value_name != strategy.value_name:
+                raise ValueError(
+                    "Selected response provenance does not match Generator"
+                )
+            assert selected.producer_status_code is not None
+            assert selected.producer_media_type is not None
+            assert selected.source_selector is not None
+            assert selected.source_field is not None
+            # Revalidate both current IR and retained values immediately before
+            # the first persistent response-pool registration.
+            self.resolve_response_source(
+                config=config,
+                input_node_id=update.input_node_id,
+                operation_key=selected.producer_operation_keys[0],
+                matched_status_code=selected.producer_status_code,
+                media_type=selected.producer_media_type,
+                field=selected.source_field,
+                ir=ir,
+            )
+            source_reference = ResponseFieldReference.from_handle(
+                selected.source_field
+            )
+            try:
                 registration = self.coordinator.register_response_value_sources(
                     consumer_operation_key=config.operation_key,
                     consumer_input_node_id=update.input_node_id,
@@ -275,20 +280,27 @@ class BehaviorMonitorReferenceValues:
                                 selected.producer_operation_keys[0]
                             ),
                             status_code=selected.producer_status_code,
-                            media_type=selected.producer_media_type,
+                            media_type=(
+                                normalize_media_type(
+                                    selected.producer_media_type
+                                )
+                                or selected.producer_media_type
+                            ),
                             selector=selected.source_selector,
-                            field_name=selected.source_field,
+                            field_name=(
+                                source_reference.property_names[-1]
+                                if source_reference.property_names
+                                else "body"
+                            ),
                         )
                     ],
                 )
-            else:
-                registration = self.coordinator.register_response_value(
-                    ir=ir,
-                    consumer_operation_key=config.operation_key,
-                    consumer_input_node_id=update.input_node_id,
-                    parameter_name=parameter_name,
-                    expected_type=expected_type,
-                )
+            except RuntimeError as exc:
+                if getattr(exc, "code", None) != "response_value_pool_unavailable":
+                    raise
+                raise ValueError(
+                    "Selected response values disappeared before registration"
+                ) from exc
             prepared.append(
                 update.model_copy(
                     update={
@@ -311,131 +323,6 @@ def _input_name(
     if parameter is not None:
         return parameter.name
     return node.canonical_path.rstrip("/").rsplit("/", 1)[-1]
-
-
-def _input_names(
-    *,
-    node: InputNodeSnapshot,
-    nodes: dict[str, InputNodeSnapshot],
-    parameters: dict[str, ParameterSnapshot],
-) -> list[str]:
-    """Collect names that give one nested input its semantic meaning.
-
-    Args:
-        node: The candidate input that may consume an observed identifier.
-        nodes: All frozen inputs keyed by their opaque runtime identity.
-        parameters: OpenAPI Parameter metadata keyed by input identity.
-
-    Returns:
-        The leaf name followed by unique ancestor names, without changing the
-        frozen operation snapshot.
-    """
-    names: list[str] = []
-    current: InputNodeSnapshot | None = node
-    while current is not None:
-        name = _input_name(
-            node=current,
-            parameter=parameters.get(current.input_node_id),
-        )
-        if name not in names:
-            names.append(name)
-        current = (
-            nodes.get(current.parent_node_id)
-            if current.parent_node_id is not None
-            else None
-        )
-    return names
-
-
-def _resource_matches_input(
-    *,
-    canonical_resource: str,
-    aliases: list[str],
-    input_names: list[str],
-    operation_path: str,
-) -> bool:
-    """Allow identifier pools only where names identify the same resource.
-
-    A specific input such as ``project_id`` can match the project catalog
-    directly. A generic path input named only ``id`` is accepted when the
-    current operation's final static path segment names that resource. This
-    keeps project IDs away from unrelated scalar inputs such as
-    ``min_access_level`` while preserving common ``/projects/{id}`` schemas.
-
-    Args:
-        canonical_resource: Stable resource name from the monitor catalog.
-        aliases: Other observed names for the same resource.
-        input_names: Leaf and ancestor names for the consuming input.
-        operation_path: Current OpenAPI path template used to interpret a
-            generic ``id`` input.
-
-    Returns:
-        Whether the resource identifier pool is semantically safe to offer.
-    """
-    resource_names = {
-        _singular_resource_name(value)
-        for value in [canonical_resource, *aliases]
-        if value
-    }
-    normalized_inputs = {
-        _normalize_reference_name(value)
-        for value in input_names
-        if value
-    }
-    for resource_name in resource_names:
-        if normalized_inputs.intersection(
-            {
-                resource_name,
-                f"{resource_name}id",
-                f"{resource_name}identifier",
-            }
-        ):
-            return True
-
-    if normalized_inputs.intersection({"id", "identifier"}):
-        static_segments = [
-            segment
-            for segment in operation_path.strip("/").split("/")
-            if segment
-            and not (
-                segment.startswith("{")
-                and segment.endswith("}")
-            )
-        ]
-        operation_resource = _singular_resource_name(
-            static_segments[-1] if static_segments else ""
-        )
-        return operation_resource in resource_names
-    return False
-
-
-def _normalize_reference_name(value: str) -> str:
-    """Return a lowercase alphanumeric name for semantic comparison.
-
-    Args:
-        value: An OpenAPI or monitor-provided name.
-
-    Returns:
-        The normalized name. No external or persistent state is changed.
-    """
-    return re.sub(r"[^a-z0-9]+", "", value.casefold())
-
-
-def _singular_resource_name(value: str) -> str:
-    """Normalize common singular/plural resource spellings.
-
-    Args:
-        value: A canonical resource, alias, or static path segment.
-
-    Returns:
-        A normalized singular spelling used only for conservative matching.
-    """
-    normalized = _normalize_reference_name(value)
-    if normalized.endswith("ies") and len(normalized) > 3:
-        return f"{normalized[:-3]}y"
-    if normalized.endswith("s") and not normalized.endswith("ss"):
-        return normalized[:-1]
-    return normalized
 
 
 def _reference_expected_type(
@@ -468,25 +355,124 @@ def _expected_type(value: str | list[str] | None) -> str | None:
     return None
 
 
-def _resource_pool_compatible(
+def _observed_value_compatible(
     expected_type: str | None,
-    value_types: list[str],
+    value: object,
 ) -> bool:
-    """Check every stored value type against the consuming JSON input type."""
-    if not value_types:
-        return False
+    """Apply JSON scalar typing to one historical response value."""
     if expected_type is None:
-        return True
-    return all(
-        value_type == expected_type
-        or (expected_type == "number" and value_type == "integer")
-        for value_type in value_types
+        return isinstance(value, (str, int, float, bool))
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return False
+
+
+def _deduplicate_values(values: list[object]) -> list[object]:
+    """Preserve historical order while removing equal values of equal type."""
+    output: list[object] = []
+    seen: set[tuple[type, object]] = set()
+    for value in values:
+        key = (type(value), value)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(value)
+    return output
+
+
+def _observed_scalar_types(values: list[object]) -> list[str]:
+    """Return stable JSON scalar type names represented by preview values."""
+    names: set[str] = set()
+    for value in values:
+        if isinstance(value, bool):
+            names.add("boolean")
+        elif isinstance(value, int):
+            names.add("integer")
+        elif isinstance(value, float):
+            names.add("number")
+        elif isinstance(value, str):
+            names.add("string")
+    return sorted(names)
+
+
+def _response_field_exists(
+    *,
+    ir: OpenAPISpecIR,
+    operation_key: str,
+    status_code: str,
+    media_type: str,
+    field: str,
+) -> bool:
+    """Require one exact handle in the selected current response contract."""
+    operation = ir.operations.get(operation_key)
+    if operation is None:
+        return False
+    response = operation.responses.by_status.get(status_code)
+    if response is None:
+        return False
+    schema = next(
+        (
+            content.schema
+            for declared_media, content in response.contents.items()
+            if normalize_media_type(declared_media)
+            == normalize_media_type(media_type)
+            and content.schema is not None
+        ),
+        None,
     )
+    if schema is None:
+        return False
+    return field in _response_scalar_handles(schema)
 
 
-def _option_id(input_node_id: str, kind: str, name: str) -> str:
-    """Create an opaque, stable prompt alias without exposing catalog IDs."""
-    digest = sha256(
-        f"{input_node_id}\0{kind}\0{name}".encode("utf-8")
-    ).hexdigest()[:20]
-    return f"ref_{digest}"
+def _response_scalar_handles(
+    schema,
+    *,
+    reference: ResponseFieldReference | None = None,
+    visited: set[int] | None = None,
+) -> set[str]:
+    """Enumerate readable scalar handles including arrays and Schema branches."""
+    reference = reference or ResponseFieldReference.body()
+    visited = set() if visited is None else set(visited)
+    if id(schema) in visited or schema.write_only is True:
+        return set()
+    visited.add(id(schema))
+    output: set[str] = set()
+    for name, child in schema.properties.items():
+        output.update(
+            _response_scalar_handles(
+                child,
+                reference=reference.property(name),
+                visited=visited,
+            )
+        )
+    if schema.items is not None:
+        output.update(
+            _response_scalar_handles(
+                schema.items,
+                reference=reference.items(),
+                visited=visited,
+            )
+        )
+    for kind, branches in (
+        ("allOf", schema.all_of),
+        ("oneOf", schema.one_of),
+        ("anyOf", schema.any_of),
+    ):
+        for index, branch in enumerate(branches):
+            output.update(
+                _response_scalar_handles(
+                    branch,
+                    reference=reference.variant(kind, index),
+                    visited=visited,
+                )
+            )
+    if not output and _expected_type(schema.type) in _SCALAR_REFERENCE_TYPES:
+        output.add(reference.handle)
+    return output

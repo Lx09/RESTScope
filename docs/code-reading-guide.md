@@ -247,7 +247,8 @@ Important files:
   structured-JSON queries, and five single-purpose Agent-local Test Case tools.
 - `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
-- `references.py`: observed-value options exposed as model-safe `R` aliases.
+- `references.py`: current resource/response evidence validation, candidate-
+  only response sampling, and Apply-time response pool registration.
 
 ### `restscope/operation_smoke/failure_dedup/`
 
@@ -269,9 +270,12 @@ testing types, validates Generator schemas and Constraints, generates
 `coordinator.py` owns deterministic checks, shared output budget, and feedback.
 Both Proposal and Review return JSON Schema responses that are validated again
 locally. The Proposal Schema exposes only model-constructible Generators and a
-recursive Constraint language that uses semantic input handles; system-owned
-Generators remain reachable only through supplied reference aliases. Its
-private `review/` subpackage owns the FAST Review Agent. Every compiled
+recursive Constraint language that uses semantic input handles. The Proposal
+Agent alone can query canonical resources, populated typed IDs, and observed
+response fields. It submits those sources directly as Generator strategies;
+deterministic compilation revalidates current evidence and derives private
+response pool names. Its private `review/` subpackage owns the FAST Review
+Agent. Every compiled
 candidate receives a fresh context containing only normalized requirement,
 Generator, Constraint, reference-provenance, and sample facts. Review issues
 are authoritative: an empty array passes, while non-empty issues return to the

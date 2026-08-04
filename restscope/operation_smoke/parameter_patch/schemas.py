@@ -23,6 +23,7 @@ from restscope.testing.models import (
     NumberRangeGenerator,
     RandomStringGenerator,
     RegexGenerator,
+    ResourceIdentifierGenerator,
     VariantGenerator,
 )
 
@@ -33,10 +34,9 @@ class _Model(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-class AvailableReferenceOption(_Model):
-    """One populated reference source the model may select by temporary alias."""
+class SelectedReferenceProvenance(_Model):
+    """Internal provenance for one selected, currently populated reference."""
 
-    option_id: str = Field(min_length=1, max_length=100)
     input_node_id: str = Field(min_length=1, max_length=1000)
     kind: Literal["resource_identifier", "response_value"]
     canonical_resource: str | None = Field(default=None, max_length=200)
@@ -50,12 +50,20 @@ class AvailableReferenceOption(_Model):
     source_selector: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
-    def validate_source(self) -> "AvailableReferenceOption":
+    def validate_source(self) -> "SelectedReferenceProvenance":
         """Require the source fields appropriate to the selected reference kind."""
         if self.kind == "resource_identifier":
-            if not self.canonical_resource or self.value_name is not None:
+            if (
+                not self.canonical_resource
+                or self.value_name is not None
+                or self.producer_operation_keys
+                or self.producer_status_code is not None
+                or self.producer_media_type is not None
+                or self.source_field is not None
+                or self.source_selector is not None
+            ):
                 raise ValueError(
-                    "resource_identifier requires canonical_resource only"
+                    "resource_identifier requires only canonical provenance"
                 )
         elif (
             not self.value_name
@@ -98,10 +106,31 @@ class ParameterPatchTask(_Model):
         return self
 
 
-# Reuse the Testing Module's field-level validation for strategies whose model
-# and runtime meanings are identical. The narrower union is the Patch model's
-# authority: system-managed and observed-value strategies are deliberately not
-# choices here.
+# Reuse Testing's validation where model and runtime meanings are identical.
+# Response values keep a separate model-facing source because their persisted
+# pool name belongs to deterministic runtime, not to the Agent.
+class SemanticResponseValueSource(_Model):
+    """Name one observed producer field without exposing its internal pool.
+
+    The four fields copy the globally unique response-field identity returned
+    by ``openapi.find_observed_response_fields``. Compilation later verifies
+    the source against this Patch session and derives the consumer-owned
+    ``value_name`` that Testing persists.
+    """
+
+    operation_key: str = Field(min_length=1, max_length=1000)
+    matched_status_code: str = Field(min_length=1, max_length=20)
+    media_type: str = Field(min_length=1, max_length=200)
+    field: str = Field(min_length=1, max_length=1000)
+
+
+class SemanticResponseValueGenerator(_Model):
+    """Select values from one observed response field chosen through a tool."""
+
+    type: Literal["response_value"]
+    source: SemanticResponseValueSource
+
+
 SemanticGeneratorStrategy = Annotated[
     ConstantGenerator
     | ChoiceGenerator
@@ -112,7 +141,9 @@ SemanticGeneratorStrategy = Annotated[
     | BooleanGenerator
     | FormatGenerator
     | ArrayGenerator
-    | VariantGenerator,
+    | VariantGenerator
+    | ResourceIdentifierGenerator
+    | SemanticResponseValueGenerator,
     Field(discriminator="type"),
 ]
 
@@ -293,17 +324,13 @@ class SemanticGeneratorChange(_Model):
     input: str = Field(min_length=1, max_length=1000)
     inclusion_probability: float | None = Field(default=None, ge=0, le=1)
     strategy: SemanticGeneratorStrategy | None = None
-    reference: str | None = Field(default=None, min_length=1, max_length=20)
 
     @model_validator(mode="after")
     def require_change(self) -> "SemanticGeneratorChange":
-        """Require a concrete change and forbid direct-plus-reference strategies."""
-        if self.strategy is not None and self.reference is not None:
-            raise ValueError("strategy and reference are mutually exclusive")
+        """Require one concrete Generator or inclusion-probability change."""
         if (
             self.inclusion_probability is None
             and self.strategy is None
-            and self.reference is None
         ):
             raise ValueError("a generator change must change at least one field")
         return self
@@ -355,7 +382,7 @@ class GeneratorPatchDraft(_Model):
         default_factory=list,
         max_length=20,
     )
-    selected_reference_options: list[AvailableReferenceOption] = Field(
+    selected_reference_provenance: list[SelectedReferenceProvenance] = Field(
         default_factory=list,
         max_length=100,
     )
@@ -369,7 +396,7 @@ class GeneratorPatchDraft(_Model):
         if len(changed) != len(set(changed)):
             raise ValueError("each input may be changed at most once")
         selected = [
-            item.input_node_id for item in self.selected_reference_options
+            item.input_node_id for item in self.selected_reference_provenance
         ]
         if len(selected) != len(set(selected)):
             raise ValueError("each input may select at most one reference option")

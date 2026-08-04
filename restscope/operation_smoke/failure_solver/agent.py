@@ -45,7 +45,6 @@ from restscope.operation_smoke.memory import (
     SolveAttemptWrite,
 )
 from restscope.operation_smoke.parameter_patch import (
-    AvailableReferenceOption,
     CompiledConstraintPatch,
     GeneratorPatchDraft,
     ParameterPatchCoordinator,
@@ -206,18 +205,9 @@ class FailureSolveAgent:
         random_seed: int,
         max_patch_outputs: int = 20,
         prepare_patch_updates: Callable | None = None,
-        reference_options_for_inputs: Callable[
-            [list[str]], list[AvailableReferenceOption]
-        ]
-        | None = None,
         max_outputs: int = 50,
     ) -> "FailureSolveSession":
-        """Start a session after preloading the current Failure's full history.
-
-        ``reference_options_for_inputs`` delays expensive semantic response
-        source matching until Solve has named the exact Patch inputs. Static
-        request options remain supported for focused callers and evaluations.
-        """
+        """Start a session after preloading the current Failure's full history."""
         if not 1 <= max_outputs <= 50:
             raise ValueError("max_outputs must be between 1 and 50")
         if not 1 <= case_count <= 20:
@@ -249,7 +239,6 @@ class FailureSolveAgent:
             random_seed=random_seed,
             max_patch_outputs=max_patch_outputs,
             prepare_patch_updates=prepare_patch_updates,
-            reference_options_for_inputs=reference_options_for_inputs,
             failure_history=history,
             system_prompt=self.system_prompt,
             max_outputs=max_outputs,
@@ -280,10 +269,6 @@ class FailureSolveSession:
         random_seed: int,
         max_patch_outputs: int,
         prepare_patch_updates: Callable | None,
-        reference_options_for_inputs: Callable[
-            [list[str]], list[AvailableReferenceOption]
-        ]
-        | None,
         failure_history: FailureHistory,
         system_prompt: str,
         max_outputs: int,
@@ -307,20 +292,12 @@ class FailureSolveSession:
         self.random_seed = random_seed
         self.max_patch_outputs = max_patch_outputs
         self.prepare_patch_updates = prepare_patch_updates
-        self.reference_options_for_inputs = reference_options_for_inputs
-        self.reference_options_by_inputs: dict[
-            tuple[str, ...], list[AvailableReferenceOption]
-        ] = {}
         self.max_outputs = max_outputs
         self.outputs_used = 0
         self.candidates: dict[str, PatchCandidate] = {}
         self.queried_parameter_handles: set[str] = set()
         self.parameter_history_for_patch: list[dict] = []
         self.semantic_inputs = build_semantic_input_map(config)
-        self.reference_options = [
-            AvailableReferenceOption.model_validate(item)
-            for item in request.reference_options
-        ]
         self.tools = self._build_tools()
 
         rendered = _solve_context_text(
@@ -329,7 +306,6 @@ class FailureSolveSession:
             active_constraints=active_constraints,
             failure_history=failure_history,
             semantic_inputs=self.semantic_inputs,
-            reference_options=self.reference_options,
             catalog_range=catalog.case_range,
         )
         self.context = AgentContext(
@@ -737,7 +713,6 @@ class FailureSolveSession:
                 active_constraints=self.active_constraints,
                 case_count=self.case_count,
                 reference_values=self.reference_values,
-                reference_options=self._patch_reference_options(task),
                 random_seed=self.random_seed,
                 max_outputs=min(self.max_patch_outputs, remaining_outputs),
             )
@@ -835,36 +810,6 @@ class FailureSolveSession:
             prior_attempts=list(self.parameter_history_for_patch),
         )
 
-    def _patch_reference_options(
-        self,
-        task: ParameterPatchTask,
-    ) -> list[AvailableReferenceOption]:
-        """Load and cache observed-value sources only for confirmed Patch inputs.
-
-        Matching a consumer name to non-identical response fields may require
-        an LLM call. Large operations have hundreds of configurable inputs, so
-        precomputing every option before Solve knows the affected inputs turns
-        an unrelated convenience into the dominant runtime cost.
-        """
-        if self.reference_options_for_inputs is None:
-            affected_node_ids = {
-                self.semantic_inputs.node_by_handle[handle]
-                for handle in task.affected_inputs
-            }
-            return [
-                option
-                for option in self.reference_options
-                if option.input_node_id in affected_node_ids
-            ]
-
-        key = tuple(sorted(task.affected_inputs))
-        cached = self.reference_options_by_inputs.get(key)
-        if cached is not None:
-            return list(cached)
-        loaded = list(self.reference_options_for_inputs(list(key)))
-        self.reference_options_by_inputs[key] = loaded
-        return list(loaded)
-
     def _decision(
         self,
         response: LLMResponse,
@@ -923,11 +868,20 @@ class FailureSolveSession:
                 # registration immediately before persistence.  Solve still
                 # chooses the candidate; this callback performs only that
                 # deterministic runtime preparation.
-                prepared_updates = self.prepare_patch_updates(
-                    self.config,
-                    patch.updates,
-                    patch.selected_reference_options,
-                )
+                try:
+                    prepared_updates = self.prepare_patch_updates(
+                        self.config,
+                        patch.updates,
+                        patch.selected_reference_provenance,
+                    )
+                except ValueError:
+                    return self._record_patch_conflict(
+                        candidate,
+                        reason=(
+                            "Selected reference evidence changed before the "
+                            "Patch could be applied."
+                        ),
+                    )
                 patch = patch.model_copy(
                     update={"updates": prepared_updates}
                 )
@@ -951,26 +905,12 @@ class FailureSolveSession:
                 # evidence, not a partial technical failure: the Patch
                 # transaction has rolled back, then a conflict Attempt is
                 # appended in its own transaction.
-                conflict_reason = (
-                    "Current Generator or Constraint state changed before "
-                    "the selected Patch could commit."
-                )
-                solve_attempt_id = self.memory.record_solve_attempt(
-                    SolveAttemptWrite(
-                        operation_key=self.request.operation_key,
-                        failure_id=self.request.todo.failure_id,
-                        round_number=self.request.round_number,
-                        outcome="conflict",
-                        reason=conflict_reason,
-                        root_cause=candidate.root_cause,
-                        parameters=candidate.parameter_attributions,
-                    )
-                )
-                return FailureSolveOutcome(
-                    status="conflict",
-                    outputs_used=self.outputs_used,
-                    solve_attempt_id=solve_attempt_id,
-                    reason=conflict_reason,
+                return self._record_patch_conflict(
+                    candidate,
+                    reason=(
+                        "Current Generator or Constraint state changed before "
+                        "the selected Patch could commit."
+                    ),
                 )
             self.config = applied.config
             return FailureSolveOutcome(
@@ -1005,6 +945,31 @@ class FailureSolveSession:
             outputs_used=self.outputs_used,
             solve_attempt_id=solve_attempt_id,
             reason=no_patch_reason,
+        )
+
+    def _record_patch_conflict(
+        self,
+        candidate: PatchCandidate,
+        *,
+        reason: str,
+    ) -> FailureSolveOutcome:
+        """Persist one rejected-at-Apply candidate without changing Generators."""
+        solve_attempt_id = self.memory.record_solve_attempt(
+            SolveAttemptWrite(
+                operation_key=self.request.operation_key,
+                failure_id=self.request.todo.failure_id,
+                round_number=self.request.round_number,
+                outcome="conflict",
+                reason=reason,
+                root_cause=candidate.root_cause,
+                parameters=candidate.parameter_attributions,
+            )
+        )
+        return FailureSolveOutcome(
+            status="conflict",
+            outputs_used=self.outputs_used,
+            solve_attempt_id=solve_attempt_id,
+            reason=reason,
         )
 
 
@@ -1209,7 +1174,6 @@ def _solve_context_text(
     active_constraints: list[CompiledConstraintPatch],
     failure_history: FailureHistory,
     semantic_inputs,
-    reference_options: list[AvailableReferenceOption],
     catalog_range: str,
 ):
     """Render the representative case reference, constraints, and Memory."""
@@ -1241,27 +1205,6 @@ def _solve_context_text(
                 constraint.constraint.model_dump(mode="python"),
                 semantic_inputs.handle_by_node,
             ),
-        )
-
-    writer.section("AVAILABLE OBSERVED-VALUE REFERENCES", untrusted=True)
-    if not reference_options:
-        writer.record("none", count=0)
-    for index, option in enumerate(reference_options, start=1):
-        writer.record(
-            f"R{index}",
-            input=semantic_inputs.handle_by_node.get(
-                option.input_node_id,
-                "<inactive-input>",
-            ),
-            kind=option.kind,
-            values=option.value_count,
-            resource=option.canonical_resource,
-            value_name=option.value_name,
-            producers=", ".join(option.producer_operation_keys) or None,
-            status=option.producer_status_code,
-            media=option.producer_media_type,
-            field=option.source_field,
-            selector=option.source_selector,
         )
 
     _write_failure_history(
@@ -1570,6 +1513,30 @@ def _patch_candidate_text(candidate: PatchCandidate) -> str:
         # a potentially large, unchanged strategy.
         writer.record(handle, required=False, **fields)
 
+    writer.section("REFERENCE SOURCES IN THIS CANDIDATE", untrusted=True)
+    if not candidate.patch.selected_reference_provenance:
+        writer.record("none", count=0)
+    for provenance in candidate.patch.selected_reference_provenance:
+        writer.record(
+            handle_by_node.get(
+                provenance.input_node_id,
+                "<inactive-input>",
+            ),
+            required=False,
+            kind=provenance.kind,
+            resource=provenance.canonical_resource,
+            value_count=provenance.value_count,
+            compatible_type=provenance.compatible_scalar_type,
+            producer=(
+                provenance.producer_operation_keys[0]
+                if provenance.producer_operation_keys
+                else None
+            ),
+            status=provenance.producer_status_code,
+            media_type=provenance.producer_media_type,
+            field=provenance.source_field,
+        )
+
     writer.section(
         "REQUEST RELATIONSHIP REPLACEMENTS IN THIS CANDIDATE",
         untrusted=True,
@@ -1860,9 +1827,15 @@ def _generator_summary(
     configs_by_node = {
         item.input_node_id: item for item in config.configs
     }
-    return {
-        handle: configs_by_node[
+    output: dict[str, dict] = {}
+    for handle in affected_inputs:
+        summary = configs_by_node[
             semantic.node_by_handle[handle]
         ].model_dump(mode="json")
-        for handle in affected_inputs
-    }
+        strategy = summary.get("strategy")
+        if isinstance(strategy, dict) and strategy.get("type") == "response_value":
+            # ``value_name`` is a private consumer-pool storage identity. Solve
+            # selects the reviewed candidate, not that internal name.
+            summary["strategy"] = {"type": "response_value"}
+        output[handle] = summary
+    return output

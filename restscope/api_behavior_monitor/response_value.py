@@ -264,6 +264,51 @@ class ResponseValueTracker:
             if _source_identity(source) in option_by_source
         ][:_MAX_AVAILABLE_SOURCE_OPTIONS]
 
+    def preview_selected_source(
+        self,
+        *,
+        consumer_operation_key: str,
+        consumer_input_node_id: str,
+        expected_type: str | None,
+        source: ResponseValueSource,
+    ) -> ResponseValueSourceOption | None:
+        """Validate one exact model-selected source without registering a pool.
+
+        Args:
+            consumer_operation_key: Operation whose request will consume values.
+            consumer_input_node_id: Stable target input identity used to derive
+                the eventual private pool name.
+            expected_type: Exact JSON body scalar type, or ``None`` for a
+                string-serialized OpenAPI parameter.
+            source: Producer contract and selector already validated against
+                the current OpenAPI lookup result by Parameter Patch.
+
+        Returns:
+            Current non-empty typed provenance, or ``None`` when retained
+            evidence disappeared or became incompatible. No monitor or value
+            pool is registered by this read.
+        """
+        values = [
+            value
+            for value in self.catalog.historical_values_for_source(
+                source,
+                limit=100,
+            )
+            if _observed_type_compatible(expected_type, value)
+        ]
+        values = _deduplicate_typed_values(values)
+        if not values:
+            return None
+        return ResponseValueSourceOption(
+            value_name=_value_name(
+                consumer_operation_key,
+                consumer_input_node_id,
+            ),
+            source=source,
+            compatible_scalar_type=expected_type,
+            value_count=len(values),
+        )
+
     def preview(
         self,
         *,
@@ -753,7 +798,11 @@ def _declared_success(status_code: str) -> bool:
 
 def _status_matches(declared: str, actual: int) -> bool:
     normalized = declared.upper()
-    return normalized == str(actual) or normalized == f"{actual // 100}XX"
+    return (
+        normalized == "DEFAULT"
+        or normalized == str(actual)
+        or normalized == f"{actual // 100}XX"
+    )
 
 
 def _type_compatible(

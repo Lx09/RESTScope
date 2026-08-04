@@ -25,7 +25,6 @@ from restscope.operation_smoke.failure_solver import (
     FailureSolveRequest,
 )
 from restscope.operation_smoke.parameter_patch import (
-    AvailableReferenceOption,
     CompiledConstraintPatch,
 )
 from restscope.operation_smoke.failure_dedup import (
@@ -291,9 +290,6 @@ class OperationSmokeCoordinator:
                                 generator_config=current.model_dump(
                                     mode="json"
                                 ),
-                                # Response sources are selected lazily after
-                                # Solve identifies the exact Patch inputs.
-                                reference_options=[],
                             ),
                             catalog=catalog,
                             config=current,
@@ -310,17 +306,7 @@ class OperationSmokeCoordinator:
                                     context=context,
                                     config=config,
                                     updates=updates,
-                                    selected_reference_options=selected,
-                                )
-                            ),
-                            reference_options_for_inputs=(
-                                lambda handles, config=current: (
-                                    _available_reference_options(
-                                        self.reference_values,
-                                        context=context,
-                                        config=config,
-                                        input_handles=handles,
-                                    )
+                                    selected_reference_provenance=selected,
                                 )
                             ),
                         )
@@ -514,41 +500,20 @@ def _assert_reference_invariants(
         )
 
 
-def _available_reference_options(
-    reference_values: BehaviorMonitorReferenceValues,
-    *,
-    context: ToolContext,
-    config: OperationGeneratorConfig,
-    input_handles: list[str],
-) -> list[AvailableReferenceOption]:
-    """Return populated reference sources only for confirmed Patch inputs."""
-    semantic = build_semantic_input_map(config)
-    return list(
-        reference_values.available_options(
-            ir=context.ir,
-            config=config,
-            input_node_ids={
-                semantic.node_by_handle[handle]
-                for handle in input_handles
-            },
-        )
-    )
-
-
 def _prepare_reference_updates(
     reference_values: BehaviorMonitorReferenceValues,
     *,
     context: ToolContext,
     config: OperationGeneratorConfig,
     updates,
-    selected_reference_options,
+    selected_reference_provenance,
 ):
     """Register selected observed pools and verify they remain non-empty."""
     prepared = reference_values.prepare_updates(
         ir=context.ir,
         config=config,
         updates=updates,
-        selected_reference_options=selected_reference_options,
+        selected_reference_provenance=selected_reference_provenance,
     )
     for update in prepared:
         strategy = update.strategy
