@@ -388,12 +388,13 @@ def _patch_call_with_handle(
                 arguments={
                     "root_cause": "The unrestricted identifier is rejected.",
                     "affected_inputs": [handle],
-                    "desired_behavior": (
+                    "value_requirements": (
                         f"Generate accepted identifiers no greater than {maximum}."
                     ),
-                    "acceptance_criteria": (
-                        f"Every sample is between 3 and {maximum}."
-                    ),
+                    "acceptance_criteria": [
+                        "path.projectId is an integer.",
+                        f"path.projectId is between 3 and {maximum} inclusive.",
+                    ],
                 },
             )
         ],
@@ -1755,6 +1756,39 @@ def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
         "apply_patch",
         "no_patch",
     ]
+    patch_tool = next(
+        tool for tool in request.tools if tool.name == "generate_parameter_patch"
+    )
+    patch_input = patch_tool.input_schema
+    assert set(patch_input["properties"]) == {
+        "root_cause",
+        "affected_inputs",
+        "value_requirements",
+        "acceptance_criteria",
+    }
+    assert set(patch_input["required"]) == set(patch_input["properties"])
+    assert "desired_behavior" not in patch_input["properties"]
+    assert "Do not describe the repair" in patch_input["properties"][
+        "root_cause"
+    ]["description"]
+    assert "exact current value has been read" in patch_input["properties"][
+        "affected_inputs"
+    ]["description"]
+    assert "required value" in patch_input["properties"][
+        "value_requirements"
+    ]["description"]
+    assert patch_input["properties"]["acceptance_criteria"] == {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+        "minItems": 1,
+        "maxItems": 20,
+        "uniqueItems": True,
+        "description": (
+            "List independently checkable value predicates, including relevant "
+            "types, allowed values, boundaries, formats, presence conditions, "
+            "or cross-input relationships. Do not describe HTTP outcomes."
+        ),
+    }
     system_prompt = request.messages[0].content
     initial_context = request.messages[1].content
     assert "## FAILURE TO INVESTIGATE — UNTRUSTED" in initial_context
@@ -1775,6 +1809,30 @@ def test_solve_sends_the_authoritative_terminal_decision_schema() -> None:
     assert "Do not broaden a case-specific lookup" in system_prompt
     assert "do not probe HTTP or inspect response Schemas" in system_prompt
     assert "query Parameter Memory and generate the Patch" in system_prompt
+    normalized_system = " ".join(system_prompt.split())
+    assert "Failure summary is a hypothesis, not evidence." in normalized_system
+    assert (
+        "OpenAPI Schema, description, and example can suggest hypotheses or "
+        "Probe values, but never authorize a Patch by themselves."
+        in normalized_system
+    )
+    assert (
+        "Before calling `generate_parameter_patch`, read the representative "
+        "TC's exact Failure Messages and every affected input's exact value."
+        in normalized_system
+    )
+    assert (
+        "A controlled Probe uses the original failed request as its baseline, "
+        "changes only affected inputs, preserves every other known input, and "
+        "makes the target Failure Message appear, disappear, or change as "
+        "predicted."
+        in normalized_system
+    )
+    assert (
+        "If neither evidence path proves the value rule, investigate further or "
+        "return `no_patch`; never call `generate_parameter_patch`."
+        in normalized_system
+    )
 
 
 def test_solve_always_offers_tools_with_a_flat_three_field_terminal_schema() -> None:

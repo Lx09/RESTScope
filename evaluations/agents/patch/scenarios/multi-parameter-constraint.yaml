@@ -13,8 +13,11 @@ input:
     failure: Independently generated start and end days can be reversed.
     root_cause: query.startDay and query.endDay use broad independent ranges.
     affected_inputs: [query.startDay, query.endDay]
-    desired_behavior: Generate both days from 1 through 30 and keep startDay <= endDay.
-    acceptance_criteria: Both values are integers in 1..30 and startDay never exceeds endDay.
+    value_requirements: Generate both days from 1 through 30 and keep startDay <= endDay.
+    acceptance_criteria:
+      - query.startDay is an integer from 1 through 30 inclusive.
+      - query.endDay is an integer from 1 through 30 inclusive.
+      - query.startDay is less than or equal to query.endDay.
     prior_attempts: []
   config:
     operation_key: GET /projects

@@ -106,7 +106,8 @@ session and ignores reason. `no_patch` requires a non-blank reason and ignores
 candidate reference. Runtime conflict exists only when atomic application of a
 selected candidate detects changed Generator or Constraint state.
 
-Each reviewed candidate carries the Patch task's root cause, desired behavior,
-and affected-input attribution. Applied and runtime-conflict Solve Attempts
-derive durable facts from that candidate. A no-Patch Attempt stores only its
-reason and creates no Parameter attribution.
+Each reviewed candidate carries the Patch task's root cause, value
+requirements, independently checkable acceptance criteria, and affected-input
+attribution. Applied and runtime-conflict Solve Attempts derive durable facts
+from that candidate. A no-Patch Attempt stores only its reason and creates no
+Parameter attribution.

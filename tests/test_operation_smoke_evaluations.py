@@ -42,21 +42,20 @@ def _evaluation_model(role: str):
     )
 
 
-def test_registry_loads_three_scenarios_for_every_agent() -> None:
-    """The explicit registry makes adding scenarios a file-only operation."""
+def test_registry_loads_expected_scenarios_for_every_agent() -> None:
+    """The registry retains three base cases plus Solve evidence regressions."""
     from evaluations.registry import SUITES
 
     assert set(SUITES) == {"dedup", "solve", "patch"}
+    expected_counts = {"dedup": 3, "patch": 3, "solve": 6}
     for agent_name, suite in SUITES.items():
         scenarios = suite.load_scenarios()
-        assert len(scenarios) == 3
-        assert len({item.scenario_id for item in scenarios}) == 3
-        assert all(item.provenance.kind == "trace" for item in scenarios)
-        assert all(
-            "restscope-project-swagger-smoke-20260727T010238Z-9712a1cf"
-            in item.provenance.source
-            for item in scenarios
-        )
+        assert len(scenarios) == expected_counts[agent_name]
+        assert len({item.scenario_id for item in scenarios}) == len(scenarios)
+        if agent_name != "solve":
+            assert all(item.provenance.kind == "trace" for item in scenarios)
+        else:
+            assert sum(item.provenance.kind == "manual" for item in scenarios) == 3
         assert all(
             secret not in item.model_dump_json().lower()
             for item in scenarios
@@ -251,8 +250,11 @@ def test_solve_task_uses_fresh_scripted_tools_and_applies_only_selected_patch() 
                         arguments={
                             "root_cause": "The range is too broad.",
                             "affected_inputs": ["path.projectId"],
-                            "desired_behavior": "Generate integers from 3 to 100.",
-                            "acceptance_criteria": "Every value is in 3..100.",
+                            "value_requirements": "Generate integers from 3 to 100.",
+                            "acceptance_criteria": [
+                                "path.projectId is an integer.",
+                                "path.projectId is between 3 and 100 inclusive.",
+                            ],
                         },
                     )
                 ],
@@ -450,6 +452,8 @@ def test_solve_and_patch_evaluators_keep_na_separate_from_zero() -> None:
     from evaluations.agents.patch.suite import generators_evaluator
     from evaluations.agents.solve.suite import (
         application_evaluator,
+        patch_evaluator,
+        probe_before_patch_evaluator,
         status_evaluator,
     )
 
@@ -463,6 +467,27 @@ def test_solve_and_patch_evaluators_keep_na_separate_from_zero() -> None:
     )[0]
     solve_na = application_evaluator.evaluate(
         {"output": solve_output, "expected": {}}
+    )[0]
+    unexpected_patch = patch_evaluator.evaluate(
+        {
+            "output": {
+                **solve_output,
+                "tool_calls": [{"tool": "generate_parameter_patch"}],
+            },
+            "expected": {"maximum_patch_calls": 0},
+        }
+    )[0]
+    wrong_tool_order = probe_before_patch_evaluator.evaluate(
+        {
+            "output": {
+                **solve_output,
+                "tool_calls": [
+                    {"tool": "generate_parameter_patch"},
+                    {"tool": "restscope.http.request"},
+                ],
+            },
+            "expected": {"probe_before_patch": True},
+        }
     )[0]
 
     patch_output = {
@@ -502,6 +527,14 @@ def test_solve_and_patch_evaluators_keep_na_separate_from_zero() -> None:
     assert (solve_pass.score, solve_pass.label) == (1, "satisfied")
     assert solve_na.score is None
     assert solve_na.label == "not_applicable"
+    assert (unexpected_patch.score, unexpected_patch.label) == (
+        0,
+        "not_satisfied",
+    )
+    assert (wrong_tool_order.score, wrong_tool_order.label) == (
+        0,
+        "not_satisfied",
+    )
     assert (patch_fail.score, patch_fail.label) == (0, "not_satisfied")
 
 

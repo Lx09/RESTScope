@@ -138,10 +138,45 @@ def _task():
         failure="Project lookup returns not found.",
         root_cause="The generated project identifier does not exist.",
         affected_inputs=["path.projectId"],
-        desired_behavior="Generate a project identifier accepted by the API.",
-        acceptance_criteria="The project-not-found response disappears.",
+        value_requirements="Generate an existing project identifier string.",
+        acceptance_criteria=[
+            "path.projectId is a string.",
+            "path.projectId equals one observed existing project identifier.",
+        ],
         prior_attempts=[],
     )
+
+
+def test_patch_task_separates_value_requirements_from_value_checks() -> None:
+    """Solve supplies one target domain and distinct atomic Reviewer checks."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchTask
+
+    task = ParameterPatchTask(
+        todo_id="T1",
+        failure="cadence is invalid",
+        root_cause="The generated cadence is outside the allowed value set.",
+        affected_inputs=["body.cadence"],
+        value_requirements="Generate one allowed cadence enum value.",
+        acceptance_criteria=[
+            "body.cadence is a string.",
+            "body.cadence is one of 1d, 7d, or 1month.",
+        ],
+    )
+
+    assert task.value_requirements == "Generate one allowed cadence enum value."
+    assert task.acceptance_criteria == [
+        "body.cadence is a string.",
+        "body.cadence is one of 1d, 7d, or 1month.",
+    ]
+    with pytest.raises(ValueError):
+        ParameterPatchTask(
+            todo_id="T1",
+            failure="cadence is invalid",
+            root_cause="The generated cadence is outside the allowed value set.",
+            affected_inputs=["body.cadence"],
+            desired_behavior="Generate one allowed cadence enum value.",
+            acceptance_criteria="The request succeeds.",
+        )
 
 
 def _updated_at_filter_config():
@@ -226,14 +261,15 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
             'The filter Generators are independent from order_by="id".'
         ),
         affected_inputs=affected,
-        desired_behavior=(
+        value_requirements=(
             "Whenever either updated_at filter is present, order_by must equal "
             "updated_at."
         ),
-        acceptance_criteria=(
-            "Requests with a filter use updated_at sorting; other requests may "
-            "use any valid order_by choice."
-        ),
+        acceptance_criteria=[
+            "query.order_by equals updated_at whenever query.updated_after is present.",
+            "query.order_by equals updated_at whenever query.updated_before is present.",
+            "query.order_by remains one of its declared values when both filters are absent.",
+        ],
         prior_attempts=[
             {"input_handle": handle, "failures": []}
             for handle in [*affected, "query.sort"]
@@ -252,8 +288,9 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     assert 'Observed failure: "HTTP 400:' in prompt
     assert "Confirmed root cause:" in prompt
     assert "Only inputs allowed to change:" in prompt
-    assert "Required generated behavior:" in prompt
-    assert "Validation target:" in prompt
+    assert "Required input values:" in prompt
+    assert "Value checks for review:" in prompt
+    assert "query.order_by equals updated_at whenever query.updated_after" in prompt
     assert '- "query.updated_after"' in prompt
     assert '- `query.order_by`' in prompt
     assert "## CURRENT STATE OF ALLOWED INPUTS — UNTRUSTED" in prompt
@@ -325,8 +362,10 @@ def test_patch_prompt_keeps_only_relevant_compatibility_history() -> None:
         failure="The current sort conflicts with the updated_at filter.",
         root_cause="The optional inputs are selected independently.",
         affected_inputs=["query.order_by"],
-        desired_behavior="Preserve a previously compatible sort repair.",
-        acceptance_criteria="Filtered requests use updated_at sorting.",
+        value_requirements="Preserve the compatible updated_at sort relationship.",
+        acceptance_criteria=[
+            "query.order_by equals updated_at whenever an updated_at filter is present."
+        ],
         prior_attempts=[
             {
                 "input_handle": "query.order_by",
@@ -469,8 +508,11 @@ def _variant_task(*affected_inputs: str):
         failure="Random project identifiers return not found.",
         root_cause="Only an observed integer project identifier is accepted.",
         affected_inputs=list(affected_inputs),
-        desired_behavior="Always generate the known integer project identifier.",
-        acceptance_criteria="Every sample selects the integer branch with value 21.",
+        value_requirements="Always generate the observed integer project identifier.",
+        acceptance_criteria=[
+            "path.projectId is an integer.",
+            "path.projectId equals 21.",
+        ],
         prior_attempts=[],
     )
 
@@ -1243,7 +1285,7 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert "not(expression)" in initial_system
     assert "implies(condition, consequence)" in initial_system
     assert "Generator edits in patch.changes" in initial_system
-    assert "one complete corrected replacement" in initial_system
+    assert "one complete corrected replacement" in normalized_system
 
     second_request = client.requests[1]
     assert second_request.response_format == "json_schema"

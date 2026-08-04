@@ -85,7 +85,10 @@ class SolveExpectation(BaseModel):
     status: str | None = None
     memory_input_handles: list[str] | None = None
     minimum_probe_calls: int | None = Field(default=None, ge=0)
+    maximum_probe_calls: int | None = Field(default=None, ge=0)
     minimum_patch_calls: int | None = Field(default=None, ge=0)
+    maximum_patch_calls: int | None = Field(default=None, ge=0)
+    probe_before_patch: bool | None = None
     applied_patch_count: int | None = Field(default=None, ge=0)
 
 
@@ -478,6 +481,8 @@ class ScriptedPatchCoordinator:
                 "tool": "generate_parameter_patch",
                 "affected_inputs": list(task.affected_inputs),
                 "root_cause": task.root_cause,
+                "value_requirements": task.value_requirements,
+                "acceptance_criteria": list(task.acceptance_criteria),
                 "prior_attempt_count": len(task.prior_attempts),
             }
         )
@@ -672,37 +677,46 @@ def status_evaluator(output: dict[str, Any], expected: dict[str, Any]) -> Score:
     )
 
 
-def _minimum_tool_score(
+def _tool_count_score(
     *,
     name: str,
     output: dict[str, Any],
     expected: dict[str, Any],
-    expected_key: str,
+    minimum_key: str,
+    maximum_key: str,
     tool_name: str,
 ) -> Score:
-    """Count a named tool without depending on model call ordering."""
-    minimum = expected.get(expected_key)
-    if minimum is None:
+    """Check optional lower and upper call bounds without assuming ordering."""
+    minimum = expected.get(minimum_key)
+    maximum = expected.get(maximum_key)
+    if minimum is None and maximum is None:
         return _na(name)
     actual = sum(
         call.get("tool") == tool_name
         for call in output.get("tool_calls", [])
     )
+    minimum_satisfied = minimum is None or actual >= minimum
+    maximum_satisfied = maximum is None or actual <= maximum
     return _score(
         name,
-        actual >= minimum,
-        f"Expected at least {minimum} calls; observed {actual}.",
+        minimum_satisfied and maximum_satisfied,
+        (
+            f"Expected calls between {minimum if minimum is not None else 0} "
+            f"and {maximum if maximum is not None else 'unbounded'}; "
+            f"observed {actual}."
+        ),
     )
 
 
 @create_evaluator(name="solve_probe_calls", kind="code")
 def probe_evaluator(output: dict[str, Any], expected: dict[str, Any]) -> Score:
     """Check whether Solve gathered the requested scripted HTTP evidence."""
-    return _minimum_tool_score(
+    return _tool_count_score(
         name="solve_probe_calls",
         output=output,
         expected=expected,
-        expected_key="minimum_probe_calls",
+        minimum_key="minimum_probe_calls",
+        maximum_key="maximum_probe_calls",
         tool_name="restscope.http.request",
     )
 
@@ -710,12 +724,56 @@ def probe_evaluator(output: dict[str, Any], expected: dict[str, Any]) -> Score:
 @create_evaluator(name="solve_patch_calls", kind="code")
 def patch_evaluator(output: dict[str, Any], expected: dict[str, Any]) -> Score:
     """Check whether Solve requested a structured Patch candidate."""
-    return _minimum_tool_score(
+    return _tool_count_score(
         name="solve_patch_calls",
         output=output,
         expected=expected,
-        expected_key="minimum_patch_calls",
+        minimum_key="minimum_patch_calls",
+        maximum_key="maximum_patch_calls",
         tool_name="generate_parameter_patch",
+    )
+
+
+@create_evaluator(name="solve_probe_before_patch", kind="code")
+def probe_before_patch_evaluator(
+    output: dict[str, Any],
+    expected: dict[str, Any],
+) -> Score:
+    """Check that ambiguous evidence was gathered before Patch was requested.
+
+    A controlled Probe can justify a Patch only if Solve observes its result
+    before asking the Parameter Patch workflow to change any input behavior.
+    Scenarios that use direct Failure Message evidence leave this check unset.
+    """
+    wanted = expected.get("probe_before_patch")
+    if wanted is None:
+        return _na("solve_probe_before_patch")
+
+    tool_names = [
+        call.get("tool") for call in output.get("tool_calls", [])
+    ]
+    probe_indexes = [
+        index
+        for index, name in enumerate(tool_names)
+        if name == "restscope.http.request"
+    ]
+    patch_indexes = [
+        index
+        for index, name in enumerate(tool_names)
+        if name == "generate_parameter_patch"
+    ]
+    actual = bool(
+        probe_indexes
+        and patch_indexes
+        and probe_indexes[0] < patch_indexes[0]
+    )
+    return _score(
+        "solve_probe_before_patch",
+        actual is wanted,
+        (
+            "Expected the first controlled Probe to precede the first Patch "
+            f"call: {wanted}; observed call order {tool_names!r}."
+        ),
     )
 
 
@@ -782,6 +840,7 @@ SUITE = EvaluationSuite(
         memory_evaluator,
         probe_evaluator,
         patch_evaluator,
+        probe_before_patch_evaluator,
         application_evaluator,
     ),
     current_prompt=_system_prompt,

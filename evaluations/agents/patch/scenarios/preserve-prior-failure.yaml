@@ -13,8 +13,11 @@ input:
     failure: Values above 50 are rejected by the current endpoint.
     root_cause: path.projectId still generates values greater than 50.
     affected_inputs: [path.projectId]
-    desired_behavior: Limit values to 50 without reintroducing values below 3.
-    acceptance_criteria: Every value is an integer from 3 through 50 inclusive.
+    value_requirements: Limit values to 50 without reintroducing values below 3.
+    acceptance_criteria:
+      - path.projectId is an integer.
+      - path.projectId is greater than or equal to 3.
+      - path.projectId is less than or equal to 50.
     prior_attempts:
       - input_handle: path.projectId
         failures:

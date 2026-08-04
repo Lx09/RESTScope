@@ -1,0 +1,74 @@
+scenario_id: solve-evidence-explicit-message-patch
+title: Use an explicit Failure Message value rule without probing
+provenance:
+  kind: manual
+  source: user-approved-failure-solve-evidence-contract-20260804
+  rationale: An exact Failure Message may directly prove a bounded value domain.
+tags: [acceptance, evidence, failure-message]
+input:
+  request:
+    operation_key: GET /projects/{projectId}
+    round_number: 2
+    todo:
+      todo_id: T-explicit
+      failure_id: failure-explicit-project-range
+      failure: The project identifier is outside the supported range.
+      test_case_id: TC1
+    operation: {method: GET, path: "/projects/{projectId}"}
+    generator_config: {}
+  config:
+    operation_key: GET /projects/{projectId}
+    snapshot:
+      operation_key: GET /projects/{projectId}
+      method: GET
+      path: "/projects/{projectId}"
+      parameters:
+        - input_node_id: path/projectId
+          name: projectId
+          location: path
+          required: true
+      input_nodes:
+        - input_node_id: path/projectId
+          node_kind: parameter
+          canonical_path: path/projectId
+          required: true
+          schema_contract: {type: integer, minimum: 1, maximum: 999999}
+    configs:
+      - input_node_id: path/projectId
+        inclusion_probability: 1
+        strategy: {type: integer_range, minimum: 1, maximum: 999999}
+  failure_history:
+    failure_id: failure-explicit-project-range
+    summary: The project identifier is outside the supported range.
+    occurrence_count: 1
+    attempts: []
+  catalog_cases:
+    - request: {path: {projectId: 900001}, query: {}, header: {}, cookie: {}}
+      response_body: {message: projectId must be between 3 and 100 inclusive}
+      failure:
+        kind: http
+        status_code: 400
+        messages: ["HTTP 400: projectId must be between 3 and 100 inclusive"]
+  parameter_histories:
+    - input_node_id: path/projectId
+      failures: []
+  patch_results:
+    - status: validated
+      todo_id: T-explicit
+      patch:
+        updates:
+          - input_node_id: path/projectId
+            strategy: {type: integer_range, minimum: 3, maximum: 100}
+        constraints: []
+        selected_reference_options: []
+      samples:
+        - values: {path.projectId: 3}
+        - values: {path.projectId: 100}
+      outputs_used: 2
+  probe_results: []
+expected:
+  status: applied_patch
+  memory_input_handles: [path.projectId]
+  maximum_probe_calls: 0
+  minimum_patch_calls: 1
+  applied_patch_count: 1

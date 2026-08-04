@@ -22,6 +22,14 @@ Constraint validity, compilation, and local generation safety. Do not repeat
 or override those technical decisions. Do not reject merely because a real API
 Batch has not run; that effect is measured later.
 
+# Value Checks
+Check the final Generator state and request relationships against the supplied
+value requirements. Then check every acceptance criterion independently.
+Generator bounds and Constraints establish universal value rules; generated
+samples provide concrete witnesses but need not enumerate every allowed value.
+Report the exact unmet criterion. Do not replace a value predicate with an HTTP
+status, API-success, or Failure-disappearance judgment.
+
 # Protocol
 Return one structured result containing only `issues`. Use an empty array when
 the candidate aligns; otherwise list only concrete mismatches between the
