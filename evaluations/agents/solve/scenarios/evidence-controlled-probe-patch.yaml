@@ -1,0 +1,80 @@
+scenario_id: solve-evidence-controlled-probe-patch
+title: Prove an ambiguous value failure with a controlled Probe
+provenance:
+  kind: manual
+  source: user-approved-failure-solve-evidence-contract-20260804
+  rationale: A generic Failure Message needs a one-input controlled contrast before Patch.
+tags: [acceptance, evidence, probe]
+input:
+  request:
+    operation_key: GET /projects/{projectId}
+    round_number: 2
+    todo:
+      todo_id: T-probe
+      failure_id: failure-ambiguous-project
+      failure: The project identifier is invalid.
+      test_case_id: TC1
+    operation: {method: GET, path: "/projects/{projectId}"}
+    generator_config: {}
+  config:
+    operation_key: GET /projects/{projectId}
+    snapshot:
+      operation_key: GET /projects/{projectId}
+      method: GET
+      path: "/projects/{projectId}"
+      parameters:
+        - input_node_id: path/projectId
+          name: projectId
+          location: path
+          required: true
+      input_nodes:
+        - input_node_id: path/projectId
+          node_kind: parameter
+          canonical_path: path/projectId
+          required: true
+          schema_contract: {type: string}
+    configs:
+      - input_node_id: path/projectId
+        inclusion_probability: 1
+        strategy: {type: random_string, min_length: 1, max_length: 16}
+  failure_history:
+    failure_id: failure-ambiguous-project
+    summary: The project identifier is invalid.
+    occurrence_count: 1
+    attempts: []
+  catalog_cases:
+    - request: {path: {projectId: random-project}, query: {}, header: {}, cookie: {}}
+      response_body: {message: project identifier is invalid}
+      failure:
+        kind: http
+        status_code: 400
+        messages: ["HTTP 400: project identifier is invalid"]
+  parameter_histories:
+    - input_node_id: path/projectId
+      failures: []
+  probe_results:
+    - tool_call_id: scripted-probe
+      name: restscope.http.request
+      status: succeeded
+      structured:
+        status_code: 200
+        response_summary: known-project succeeds
+  patch_results:
+    - status: validated
+      todo_id: T-probe
+      patch:
+        updates:
+          - input_node_id: path/projectId
+            strategy: {type: constant, value: known-project}
+        constraints: []
+        selected_reference_options: []
+      samples:
+        - values: {path.projectId: known-project}
+      outputs_used: 2
+expected:
+  status: applied_patch
+  memory_input_handles: [path.projectId]
+  minimum_probe_calls: 1
+  minimum_patch_calls: 1
+  probe_before_patch: true
+  applied_patch_count: 1

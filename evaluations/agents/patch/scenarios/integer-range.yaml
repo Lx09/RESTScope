@@ -13,8 +13,11 @@ input:
     failure: Project identifiers outside the supported range are rejected.
     root_cause: path.projectId generates integers outside 3 through 100.
     affected_inputs: [path.projectId]
-    desired_behavior: Generate integer project identifiers from 3 through 100 inclusive.
-    acceptance_criteria: Every generated path.projectId is an integer >= 3 and <= 100.
+    value_requirements: Generate integer project identifiers from 3 through 100 inclusive.
+    acceptance_criteria:
+      - path.projectId is an integer.
+      - path.projectId is greater than or equal to 3.
+      - path.projectId is less than or equal to 100.
     prior_attempts: []
   config:
     operation_key: GET /projects/{projectId}

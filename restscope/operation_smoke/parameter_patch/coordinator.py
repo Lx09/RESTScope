@@ -397,7 +397,7 @@ def _build_review_candidate(
         requirement={
             "failure": task.failure,
             "root_cause": task.root_cause,
-            "desired_behavior": task.desired_behavior,
+            "value_requirements": task.value_requirements,
             "acceptance_criteria": task.acceptance_criteria,
         },
         affected_inputs=list(task.affected_inputs),

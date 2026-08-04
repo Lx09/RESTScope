@@ -71,14 +71,21 @@ class AvailableReferenceOption(_Model):
 
 
 class ParameterPatchTask(_Model):
-    """One Solve-owned requirement that Parameter Patch must satisfy."""
+    """One evidence-backed value requirement that Parameter Patch must satisfy.
+
+    ``root_cause`` diagnoses the current generated values. The separate
+    ``value_requirements`` field states the target value domain, while each
+    acceptance criterion gives the Reviewer one independently checkable value
+    predicate. HTTP outcomes deliberately belong to Solve evidence, not this
+    Patch-construction handoff.
+    """
 
     todo_id: str = Field(min_length=1, max_length=100)
     failure: str = Field(min_length=1)
     root_cause: str = Field(min_length=1)
     affected_inputs: list[str] = Field(min_length=1, max_length=100)
-    desired_behavior: str = Field(min_length=1)
-    acceptance_criteria: str = Field(min_length=1)
+    value_requirements: str = Field(min_length=1)
+    acceptance_criteria: list[str] = Field(min_length=1, max_length=20)
     prior_attempts: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -86,6 +93,8 @@ class ParameterPatchTask(_Model):
         """Prevent ambiguous duplicate input ownership inside one requirement."""
         if len(self.affected_inputs) != len(set(self.affected_inputs)):
             raise ValueError("affected_inputs must be unique")
+        if len(self.acceptance_criteria) != len(set(self.acceptance_criteria)):
+            raise ValueError("acceptance_criteria must be unique")
         return self
 
 

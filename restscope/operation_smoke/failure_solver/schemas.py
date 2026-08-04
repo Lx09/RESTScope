@@ -55,9 +55,9 @@ class FailureSolveDecision(_Model):
 class PatchCandidate(_Model):
     """Keep one reviewed Patch and its derived facts in one Solve session.
 
-    The Patch task supplied the cause, desired behavior, and affected inputs to
-    both the Patch Agent and its independent Reviewer. Storing those facts on
-    the candidate lets deterministic runtime persist the selected evidence
+    The Patch task supplied the cause, value requirements, and affected inputs
+    to both the Patch Agent and its independent Reviewer. Storing those facts
+    on the candidate lets deterministic runtime persist the selected evidence
     without asking the Solve model to restate it in terminal JSON.
     """
 

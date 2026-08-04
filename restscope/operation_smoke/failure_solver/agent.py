@@ -336,7 +336,7 @@ class FailureSolveSession:
             system=system_prompt,
             user=rendered.text,
             limits=ContextLimits(
-                system_chars=3_500,
+                system_chars=4_500,
                 initial_user_chars=24_000,
                 feedback_chars=8_000,
                 conversation_chars=48_000,
@@ -783,7 +783,7 @@ class FailureSolveSession:
                 candidate_ref=candidate_ref,
                 patch=result.patch,
                 root_cause=task.root_cause,
-                change_reason=task.desired_behavior,
+                change_reason=task.value_requirements,
                 parameter_attributions=[
                     SolveAttemptParameterWrite(
                         input_node_id=self.semantic_inputs.node_by_handle[handle],
@@ -826,7 +826,7 @@ class FailureSolveSession:
             failure=self.request.todo.failure,
             root_cause=arguments["root_cause"],
             affected_inputs=affected,
-            desired_behavior=arguments["desired_behavior"],
+            value_requirements=arguments["value_requirements"],
             acceptance_criteria=arguments["acceptance_criteria"],
             # The Patch Module receives every related history read in this
             # session.
@@ -1026,6 +1026,26 @@ Investigate exactly one Operation Smoke Failure.
 5. Call `generate_parameter_patch` with confirmed, testable requirements.
 6. Return one terminal `FailureSolveDecision` JSON object.
 
+# Patch Evidence Gate
+
+Failure summary is a hypothesis, not evidence. Before calling
+`generate_parameter_patch`, read the representative TC's exact Failure Messages
+and every affected input's exact value.
+
+A Patch is allowed through exactly two evidence paths:
+
+1. An exact Failure Message explicitly states the required value type, allowed
+   values, boundary, format, presence condition, or cross-input relationship.
+2. A controlled Probe uses the original failed request as its baseline, changes
+   only affected inputs, preserves every other known input, and makes the target
+   Failure Message appear, disappear, or change as predicted. Query the Probe's
+   new `TC*` for the comparison facts.
+
+OpenAPI Schema, description, and example can suggest hypotheses or Probe values,
+but never authorize a Patch by themselves. If neither evidence path proves the
+value rule, investigate further or return `no_patch`; never call
+`generate_parameter_patch`.
+
 # Rules
 
 - One output may group only read-only OpenAPI/Catalog/Parameter Memory queries.
@@ -1114,14 +1134,24 @@ def _patch_tool_spec(
         name=_PATCH_TOOL_NAME,
         description=(
             "Ask Parameter Patch to build and independently review a Generator "
-            "or cross-Parameter Constraint candidate. This tool has no side effects. "
-            "Copy affected input handles exactly from the schema enum."
+            "or cross-Parameter Constraint candidate only after the system "
+            "prompt's Failure Message or controlled-Probe evidence gate is "
+            "satisfied. This tool has no side effects. Copy affected input "
+            "handles exactly from the schema enum."
         ),
         kind="local_function",
         input_schema={
             "type": "object",
             "properties": {
-                "root_cause": {"type": "string", "minLength": 1},
+                "root_cause": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Evidence-backed causal statement connecting affected "
+                        "input values or relationships to the target Failure "
+                        "Message. Do not describe the repair."
+                    ),
+                },
                 "affected_inputs": {
                     "type": "array",
                     "items": {
@@ -1130,14 +1160,40 @@ def _patch_tool_spec(
                     },
                     "minItems": 1,
                     "uniqueItems": True,
+                    "description": (
+                        "List only inputs whose causal role is supported by "
+                        "the exact Failure Message or controlled Probe and "
+                        "whose exact current value has been read from the "
+                        "representative Test Case."
+                    ),
                 },
-                "desired_behavior": {"type": "string", "minLength": 1},
-                "acceptance_criteria": {"type": "string", "minLength": 1},
+                "value_requirements": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Describe only the affected inputs' required value "
+                        "types, domains, ranges, formats, presence rules, or "
+                        "cross-input relationships."
+                    ),
+                },
+                "acceptance_criteria": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "uniqueItems": True,
+                    "description": (
+                        "List independently checkable value predicates, "
+                        "including relevant types, allowed values, boundaries, "
+                        "formats, presence conditions, or cross-input "
+                        "relationships. Do not describe HTTP outcomes."
+                    ),
+                },
             },
             "required": [
                 "root_cause",
                 "affected_inputs",
-                "desired_behavior",
+                "value_requirements",
                 "acceptance_criteria",
             ],
             "additionalProperties": False,
