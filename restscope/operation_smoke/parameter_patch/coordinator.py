@@ -48,6 +48,7 @@ from .schemas import (
     ParameterPatchFailure,
     ParameterPatchProposal,
     ParameterPatchTask,
+    SemanticBooleanExpression,
     ValidatedParameterPatch,
 )
 
@@ -321,10 +322,8 @@ def _proposal_feedback(errors: list[str]) -> str:
         "forbidden keys",
         "Never use generators, generator_changes, and constraint_changes.",
     )
-    # DeepSeek's strict transport currently accepts calls whose nested fields
-    # still violate the recursive schema. State the two observed corrections
-    # only after a rejected proposal; putting the recursive contract into the
-    # initial system prompt caused the provider to return empty arguments.
+    # Keep field guidance next to the rejected output so a model using a
+    # provider's JSON-only mode can repair a shape the provider did not enforce.
     writer.text(
         "change input",
         'Each change uses "input", never "input_handle".',
@@ -334,6 +333,13 @@ def _proposal_feedback(errors: list[str]) -> str:
         (
             "Each constraint expression must be a recursive object, never a "
             "string expression."
+        ),
+    )
+    writer.text(
+        "constraint fields",
+        (
+            "and, or, and cardinality use expressions, never conditions; "
+            "not uses expression; implies uses condition and consequence."
         ),
     )
     writer.text(
@@ -501,17 +507,6 @@ def _compile_patch(
         if node_id is None:
             raise ValueError(f"Unknown semantic input: {change.input}")
         strategy = change.strategy
-        if strategy is not None and strategy.type in {"object", "request_body"}:
-            raise ValueError(
-                f"{strategy.type} is system-managed and cannot be patched"
-            )
-        if strategy is not None and strategy.type in {
-            "resource_identifier",
-            "response_value",
-        }:
-            raise ValueError(
-                "Observed generators must use a system-provided R alias"
-            )
         if change.reference is not None:
             option = reference_by_alias.get(change.reference)
             if option is None:
@@ -684,14 +679,21 @@ def _variant_branch_index(node: Any) -> int:
 
 
 def _compile_constraint(
-    expression: dict[str, Any],
+    expression: SemanticBooleanExpression,
     *,
     task: ParameterPatchTask,
     semantic: Mapping[str, str],
     config: OperationGeneratorConfig,
 ) -> CompiledConstraintPatch:
-    """Compile one semantic Constraint and reject out-of-scope inputs."""
+    """Compile one model-facing Constraint into the Testing Module contract.
+
+    The Patch model names inputs with readable semantic handles. This function
+    converts those handles into the frozen input-node identities used during
+    generation, rejects handles outside the approved Patch task, and then runs
+    the existing executable Constraint validation and normalization.
+    """
     allowed = set(task.affected_inputs)
+    source = expression.model_dump(mode="python")
 
     def convert(value: Any) -> Any:
         """Replace semantic input handles recursively with frozen node IDs."""
@@ -715,7 +717,7 @@ def _compile_constraint(
         return output
 
     compiled = ConstraintSet.model_validate(
-        {"constraints": [convert(expression)]}
+        {"constraints": [convert(source)]}
     )
     validate_constraint_set(compiled, config.snapshot)
     normalized = normalize_constraint_set(compiled)

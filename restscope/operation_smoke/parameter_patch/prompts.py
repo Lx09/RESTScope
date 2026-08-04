@@ -31,6 +31,20 @@ inclusion_probability, strategy, or an R alias reference; strategy and
 reference are mutually exclusive. Use only supplied semantic input handles and
 aliases, and preserve compatible existing behavior. When compiler or Reviewer
 feedback follows, submit one complete corrected replacement.
+
+Generator DSL:
+constant(value); choice(values, weights?); integer_range(minimum, maximum);
+number_range(minimum, maximum); random_string(min_length, max_length, alphabet);
+regex(pattern, min_length, max_length); boolean(true_probability);
+format(format); array(min_items, max_items); variant(branch_weights).
+
+Constraint DSL:
+Values are input_value(input), literal(value), or
+arithmetic(operator, left, right). Booleans are present(input),
+compare(operator, left, right), matches(value, pattern),
+implies(condition, consequence), and(expressions), or(expressions),
+cardinality(expressions, minimum, maximum), or not(expression). Never use
+conditions. Every patch.constraints item contains exactly one expression.
 """.strip()
 
 
