@@ -17,7 +17,12 @@ from typing import Any, Literal
 from jsonschema import SchemaError, ValidationError, validate
 from jsonschema.validators import validator_for
 
-from restscope.llm import ToolCall, ToolResult, ToolSpec
+from restscope.llm import (
+    ProviderUnavailableError,
+    ToolCall,
+    ToolResult,
+    ToolSpec,
+)
 from restscope.observability import TracingRuntime
 
 
@@ -134,6 +139,10 @@ class AgentToolbox:
         Returns:
             A result that either denies invalid input before the implementation
             runs or contains the implementation's structured output.
+
+        Raises:
+            ProviderUnavailableError: A nested LLM-backed tool exhausted its
+                provider retry policy, so the owning workflow must stop.
         """
         validation_failure = self._validation_failure(tool_call)
         if validation_failure is not None:
@@ -151,6 +160,10 @@ class AgentToolbox:
         Returns:
             One result per call in the original model-provided order. An empty
             input returns immediately without creating worker threads.
+
+        Raises:
+            ProviderUnavailableError: Any nested LLM-backed tool exhausted its
+                provider retry policy. No result group is returned.
         """
         if not tool_calls:
             return []
@@ -234,7 +247,15 @@ class AgentToolbox:
         return None
 
     def _execute_validated(self, tool_call: ToolCall) -> ToolResult:
-        """Trace, redact, and return one already validated tool call."""
+        """Trace and execute one call without hiding a shared provider outage.
+
+        Ordinary tool failures return a model-safe :class:`ToolResult`.
+        ``ProviderUnavailableError`` is raised only after the Tool span closes
+        normally, so tracing cannot follow its private SDK cause into a raw
+        provider response.
+        """
+        provider_error: ProviderUnavailableError | None = None
+        redacted: ToolResult | None = None
         with self.tracing_runtime.span(
             tool_call.name,
             kind="TOOL",
@@ -243,6 +264,21 @@ class AgentToolbox:
         ) as span:
             try:
                 result = self._invoke_validated(tool_call)
+            except ProviderUnavailableError as exc:
+                # This is run-control state, not feedback the Agent can repair.
+                # Record only the same stable fields as the owning LLM span.
+                span.set_attribute("restscope.llm.error_code", exc.code)
+                if exc.status_code is not None:
+                    span.set_attribute(
+                        "http.response.status_code",
+                        exc.status_code,
+                    )
+                span.set_attribute(
+                    "restscope.llm.provider_retry_limit",
+                    exc.retry_limit,
+                )
+                span.mark_error(str(exc))
+                provider_error = exc
             except ToolFailure as exc:
                 result = ToolResult(
                     tool_call_id=tool_call.id,
@@ -264,15 +300,23 @@ class AgentToolbox:
                         "message": "The tool failed because of an internal error.",
                     },
                 )
-            redacted = ToolResult.model_validate(
-                self.tracing_runtime.redactor.redact(result)
-            )
-            span.set_output(redacted)
-            span.set_attribute("restscope.tool.status", redacted.status)
-            if redacted.status in {"failed", "timed_out"}:
-                message = (redacted.error or {}).get("message", redacted.status)
-                span.mark_error(str(message))
-            return redacted
+            if provider_error is None:
+                redacted = ToolResult.model_validate(
+                    self.tracing_runtime.redactor.redact(result)
+                )
+                span.set_output(redacted)
+                span.set_attribute("restscope.tool.status", redacted.status)
+                if redacted.status in {"failed", "timed_out"}:
+                    message = (redacted.error or {}).get(
+                        "message",
+                        redacted.status,
+                    )
+                    span.mark_error(str(message))
+
+        if provider_error is not None:
+            raise provider_error
+        assert redacted is not None
+        return redacted
 
     def _invoke_validated(self, tool_call: ToolCall) -> ToolResult:
         """Call one implementation and enforce its successful output schema."""

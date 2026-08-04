@@ -9,6 +9,7 @@ import pytest
 from restscope.llm import (
     LLMModelConfig,
     LLMResponse,
+    ProviderUnavailableError,
     ToolCall,
     ToolResult,
     ToolSpec,
@@ -32,10 +33,13 @@ from tests._operation_smoke_dedup_solve_fixtures import smoke_config
 class StubClient:
     """Return scripted Solve outputs and retain each request for inspection."""
 
-    def __init__(self, responses: list[LLMResponse | dict]) -> None:
+    def __init__(
+        self,
+        responses: list[LLMResponse | dict | Exception],
+    ) -> None:
         self.responses = [
             response
-            if isinstance(response, LLMResponse)
+            if isinstance(response, LLMResponse | Exception)
             else LLMResponse(
                 provider="stub",
                 model="think-model",
@@ -48,7 +52,10 @@ class StubClient:
     def invoke(self, request):
         """Return the next scripted response."""
         self.requests.append(request)
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class ToolContractAwareClient:
@@ -254,6 +261,28 @@ def _model() -> LLMModelConfig:
     )
 
 
+def _patch_model() -> LLMModelConfig:
+    """Build the FAST model selected for Parameter Patch proposals."""
+    return LLMModelConfig(
+        role="parameter_patch_agent",
+        provider="stub",
+        model="fast-model",
+        max_tokens=8192,
+        context_window_tokens=131072,
+    )
+
+
+def _review_model() -> LLMModelConfig:
+    """Build the FAST model selected for independent Patch Review."""
+    return LLMModelConfig(
+        role="parameter_patch_review_agent",
+        provider="stub",
+        model="fast-model",
+        max_tokens=8192,
+        context_window_tokens=131072,
+    )
+
+
 def _request():
     """Build one stable Failure with one representative Catalog reference."""
     from restscope.operation_smoke.failure_solver import FailureSolveRequest
@@ -386,6 +415,25 @@ def _validated_patch(value: str, *, outputs_used: int = 2):
         samples=[{"values": {"path.projectId": value}, "present": {"path.projectId": True}}],
         outputs_used=outputs_used,
     )
+
+
+def _constant_patch_proposal() -> dict:
+    """Build one executable Patch proposal that proceeds to Review."""
+    return {
+        "action": "propose",
+        "patch": {
+            "changes": [
+                {
+                    "input": "path.projectId",
+                    "strategy": {
+                        "type": "constant",
+                        "value": "known-project",
+                    },
+                }
+            ],
+            "constraints": [],
+        },
+    }
 
 
 def _summary_candidate(
@@ -869,6 +917,47 @@ def test_solve_preloads_failure_queries_parameter_then_atomically_applies_patch(
     assert "run-2" not in initial_prompt
     assert "current_batch" not in initial_prompt
     assert '{"' not in initial_prompt
+
+
+def test_patch_review_provider_unavailable_stops_failure_solve() -> None:
+    """A nested Review outage escapes the Patch tool without another Solve turn."""
+    from restscope.operation_smoke.parameter_patch import (
+        ParameterPatchCoordinatorFactory,
+    )
+
+    unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
+    client = StubClient(
+        [
+            _memory_call(),
+            _patch_call(),
+            _constant_patch_proposal(),
+            unavailable,
+            _terminal("no_patch"),
+        ]
+    )
+    patch_factory = ParameterPatchCoordinatorFactory(
+        client=client,
+        patch_model=_patch_model(),
+        review_model=_review_model(),
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        _start(
+            _agent(
+                client,
+                StubMemory(),
+                patch_factory,
+                StubPatchApplication(),
+            )
+        ).advance()
+
+    assert caught.value is unavailable
+    assert [request.metadata["role"] for request in client.requests] == [
+        "operation_smoke_failure_solve",
+        "operation_smoke_failure_solve",
+        "parameter_patch_agent",
+        "parameter_patch_review_agent",
+    ]
 
 
 def test_response_reference_options_are_loaded_only_for_patch_inputs() -> None:

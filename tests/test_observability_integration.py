@@ -330,6 +330,61 @@ def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     assert "tool-secret" not in error_event.attributes["exception.stacktrace"]
 
 
+def test_agent_toolbox_propagates_provider_unavailable_without_tracing_cause() -> None:
+    """A nested model outage keeps stable Tool span facts and a private cause."""
+    from opentelemetry.trace.status import StatusCode
+
+    from restscope.capabilities import AgentToolbox
+    from restscope.llm import (
+        ProviderUnavailableError,
+        ToolCall,
+        ToolSpec,
+    )
+
+    provider_body = "unregistered private nested provider response body"
+    unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
+    unavailable.__cause__ = RuntimeError(provider_body)
+
+    def fail() -> dict:
+        """Expose the nested provider failure through one registered tool."""
+        raise unavailable
+
+    runtime, exporter = _recording_runtime()
+    toolbox = AgentToolbox(tracing_runtime=runtime)
+    toolbox.register(
+        spec=ToolSpec(
+            name="patch.review",
+            description="Review one generated Patch.",
+            kind="local_function",
+            input_schema={"type": "object", "additionalProperties": False},
+            output_schema={"type": "object"},
+        ),
+        execute=fail,
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        toolbox.execute(
+            ToolCall(id="review", name="patch.review", arguments={})
+        )
+    runtime.close()
+
+    span = exporter.get_finished_spans()[0]
+    rendered = json.dumps(
+        {
+            "attributes": dict(span.attributes),
+            "events": [dict(event.attributes) for event in span.events],
+        },
+        default=str,
+    )
+    assert caught.value is unavailable
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["restscope.llm.error_code"] == "provider_unavailable"
+    assert span.attributes["http.response.status_code"] == 503
+    assert span.attributes["restscope.llm.provider_retry_limit"] == 3
+    assert "restscope.llm.provider_retry_count" not in span.attributes
+    assert provider_body not in rendered
+
+
 def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
     """Scenario: concurrent tool spans remain children of the calling Agent."""
     import threading

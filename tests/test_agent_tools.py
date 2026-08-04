@@ -147,6 +147,99 @@ def test_agent_toolbox_hides_unexpected_exception_details() -> None:
     assert "secret-password" not in result.model_dump_json()
 
 
+def test_agent_toolbox_propagates_provider_unavailable_error() -> None:
+    """A shared model outage escapes the tool seam instead of becoming feedback."""
+    from restscope.capabilities import AgentToolbox
+    from restscope.llm import (
+        ProviderUnavailableError,
+        ToolCall,
+        ToolSpec,
+    )
+
+    unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
+
+    def fail() -> dict:
+        """Expose the shared provider failure from a nested LLM-backed tool."""
+        raise unavailable
+
+    toolbox = AgentToolbox()
+    toolbox.register(
+        spec=ToolSpec(
+            name="patch.review",
+            description="Review one generated Patch.",
+            kind="local_function",
+            input_schema={"type": "object", "additionalProperties": False},
+            output_schema={"type": "object"},
+        ),
+        execute=fail,
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        toolbox.execute(
+            ToolCall(id="review", name="patch.review", arguments={})
+        )
+
+    assert caught.value is unavailable
+
+
+def test_agent_toolbox_parallel_calls_propagate_provider_unavailable_error() -> None:
+    """A shared outage in a read-only tool group aborts the entire result group."""
+    from restscope.capabilities import AgentToolbox
+    from restscope.llm import (
+        ProviderUnavailableError,
+        ToolCall,
+        ToolSpec,
+    )
+
+    unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
+
+    def query(*, fail: bool) -> dict:
+        """Return one harmless value unless this call exposes the outage."""
+        if fail:
+            raise unavailable
+        return {"structured": {"value": "available"}}
+
+    toolbox = AgentToolbox()
+    toolbox.register(
+        spec=ToolSpec(
+            name="catalog.query",
+            description="Read one independent value.",
+            kind="local_function",
+            input_schema={
+                "type": "object",
+                "properties": {"fail": {"type": "boolean"}},
+                "required": ["fail"],
+                "additionalProperties": False,
+            },
+            output_schema={
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        ),
+        execute=query,
+    )
+
+    with pytest.raises(ProviderUnavailableError) as caught:
+        toolbox.execute_many(
+            [
+                ToolCall(
+                    id="available",
+                    name="catalog.query",
+                    arguments={"fail": False},
+                ),
+                ToolCall(
+                    id="unavailable",
+                    name="catalog.query",
+                    arguments={"fail": True},
+                ),
+            ]
+        )
+
+    assert caught.value is unavailable
+
+
 def test_agent_toolbox_returns_only_its_registered_specs_in_order() -> None:
     """Scenario: an Agent offers exactly the tools registered for that Agent."""
     from restscope.capabilities import AgentToolbox

@@ -30,6 +30,27 @@ The user approved these current decisions on 2026-08-04:
 - Do not retry an Agent turn, tool call, HTTP Probe, target request, operation,
   or workflow because of provider capacity.
 
+## Follow-up live evidence
+
+The authorized run
+`gitlab-projects-five-20260804T033632Z-b34b2f92` ended after 538.25 seconds.
+It completed four Batches and 40 GitLab cases. GET Projects passed; POST
+Projects preserved two Batches before a direct Failure Solve HTTP 503 stopped
+the run with `provider_unavailable`, leaving the final three operations
+unattempted.
+
+Phoenix also showed two earlier provider-unavailable failures inside
+`ParameterPatchReviewAgent.run`: one transport failure and one HTTP 503. The
+Review and Patch Modules correctly propagated them, but `AgentToolbox`
+converted each to a generic `internal_tool_error` Tool Result. Failure Solve
+therefore continued instead of applying the approved global stop rule.
+
+The approved follow-up makes provider unavailability an explicit
+`AgentToolbox.execute` and `execute_many` error mode. Ordinary tool failures
+remain model-safe Tool Results; a nested shared model outage retains its type
+and escapes to Operation Smoke. Tool tracing records only stable outage fields
+and never follows the private provider cause into a response body.
+
 ## Approved scope
 
 - Publish the stable provider-unavailable LLM exception without copying a
@@ -67,6 +88,19 @@ Observed locally on 2026-08-04:
 - `uv run python -m compileall -q restscope`: passed.
 - `git diff --check`: passed.
 
-No real model, GitLab, or other external request was made. The implementation
-remains uncommitted in its dedicated feature worktree pending separate Git
-authorization.
+No real model, GitLab, or other external request was made during the original
+implementation verification. The later authorized live run is recorded in the
+follow-up evidence above.
+
+Follow-up repair verification observed on 2026-08-04:
+
+- Toolbox, Failure Solve, tracing, Operation Smoke, and Supervisor focused
+  suite: `67 passed`.
+- Complete suite: `uv run --group evaluation pytest -q` reported `659 passed,
+  5 skipped`.
+- Workflow package boundary suite: `8 passed`.
+- `uv run python -m compileall -q restscope`: passed.
+- `git diff --check`: passed.
+
+No second live run was performed; it requires separate authorization because
+it calls the real model and may mutate the disposable GitLab target.
