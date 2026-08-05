@@ -1,10 +1,11 @@
 """Validate and atomically persist only final reference-worklist decisions.
 
 This deterministic harness dereferences every E, TC, Parameter, and P value
-against current session registries. Agent-written text supplies semantic
-summary, root cause, and decision rationale, but executable Patch content,
-affected input identities, samples, and change events always come from trusted
-candidate objects and a freshly recomputed combined state transition.
+against current session registries. It derives the stable Failure summary from
+exact E messages, while Agent-written text supplies root cause and decision
+rationale. Executable Patch content, affected input identities, samples, and
+change events always come from trusted candidate objects and a freshly
+recomputed combined state transition.
 """
 
 from __future__ import annotations
@@ -276,6 +277,7 @@ class FailureResolutionFinalizer:
                     committed_items.append(
                         ResolutionItemCommit(
                             item_id=item.item.item_id,
+                            failure_summary=item.failure_summary,
                             outcome=item.item.decision.outcome,
                             failure_id=failure_id,
                             attempt_id=attempt_id,
@@ -380,6 +382,7 @@ class FailureResolutionFinalizer:
         return _ResolvedItem(
             item=item,
             messages=messages,
+            failure_summary=derive_failure_summary(messages),
             suspected_input_node_ids=suspected_input_node_ids,
             last_status_code=_last_status_code(item.test_case_refs, catalog),
             parameters=parameters,
@@ -421,6 +424,7 @@ class _ResolvedItem:
         *,
         item: WorklistItem,
         messages: list[str],
+        failure_summary: str,
         suspected_input_node_ids: list[str],
         last_status_code: int | None,
         parameters: list[SolveAttemptParameterWrite],
@@ -429,6 +433,7 @@ class _ResolvedItem:
         """Store values derived from authoritative session registries."""
         self.item = item
         self.messages = messages
+        self.failure_summary = failure_summary
         self.suspected_input_node_ids = suspected_input_node_ids
         self.last_status_code = last_status_code
         self.parameters = parameters
@@ -445,7 +450,7 @@ def _unique_failure_writes(
         unique.setdefault(
             key,
             FailureWrite(
-                summary=item.item.failure_summary,
+                summary=item.failure_summary,
                 messages=sorted({" ".join(message.split()) for message in item.messages}),
                 suspected_input_node_ids=sorted(item.suspected_input_node_ids),
                 last_status_code=item.last_status_code,
@@ -477,6 +482,50 @@ def _failure_identity(messages: list[str], input_node_ids: list[str]) -> tuple:
         tuple(sorted({" ".join(message.split()) for message in messages})),
         tuple(sorted(input_node_ids)),
     )
+
+
+def derive_failure_summary(messages: list[str], *, max_chars: int = 1_200) -> str:
+    """Build bounded stable display text from authoritative Failure messages.
+
+    The canonical first exact message is the most direct description of what
+    the target returned. Canonical sorting makes the display stable even when
+    a later Batch issues E references in a different order. When semantic
+    grouping combines more messages, a count points readers to the complete
+    ``normalized_messages`` evidence without asking the Agent to write a second
+    diagnosis. Very long first messages are clipped only in this display field;
+    the exact messages remain persisted.
+
+    Args:
+        messages: Exact registry messages in any worklist order.
+        max_chars: Maximum size accepted by the public Resolution result.
+
+    Returns:
+        One deterministic non-empty summary no longer than ``max_chars``.
+
+    Raises:
+        ValueError: If finalization is called without a Failure message or with
+            an unusable character allowance.
+    """
+    if not messages:
+        raise ValueError("Failure summary requires at least one exact message")
+    if max_chars < 2:
+        raise ValueError("Failure summary max_chars must be at least 2")
+
+    normalized_messages = sorted({" ".join(message.split()) for message in messages})
+    if any(not message for message in normalized_messages):
+        raise ValueError("Failure summary messages must not be blank")
+    first = normalized_messages[0]
+    suffix = (
+        f" (+{len(normalized_messages) - 1} related Failure messages)"
+        if len(normalized_messages) > 1
+        else ""
+    )
+    available = max_chars - len(suffix)
+    if available < 2:
+        raise ValueError("Failure summary allowance is too small for its suffix")
+    if len(first) > available:
+        first = first[: available - 1].rstrip() + "…"
+    return first + suffix
 
 
 def _last_status_code(case_refs: list[str], catalog: TestCaseCatalog) -> int | None:

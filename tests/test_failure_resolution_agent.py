@@ -300,7 +300,6 @@ def _write_call(*, call_id="write-1", active_item_id="invalid-name"):
                             "item_id": "invalid-name",
                             "source_failure_refs": ["E1"],
                             "test_case_refs": ["TC1", "TC2"],
-                            "failure_summary": "Project names are rejected.",
                             "suspected_parameters": ["query.name"],
                             "progress": "The two exact failures are grouped.",
                             "root_cause": "Generated names violate the contract.",

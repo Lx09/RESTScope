@@ -1,6 +1,6 @@
 # Failure Resolution Agent Merge
 
-Status: Implemented and locally verified; awaiting Git authorization
+Status: Completed
 
 ## Objective
 
@@ -41,6 +41,11 @@ final validation, and atomic persistence.
   failure without changing the original history.
 - Remove the old packages, roles, public contracts, and evaluation split
   without compatibility aliases.
+- Follow-up decision approved on 2026-08-05: remove Agent-authored
+  `failure_summary` from each worklist item. Finalization derives a bounded
+  stable display summary from authoritative E messages, while `root_cause`
+  remains the Agent's Attempt-level diagnosis. The existing database summary
+  column and public round summary remain unchanged.
 
 ## Non-goals
 
@@ -89,3 +94,8 @@ final validation, and atomic persistence.
   reached at most 67,067 prompt tokens, so the 524,288-token Compact threshold
   was not reached in this run. The first launch also exposed and then gained a
   regression fix for sibling-worktree `.env` discovery in both GitLab harnesses.
+- Worklist summary follow-up: 47 focused Resolution, finalization, Coordinator,
+  and Evaluation tests passed. The complete optional-dependency suite passed
+  with 675 tests and 5 environment-dependent skips. Python compilation and
+  `git diff --check` also passed. No database migration, real model call, or
+  target API request was performed.

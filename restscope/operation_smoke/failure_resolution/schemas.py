@@ -65,12 +65,17 @@ class WorklistDecision(_Model):
 
 
 class WorklistItem(_Model):
-    """Carry one mutable semantic view composed only from short references."""
+    """Carry one mutable diagnosis composed only from references and notes.
+
+    A stable Failure summary is deliberately absent. The Harness derives that
+    display text from the authoritative ``E*`` messages during finalization so
+    the Agent does not restate the same diagnosis in both a summary and
+    ``root_cause``.
+    """
 
     item_id: str = Field(min_length=1, max_length=120)
     source_failure_refs: list[str] = Field(min_length=1, max_length=100)
     test_case_refs: list[str] = Field(min_length=1, max_length=1_100)
-    failure_summary: str = Field(min_length=1, max_length=1_200)
     suspected_parameters: list[str] = Field(default_factory=list, max_length=100)
     progress: str = Field(default="", max_length=1_200)
     root_cause: str | None = Field(default=None, min_length=1, max_length=1_200)
@@ -160,9 +165,14 @@ class ResolutionCommit(_Model):
 
 
 class ResolutionItemCommit(_Model):
-    """Link one decided worklist item to its append-only persistence identities."""
+    """Return trusted finalization facts for one decided worklist item.
+
+    ``failure_summary`` is generated from registry-owned Failure messages, not
+    copied from Agent-authored worklist text.
+    """
 
     item_id: str = Field(min_length=1, max_length=120)
+    failure_summary: str = Field(min_length=1, max_length=1_200)
     outcome: Literal["apply_patch", "no_patch"]
     failure_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)

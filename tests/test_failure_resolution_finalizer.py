@@ -122,12 +122,12 @@ def _candidate(registry, *, handle, node_id, value):
     )
 
 
-def _worklist(*, registry, items):
+def _worklist(*, registry, items, sources=None):
     """Validate final test items through the same reference-only store."""
     from restscope.operation_smoke.failure_resolution import FailureWorklistStore
 
     store = FailureWorklistStore(
-        sources=[_source()],
+        sources=list(sources or [_source()]),
         valid_parameters={"path.projectId", "query.region"},
         candidate_refs=registry.refs,
     )
@@ -140,6 +140,7 @@ def _item(
     outcome,
     candidate_ref=None,
     suspected_parameters=("path.projectId",),
+    source_failure_refs=("E1",),
 ):
     """Build one decided reference-only item without precise runtime objects."""
     from restscope.operation_smoke.failure_resolution import (
@@ -149,9 +150,8 @@ def _item(
 
     return WorklistItem(
         item_id=item_id,
-        source_failure_refs=["E1"],
+        source_failure_refs=list(source_failure_refs),
         test_case_refs=["TC1"],
-        failure_summary="The requested project was not found.",
         suspected_parameters=list(suspected_parameters),
         progress="Investigation is complete.",
         root_cause="Final worklist root cause.",
@@ -199,11 +199,62 @@ def test_duplicate_stable_failure_in_one_batch_increments_occurrence_once() -> N
         failure_id=commit.items[0].failure_id,
     )
     assert history.occurrence_count == 1
+    assert history.summary == "HTTP 404: project missing"
     assert len(history.attempts) == 2
     assert history.attempts[0].reason == "Final Agent decision reason."
     assert history.attempts[0].root_cause == "Final worklist root cause."
     assert history.attempts[0].reason == "Final Agent decision reason."
     assert history.attempts[0].parameters[0].input_node_id == "path/projectId"
+
+
+def test_grouped_failure_summary_is_derived_from_canonical_exact_messages() -> None:
+    """A semantic group gets bounded display text without Agent-authored summary."""
+    from restscope.operation_smoke.failure_resolution import (
+        FailureResolutionFinalizer,
+        FailureSource,
+        PatchCandidateRegistry,
+    )
+    from restscope.operation_smoke.memory import SmokeMemory
+
+    current, factory, _session_factory = _database()
+    registry = PatchCandidateRegistry()
+    second = FailureSource(
+        failure_ref="E2",
+        message="HTTP 422: namespace is invalid",
+        test_case_refs=["TC1"],
+    )
+    sources = (_source(), second)
+    worklist = _worklist(
+        registry=registry,
+        sources=sources,
+        items=[
+            _item(
+                item_id="grouped",
+                outcome="no_patch",
+                # Agent ordering cannot change the canonical display summary.
+                source_failure_refs=("E2", "E1"),
+            )
+        ],
+    )
+
+    commit = FailureResolutionFinalizer(factory).finalize(
+        request=_request(),
+        sources=sources,
+        worklist=worklist,
+        candidates=registry,
+        catalog=_catalog(),
+        current=current,
+        active_constraints=[],
+    )
+
+    assert commit.items[0].failure_summary == (
+        "HTTP 404: project missing (+1 related Failure messages)"
+    )
+    history = SmokeMemory(factory).failure_history(
+        operation_key=current.operation_key,
+        failure_id=commit.items[0].failure_id,
+    )
+    assert history.summary == commit.items[0].failure_summary
 
 
 def test_apply_patch_dereferences_candidate_and_recomputes_combined_state() -> None:

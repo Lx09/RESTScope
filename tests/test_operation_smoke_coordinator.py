@@ -211,7 +211,6 @@ def _resolution(*, applied: bool, outputs_used: int = 4):
         item_id="missing-project",
         source_failure_refs=["E1"],
         test_case_refs=["TC1"],
-        failure_summary="The requested project is missing.",
         suspected_parameters=["path.projectId"],
         progress="Investigation complete.",
         root_cause="The generated identifier does not exist.",
@@ -220,6 +219,7 @@ def _resolution(*, applied: bool, outputs_used: int = 4):
     )
     committed = ResolutionItemCommit(
         item_id=item.item_id,
+        failure_summary="HTTP 404: project missing",
         outcome=decision.outcome,
         failure_id="failure-1",
         attempt_id="attempt-1",

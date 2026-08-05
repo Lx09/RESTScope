@@ -8,7 +8,11 @@ from .candidates import (
     register_candidate_read_tool,
 )
 from .agent import FailureResolutionAgent, ResolutionFinalizer, build_failure_sources
-from .finalizer import FailureResolutionFinalizer, ResolutionUnitOfWork
+from .finalizer import (
+    FailureResolutionFinalizer,
+    ResolutionUnitOfWork,
+    derive_failure_summary,
+)
 from .probe import CurrentOperationHTTPProbe
 from .schemas import (
     FailureResolutionFinish,
@@ -52,6 +56,7 @@ __all__ = [
     "WorklistDecision",
     "WorklistItem",
     "build_failure_sources",
+    "derive_failure_summary",
     "read_candidate_tool_spec",
     "read_worklist_tool_spec",
     "register_candidate_read_tool",

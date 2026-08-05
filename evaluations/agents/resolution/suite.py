@@ -30,6 +30,7 @@ from restscope.operation_smoke.failure_resolution import (
     FailureResolutionRequest,
     ResolutionCommit,
     ResolutionItemCommit,
+    derive_failure_summary,
 )
 from restscope.operation_smoke.failure_resolution.prompts import (
     failure_resolution_system_prompt,
@@ -122,7 +123,6 @@ class _EvaluationFinalizer:
         """
         del (
             request,
-            sources,
             catalog,
             current,
             active_constraints,
@@ -133,9 +133,15 @@ class _EvaluationFinalizer:
         attempt_ids: list[str] = []
         event_ids: list[str] = []
         applied_refs: list[str] = []
+        source_by_ref = {source.failure_ref: source for source in sources}
         for index, item in enumerate(worklist.items, start=1):
             if item.decision is None:
                 continue
+            messages = [
+                source_by_ref[ref].message
+                for ref in item.source_failure_refs
+            ]
+            failure_summary = derive_failure_summary(messages)
             attempt_id = f"eval-attempt-{index}"
             failure_id = f"eval-failure-{index}"
             attempt_ids.append(attempt_id)
@@ -143,6 +149,7 @@ class _EvaluationFinalizer:
                 commits.append(
                     ResolutionItemCommit(
                         item_id=item.item_id,
+                        failure_summary=failure_summary,
                         outcome="no_patch",
                         failure_id=failure_id,
                         attempt_id=attempt_id,
@@ -157,6 +164,7 @@ class _EvaluationFinalizer:
             commits.append(
                 ResolutionItemCommit(
                     item_id=item.item_id,
+                    failure_summary=failure_summary,
                     outcome="apply_patch",
                     failure_id=failure_id,
                     attempt_id=attempt_id,

@@ -132,9 +132,11 @@ The complete OpenAPI IR and database primary keys never enter model prompts.
 ### Failure and Resolution Attempt
 
 A Failure is stable across rounds when its operation, normalized message set,
-and complete suspected causal Parameter state match. The representative `TC*`
-remains only in the run-local Test Case Catalog. A terminal Attempt stores its
-outcome, final worklist root cause, and decision reason. Applied-Patch input
+and complete suspected causal Parameter state match. Its short display summary
+is generated mechanically from those authoritative messages instead of being
+restated by the Agent. The representative `TC*` remains only in the run-local
+Test Case Catalog. A terminal Attempt stores its outcome, final worklist root
+cause, and decision reason. Applied-Patch input
 attribution comes from the selected candidate; no-Patch attribution is resolved
 from the item's validated semantic handles, with `[]` representing an
 operation-level cause. When Resolution selects a validated Patch, deterministic

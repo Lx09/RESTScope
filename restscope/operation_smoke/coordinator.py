@@ -297,7 +297,10 @@ class OperationSmokeCoordinator:
                     item_summaries.append(
                         ResolutionItemSummary(
                             item_id=committed.item_id,
-                            failure_summary=work_item.failure_summary,
+                            # Finalization derives the display summary from
+                            # trusted E messages; the worklist no longer lets
+                            # the Agent author a duplicate of root_cause.
+                            failure_summary=committed.failure_summary,
                             outcome=committed.outcome,
                             attempt_id=committed.attempt_id,
                             reason=work_item.decision.reason,

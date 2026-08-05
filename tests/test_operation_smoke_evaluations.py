@@ -157,7 +157,6 @@ def test_resolution_task_runs_real_worklist_loop_without_storage() -> None:
                                     "item_id": "name-conflict",
                                     "source_failure_refs": ["E1", "E2"],
                                     "test_case_refs": ["TC1", "TC2"],
-                                    "failure_summary": "Project names conflict.",
                                     "suspected_parameters": ["body.name"],
                                     "progress": "Both failures share one input.",
                                     "root_cause": "The names already exist.",

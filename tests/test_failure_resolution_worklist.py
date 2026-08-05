@@ -69,7 +69,6 @@ def _item(**changes):
         "item_id": "name-conflict",
         "source_failure_refs": ["E1"],
         "test_case_refs": ["TC1"],
-        "failure_summary": "The project name is unavailable.",
         "suspected_parameters": ["body.name"],
         "progress": "The response identifies the name field.",
         "root_cause": "The generated name already exists.",
@@ -102,6 +101,17 @@ def test_worklist_schema_rejects_embedded_precise_objects() -> None:
     value["patch"] = {
         "updates": [{"input_node_id": "request/body/name"}],
     }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        WorklistItem.model_validate(value)
+
+
+def test_worklist_schema_rejects_agent_authored_failure_summary() -> None:
+    """Stable Failure summaries come from E messages, not duplicated Agent text."""
+    from restscope.operation_smoke.failure_resolution import WorklistItem
+
+    value = _item().model_dump(mode="json")
+    value["failure_summary"] = "Agent-authored duplicate of the root cause."
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         WorklistItem.model_validate(value)
@@ -147,12 +157,10 @@ def test_worklist_accepts_agent_owned_overlap_split_and_reordering() -> None:
             _item(
                 item_id="first-cause",
                 test_case_refs=["TC1"],
-                failure_summary="The first name conflicts.",
             ),
             _item(
                 item_id="second-cause",
                 test_case_refs=["TC2"],
-                failure_summary="The second name violates another rule.",
             ),
         ],
     )
