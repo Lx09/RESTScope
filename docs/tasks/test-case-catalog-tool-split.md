@@ -7,6 +7,11 @@ Status: Completed
 > alongside unique handles or paths. See
 > `test-case-structured-request-json.md`.
 
+> Resolution refinement (2026-08-05): the Failure-message query and tool spec
+> remain available, but the merged Resolution Agent no longer registers that
+> redundant tool because its initial prompt already contains every exact
+> Failure message. Resolution retains the other four Test Case tools.
+
 ## Objective
 
 Replace the action-dispatched `query_test_case_catalog` model tool with five

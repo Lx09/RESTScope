@@ -2,7 +2,7 @@
 
 Operation request snapshots stay in memory because the App never reopens an
 existing database.  These tables retain only mutable current values plus the
-small before/after audit produced when Solve accepts a complete Patch.
+small before/after audit produced when Resolution accepts a complete Patch.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class OperationConstraintORM(CreatedAtMixin, Base):
 
 
 class GeneratorChangeEventORM(CreatedAtMixin, Base):
-    """Map the deterministic before/after diff for one accepted Solve Patch."""
+    """Map the deterministic before/after diff for one accepted Resolution Patch."""
 
     __tablename__ = "generator_change_events"
     __table_args__ = (

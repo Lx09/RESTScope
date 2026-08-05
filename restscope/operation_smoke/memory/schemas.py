@@ -1,8 +1,8 @@
-"""Define stable Failure and terminal Solve Attempt persistence contracts.
+"""Define stable Failure and terminal Resolution Attempt persistence contracts.
 
-Failure Dedup writes normalized semantic groups without storing Test Cases.
-Failure Solve appends terminal conclusions and optional input attribution.
-Accepted Generator/Constraint diffs are exposed with their Solve Attempt, while
+Failure Resolution finalization writes decided semantic groups without storing
+Test Cases and appends terminal conclusions with optional input attribution.
+Accepted Generator/Constraint diffs are exposed with their terminal Attempt, while
 Patch samples, response bodies, and Agent transcripts never cross this seam.
 """
 
@@ -20,11 +20,11 @@ class _MemoryModel(BaseModel):
 
 
 class FailureWrite(_MemoryModel):
-    """Describe one stable Failure occurrence produced by current-Batch Dedup."""
+    """Describe one stable Failure occurrence from a final Resolution item."""
 
     summary: str = Field(min_length=1)
     messages: list[str] = Field(min_length=1, max_length=100)
-    suspected_input_node_ids: list[str] | None = None
+    suspected_input_node_ids: list[str]
     last_status_code: int | None = Field(default=None, ge=100, le=599)
 
     @model_validator(mode="after")
@@ -33,17 +33,15 @@ class FailureWrite(_MemoryModel):
 
         if len(self.messages) != len(set(self.messages)):
             raise ValueError("Failure messages must be unique")
-        if (
-            self.suspected_input_node_ids is not None
-            and len(self.suspected_input_node_ids)
-            != len(set(self.suspected_input_node_ids))
+        if len(self.suspected_input_node_ids) != len(
+            set(self.suspected_input_node_ids)
         ):
             raise ValueError("suspected input node IDs must be unique")
         return self
 
 
 class FailureBatchWrite(_MemoryModel):
-    """Record every validated Failure group from one completed Dedup step."""
+    """Record validated Failure groups selected by one final worklist."""
 
     operation_key: str = Field(min_length=1)
     failures: list[FailureWrite] = Field(min_length=1)
@@ -72,9 +70,11 @@ class SolveAttemptParameterWrite(_MemoryModel):
 class SolveAttemptWrite(_MemoryModel):
     """Append one terminal conclusion with only facts trustworthy for it.
 
-    Applied and runtime-conflict Attempts receive root cause and Parameter
-    attribution from a reviewed candidate. A no-Patch Attempt has neither and
-    records only the model's explanation in ``reason``.
+    Failure Resolution supplies the final root cause and reason for both
+    outcomes. Applied-Patch Parameter attribution comes from the immutable
+    candidate; no-Patch attribution comes from validated worklist handles.
+    The older ``conflict`` storage value remains available to the lower-level
+    optimistic Patch seam and uses candidate-derived facts.
     """
 
     operation_key: str = Field(min_length=1)
@@ -105,7 +105,7 @@ class GeneratorChangeMemory(_MemoryModel):
 
 
 class SolveAttemptMemory(_MemoryModel):
-    """Read one chronological terminal Solve conclusion."""
+    """Read one chronological terminal Resolution conclusion."""
 
     solve_attempt_id: str
     round_number: int
@@ -117,7 +117,7 @@ class SolveAttemptMemory(_MemoryModel):
 
 
 class FailureHistory(_MemoryModel):
-    """Return stable Failure metadata plus all terminal Solve Attempts."""
+    """Return stable Failure metadata plus all terminal Resolution Attempts."""
 
     failure_id: str
     summary: str
@@ -126,7 +126,7 @@ class FailureHistory(_MemoryModel):
 
 
 class ParameterHistory(_MemoryModel):
-    """Return Failures whose Solve conclusions attributed one exact input."""
+    """Return Failures whose Resolution conclusions attributed one exact input."""
 
     input_node_id: str
     failures: list[FailureHistory] = Field(default_factory=list)

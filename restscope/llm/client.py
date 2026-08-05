@@ -140,6 +140,12 @@ class LLMClient:
 
 
 def _request_attributes(request: LLMRequest) -> dict[str, object]:
+    """Project stable model controls and the internal Agent role into a span.
+
+    The role is workflow metadata chosen by RESTScope, not provider response
+    content. Recording it lets one shared model configuration remain separable
+    by Agent responsibility in Phoenix without copying arbitrary metadata.
+    """
     attributes: dict[str, object] = {
         "llm.provider": request.provider,
         "llm.model_name": request.model,
@@ -149,6 +155,12 @@ def _request_attributes(request: LLMRequest) -> dict[str, object]:
         "llm.reasoning.mode": request.reasoning.mode,
         "llm.tool_choice": request.tool_choice,
     }
+    role = request.metadata.get("role")
+    if isinstance(role, str) and role:
+        # Do not forward the complete metadata object. Other keys may be
+        # workflow-local or untrusted, while this one bounded role label is the
+        # explicit observability contract shared by every RESTScope Agent.
+        attributes["restscope.llm.role"] = role[:200]
     if request.reasoning.effort is not None:
         attributes["llm.reasoning.effort"] = request.reasoning.effort
     if request.tools:

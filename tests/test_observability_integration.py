@@ -424,7 +424,7 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
         execute=query,
     )
 
-    with runtime.span("FailureDedupAgent.deduplicate", kind="AGENT"):
+    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
         results = toolbox.execute_many(
             [
                 ToolCall(
@@ -443,7 +443,7 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
 
     spans = exporter.get_finished_spans()
     agent_span = next(
-        span for span in spans if span.name == "FailureDedupAgent.deduplicate"
+        span for span in spans if span.name == "FailureResolutionAgent.resolve"
     )
     tool_spans = [span for span in spans if span.name == "catalog.query"]
 

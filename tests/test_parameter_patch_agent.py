@@ -8,8 +8,12 @@ import json
 import pytest
 
 from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
+from restscope.operation_smoke.output_limit import (
+    ModelOutputLimit,
+    ModelOutputLimitExceeded,
+)
 
-from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+from tests._operation_smoke_resolution_fixtures import smoke_config
 
 
 class StubClient:
@@ -235,7 +239,7 @@ def _sampleable_config():
 
 
 def _task():
-    """Build one Solve-owned Patch requirement with no Group concepts."""
+    """Build one Resolution-owned Patch requirement with no Group concepts."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchTask
 
     return ParameterPatchTask(
@@ -253,7 +257,7 @@ def _task():
 
 
 def test_patch_task_separates_value_requirements_from_value_checks() -> None:
-    """Solve supplies one target domain and distinct atomic Reviewer checks."""
+    """Resolution supplies one target domain and atomic Reviewer checks."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchTask
 
     task = ParameterPatchTask(
@@ -669,7 +673,7 @@ def test_patch_agent_queries_resource_ids_before_compiling_a_resource_generator(
         active_constraints=[],
         case_count=1,
         reference_values=StubReferenceValues(),
-        max_outputs=4,
+        output_limit=ModelOutputLimit(max_outputs=4),
     )
 
     assert outcome.status == "validated"
@@ -705,21 +709,22 @@ def test_patch_rejects_a_resource_generator_without_a_successful_id_lookup() -> 
     """A model cannot guess a resource name even when that name sounds plausible."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
-    outcome = ParameterPatchCoordinator(
-        client=StubClient([_resource_patch(), _resource_patch()]),
-        patch_model=_model(),
-        review_model=_review_model(),
-    ).run(
-        task=_task(),
-        config=_sampleable_config(),
-        active_constraints=[],
-        case_count=1,
-        reference_values=StubReferenceValues(),
-        max_outputs=2,
-    )
-
-    assert outcome.status == "failed"
-    assert any("resource.list_ids" in error for error in outcome.errors)
+    client = StubClient([_resource_patch(), _resource_patch()])
+    with pytest.raises(ModelOutputLimitExceeded):
+        ParameterPatchCoordinator(
+            client=client,
+            patch_model=_model(),
+            review_model=_review_model(),
+        ).run(
+            task=_task(),
+            config=_sampleable_config(),
+            active_constraints=[],
+            case_count=1,
+            reference_values=StubReferenceValues(),
+            output_limit=ModelOutputLimit(max_outputs=2),
+        )
+    assert len(client.requests) == 2
+    assert "resource.list_ids" in client.requests[1].messages[-1].content
 
 
 def test_patch_samples_a_queried_response_field_without_registering_a_pool() -> None:
@@ -764,7 +769,7 @@ def test_patch_samples_a_queried_response_field_without_registering_a_pool() -> 
         active_constraints=[],
         case_count=2,
         reference_values=references,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert outcome.status == "validated"
@@ -812,22 +817,22 @@ def test_patch_rejects_a_response_field_not_returned_by_its_lookup_session() -> 
         ]
     )
 
-    outcome = ParameterPatchCoordinator(
-        client=client,
-        patch_model=_model(),
-        review_model=_review_model(),
-        openapi_capability=StubObservedFieldCapability(),
-    ).run(
-        task=_task(),
-        config=_sampleable_config(),
-        active_constraints=[],
-        case_count=1,
-        reference_values=StubObservedResponseReferenceValues(),
-        max_outputs=3,
-    )
-
-    assert outcome.status == "failed"
-    assert any("copied exactly" in error for error in outcome.errors)
+    with pytest.raises(ModelOutputLimitExceeded):
+        ParameterPatchCoordinator(
+            client=client,
+            patch_model=_model(),
+            review_model=_review_model(),
+            openapi_capability=StubObservedFieldCapability(),
+        ).run(
+            task=_task(),
+            config=_sampleable_config(),
+            active_constraints=[],
+            case_count=1,
+            reference_values=StubObservedResponseReferenceValues(),
+            output_limit=ModelOutputLimit(max_outputs=3),
+        )
+    assert len(client.requests) == 3
+    assert "copied exactly" in client.requests[2].messages[-1].content
 
 
 def _variant_config():
@@ -943,7 +948,7 @@ def test_patch_proposal_returns_recursive_json_without_a_submission_tool() -> No
         config=_sampleable_config(),
         active_constraints=[],
         case_count=2,
-        max_outputs=2,
+        output_limit=ModelOutputLimit(max_outputs=2),
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -1254,7 +1259,7 @@ def test_patch_corrects_conditions_to_the_dsl_expressions_field() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -1295,7 +1300,7 @@ def test_patch_repairs_one_truncated_structured_json_object() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=2,
+        output_limit=ModelOutputLimit(max_outputs=2),
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -1341,7 +1346,7 @@ def test_patch_returns_an_unknown_lookup_as_a_complete_tool_result_group() -> No
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert outcome.status == "validated"
@@ -1371,7 +1376,7 @@ def test_patch_uses_case_count_in_a_fresh_review_context() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=3,
-        max_outputs=20,
+        output_limit=ModelOutputLimit(max_outputs=20),
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -1425,7 +1430,7 @@ def test_review_returns_issues_without_an_output_submission_tool() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=2,
+        output_limit=ModelOutputLimit(max_outputs=2),
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -1462,7 +1467,7 @@ def test_review_issues_return_to_the_original_patch_session_for_revision() -> No
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=4,
+        output_limit=ModelOutputLimit(max_outputs=4),
     )
 
     assert outcome.status == "validated"
@@ -1494,7 +1499,7 @@ def test_patch_traces_separate_coordinator_proposal_and_review() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=2,
+        output_limit=ModelOutputLimit(max_outputs=2),
     )
 
     assert outcome.status == "validated"
@@ -1550,7 +1555,7 @@ def test_invalid_review_protocol_is_corrected_without_reproposing() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert outcome.status == "validated"
@@ -1613,7 +1618,7 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert outcome.status == "validated"
@@ -1695,23 +1700,21 @@ def test_patch_rejects_the_removed_reference_alias_protocol() -> None:
             "constraints": [],
         },
     }
-    client = StubClient([invalid_reference, invalid_reference, invalid_reference])
+    client = StubClient([invalid_reference] * 4)
 
-    outcome = ParameterPatchCoordinator(
-        client=client,
-        patch_model=_model(),
-        review_model=_review_model(),
-    ).run(
-        task=_task(),
-        config=_sampleable_config(),
-        active_constraints=[],
-        case_count=1,
-        max_outputs=3,
-    )
-
-    assert outcome.status == "failed"
-    assert outcome.reason == "repeated_invalid_output"
-    assert outcome.outputs_used == 3
+    with pytest.raises(ModelOutputLimitExceeded):
+        ParameterPatchCoordinator(
+            client=client,
+            patch_model=_model(),
+            review_model=_review_model(),
+        ).run(
+            task=_task(),
+            config=_sampleable_config(),
+            active_constraints=[],
+            case_count=1,
+            output_limit=ModelOutputLimit(max_outputs=4),
+        )
+    assert len(client.requests) == 4
     correction = client.requests[1].messages[-1].content
     assert "R alias" not in correction
 
@@ -1720,24 +1723,21 @@ def test_variant_child_patch_requires_explicit_parent_branch_selection() -> None
     """A child-only fix cannot pass while another branch remains reachable."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
-    outcome = ParameterPatchCoordinator(
-        client=StubClient([_variant_patch(include_parent=False)]),
-        patch_model=_model(),
-        review_model=_review_model(),
-    ).run(
-        task=_variant_task("path.id.oneOf[1]"),
-        config=_variant_config(),
-        active_constraints=[],
-        case_count=10,
-        random_seed=20260730,
-        max_outputs=1,
-    )
-
-    assert outcome.status == "failed"
-    assert any(
-        "path.id" in error and "branch" in error
-        for error in outcome.errors
-    )
+    client = StubClient([_variant_patch(include_parent=False)])
+    with pytest.raises(ModelOutputLimitExceeded):
+        ParameterPatchCoordinator(
+            client=client,
+            patch_model=_model(),
+            review_model=_review_model(),
+        ).run(
+            task=_variant_task("path.id.oneOf[1]"),
+            config=_variant_config(),
+            active_constraints=[],
+            case_count=10,
+            random_seed=20260730,
+            output_limit=ModelOutputLimit(max_outputs=1),
+        )
+    assert len(client.requests) == 1
 
 
 def test_complete_variant_patch_always_samples_the_selected_branch() -> None:
@@ -1756,7 +1756,7 @@ def test_complete_variant_patch_always_samples_the_selected_branch() -> None:
         active_constraints=[],
         case_count=10,
         random_seed=20260730,
-        max_outputs=2,
+        output_limit=ModelOutputLimit(max_outputs=2),
     )
 
     assert outcome.status == "validated"
@@ -1768,7 +1768,7 @@ def test_complete_variant_patch_always_samples_the_selected_branch() -> None:
 
 
 def test_patch_cannot_change_input_outside_solve_requirement() -> None:
-    """Scenario: executable safety rejects an input not authorized by Solve."""
+    """Scenario: executable safety rejects an input not authorized by Resolution."""
     from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     client = StubClient(
@@ -1788,12 +1788,12 @@ def test_patch_cannot_change_input_outside_solve_requirement() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=2,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert outcome.status == "validated"
     assert outcome.outputs_used == 3
-    assert "outside the Solve Patch requirement" in (
+    assert "outside the Resolution Patch requirement" in (
         client.requests[1].messages[-1].content
     )
 
@@ -1819,7 +1819,7 @@ def test_patch_rejects_a_review_shape_submitted_as_a_proposal() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=3,
+        output_limit=ModelOutputLimit(max_outputs=3),
     )
 
     assert outcome.status == "validated"
@@ -1828,39 +1828,30 @@ def test_patch_rejects_a_review_shape_submitted_as_a_proposal() -> None:
     assert r'Use action=\"propose\"' in client.requests[1].messages[-1].content
 
 
-def test_patch_output_budget_returns_complete_failure_to_solve() -> None:
-    """Scenario: every invalid Patch output counts toward the 20-output bound."""
-    from restscope.operation_smoke.parameter_patch import (
-        ParameterPatchCoordinator,
-        ParameterPatchFailure,
-    )
+def test_patch_invalid_outputs_end_only_at_the_shared_hard_limit() -> None:
+    """Invalid Patch outputs propagate the Operation-wide hard-stop exception."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     client = StubClient([{"invalid": True}, {"invalid": True}])
 
-    outcome = ParameterPatchCoordinator(
-        client=client,
-        patch_model=_model(),
-        review_model=_review_model(),
-    ).run(
-        task=_task(),
-        config=_sampleable_config(),
-        active_constraints=[],
-        case_count=2,
-        max_outputs=2,
-    )
-
-    assert isinstance(outcome, ParameterPatchFailure)
-    assert outcome.reason == "output_budget_exhausted"
-    assert outcome.outputs_used == 2
-    assert outcome.errors
+    with pytest.raises(ModelOutputLimitExceeded):
+        ParameterPatchCoordinator(
+            client=client,
+            patch_model=_model(),
+            review_model=_review_model(),
+        ).run(
+            task=_task(),
+            config=_sampleable_config(),
+            active_constraints=[],
+            case_count=2,
+            output_limit=ModelOutputLimit(max_outputs=2),
+        )
+    assert len(client.requests) == 2
 
 
-def test_patch_stops_after_three_equivalent_invalid_outputs() -> None:
-    """Repeated malformed decisions stop one tool session before its full budget."""
-    from restscope.operation_smoke.parameter_patch import (
-        ParameterPatchCoordinator,
-        ParameterPatchFailure,
-    )
+def test_patch_allows_three_equivalent_invalid_outputs_then_recovers() -> None:
+    """Repeated malformed decisions remain repairable in the same context."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     repeated = {
         "propose": {
@@ -1868,7 +1859,9 @@ def test_patch_stops_after_three_equivalent_invalid_outputs() -> None:
             "patch": _constant_patch()["patch"],
         }
     }
-    client = StubClient([repeated, repeated, repeated])
+    client = StubClient(
+        [repeated, repeated, repeated, _constant_patch(), {"issues": []}]
+    )
 
     outcome = ParameterPatchCoordinator(
         client=client,
@@ -1879,31 +1872,28 @@ def test_patch_stops_after_three_equivalent_invalid_outputs() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=20,
+        output_limit=ModelOutputLimit(max_outputs=5),
     )
 
-    assert isinstance(outcome, ParameterPatchFailure)
-    assert outcome.reason == "repeated_invalid_output"
-    assert outcome.outputs_used == 3
-    assert len(outcome.attempt_history) == 3
-    assert len(client.requests) == 3
+    assert outcome.status == "validated"
+    assert outcome.outputs_used == 5
+    assert len(client.requests) == 5
 
 
-def test_patch_stops_after_three_equivalent_task_boundary_failures() -> None:
-    """A valid DTO that repeats the same unsafe Patch must also stop early.
+def test_patch_allows_repeated_task_boundary_failures_then_recovers() -> None:
+    """A repeated unsafe Patch may be replaced by a later valid proposal.
 
     The proposal parses correctly, but it changes an input that Solve did not
     authorize. Repeating it cannot produce new compiler evidence, so consuming
     the remaining 20-output Patch budget would only delay the parent Solve
     session.
     """
-    from restscope.operation_smoke.parameter_patch import (
-        ParameterPatchCoordinator,
-        ParameterPatchFailure,
-    )
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     repeated = _constant_patch("query.region")
-    client = StubClient([repeated, repeated, repeated])
+    client = StubClient(
+        [repeated, repeated, repeated, _constant_patch(), {"issues": []}]
+    )
 
     outcome = ParameterPatchCoordinator(
         client=client,
@@ -1914,24 +1904,17 @@ def test_patch_stops_after_three_equivalent_task_boundary_failures() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=20,
+        output_limit=ModelOutputLimit(max_outputs=5),
     )
 
-    assert isinstance(outcome, ParameterPatchFailure)
-    assert outcome.reason == "repeated_invalid_output"
-    assert outcome.outputs_used == 3
-    assert outcome.errors == [
-        "query.region is outside the Solve Patch requirement"
-    ]
-    assert len(client.requests) == 3
+    assert outcome.status == "validated"
+    assert outcome.outputs_used == 5
+    assert len(client.requests) == 5
 
 
-def test_patch_stops_after_three_equivalent_review_rejections() -> None:
-    """The same proposal and semantic issues trigger the shared three-strike guard."""
-    from restscope.operation_smoke.parameter_patch import (
-        ParameterPatchCoordinator,
-        ParameterPatchFailure,
-    )
+def test_patch_allows_three_equivalent_review_rejections_then_recovers() -> None:
+    """Repeated semantic rejection does not create a second stop condition."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinator
 
     rejected_review = {
         "issues": ["The proposal does not satisfy the acceptance criteria."],
@@ -1944,6 +1927,8 @@ def test_patch_stops_after_three_equivalent_review_rejections() -> None:
             rejected_review,
             _constant_patch(),
             rejected_review,
+            _constant_patch(),
+            {"issues": []},
         ]
     )
 
@@ -1956,13 +1941,12 @@ def test_patch_stops_after_three_equivalent_review_rejections() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
-        max_outputs=20,
+        output_limit=ModelOutputLimit(max_outputs=8),
     )
 
-    assert isinstance(outcome, ParameterPatchFailure)
-    assert outcome.reason == "repeated_invalid_output"
-    assert outcome.outputs_used == 6
-    assert len(client.requests) == 6
+    assert outcome.status == "validated"
+    assert outcome.outputs_used == 8
+    assert len(client.requests) == 8
 
 
 def test_patch_keeps_constraint_compilation_as_executable_boundary() -> None:
@@ -1994,23 +1978,19 @@ def test_patch_keeps_constraint_compilation_as_executable_boundary() -> None:
     }
     client = StubClient([impossible, impossible])
 
-    outcome = ParameterPatchCoordinator(
-        client=client,
-        patch_model=_model(),
-        review_model=_review_model(),
-    ).run(
-        task=_task(),
-        config=_sampleable_config(),
-        active_constraints=[],
-        case_count=2,
-        max_outputs=2,
-    )
-
-    assert outcome.status == "failed"
-    assert any(
-        "satisf" in error.lower() or "constraint" in error.lower()
-        for error in outcome.errors
-    )
+    with pytest.raises(ModelOutputLimitExceeded):
+        ParameterPatchCoordinator(
+            client=client,
+            patch_model=_model(),
+            review_model=_review_model(),
+        ).run(
+            task=_task(),
+            config=_sampleable_config(),
+            active_constraints=[],
+            case_count=2,
+            output_limit=ModelOutputLimit(max_outputs=2),
+        )
+    assert len(client.requests) == 2
 
 
 def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> None:
@@ -2064,7 +2044,7 @@ def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> No
         config=_sampleable_config(),
         active_constraints=[active],
         case_count=2,
-        max_outputs=2,
+        output_limit=ModelOutputLimit(max_outputs=2),
     )
 
     assert isinstance(outcome, ValidatedParameterPatch)
@@ -2090,7 +2070,7 @@ def test_patch_requires_case_count_within_testing_boundary() -> None:
             config=_sampleable_config(),
             active_constraints=[],
             case_count=21,
-            max_outputs=20,
+            output_limit=ModelOutputLimit(max_outputs=20),
         )
 
 
@@ -2110,6 +2090,7 @@ def test_patch_uses_an_explicit_complete_system_prompt_override() -> None:
         config=_sampleable_config(),
         active_constraints=[],
         case_count=1,
+        output_limit=ModelOutputLimit(),
     )
 
     assert client.requests[0].messages[0].content == (

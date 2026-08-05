@@ -1,0 +1,50 @@
+scenario_id: resolution-split-distinct-parameters
+title: Keep unrelated body input failures as separate worklist items
+provenance:
+  kind: trace
+  source: artifacts/phoenix-exports/restscope-project-swagger-smoke-20260727T010238Z-9712a1cf
+  trace_id: sanitized-project-create-split
+  span_ids: [sanitized-plan]
+  rationale: The two response messages identify independent request fields.
+tags: [acceptance, semantic-splitting]
+input:
+  request:
+    operation_key: POST /projects
+    round_number: 1
+    batch_run_id: eval-resolution-split
+    case_ids: [TC1, TC2]
+  openapi:
+    openapi: 3.0.3
+    info: {title: Resolution evaluation, version: "1"}
+    paths:
+      /projects:
+        post:
+          requestBody:
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    name: {type: string}
+                    namespace_id: {type: integer}
+          responses: {"400": {description: bad request}}
+  catalog_cases:
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {name: ""}}
+      response_body: {message: name is required}
+      failure:
+        kind: http
+        status_code: 400
+        messages: ["HTTP 400: name is required"]
+    - request: {path: {}, query: {}, header: {}, cookie: {}, body: {namespace_id: -1}}
+      response_body: {message: namespace is invalid}
+      failure:
+        kind: http
+        status_code: 400
+        messages: ["HTTP 400: namespace is invalid"]
+expected:
+  status: completed
+  item_count: 2
+  source_groups: [[E1], [E2]]
+  parameter_sets: [[body.name], [body.namespace_id]]
+  decision_outcomes: [no_patch, no_patch]
+  applied_candidate_count: 0

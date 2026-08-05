@@ -1,10 +1,10 @@
-"""Define the public, bounded result of the Operation Smoke workflow.
+"""Define the bounded public result of the Operation Smoke workflow.
 
-Full Batch requests/responses and LLM conversations remain inside their owning
-runtime boundaries.  The public result reports actual Batch success, why the
-workflow stopped, and what each Solve Attempt applied or declined.  It never
-labels a Patch ``resolved`` because only a later complete Batch can demonstrate
-its real effect.
+Full Batch requests/responses, candidate registries, worklists, and LLM
+conversations remain inside their run-local owners. The public result reports
+actual Batch success and the durable decisions produced by one continuous
+Failure Resolution session. It never labels a Patch ``resolved`` because only
+a later complete Batch can demonstrate its real effect.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+
 class _PublicModel(BaseModel):
     """Make public Smoke contracts immutable and reject removed old fields."""
 
@@ -20,14 +21,15 @@ class _PublicModel(BaseModel):
 
 
 class OperationSmokeRequest(_PublicModel):
-    """Configure bounded Batch and Agent work for one operation."""
+    """Configure deterministic Batch work for one operation.
+
+    Agent, Patch, and Review quotas are intentionally absent. One internal
+    1000-output hard guard covers the complete Operation Smoke execution.
+    """
 
     operation_key: str = Field(min_length=1)
     case_count: int = Field(default=10, ge=1, le=20)
     success_rate_threshold: float = Field(default=0.8, ge=0, le=1)
-    max_dedup_outputs: int = Field(default=50, ge=1, le=50)
-    max_solve_outputs_per_todo: int = Field(default=50, ge=1, le=50)
-    max_patch_outputs: int = Field(default=20, ge=1, le=20)
 
 
 OperationSmokeStopReason: TypeAlias = Literal[
@@ -36,58 +38,52 @@ OperationSmokeStopReason: TypeAlias = Literal[
 ]
 OperationSmokeStatus: TypeAlias = Literal["passed", "unsupported", "errored"]
 OperationSmokeFailureKind: TypeAlias = Literal[
-    "dedup_budget_exhausted",
-    "solve_budget_exhausted",
+    "failure_resolution_limit_exceeded",
     "unsupported_operation",
     "operation_error",
     "provider_unavailable",
 ]
 
 
-class PatchAttemptSummary(_PublicModel):
-    """Describe the selected validated candidate actually applied by Solve."""
+class ResolutionPatchSummary(_PublicModel):
+    """Describe one registry candidate actually applied by final Resolution."""
 
-    candidate_ref: str
-    patch_outputs: int = Field(ge=1, le=20)
+    candidate_ref: str = Field(pattern=r"^P[1-9][0-9]*$")
+    patch_outputs: int = Field(ge=1, le=1_000)
     generator_change_event_id: str = Field(min_length=1)
     changed_input_count: int = Field(ge=0)
     constraint_count: int = Field(ge=0)
 
 
-class TodoRunSummary(_PublicModel):
-    """Summarize one independent terminal Failure Solve Attempt."""
+class ResolutionItemSummary(_PublicModel):
+    """Summarize one decided final worklist item and its durable Attempt."""
 
-    todo_id: str = Field(min_length=1)
-    failure: str = Field(min_length=1)
-    status: Literal["applied_patch", "no_patch", "conflict"]
-    solve_outputs: int = Field(ge=1, le=50)
-    solve_attempt_id: str = Field(min_length=1)
-    reason: str | None = None
-    applied_patch: PatchAttemptSummary | None = None
+    item_id: str = Field(min_length=1)
+    failure_summary: str = Field(min_length=1)
+    outcome: Literal["apply_patch", "no_patch"]
+    attempt_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    applied_patch: ResolutionPatchSummary | None = None
 
     @model_validator(mode="after")
-    def validate_patch_summary(self) -> "TodoRunSummary":
-        """Require an applied summary exactly for applied-Patch outcomes."""
-        if self.status == "applied_patch" and self.applied_patch is None:
-            raise ValueError("applied_patch status requires applied_patch")
-        if self.status != "applied_patch" and self.applied_patch is not None:
-            raise ValueError("only applied_patch status may include applied_patch")
+    def validate_patch_summary(self) -> "ResolutionItemSummary":
+        """Require an applied summary exactly for apply-Patch outcomes."""
+        if self.outcome == "apply_patch" and self.applied_patch is None:
+            raise ValueError("apply_patch outcome requires applied_patch")
+        if self.outcome == "no_patch" and self.applied_patch is not None:
+            raise ValueError("no_patch outcome cannot include applied_patch")
         return self
 
 
 class SmokeRoundSummary(_PublicModel):
-    """Record one Batch, its Dedup result, and completed Solve Attempts."""
+    """Record one Batch and its one continuous Failure Resolution result."""
 
     round_number: int = Field(ge=1)
     batch_run_id: str = Field(min_length=1)
-    dedup_status: Literal[
-        "bypassed",
-        "deduplicated",
-        "dedup_budget_exhausted",
-    ]
-    dedup_outputs: int = Field(ge=0, le=50)
+    resolution_status: Literal["completed"]
+    resolution_outputs: int = Field(ge=1, le=1_000)
     failure_count: int = Field(default=0, ge=0)
-    todos: list[TodoRunSummary] = Field(default_factory=list)
+    items: list[ResolutionItemSummary] = Field(default_factory=list)
 
 
 class OperationSmokeResult(_PublicModel):
@@ -121,8 +117,7 @@ class OperationSmokeResult(_PublicModel):
                 raise ValueError("unsupported result cannot have stop_reason")
         else:
             if self.failure_kind not in {
-                "dedup_budget_exhausted",
-                "solve_budget_exhausted",
+                "failure_resolution_limit_exceeded",
                 "operation_error",
                 "provider_unavailable",
             }:

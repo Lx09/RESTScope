@@ -9,7 +9,6 @@ than a peer Operation Smoke Module.
 from .agent import ParameterPatchReviewAgent
 from .schemas import (
     ParameterPatchReviewCandidate,
-    ParameterPatchReviewFailure,
     ParameterPatchReviewResult,
     ParameterPatchReviewSubmission,
 )
@@ -17,7 +16,6 @@ from .schemas import (
 __all__ = [
     "ParameterPatchReviewAgent",
     "ParameterPatchReviewCandidate",
-    "ParameterPatchReviewFailure",
     "ParameterPatchReviewResult",
     "ParameterPatchReviewSubmission",
 ]

@@ -2,7 +2,7 @@
 
 The Coordinator supplies normalized facts about one compiled candidate. The
 Review Agent returns concrete semantic issues only; none of these DTOs are
-persisted or exposed through Failure Solve's public Patch candidate Interface.
+persisted or exposed through Failure Resolution's candidate Interface.
 """
 
 from __future__ import annotations
@@ -47,15 +47,5 @@ class ParameterPatchReviewResult(_Model):
     status: Literal["reviewed"] = "reviewed"
     accepted: bool
     issues: list[ReviewIssue] = Field(max_length=20)
-    outputs_used: int = Field(ge=1, le=20)
-    attempt_history: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ParameterPatchReviewFailure(_Model):
-    """Report bounded Reviewer protocol failure without rejecting the Patch."""
-
-    status: Literal["failed"] = "failed"
-    reason: Literal["output_budget_exhausted", "repeated_invalid_output"]
-    outputs_used: int = Field(ge=1, le=20)
-    errors: list[str] = Field(default_factory=list, max_length=20)
+    outputs_used: int = Field(ge=1, le=1_000)
     attempt_history: list[dict[str, Any]] = Field(default_factory=list)

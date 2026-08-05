@@ -1,35 +1,30 @@
-"""Coordinate complete Batch rounds around Dedup and Solve decisions.
+"""Coordinate complete Batches around one continuous Resolution Agent.
 
-The Coordinator owns ordering and stop conditions, not semantic diagnosis.  A
-round always executes in this order:
-
-``complete Batch → Failure Dedup → every Failure Solve item → next complete Batch``.
-
-Parameter Patch validation happens inside each Solve session.  No Effect Agent
-or candidate Batch exists: a Patch's real effect is observed only when the next
-round starts with a complete Batch under all accepted changes.
+Each failed Batch enters exactly one Failure Resolution session. The Agent owns
+semantic grouping, investigation, worklist evolution, Patch selection, and its
+finish decision. This Coordinator owns only Batch sequencing, one Operation-
+wide 1000-model-output guard, runtime reference preparation, and the decision
+to run another complete Batch after at least one Patch was atomically applied.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict
 from typing import Protocol
 
-from restscope.capabilities.tool_context import ToolContext
 from restscope.capabilities import operation_input_references
+from restscope.capabilities.tool_context import ToolContext
 from restscope.llm import ProviderUnavailableError
 from restscope.observability import TracingRuntime
-from restscope.operation_smoke.failure_solver import (
-    FailureSolveAgentFactory,
-    FailureSolveRequest,
+from restscope.operation_smoke.failure_resolution import (
+    FailureResolutionAgent,
+    FailureResolutionRequest,
 )
+from restscope.operation_smoke.output_limit import ModelOutputLimit
 from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
-)
-from restscope.operation_smoke.failure_dedup import (
-    FailureDeduplicator,
-    FailureDedupRequest,
+    GeneratorPatchDraft,
+    sample_compiled_patch,
 )
 from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
 from restscope.testing import (
@@ -40,6 +35,7 @@ from restscope.testing import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
     build_semantic_input_map,
+    referenced_input_node_ids,
 )
 from restscope.testing.constraints import OperationConstraintRecord
 
@@ -48,9 +44,9 @@ from .schemas import (
     OperationSmokeFailureKind,
     OperationSmokeRequest,
     OperationSmokeResult,
-    PatchAttemptSummary,
+    ResolutionItemSummary,
+    ResolutionPatchSummary,
     SmokeRoundSummary,
-    TodoRunSummary,
 )
 
 
@@ -84,25 +80,23 @@ class CurrentConstraintReader(Protocol):
 
 
 class OperationSmokeCoordinator:
-    """Repeat full Batches until success or one approved terminal condition."""
+    """Repeat complete Batches until success or Resolution applies no Patch."""
 
     def __init__(
         self,
         *,
         config_catalog: GeneratorConfigCatalog,
         batch_runner: SmokeBatchRunner,
-        failure_deduplicator: FailureDeduplicator,
-        failure_solver_factory: FailureSolveAgentFactory,
+        failure_resolution_agent: FailureResolutionAgent,
         constraint_reader: CurrentConstraintReader,
         reference_values: BehaviorMonitorReferenceValues,
         random_seed: int = 0,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Store workflow collaborators and the durable Constraint reader."""
+        """Store workflow collaborators; sessions retain all mutable Agent state."""
         self.config_catalog = config_catalog
         self.batch_runner = batch_runner
-        self.failure_deduplicator = failure_deduplicator
-        self.failure_solver_factory = failure_solver_factory
+        self.failure_resolution_agent = failure_resolution_agent
         self.constraint_reader = constraint_reader
         self.reference_values = reference_values
         self.random_seed = random_seed
@@ -144,19 +138,18 @@ class OperationSmokeCoordinator:
             return result
 
     def clear_app_state(self) -> None:
-        """Retain a no-op close hook; current Constraints live in the database."""
+        """Retain a no-op close hook; current state lives in the database."""
 
     def _run(
         self,
         context: ToolContext,
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
-        """Execute complete rounds, catching technical errors at the workflow edge."""
+        """Execute complete rounds and catch technical errors at the workflow edge."""
         current = self.config_catalog.get_operation(request.operation_key)
         if current is None:
             return _errored_result(
                 request=request,
-                current=None,
                 success_rate=0,
                 batch_run_ids=[],
                 rounds=[],
@@ -175,27 +168,22 @@ class OperationSmokeCoordinator:
                 reason="The operation has no executable Generator configuration.",
             )
 
-        constraints = _compiled_constraints(
-            self.constraint_reader.current_constraints(request.operation_key)
-        )
         batch_run_ids: list[str] = []
         rounds: list[SmokeRoundSummary] = []
         success_rate = 0.0
-        dedup_outputs_used = 0
-        semantic = build_semantic_input_map(current)
+        output_limit = ModelOutputLimit()
         operation = context.ir.operations.get(request.operation_key)
+        semantic = build_semantic_input_map(current)
         catalog = TestCaseCatalog(
             input_references=(
                 operation_input_references(operation)
                 if operation is not None
                 else semantic.reference_by_handle.values()
-            ),
+            )
         )
 
         try:
             while True:
-                # Each complete Batch starts from the durable current set. This
-                # avoids relying on private Coordinator memory after a Patch.
                 constraints = _compiled_constraints(
                     self.constraint_reader.current_constraints(
                         request.operation_key
@@ -207,9 +195,7 @@ class OperationSmokeCoordinator:
                     operation_key=request.operation_key,
                     case_count=request.case_count,
                     seed=self.random_seed,
-                    constraints=_combined_constraints(
-                        constraints
-                    ),
+                    constraints=_combined_constraints(constraints),
                     case_id_factory=catalog.issue_case_id,
                 )
                 batch_run_ids.append(batch.run_id)
@@ -219,7 +205,6 @@ class OperationSmokeCoordinator:
                 if success_rate >= request.success_rate_threshold:
                     return _passed_result(
                         request=request,
-                        current=current,
                         success_rate=success_rate,
                         batch_run_ids=batch_run_ids,
                         rounds=rounds,
@@ -231,8 +216,8 @@ class OperationSmokeCoordinator:
                     )
 
                 round_number = len(rounds) + 1
-                dedup = self.failure_deduplicator.deduplicate(
-                    FailureDedupRequest(
+                resolution = self.failure_resolution_agent.start(
+                    FailureResolutionRequest(
                         operation_key=request.operation_key,
                         round_number=round_number,
                         batch_run_id=batch.run_id,
@@ -241,168 +226,114 @@ class OperationSmokeCoordinator:
                             for case in batch.cases
                             if case.failure is not None
                         ],
-                        input_node_ids_by_handle=semantic.node_by_handle,
                     ),
                     catalog=catalog,
-                    max_outputs=(
-                        request.max_dedup_outputs - dedup_outputs_used
-                    ),
-                )
-                dedup_outputs_used += dedup.outputs_used
-
-                if dedup.status == "dedup_budget_exhausted":
-                    rounds.append(
-                        SmokeRoundSummary(
-                            round_number=round_number,
-                            batch_run_id=batch.run_id,
-                            dedup_status=dedup.status,
-                            dedup_outputs=dedup.outputs_used,
-                            failure_count=0,
+                    output_limit=output_limit,
+                    config=current,
+                    active_constraints=constraints,
+                    case_count=request.case_count,
+                    random_seed=self.random_seed,
+                    prepare_patch_updates=(
+                        lambda config, updates, selected: _prepare_reference_updates(
+                            self.reference_values,
+                            context=context,
+                            config=config,
+                            updates=updates,
+                            selected_reference_provenance=selected,
                         )
-                    )
+                    ),
+                    validate_combined_patch=(
+                        lambda patch: sample_compiled_patch(
+                            config=current,
+                            patch=patch,
+                            active_constraints=constraints,
+                            affected_parameters=_affected_patch_handles(
+                                current,
+                                patch,
+                            ),
+                            reference_values=self.reference_values,
+                            case_count=request.case_count,
+                            random_seed=self.random_seed,
+                        )
+                    ),
+                ).advance()
+                if resolution.status == "failure_resolution_limit_exceeded":
                     return _errored_result(
                         request=request,
-                        current=current,
                         success_rate=success_rate,
                         batch_run_ids=batch_run_ids,
                         rounds=rounds,
-                        failure_kind="dedup_budget_exhausted",
-                        error=RuntimeError(dedup.reason),
+                        failure_kind="failure_resolution_limit_exceeded",
+                        error=RuntimeError(
+                            resolution.reason
+                            or "Failure Resolution reached its hard output limit."
+                        ),
                     )
 
-                todo_summaries: list[TodoRunSummary] = []
-                applied_count = 0
-                # ``dedup.todos`` is a fixed snapshot. Even after one Patch,
-                # remaining Failures are investigated against the updated
-                # Generator state; no intermediate Batch interrupts the round.
-                for todo in dedup.todos:
-                    solve = (
-                        self.failure_solver_factory.create()
-                        .start(
-                            FailureSolveRequest(
-                                operation_key=request.operation_key,
-                                round_number=round_number,
-                                todo=todo,
-                                operation=_operation_context(
-                                    context,
-                                    config=current,
-                                ),
-                                generator_config=current.model_dump(
-                                    mode="json"
-                                ),
-                            ),
-                            catalog=catalog,
-                            config=current,
-                            active_constraints=constraints,
-                            case_count=request.case_count,
-                            random_seed=self.random_seed,
-                            max_outputs=(
-                                request.max_solve_outputs_per_todo
-                            ),
-                            max_patch_outputs=request.max_patch_outputs,
-                            prepare_patch_updates=lambda config, updates, selected: (
-                                _prepare_reference_updates(
-                                    self.reference_values,
-                                    context=context,
-                                    config=config,
-                                    updates=updates,
-                                    selected_reference_provenance=selected,
-                                )
-                            ),
-                        )
-                        .advance()
-                    )
-                    if solve.status == "solve_budget_exhausted":
-                        rounds.append(
-                            SmokeRoundSummary(
-                                round_number=round_number,
-                                batch_run_id=batch.run_id,
-                                dedup_status=dedup.status,
-                                dedup_outputs=dedup.outputs_used,
-                                failure_count=len(dedup.todos),
-                                todos=todo_summaries,
-                            )
-                        )
-                        return _errored_result(
-                            request=request,
-                            current=current,
-                            success_rate=success_rate,
-                            batch_run_ids=batch_run_ids,
-                            rounds=rounds,
-                            failure_kind="solve_budget_exhausted",
-                            error=RuntimeError(
-                                solve.reason
-                                or "Failure Solve budget was exhausted."
-                            ),
-                        )
-
-                    applied_summary = None
-                    if solve.status == "applied_patch":
-                        assert solve.applied_patch is not None
-                        assert solve.generator_change_event_id is not None
-                        current = self.config_catalog.require_operation(
-                            request.operation_key
-                        )
-                        constraints = list(solve.active_constraints)
-                        applied_count += 1
-                        applied_summary = PatchAttemptSummary(
-                            candidate_ref=(
-                                solve.applied_patch.candidate_ref
-                            ),
-                            patch_outputs=(
-                                solve.applied_patch.patch_outputs
-                            ),
+                assert resolution.commit is not None
+                work_item_by_id = {
+                    item.item_id: item for item in resolution.worklist.items
+                }
+                item_summaries = []
+                for committed in resolution.commit.items:
+                    work_item = work_item_by_id[committed.item_id]
+                    assert work_item.decision is not None
+                    patch_summary = None
+                    if committed.outcome == "apply_patch":
+                        assert committed.candidate_ref is not None
+                        assert committed.patch_outputs is not None
+                        assert committed.generator_change_event_id is not None
+                        assert committed.changed_input_count is not None
+                        assert committed.constraint_count is not None
+                        patch_summary = ResolutionPatchSummary(
+                            candidate_ref=committed.candidate_ref,
+                            patch_outputs=committed.patch_outputs,
                             generator_change_event_id=(
-                                solve.generator_change_event_id
+                                committed.generator_change_event_id
                             ),
-                            changed_input_count=len(
-                                solve.applied_patch.patch.updates
-                            ),
-                            constraint_count=len(
-                                solve.applied_patch.patch.constraints
-                            ),
+                            changed_input_count=committed.changed_input_count,
+                            constraint_count=committed.constraint_count,
                         )
-                    todo_summaries.append(
-                        TodoRunSummary(
-                            todo_id=todo.todo_id,
-                            failure=todo.failure,
-                            status=solve.status,
-                            solve_outputs=solve.outputs_used,
-                            solve_attempt_id=solve.solve_attempt_id,
-                            reason=solve.reason,
-                            applied_patch=applied_summary,
+                    item_summaries.append(
+                        ResolutionItemSummary(
+                            item_id=committed.item_id,
+                            failure_summary=work_item.failure_summary,
+                            outcome=committed.outcome,
+                            attempt_id=committed.attempt_id,
+                            reason=work_item.decision.reason,
+                            applied_patch=patch_summary,
                         )
                     )
-
                 rounds.append(
                     SmokeRoundSummary(
                         round_number=round_number,
                         batch_run_id=batch.run_id,
-                        dedup_status=dedup.status,
-                        dedup_outputs=dedup.outputs_used,
-                        failure_count=len(dedup.todos),
-                        todos=todo_summaries,
+                        resolution_status="completed",
+                        resolution_outputs=resolution.outputs_used,
+                        failure_count=resolution.source_count,
+                        items=item_summaries,
                     )
                 )
-                if applied_count == 0:
+                if not resolution.commit.applied_candidate_refs:
                     return _passed_result(
                         request=request,
-                        current=current,
                         success_rate=success_rate,
                         batch_run_ids=batch_run_ids,
                         rounds=rounds,
                         stop_reason="no_patch_applied",
                         reason=(
-                            "Every deduplicated Solve Attempt completed, but none "
-                            "produced an applicable Patch."
+                            "Failure Resolution finished without applying a "
+                            "Patch, so no further Batch is required."
                         ),
                     )
-                # At least one Patch was committed.  Only now does control
-                # return to the top for the next complete Batch.
+
+                # Finalization committed all selected candidates atomically.
+                # Reload durable state before the next complete Batch rather
+                # than treating session objects as current configuration.
+                current = self.config_catalog.require_operation(
+                    request.operation_key
+                )
         except Exception as exc:
-            # A provider-capacity failure has a stronger meaning than an
-            # operation-local error: Supervisor must end the whole run instead
-            # of trying this operation or a later operation again.
             failure_kind: OperationSmokeFailureKind = (
                 "provider_unavailable"
                 if isinstance(exc, ProviderUnavailableError)
@@ -410,7 +341,6 @@ class OperationSmokeCoordinator:
             )
             return _errored_result(
                 request=request,
-                current=current,
                 success_rate=success_rate,
                 batch_run_ids=batch_run_ids,
                 rounds=rounds,
@@ -422,14 +352,13 @@ class OperationSmokeCoordinator:
 def _passed_result(
     *,
     request: OperationSmokeRequest,
-    current: OperationGeneratorConfig,
     success_rate: float,
     batch_run_ids: list[str],
     rounds: list[SmokeRoundSummary],
     stop_reason,
     reason: str,
 ) -> OperationSmokeResult:
-    """Build one of the two explicit successful terminal results."""
+    """Build one explicit successful terminal result."""
     return OperationSmokeResult(
         status="passed",
         operation_key=request.operation_key,
@@ -445,7 +374,6 @@ def _passed_result(
 def _errored_result(
     *,
     request: OperationSmokeRequest,
-    current: OperationGeneratorConfig | None,
     success_rate: float,
     batch_run_ids: list[str],
     rounds: list[SmokeRoundSummary],
@@ -463,21 +391,6 @@ def _errored_result(
         failure_kind=failure_kind,
         error={"type": type(error).__name__, "message": str(error)},
     )
-
-
-def _operation_context(
-    context: ToolContext,
-    *,
-    config: OperationGeneratorConfig,
-) -> dict:
-    """Combine the live Operation IR with its frozen testing snapshot."""
-    operation = context.ir.operations.get(config.operation_key)
-    return {
-        "openapi_operation_ir": (
-            asdict(operation) if operation is not None else None
-        ),
-        "testing_snapshot": config.snapshot.model_dump(mode="json"),
-    }
 
 
 def _assert_reference_invariants(
@@ -528,6 +441,28 @@ def _prepare_reference_updates(
     return prepared
 
 
+def _affected_patch_handles(
+    config: OperationGeneratorConfig,
+    patch: GeneratorPatchDraft,
+) -> list[str]:
+    """Translate every combined Generator/Constraint scope into semantic handles."""
+    semantic = build_semantic_input_map(config)
+    node_ids = {
+        update.input_node_id for update in patch.updates
+    } | {
+        node_id
+        for constraint in patch.constraints
+        for node_id in referenced_input_node_ids(constraint.constraint)
+    }
+    unknown = sorted(node_ids - set(semantic.handle_by_node))
+    if unknown:
+        raise ValueError(
+            "Combined Patch references unknown operation inputs: "
+            + ", ".join(unknown)
+        )
+    return sorted(semantic.handle_by_node[node_id] for node_id in node_ids)
+
+
 def _combined_constraints(
     patches: list[CompiledConstraintPatch],
 ) -> ConstraintSet | None:
@@ -545,7 +480,6 @@ def _compiled_constraints(
     records: list[OperationConstraintRecord],
 ) -> list[CompiledConstraintPatch]:
     """Translate durable records into the execution DTO used by Smoke."""
-
     return [
         CompiledConstraintPatch(
             constraint_id=item.id,

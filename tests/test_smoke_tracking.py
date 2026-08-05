@@ -182,13 +182,12 @@ def _smoke_runtime(tmp_path: Path):
         reference_values=references,
     )
 
-    class UnexpectedDedup:
-        def deduplicate(self, *args, **kwargs):
-            raise AssertionError("a successful batch must not invoke Dedup")
+    class UnexpectedResolutionAgent:
+        """Fail if a successful Batch incorrectly starts Failure Resolution."""
 
-    class UnexpectedFactory:
-        def create(self):
-            raise AssertionError("a successful batch must not create a sub-Agent")
+        def start(self, *args, **kwargs):
+            """A successful Batch must return before constructing a session."""
+            raise AssertionError("a successful batch must not invoke Resolution")
 
     class EmptyConstraintReader:
         """Return the empty durable Constraint set used by this success case."""
@@ -201,8 +200,7 @@ def _smoke_runtime(tmp_path: Path):
     smoke = OperationSmokeCoordinator(
         config_catalog=catalog,
         batch_runner=testing,
-        failure_deduplicator=UnexpectedDedup(),
-        failure_solver_factory=UnexpectedFactory(),
+        failure_resolution_agent=UnexpectedResolutionAgent(),
         constraint_reader=EmptyConstraintReader(),
         reference_values=references,
         tracing_runtime=runtime,
@@ -272,12 +270,16 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
     )
 
 
-def test_failure_dedup_uses_its_role_in_llm_trace(
+def test_failure_resolution_uses_its_role_in_llm_trace(
     tmp_path: Path,
 ) -> None:
-    """Semantic Dedup model calls are tagged with the independent role."""
+    """The continuous Resolution model call uses the unified trace role."""
     del tmp_path
-    from restscope.operation_smoke.failure_dedup import FailureDedupAgent
+    from restscope.operation_smoke.failure_resolution import (
+        FailureResolutionAgent,
+        FailureResolutionRequest,
+    )
+    from restscope.operation_smoke.output_limit import ModelOutputLimit
     from restscope.operation_smoke.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
@@ -292,27 +294,18 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
     )
     from restscope.llm.providers.base import BaseLLMProvider
 
-    class DedupProvider(BaseLLMProvider):
+    class ResolutionProvider(BaseLLMProvider):
         name = "stub"
 
         def invoke(self, request: LLMRequest) -> LLMResponse:
             return LLMResponse(
                 provider=self.name,
                 model=request.model,
-                parsed_json={
-                    "failures": [
-                        {
-                            "summary": "Two name errors.",
-                            "suspected_parameters": ["body.name"],
-                            "messages": ["first", "second"],
-                        }
-                    ],
-                    "reason": "Both involve body.name.",
-                },
+                parsed_json={"reason": "The empty worklist is ready."},
             )
 
     registry = LLMProviderRegistry()
-    registry.register(DedupProvider())
+    registry.register(ResolutionProvider())
     runtime, exporter = _recording_runtime()
 
     from restscope.request_inputs import RequestInputReference
@@ -340,30 +333,54 @@ def test_failure_dedup_uses_its_role_in_llm_trace(
                 ),
             )
         )
-    agent = FailureDedupAgent(
+    class EmptyOpenAPI:
+        """Supply methods needed to build tool contracts without executing them."""
+
+        list_inputs = list_response_fields = get_input_schema = (
+            get_response_field_schema
+        ) = lambda self, **arguments: {"structured": arguments}
+
+    class UnexpectedFinalizer:
+        """Coverage fails before a finalizer may be called in this trace case."""
+
+        def finalize(self, **arguments):
+            """Expose an incorrect call as a test failure."""
+            raise AssertionError(arguments)
+
+    agent = FailureResolutionAgent(
         client=LLMClient(registry, tracing_runtime=runtime),
         model=LLMModelConfig(
-            role="operation_smoke_failure_dedup",
+            role="operation_smoke_failure_resolution",
             provider="stub",
             model="think",
             enabled=True,
         ),
+        compact_model=LLMModelConfig(
+            role="operation_smoke_failure_resolution_compact",
+            provider="stub",
+            model="fast",
+            enabled=True,
+        ),
+        openapi_capability=EmptyOpenAPI(),
+        finalizer=UnexpectedFinalizer(),
         tracing_runtime=runtime,
     )
-    result, outputs, corrections, errors = agent.deduplicate(
-        operation_key="POST /items",
-        semantic_parameters=["body.name"],
-        observations=[
-            {"message": "first", "case_id": "TC1"},
-            {"message": "second", "case_id": "TC2"},
-        ],
+    result = agent.start(
+        FailureResolutionRequest(
+            operation_key="POST /items",
+            round_number=1,
+            batch_run_id="batch-1",
+            case_ids=["TC1", "TC2"],
+        ),
         catalog=catalog,
-        max_outputs=1,
-    )
+        output_limit=ModelOutputLimit(max_outputs=1),
+    ).advance()
     runtime.close()
 
     spans = list(exporter.get_finished_spans())
     llm_span = next(span for span in spans if span.name == "LLMClient.invoke")
-    assert result is not None
-    assert (outputs, corrections, errors) == (1, 0, [])
+    assert result.status == "failure_resolution_limit_exceeded"
     assert llm_span.attributes["llm.model_name"] == "think"
+    assert llm_span.attributes["restscope.llm.role"] == (
+        "operation_smoke_failure_resolution"
+    )

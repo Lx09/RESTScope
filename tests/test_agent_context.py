@@ -262,6 +262,150 @@ def test_agent_context_preserves_tool_groups_and_latest_feedback() -> None:
     assert context.metrics.conversation_group_count == 6
 
 
+def test_agent_context_builds_temporary_compaction_messages_from_full_history() -> None:
+    """Compaction sees B + complete H + C without saving the temporary C."""
+    context = AgentContext(
+        system="Resolution system contract",
+        user="Original Failure sources",
+        limits=ContextLimits(
+            system_chars=100,
+            initial_user_chars=100,
+            feedback_chars=200,
+            conversation_chars=260,
+            required_output_tokens=128,
+        ),
+    )
+    context.append_assistant(
+        LLMResponse(
+            provider="deepseek",
+            model="test",
+            tool_calls=[
+                ToolCall(
+                    id="lookup-1",
+                    name="lookup",
+                    arguments={"ref": "E1"},
+                    provider_context={"reasoning_content": "private continuation"},
+                )
+            ],
+        )
+    )
+    context.append_tool_result(
+        "lookup",
+        "lookup-1",
+        "Important evidence that the ordinary projection would omit. " * 8,
+    )
+    context.append_feedback("Harness correction")
+
+    history_before_compact = context.clone_history()
+    compact_messages = context.messages_for_compaction("Create checkpoint C")
+
+    assert [message.role for message in compact_messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "user",
+    ]
+    assert compact_messages[0].content == "Resolution system contract"
+    assert compact_messages[1:] == [
+        *history_before_compact,
+        compact_messages[-1],
+    ]
+    assert compact_messages[-1].content == "Create checkpoint C"
+    assert compact_messages[2].tool_calls[0].provider_context == {
+        "reasoning_content": "private continuation"
+    }
+    assert all(
+        message.content != "Create checkpoint C"
+        for message in context.clone_history()
+    )
+
+
+def test_agent_context_replaces_h_with_original_user_message_and_summary() -> None:
+    """Replacing H preserves B and U while removing old assistant/tool records."""
+    context = AgentContext(
+        system="Resolution system contract",
+        user="Original Failure sources",
+        limits=ContextLimits(
+            system_chars=100,
+            initial_user_chars=100,
+            feedback_chars=200,
+            conversation_chars=2_000,
+            required_output_tokens=128,
+        ),
+    )
+    context.append_assistant(
+        LLMResponse(
+            provider="test",
+            model="test",
+            tool_calls=[
+                ToolCall(id="lookup-1", name="lookup", arguments={"ref": "E1"})
+            ],
+        )
+    )
+    context.append_tool_result("lookup", "lookup-1", "Old tool evidence")
+    context.append_feedback("Old Harness correction")
+
+    removed_group_count = context.replace_compacted_history(
+        "Another model investigated this operation.\n\n# Checkpoint\nContinue E2.",
+        max_summary_chars=100,
+    )
+    messages_after_compact = context.messages_for_request(_model())
+
+    assert removed_group_count == 2
+    assert [message.role for message in messages_after_compact] == [
+        "system",
+        "user",
+        "user",
+    ]
+    assert messages_after_compact[0].content == "Resolution system contract"
+    assert messages_after_compact[1].content == "Original Failure sources"
+    assert "# Checkpoint" in messages_after_compact[2].content
+    assert "Continue E2." in messages_after_compact[2].content
+    assert "Old tool evidence" not in str(messages_after_compact)
+    assert "Old Harness correction" not in str(messages_after_compact)
+    assert context.metrics.compaction_count == 1
+    assert context.metrics.compacted_group_count == 2
+    assert context.metrics.conversation_group_count == 1
+
+
+def test_second_compaction_summarizes_but_does_not_preserve_the_old_summary_as_u() -> None:
+    """Only the original task is U; an earlier S is ordinary replaceable H."""
+    context = AgentContext(
+        system="Resolution system B",
+        user="Original Failure sources U",
+        limits=ContextLimits(
+            system_chars=100,
+            initial_user_chars=100,
+            feedback_chars=200,
+            conversation_chars=2_000,
+            required_output_tokens=128,
+        ),
+    )
+    context.append_feedback("Old Harness correction")
+    context.replace_compacted_history("handoff prefix\n\nFirst summary S1")
+    context.append_feedback("Evidence learned after S1")
+
+    second_compact_input = context.messages_for_compaction("Create second C")
+    assert any("First summary S1" in item.content for item in second_compact_input)
+    assert any(
+        "Evidence learned after S1" in item.content
+        for item in second_compact_input
+    )
+
+    context.replace_compacted_history("handoff prefix\n\nSecond summary S2")
+    final_messages = context.messages_for_request(_model())
+
+    assert [message.content for message in final_messages] == [
+        "Resolution system B",
+        "Original Failure sources U",
+        "handoff prefix\n\nSecond summary S2",
+    ]
+    assert context.metrics.compaction_count == 2
+    assert context.metrics.compacted_group_count == 3
+
+
 def test_agent_context_clips_but_keeps_oversized_required_recent_groups() -> None:
     """A large latest result cannot erase its tool call or newest correction."""
     context = AgentContext(
@@ -355,11 +499,10 @@ def test_context_package_has_no_workflow_database_or_registry_dependencies() -> 
 
 
 def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
-    """All five current decision sites share one safe message-construction path."""
+    """Every current decision site shares one safe message-construction path."""
     root = Path(__file__).parents[1]
     callers = (
-        root / "restscope/operation_smoke/failure_dedup/agent.py",
-        root / "restscope/operation_smoke/failure_solver/agent.py",
+        root / "restscope/operation_smoke/failure_resolution/agent.py",
         root / "restscope/operation_smoke/parameter_patch/agent.py",
         root / "restscope/api_behavior_monitor/resource_identifier.py",
         root / "restscope/api_behavior_monitor/response_value.py",
@@ -371,6 +514,13 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
         assert "messages_for_request(" in source, caller
         assert "fit_prompt_context" not in source, caller
         assert "fit_message_context" not in source, caller
+
+    compact_agent = (
+        root
+        / "restscope/operation_smoke/failure_resolution/compact/agent.py"
+    ).read_text(encoding="utf-8")
+    assert "AgentContext" in compact_agent
+    assert "messages_for_compaction(" in compact_agent
 
 
 def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:

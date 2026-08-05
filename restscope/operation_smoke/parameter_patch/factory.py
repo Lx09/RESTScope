@@ -1,4 +1,4 @@
-"""Fresh Parameter Patch Coordinator construction per Solve requirement."""
+"""Fresh Parameter Patch Coordinator construction per Resolution request."""
 
 from __future__ import annotations
 

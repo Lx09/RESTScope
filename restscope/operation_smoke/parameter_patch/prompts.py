@@ -1,6 +1,6 @@
 """Build the compact domain context for one Parameter Patch Agent session.
 
-Failure Solve has already identified a root cause and selected affected semantic
+Failure Resolution has already identified a root cause and selected affected semantic
 inputs. This module projects only those Generators, active Constraints, and
 prior Patch facts into safe text. The common Context Module later manages the
 growing proposal/revision and lookup-tool conversation.
@@ -105,7 +105,7 @@ def build_parameter_patch_prompt(
     """Build the bounded initial task without serializing DTOs as JSON.
 
     Args:
-        task: Solve-owned root cause, affected inputs, and acceptance contract.
+        task: Resolution-owned root cause, affected inputs, and acceptance contract.
         config: Current operation Generator configuration.
         model: Model configuration retained for a stable builder interface; the
             shared AgentContext applies its actual window later.

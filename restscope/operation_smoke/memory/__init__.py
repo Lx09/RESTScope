@@ -1,12 +1,14 @@
-"""Public internal seam for stable Failure and Solve Attempt memory."""
+"""Public internal seam for stable Failure and terminal Attempt memory."""
 
 from .memory import SmokeMemory
 from .ports import SmokeMemoryRepository, SmokeMemoryUnitOfWork
 from .patch_application import (
     AppliedSmokePatch,
     PatchSolveAttempt,
+    PreparedSmokePatch,
     SmokePatchApplication,
     normalize_patch_constraints,
+    prepare_smoke_patch,
     replace_constraint_scope,
 )
 from .schemas import (
@@ -30,6 +32,7 @@ __all__ = [
     "GeneratorChangeMemory",
     "ParameterHistory",
     "PatchSolveAttempt",
+    "PreparedSmokePatch",
     "RecordedFailure",
     "RecordedFailures",
     "SmokeMemory",
@@ -40,5 +43,6 @@ __all__ = [
     "SolveAttemptParameterWrite",
     "SolveAttemptWrite",
     "normalize_patch_constraints",
+    "prepare_smoke_patch",
     "replace_constraint_scope",
 ]

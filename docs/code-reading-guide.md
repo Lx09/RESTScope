@@ -30,23 +30,26 @@ The core loop is:
    and learns narrowly approved identifier and response-value evidence.
 8. **Index Test Cases.** One run-local Catalog retains every sent request's
    structured input JSON and only failed response bodies.
-9. **Deduplicate Failures.** Exact messages are collapsed first; the Dedup
-   Agent lists OpenAPI input handles and queries selected `TC*` cases before
-   grouping messages by complete suspected Parameter set.
-10. **Solve one Failure.** Failure Solve may query exact OpenAPI input or
-   response-field Schemas, Test Cases, Parameter history, or use an HTTP probe
-   restricted to the current operation.
-11. **Build and select a Patch.** Solve calls the Parameter Patch Coordinator as
-    an internal tool. Each reviewed candidate receives a session-local `P*`
-    reference. A flat apply/no-Patch terminal decision either selects one
-    candidate or records only a no-Patch reason. Every Failure item finishes
-    before the next complete Batch measures the result.
+9. **Resolve the failed Batch.** Runtime collapses exact duplicate messages into
+   `E*` sources, then one continuous Failure Resolution Agent owns semantic
+   grouping, investigation order, and a revisioned reference-only worklist. It
+   queries OpenAPI, `TC*` cases, Parameter history, or the operation-scoped HTTP
+   Probe only when needed. At 80% of configured input capacity, its nested FAST
+   Compact Agent reads the unchanged system prompt plus the complete saved
+   conversation and one temporary checkpoint instruction. Runtime replaces old
+   assistant/tool exchanges with the original Failure prompt plus the Markdown
+   handoff; worklist and registries stay untouched.
+10. **Build, select, and finalize Patches.** Resolution calls the Parameter Patch
+    Coordinator as an internal tool. Each reviewed candidate remains in a
+    session registry behind `P*`. When the Agent finishes, deterministic code
+    validates decided items and atomically commits compatible candidates plus
+    their Failures and Attempts before the next complete Batch.
 
 Most state used in steps 4–10 is deliberately temporary. RESTScope does not
 persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases, or
 Patch samples. It persists the complete current normalized OpenAPI plus change
 events for audit/export, current per-input Generators and Constraints, bounded
-Behavior Monitor evidence, stable Failures, terminal Solve Attempts, validated
+Behavior Monitor evidence, stable Failures, terminal Resolution Attempts, validated
 input attribution, and deterministic accepted-change events. None of these
 artifacts restores an App.
 
@@ -109,27 +112,32 @@ maximum”, or “exactly one of these fields is included”.
 
 ### Request-local references
 
-Solve uses `P1`, `P2`, … for Patch candidates created in its own session.
-Dedup receives exact messages and representative `TC*` references without
-item IDs or Fingerprint references. It receives the current Catalog's complete
-semantic Parameter list once and uses five run-local `test_case.*` tools
-instead of receiving full HTTP JSON. Each tool performs one exact query and returns only the selected request
-or response JSON fragment. Inside JSON, `sort` is a direct key at
+Resolution uses `E1`, `E2`, … for exact Failure sources, `TC1`, `TC2`, … for
+run-local cases, and `P1`, `P2`, … for reviewed Patch candidates created in its
+own session. Its initial prompt contains only the operation key, exact messages,
+and original E-to-TC associations. It discovers semantic Parameters and uses
+run-local `test_case.*` tools instead of receiving full HTTP JSON. It does not
+receive a Failure-message lookup because those messages are already present.
+When a message is unclear, `openapi.list_response_fields` discovers contract
+path candidates and `test_case.get_response_field_value` reads one selected
+path from the associated failed cases. Each Test Case tool returns only the
+selected request or response JSON fragment. Inside JSON, `sort` is a direct key at
 `request.query.sort`; `query.sort` remains the unique semantic handle used by
 OpenAPI, Catalog, Memory, Patch, and Agent output. An unused request Parameter
 and an unretained response body are reported with explicit terminal status text
 rather than a boolean presence flag.
-Solve can additionally query one input or response-field Schema at a time.
+Resolution can additionally query one input or response-field Schema at a time.
 The complete OpenAPI IR and database primary keys never enter model prompts.
 
-### Failure and Solve Attempt
+### Failure and Resolution Attempt
 
 A Failure is stable across rounds when its operation, normalized message set,
 and complete suspected causal Parameter state match. The representative `TC*`
-remains only in the run-local Test Case Catalog. A Solve Attempt stores its
-outcome and one reason. Applied and runtime-conflict Attempts also inherit root
-cause and exact Parameter attribution from the reviewed candidate; no-Patch
-Attempts have neither. When Solve selects a validated Patch, deterministic
+remains only in the run-local Test Case Catalog. A terminal Attempt stores its
+outcome, final worklist root cause, and decision reason. Applied-Patch input
+attribution comes from the selected candidate; no-Patch attribution is resolved
+from the item's validated semantic handles, with `[]` representing an
+operation-level cause. When Resolution selects a validated Patch, deterministic
 Generator/Constraint before-and-after changes commit with that Attempt;
 candidate samples are not persisted.
 
@@ -148,11 +156,11 @@ Read these files in order:
 3. `restscope/supervisor/graph.py` — the top-level dynamic operation loop.
 4. `restscope/testing/execution.py` — turns generated cases into real HTTP
    results.
-5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds, fixed
-   Failure dispatch, and explicit stop conditions.
-6. `restscope/operation_smoke/failure_dedup/agent.py` and
-   `restscope/operation_smoke/failure_solver/agent.py` — Failure todo management
-   and one continuous Solve session.
+5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds,
+   Resolution session dispatch, and explicit stop conditions.
+6. `restscope/operation_smoke/failure_resolution/agent.py`, `worklist.py`, and
+   `finalizer.py` — one continuous Agent session, reference-only draft state,
+   registry checks, and atomic finalization.
 7. `restscope/operation_smoke/parameter_patch/agent.py`,
    `restscope/operation_smoke/parameter_patch/coordinator.py`,
    `restscope/operation_smoke/parameter_patch/review/agent.py`, and
@@ -242,28 +250,27 @@ Memory, public round summaries, and reference adaptation.
 
 Important files:
 
-- `coordinator.py`: complete-batch and fixed-todo orchestration.
+- `coordinator.py`: complete-Batch and continuous Resolution orchestration.
 - `test_case_catalog/`: `TC*` identity, bounded response retention, exact
-  structured-JSON queries, and five single-purpose Agent-local Test Case tools.
+  structured-JSON queries, and four single-purpose tools registered for
+  Resolution. The unregistered Failure-message query remains available to
+  trusted Catalog callers.
 - `memory/`: domain Memory Interface and atomic Patch application.
 - `schemas.py`: public request and bounded result summaries.
 - `references.py`: current resource/response evidence validation, candidate-
   only response sampling, and Apply-time response pool registration.
 
-### `restscope/operation_smoke/failure_dedup/`
+### `restscope/operation_smoke/failure_resolution/`
 
-Owns exact normalized-message deduplication, LLM Parameter-set grouping,
-correction, representative-case selection, and validated Failure recording.
-
-### `restscope/operation_smoke/failure_solver/`
-
-Owns one continuous THINK Solve session per Failure, Parameter-memory and HTTP
-tools, and the internal Parameter Patch tool. It alone decides root cause,
-Parameter attribution, candidate selection, conflict, and no-Patch outcomes.
+Owns deterministic exact-message folding and one continuous Agent session for
+all Failures in a failed Batch. `worklist.py` validates only revisions and real
+references; `candidates.py` hides precise reviewed objects behind `P*`;
+`agent.py` owns semantic grouping, investigation, and finish timing; and
+`finalizer.py` performs mechanical compatibility checks and one atomic commit.
 
 ### `restscope/operation_smoke/parameter_patch/`
 
-Constructs one Solve-owned Patch candidate. It compiles model output into
+Constructs one Resolution-owned Patch candidate. It compiles model output into
 testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and coordinates a separate semantic Reviewer.
 `agent.py` owns one continuing proposal/revision conversation;
@@ -295,6 +302,11 @@ blocks inside that Markdown.
 feedback, explicit clipping, and numeric trace metrics inside each role's
 budget. It knows no Operation Smoke, Behavior Monitor, database, or Agent
 registry concepts.
+
+For local compaction, `AgentContext` keeps the system prompt separate from its
+replaceable history. `messages_for_compaction` creates temporary `B + H + C`
+messages, while `replace_compacted_history` installs `H' = U + S` without
+changing `B`. These generic methods do not interpret Resolution state.
 
 Workflow-specific code remains responsible for selecting and interpreting
 domain facts. No model-facing runtime evidence is produced by dumping a DTO or
@@ -349,13 +361,13 @@ data.
 
 ### `evaluations/`
 
-Provides the developer-only Phoenix Evals entrypoint for the three Operation
-Smoke Agents. `registry.py` is the one-line-per-suite registry; `core.py` owns
-only Dataset synchronization, prompt selection, and Experiment metadata.
-`agents/dedup/`, `agents/solve/`, and `agents/patch/` each own their Scenario
-DTO, temporary collaborators, Phoenix task, code evaluators, and YAML evidence.
-These Modules reuse production Agents but never import a database Adapter or
-send target HTTP requests.
+Provides the developer-only Phoenix Evals entrypoint for the continuous
+Resolution boundary. `registry.py` exposes one suite; `core.py` owns only
+Dataset synchronization, prompt selection, and Experiment metadata; and
+`agents/resolution/` owns Scenario DTOs, temporary collaborators, the Phoenix
+task, code evaluators, and YAML evidence. It reuses production Resolution,
+Parameter Patch, and Review Agents but never imports a database Adapter or sends
+target HTTP requests.
 
 ### `tests/`
 
@@ -384,17 +396,16 @@ For a failed Batch that receives an applied Patch:
 
 ```text
 BatchExecutionResult + TestCaseCatalog
-  -> exact normalized-message Fingerprint deduplication
-  -> one Fingerprint: deterministic bypass
-  -> several Fingerprints: FailureDedupAgent groups by suspected Parameters
-  -> one representative TC* per current-round Failure (run-local only)
-  -> fresh FailureSolveAgent
-  -> optional Catalog, Parameter-memory, and HTTP tools
+  -> deterministic exact-message folding into E* sources
+  -> one continuous FailureResolutionAgent for the failed Batch
+  -> Agent-owned reference-only worklist (merge/split/reorder/reopen)
+  -> optional Catalog, OpenAPI, Parameter-memory, and HTTP tools
   -> internal ParameterPatchCoordinator tool
   -> Patch proposal + compile/sample + independent Review
-  -> Solve returns apply_patch with a session-local P* candidate
-  -> atomic current Generator/Constraint + Solve Attempt + change event write
-  -> remaining Dedup items
+  -> reviewed candidate retained in the registry behind P*
+  -> Agent finishes when its worklist is ready
+  -> final coverage and multi-candidate mechanical validation
+  -> atomic Failures + Attempts + Generator/Constraint + change events write
   -> next complete Batch
 ```
 

@@ -57,7 +57,7 @@ class _SmokeCoordinator:
             "passed"
             if status in passed_stop_reasons
             else "errored"
-            if status in {"dedup_budget_exhausted", "provider_unavailable"}
+            if status in {"failure_resolution_limit_exceeded", "provider_unavailable"}
             else status
         )
         batch_run_ids = (
@@ -78,8 +78,8 @@ class _SmokeCoordinator:
             ),
             batch_run_ids=batch_run_ids,
             failure_kind=(
-                "dedup_budget_exhausted"
-                if status == "dedup_budget_exhausted"
+                "failure_resolution_limit_exceeded"
+                if status == "failure_resolution_limit_exceeded"
                 else "provider_unavailable"
                 if status == "provider_unavailable"
                 else "unsupported_operation"

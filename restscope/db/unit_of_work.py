@@ -218,9 +218,9 @@ class SqlAlchemyResponseValueCatalogUnitOfWork:
 class SqlAlchemySmokeMemoryUnitOfWork:
     """Own one atomic transaction for Operation Smoke knowledge.
 
-    Failure Dedup uses this boundary to record validated stable Failures.
-    Failure Solve also uses it to change current Generator and Constraint state
-    while writing the matching Solve Attempt and change event in the same
+    Failure Resolution finalization uses this boundary to record stable Failures
+    and change current Generator and Constraint state
+    while writing the matching Resolution Attempt and change event in the same
     database transaction. Exposing all repositories on one session prevents a
     configuration from changing without an explanation, or an event from
     existing without its current-state change.

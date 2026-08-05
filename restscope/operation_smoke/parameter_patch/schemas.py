@@ -1,6 +1,6 @@
 """Public contracts owned by the Parameter Patch Module.
 
-Failure Solve supplies one root cause and Patch requirement. Parameter Patch
+Failure Resolution supplies one root cause and Patch requirement. Parameter Patch
 translates that requirement into executable Generator and Constraint objects,
 then returns the complete validated Patch or a bounded failure record. No
 failure aliases, Patch Groups, or cross-failure ownership appear here.
@@ -84,7 +84,7 @@ class ParameterPatchTask(_Model):
     ``root_cause`` diagnoses the current generated values. The separate
     ``value_requirements`` field states the target value domain, while each
     acceptance criterion gives the Reviewer one independently checkable value
-    predicate. HTTP outcomes deliberately belong to Solve evidence, not this
+    predicate. HTTP outcomes deliberately belong to Resolution evidence, not this
     Patch-construction handoff.
     """
 
@@ -412,16 +412,5 @@ class ValidatedParameterPatch(_Model):
     todo_id: str
     patch: GeneratorPatchDraft
     samples: list[dict[str, Any]] = Field(min_length=1, max_length=20)
-    outputs_used: int = Field(ge=2, le=20)
-    attempt_history: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ParameterPatchFailure(_Model):
-    """Bounded Patch failure returned to the same Failure Solve session."""
-
-    status: Literal["failed"] = "failed"
-    todo_id: str
-    reason: Literal["output_budget_exhausted", "repeated_invalid_output"]
-    outputs_used: int = Field(ge=1, le=20)
-    errors: list[str] = Field(default_factory=list, max_length=20)
+    outputs_used: int = Field(ge=2, le=1_000)
     attempt_history: list[dict[str, Any]] = Field(default_factory=list)

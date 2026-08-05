@@ -204,6 +204,7 @@ def run_suite(
     suite: EvaluationSuite,
     llm_client: Any,
     model: Any,
+    task_models: dict[str, Any] | None = None,
     tracing_runtime: Any,
     prompt_name: str,
     repetitions: int,
@@ -248,6 +249,7 @@ def run_suite(
     task = suite.build_task(
         client=llm_client,
         model=model,
+        task_models=task_models or {},
         tracing_runtime=tracing_runtime,
         system_prompt=prompt.system_prompt_override,
         seed=seed,
@@ -255,6 +257,10 @@ def run_suite(
     metadata = {
         "agent": suite.agent_name,
         "model": model.model_dump(mode="json"),
+        "nested_models": {
+            role: config.model_dump(mode="json")
+            for role, config in sorted((task_models or {}).items())
+        },
         "prompt_name": prompt.name,
         "prompt_sha256": prompt.sha256,
         "git_revision": git_revision,

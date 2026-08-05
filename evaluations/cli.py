@@ -24,11 +24,12 @@ from evaluations.registry import SUITES
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_ROLES = {
-    "dedup": "operation_smoke_failure_dedup",
-    "solve": "operation_smoke_failure_solve",
-    "patch": "parameter_patch_agent",
-}
+_ROLES = {"resolution": "operation_smoke_failure_resolution"}
+_NESTED_ROLES = (
+    "operation_smoke_failure_resolution_compact",
+    "parameter_patch_agent",
+    "parameter_patch_review_agent",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -153,15 +154,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.llm,
             tracing_runtime=tracing_runtime,
         )
-        model = ModelSelector.from_config(config.llm).select(
-            _ROLES[args.agent]
-        )
-        _require_configured_model(llm_client, model)
+        selector = ModelSelector.from_config(config.llm)
+        model = selector.select(_ROLES[args.agent])
+        task_models = {role: selector.select(role) for role in _NESTED_ROLES}
+        for configured_model in (model, *task_models.values()):
+            _require_configured_model(llm_client, configured_model)
         experiment = run_suite(
             phoenix_client=phoenix_client,
             suite=SUITES[args.agent],
             llm_client=llm_client,
             model=model,
+            task_models=task_models,
             tracing_runtime=tracing_runtime,
             prompt_name=args.prompt,
             repetitions=args.repetitions,

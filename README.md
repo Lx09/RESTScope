@@ -77,7 +77,7 @@ uv run pytest
 The database is one audit artifact for one App. It contains exactly 19 business
 tables: the complete current normalized OpenAPI and response-change events,
 current per-input Generators and Constraints, narrow Resource Identifier and
-bounded Response Value evidence, stable Failures, terminal Solve Attempts,
+bounded Response Value evidence, stable Failures, terminal Resolution Attempts,
 validated input attribution, and accepted Generator/Constraint change events.
 It never stores raw responses, Test Cases, Batches, Patch samples, model
 conversations, plans, queues, scheduler progress, or authentication material.
@@ -131,8 +131,12 @@ empty containers. Bounded HTTP request/response evidence is the sole JSON
 prompt exception and is rendered inside a safe Markdown fence so a complete
 test case stays easy to inspect.
 `AgentContext` preserves complete tool exchanges and newest validation feedback
-inside the role and model windows. Strict Agent outputs and provider tool
-protocols also remain JSON.
+inside the role and model windows. At 80% of configured Resolution input
+capacity, a FAST Compact call receives the same system prompt, the complete
+saved history, and one temporary summary instruction. The next Resolution turn
+retains the original Failure prompt plus the Markdown handoff; worklists and
+candidate registries are not replaced or persisted. Strict Agent outputs and
+provider tool protocols remain JSON.
 
 ## Local trace monitoring with Phoenix
 
@@ -191,18 +195,20 @@ credentials are redacted.
 ## Phoenix Evals for Operation Smoke Agents
 
 The developer-only [`evaluations/`](evaluations/README.md) directory evaluates
-Failure Dedup, Failure Solve, and Parameter Patch independently with native Phoenix Datasets,
-Experiments, and code evaluators. Repository YAML Scenarios are synchronized by
-stable ID, and each Scenario/repetition receives fresh temporary Memory and
-scripted tools. Experiment runs call the real configured DeepSeek model and
-record linked traces, but never open the RESTScope database or request a target
-API. This is LLM evaluation, not part of the runtime test suite.
+the continuous Failure Resolution flow with one native Phoenix Dataset,
+Experiments, and independent code evaluators. Repository YAML Scenarios cover
+semantic merge, semantic split, and a real nested Parameter Patch/Review flow.
+Each repetition receives fresh session registries and a storage-free finalizer.
+Experiment runs call the configured model and record linked traces, but never
+open the RESTScope database or request a target API. This is LLM evaluation,
+not part of the runtime test suite.
 
 ```bash
 uv sync --group evaluation
 uv run --group evaluation python -m evaluations list
-uv run --group evaluation python -m evaluations run patch \
-  --scenario patch-integer-range --prompt current --repetitions 1 --seed 0
+uv run --group evaluation python -m evaluations run resolution \
+  --scenario resolution-patch-bounded-identifier --prompt current \
+  --repetitions 1 --seed 0
 ```
 
 Use one repetition while exploring and three when comparing complete prompt
@@ -317,7 +323,7 @@ Failure facts. The Catalog is released when the operation's Smoke run ends and
 is never persisted.
 
 `restscope.http.request` is a high-risk, non-read-only model capability that
-can trigger side effects on the bound target. Failure Solve receives a further
+can trigger side effects on the bound target. Failure Resolution receives a further
 operation-scoped wrapper around it. Generated batch execution remains internal
 to Operation Smoke and can execute only an initialized operation using its
 complete current Generator and Constraint configuration.
@@ -372,78 +378,77 @@ Patch performs the first producer-to-consumer pool registration.
 
 ## Operation Smoke workflow
 
-`OperationSmokeCoordinator` owns ordering around three LLM Agents:
+`OperationSmokeCoordinator` owns deterministic Batch ordering around one
+continuous `FailureResolutionAgent` session:
 
 1. A complete generated Batch establishes the current evidence and 2xx rate.
    The App-wide `RANDOM_SEED` is reused by Batch inputs, Constraint solving, and
-   Patch samples.
-2. `FailureDeduplicator` extracts normalized error-message Fingerprints and
-   keeps only the first test case for each exact Fingerprint. One Fingerprint
-   bypasses the LLM. With several Fingerprints, `FailureDedupAgent` groups them
-   by equal complete suspected causal Parameter sets. Its initial Markdown
-   context contains the operation, the complete Catalog-valid semantic
-   Parameter handles, each Failure Message, and a representative `TC*`
-   reference. It queries exact case evidence through five
-   single-purpose `test_case.*` tools for request JSON fragments, reverse
-   Parameter matches, response JSON fragments, reverse response matches, and
-   Failure Messages. Native structured results use explicit statuses such as
-   `parameter_not_used_in_request` instead of boolean presence flags.
-   It reads no Failure history. Deterministic validation and Markdown
-   correction run before Memory is written. Every current-round Failure
-   carries exactly one representative `TC*`.
-3. Each debug item gets a fresh `FailureSolveAgent`. Solve preloads the current
-   Failure, may query other Failure history by semantic Parameter handle, and
-   may query any currently known `TC*`. It can list OpenAPI inputs and fetch one
-   exact input or response-field Schema through the shared global OpenAPI
-   capability without receiving the complete IR. Its current-operation HTTP probe supports
-   GET, HEAD, OPTIONS, POST, PUT, PATCH, and DELETE. Every attempted Probe adds
-   another `TC*`; mutating Probes are not rolled back. Before replacing a
-   Parameter Generator it must inspect that Parameter's earlier Failure/Patch
-   history.
-4. Solve calls a fresh `ParameterPatchCoordinator` as an internal tool. Its
-   FAST Patch Agent proposes a complete Generator/Constraint replacement;
-   deterministic code validates scope, Schema, references, Constraints,
-   compilation, and local samples. A separate FAST Review Agent then receives
-   a new context containing only normalized requirement and candidate facts.
-   Empty Review issues accept the candidate; concrete issues return to the
-   original Patch proposal call for revision. A validated result becomes the
-   same session-local `P*` candidate reference used by Solve.
-5. Solve finishes with flat JSON containing only `action`, `candidate_ref`, and
-   `reason`. `apply_patch` must select a validated session-local `P*`; its
-   terminal reason is ignored. `no_patch` requires a reason and ignores any
-   candidate reference. A successful Patch commits current state, one Solve
-   Attempt, candidate-derived root cause and input links, and one append-only
-   Generator change event in one transaction. `conflict` is not a model action:
-   deterministic runtime records it only when a selected candidate loses the
-   atomic current-state comparison.
+   candidate samples. Every sent case enters the run-local Test Case Catalog.
+2. Runtime folds completely identical Failure messages and assigns deterministic
+   `E*` references while retaining every original `E* → TC*` association. The
+   initial Agent prompt contains only the operation key, exact messages, and
+   those associations. Semantic Parameter handles, OpenAPI details, Test Cases,
+   Memory, and Generator state are available only through tools.
+3. The Agent creates and maintains one revisioned, reference-only worklist. It
+   may freely merge, split, overlap, reorder, reopen, or leave items undecided;
+   `active_item_id` expresses its own investigation order. A whole-list write is
+   accepted atomically only when its expected revision and every `E*`, `TC*`,
+   `P*`, and Parameter handle are real. The harness does not judge the Agent's
+   grouping, diagnosis, progress text, or decision quality.
+4. OpenAPI and Test Case tools provide bounded exact evidence. Failure messages
+   are already in the initial prompt, so Resolution has no duplicate
+   Failure-message lookup. If a message is unclear, it can list candidate paths
+   for that HTTP status with `openapi.list_response_fields`, then inspect one
+   associated failed response with `test_case.get_response_field_value`.
+   Parameter Memory is read only and queried on demand. The operation-scoped
+   HTTP Probe supports GET, HEAD, OPTIONS, POST, PUT, PATCH, and DELETE; every
+   invocation sends a fresh request and creates a fresh `TC*`, even when the
+   call repeats or can mutate the target. An exact reproduced Failure message
+   becomes optional evidence for its existing `E*`, but does not enlarge
+   initial coverage.
+5. `generate_parameter_patch` creates a fresh production Patch/Review flow for
+   the active item. Deterministic code checks scope, Schema, references,
+   Constraints, compilation, and samples; a separate Review Agent sees only
+   normalized requirement and candidate facts. The complete reviewed object is
+   held exclusively in a session registry. Resolution receives a short `P*`
+   plus a bounded summary and can recover that summary with
+   `parameter_patch.read_candidate`; executable DTOs and sample values never
+   enter the worklist.
+6. When the Agent returns `FailureResolutionFinish`, the harness requires every
+   original `(E*, TC*)` association to appear at least once, then mechanically
+   validates only decided items. `no_patch` derives real source messages and
+   input node IDs from registries. `apply_patch` dereferences its selected `P*`;
+   Agent text cannot alter Generator/Constraint changes, samples, affected
+   inputs, or candidate provenance. Selected candidates must be unique,
+   baseline-current, non-overlapping, compilable, and freshly sampleable as one
+   combined state.
+7. All decided stable Failures, terminal Attempts, compatible selected
+   candidates, and per-candidate change events commit in one database
+   transaction. Any validation, optimistic-state, or write failure returns to
+   the same Agent session without a partial write. Items without a decision,
+   unselected candidates, worklist drafts, progress, and conversation history
+   disappear when the session ends.
 
-Every item in the fixed Dedup result finishes before another Batch is allowed.
-If no Patch was applied, Smoke passes with `no_patch_applied`. Otherwise the next
-complete Batch validates all applied changes together, and
+If no Patch was applied, Smoke stops with `no_patch_applied`. Otherwise the next
+complete Batch measures all applied changes together, and
 `success_rate_reached` stops at the configured threshold (80% by default).
-There is no Effect Agent, candidate Batch, rollback snapshot, or permanent
-`resolved` flag.
+There is no Effect Agent, candidate Batch, rollback snapshot, fixed Failure todo
+queue, or permanent `resolved` flag.
 
-Dedup has a shared 50-output budget. One Fingerprint uses zero outputs; several
-normally require an OpenAPI input listing, optional Catalog reads, and one final
-decision. Each Solve has a 50-output budget that also counts every nested
-Parameter Patch proposal and Review output; one Patch tool call shares a
-single cap of 20 outputs across both Agents.
-Malformed replies and invalid tool-requesting model outputs count.
-Every valid tool call naturally continues the same Solve investigation; the
-50-output maximum is the only Solve-level continuation bound. Dedup or Solve
-exhaustion is a technical error; one Patch-tool exhaustion is recoverable
-feedback within its Solve session.
+Resolution, Compact, Parameter Patch, and Review share one hard limit of 1000
+model outputs for the entire Operation Smoke run. There are no smaller per-Agent
+budgets, repeated-output fingerprints, or repeated-tool stopping rules. From
+the eleventh non-terminal output for the current active item, the harness adds a
+budget reminder; the Agent still owns whether to gather more evidence, record
+`no_patch`, form a candidate, or switch items. Hitting the hard limit returns
+`failure_resolution_limit_exceeded` and writes none of the unfinalized session.
 
-The database keeps stable structured Failures, append-only Solve Attempts,
+The database keeps stable structured Failures, append-only terminal Attempts,
 current input Generators and Constraints, and append-only deterministic change
-events. Applied and runtime-conflict Attempts inherit root cause and Parameter
-attribution from the reviewed candidate; a no-Patch Attempt stores only its
-reason and therefore does not enter Parameter-specific history. Rejected
-session candidates, Patch samples, raw Batches/responses, HTTP transcripts, and
-LLM transcripts are not persisted. Public results contain Batch run IDs plus
-bounded round, Solve Attempt, and Generator change-event summaries.
-Request/response reports are intentionally absent.
+events. Rejected or unselected candidates, worklists, Patch samples, raw
+Batches/responses, HTTP transcripts, and LLM transcripts are not persisted.
+Public results contain Batch run IDs plus bounded Resolution item and Generator
+change-event summaries; request/response reports are intentionally absent.
 
 Reference-backed generators fail closed. Empty pools are never exposed as
 candidate options and therefore cannot create a reference-backed Generator.

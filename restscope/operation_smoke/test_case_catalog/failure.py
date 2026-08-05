@@ -1,7 +1,7 @@
 """Parse one executed request outcome into stable Failure evidence.
 
-Batch execution and Solve HTTP Probe both call these helpers before recording a
-Test Case. Parsing happens once at the capture seam so Dedup, Solve, Memory, and
+Batch execution and Resolution HTTP Probe call these helpers before recording a
+Test Case. Parsing happens once at the capture seam so Resolution, Memory, and
 Catalog queries cannot disagree about the normalized Failure messages.
 """
 

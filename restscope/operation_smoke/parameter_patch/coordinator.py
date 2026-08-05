@@ -1,9 +1,10 @@
 """Coordinate proposal, deterministic validation, and independent review.
 
-Failure Solve decides why a batch failed and what behavior must change.
+Failure Resolution decides why a batch failed and what behavior must change.
 Parameter Patch converts that requirement into executable Generator and
-Constraint objects. This deterministic Module owns budgets and feedback while
-the Patch Agent proposes and a fresh Review Agent judges semantic alignment.
+Constraint objects. This deterministic Module uses the shared output guard and
+owns feedback while the Patch Agent proposes and a fresh Review Agent judges
+semantic alignment.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from restscope.capabilities import (
 from restscope.context import CompactTextWriter
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
+from restscope.operation_smoke.output_limit import ModelOutputLimit
 from restscope.response_fields import ResponseFieldReference
 from restscope.testing import (
     ConstraintSet,
@@ -45,13 +47,11 @@ from .prompts import build_parameter_patch_prompt
 from .review import (
     ParameterPatchReviewAgent,
     ParameterPatchReviewCandidate,
-    ParameterPatchReviewFailure,
 )
 from .schemas import (
     SelectedReferenceProvenance,
     CompiledConstraintPatch,
     GeneratorPatchDraft,
-    ParameterPatchFailure,
     ParameterPatchProposal,
     ParameterPatchTask,
     SemanticResponseValueGenerator,
@@ -124,18 +124,16 @@ class ParameterPatchCoordinator:
         case_count: int,
         reference_values: ReferenceValueProvider | None = None,
         random_seed: int = 0,
-        max_outputs: int = 20,
-    ) -> ValidatedParameterPatch | ParameterPatchFailure:
+        output_limit: ModelOutputLimit,
+    ) -> ValidatedParameterPatch:
         """Coordinate proposal, local validation, and fresh semantic review.
 
-        Both Agents spend the same output budget. Compile failures consume only
-        the proposal; successful candidates always consume a fresh Reviewer
-        output before they can become ``ValidatedParameterPatch``.
+        Both Agents consume the Operation-wide hard limit. Compile failures and
+        repeated calls remain in the same revision context until a reviewed
+        candidate succeeds or the shared guard raises its terminal exception.
         """
         if not 1 <= case_count <= 20:
             raise ValueError("case_count must be between 1 and 20")
-        if not 1 <= max_outputs <= 20:
-            raise ValueError("max_outputs must be between 1 and 20")
         if not self.patch_model.enabled or not self.review_model.enabled:
             raise RuntimeError("Both Parameter Patch models must be configured")
 
@@ -152,13 +150,12 @@ class ParameterPatchCoordinator:
             prompt=prompt,
             openapi_capability=self.openapi_capability,
             resource_capability=self.resource_capability,
+            output_limit=output_limit,
             tracing_runtime=self.tracing_runtime,
         )
-        outputs_used = 0
+        starting_outputs = output_limit.used
         latest_errors: list[str] = []
         attempt_history: list[dict[str, Any]] = []
-        last_invalid_fingerprint: str | None = None
-        repeated_invalid_count = 0
 
         with self.tracing_runtime.span(
             "ParameterPatchCoordinator.run",
@@ -167,7 +164,7 @@ class ParameterPatchCoordinator:
                 "todo_id": task.todo_id,
                 "input_count": len(task.affected_inputs),
                 "case_count": case_count,
-                "max_outputs": max_outputs,
+                "shared_outputs_used": starting_outputs,
             },
             attributes={
                 "restscope.patch.todo_id": task.todo_id,
@@ -175,11 +172,8 @@ class ParameterPatchCoordinator:
                 "restscope.patch.sample_count": case_count,
             },
         ) as span:
-            while outputs_used < max_outputs:
-                attempt = patch_agent.propose(
-                    shared_output_number=outputs_used + 1,
-                )
-                outputs_used += 1
+            while True:
+                attempt = patch_agent.propose()
                 attempt_history.append(_patch_attempt_record(attempt))
                 errors = list(attempt.errors)
 
@@ -188,11 +182,6 @@ class ParameterPatchCoordinator:
                 # and its complete provider call/result group stays in Context.
                 if attempt.response.tool_calls and not errors:
                     patch_agent.execute_tools(attempt)
-                    if outputs_used >= max_outputs:
-                        latest_errors = [
-                            "Lookup outputs exhausted the budget before a final "
-                            "Patch proposal."
-                        ]
                     continue
                 patch: GeneratorPatchDraft | None = None
                 samples: list[dict[str, Any]] = []
@@ -227,11 +216,6 @@ class ParameterPatchCoordinator:
                         errors = [str(exc)]
 
                 if patch is not None and not errors:
-                    if outputs_used >= max_outputs:
-                        latest_errors = [
-                            "No shared output budget remains for independent review."
-                        ]
-                        break
                     review_candidate = _build_review_candidate(
                         task=task,
                         config=config,
@@ -248,34 +232,16 @@ class ParameterPatchCoordinator:
                     )
                     review = reviewer.run(
                         review_candidate,
-                        max_outputs=max_outputs - outputs_used,
-                        shared_outputs_used=outputs_used,
+                        output_limit=output_limit,
                     )
-                    outputs_used += review.outputs_used
                     attempt_history.extend(
                         {"agent": "parameter_patch_review_agent", **item}
                         for item in review.attempt_history
                     )
+                    outputs_used = output_limit.used - starting_outputs
                     span.set_attribute(
                         "restscope.patch.shared_outputs_used", outputs_used
                     )
-                    if isinstance(review, ParameterPatchReviewFailure):
-                        failure = ParameterPatchFailure(
-                            todo_id=task.todo_id,
-                            reason=review.reason,
-                            outputs_used=outputs_used,
-                            errors=review.errors,
-                            attempt_history=attempt_history,
-                        )
-                        span.set_output(
-                            {
-                                "status": failure.status,
-                                "reason": failure.reason,
-                                "outputs_used": outputs_used,
-                                "review_issue_count": 0,
-                            }
-                        )
-                        return failure
                     if review.accepted:
                         outcome = ValidatedParameterPatch(
                             todo_id=task.todo_id,
@@ -299,29 +265,6 @@ class ParameterPatchCoordinator:
                     errors = list(review.issues)
 
                 latest_errors = errors or ["The Patch proposal could not be used."]
-                fingerprint = _invalid_attempt_fingerprint(attempt, latest_errors)
-                if fingerprint == last_invalid_fingerprint:
-                    repeated_invalid_count += 1
-                else:
-                    last_invalid_fingerprint = fingerprint
-                    repeated_invalid_count = 1
-                if repeated_invalid_count >= 3:
-                    failure = ParameterPatchFailure(
-                        todo_id=task.todo_id,
-                        reason="repeated_invalid_output",
-                        outputs_used=outputs_used,
-                        errors=latest_errors[:_MAX_ERRORS],
-                        attempt_history=attempt_history,
-                    )
-                    span.set_output(
-                        {
-                            "status": failure.status,
-                            "reason": failure.reason,
-                            "outputs_used": outputs_used,
-                            "review_issue_count": len(latest_errors),
-                        }
-                    )
-                    return failure
                 # Compiler errors and semantic Review issues both refer to the
                 # exact proposal call. Returning them as its matching result
                 # preserves the Patch Agent's one continuous revision context.
@@ -329,23 +272,6 @@ class ParameterPatchCoordinator:
                     attempt,
                     _proposal_feedback(latest_errors),
                 )
-
-            failure = ParameterPatchFailure(
-                todo_id=task.todo_id,
-                reason="output_budget_exhausted",
-                outputs_used=outputs_used,
-                errors=latest_errors[:_MAX_ERRORS],
-                attempt_history=attempt_history,
-            )
-            span.set_output(
-                {
-                    "status": failure.status,
-                    "reason": failure.reason,
-                    "outputs_used": outputs_used,
-                    "error_count": len(failure.errors),
-                }
-            )
-            return failure
 
 
 def _patch_attempt_record(attempt: ParameterPatchAttempt) -> dict[str, Any]:
@@ -404,30 +330,6 @@ def _proposal_feedback(errors: list[str]) -> str:
         ),
     )
     return writer.render(max_chars=12_000).text
-
-
-def _invalid_attempt_fingerprint(
-    attempt: ParameterPatchAttempt,
-    errors: list[str],
-) -> str:
-    """Identify the same proposal receiving the same rejection three times."""
-    response = attempt.response
-    value: Any = (
-        [
-            {"name": call.name, "arguments": call.arguments}
-            for call in response.tool_calls
-        ]
-        or response.parsed_json
-        or response.content
-    )
-    normalized = json.dumps(
-        {"candidate": value, "errors": errors},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _build_review_candidate(
@@ -564,7 +466,7 @@ def _compile_patch(
     for change in proposal.changes:
         if change.input not in allowed:
             raise ValueError(
-                f"{change.input} is outside the Solve Patch requirement"
+                f"{change.input} is outside the Resolution Patch requirement"
             )
         node_id = semantic.node_by_handle.get(change.input)
         if node_id is None:
@@ -946,7 +848,7 @@ def _compile_constraint(
                 raise ValueError(f"Unknown constraint input: {handle}")
             if handle not in allowed:
                 raise ValueError(
-                    f"{handle} is outside the Solve Patch requirement"
+                    f"{handle} is outside the Resolution Patch requirement"
                 )
             output.pop("input", None)
             output["input_node_id"] = semantic[handle]
@@ -983,6 +885,34 @@ def _sample_patch(
     random_seed: int,
 ) -> list[dict[str, Any]]:
     """Generate samples using the complete post-replacement Constraint set."""
+    return sample_compiled_patch(
+        config=config,
+        patch=patch,
+        active_constraints=active_constraints,
+        affected_parameters=task.affected_inputs,
+        reference_values=reference_values,
+        case_count=case_count,
+        random_seed=random_seed,
+    )
+
+
+def sample_compiled_patch(
+    *,
+    config: OperationGeneratorConfig,
+    patch: GeneratorPatchDraft,
+    active_constraints: list[CompiledConstraintPatch],
+    affected_parameters: list[str],
+    reference_values: ReferenceValueProvider | None,
+    case_count: int,
+    random_seed: int,
+) -> list[dict[str, Any]]:
+    """Freshly sample a compiled Patch against the complete resulting state.
+
+    Failure Resolution finalization calls this after combining selected
+    non-overlapping candidates. The function performs the same deterministic
+    generation used before independent Review and returns only run-local sample
+    evidence; it does not mutate Generator state or persist the samples.
+    """
     candidate = preview_generator_patch(config, patch.updates)
     final_constraints = _replace_candidate_constraint_scope(
         active_constraints,
@@ -1011,7 +941,7 @@ def _sample_patch(
         )
         values: dict[str, Any] = {}
         present: dict[str, bool] = {}
-        for handle in task.affected_inputs:
+        for handle in affected_parameters:
             node_id = semantic.node_by_handle[handle]
             assignment = assignments[node_id]
             present[handle] = assignment.present

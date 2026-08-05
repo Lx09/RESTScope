@@ -1,19 +1,16 @@
-"""Compose the four-Agent, memory-driven Operation Smoke workflow."""
+"""Compose Resolution with nested Compact, Patch, and Review Agents."""
 
 from __future__ import annotations
 
-from restscope.operation_smoke.failure_solver import (
+from restscope.operation_smoke.failure_resolution import (
     CurrentOperationHTTPProbe,
-    FailureSolveAgentFactory,
+    FailureResolutionAgent,
+    FailureResolutionFinalizer,
 )
 from restscope.operation_smoke.parameter_patch import (
     ParameterPatchCoordinatorFactory,
 )
 from restscope.operation_smoke.memory import SmokeMemory, SmokePatchApplication
-from restscope.operation_smoke.failure_dedup import (
-    FailureDedupAgent,
-    FailureDeduplicator,
-)
 from restscope.capabilities import CapabilityRuntime
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
@@ -40,12 +37,11 @@ def build_operation_smoke_coordinator(
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> OperationSmokeCoordinator:
-    """Build Dedup, Solve, Patch/Review, and shared App-lifetime Memory.
+    """Build Resolution, nested Compact/Patch/Review, and App-lifetime Memory.
 
-    Dedup writes current Failures while Solve reads histories through the same
-    deep Memory Interface. Patch application receives the same Unit of Work
-    factory so current Generator/Constraint changes and the Solve Attempt
-    commit atomically.
+    Draft worklists and candidates remain run-local. The Resolution finalizer
+    receives the shared Unit of Work factory so decided Failures, Attempts,
+    Generator/Constraint state, and change events commit together.
     """
     if capability_runtime is None:
         raise ValueError(
@@ -79,25 +75,19 @@ def build_operation_smoke_coordinator(
     return OperationSmokeCoordinator(
         config_catalog=config_catalog,
         batch_runner=batch_runner,
-        failure_deduplicator=FailureDeduplicator(
-            agent=FailureDedupAgent(
-                client=client,
-                model=selector.select("operation_smoke_failure_dedup"),
-                tracing_runtime=runtime,
-            ),
-            memory=memory,
-            tracing_runtime=runtime,
-        ),
-        failure_solver_factory=FailureSolveAgentFactory(
+        failure_resolution_agent=FailureResolutionAgent(
             client=client,
-            model=selector.select("operation_smoke_failure_solve"),
+            model=selector.select("operation_smoke_failure_resolution"),
+            compact_model=selector.select(
+                "operation_smoke_failure_resolution_compact"
+            ),
             http_probe=CurrentOperationHTTPProbe(
                 http_tool=capability_runtime.target_http_tool,
                 context_provider=capability_runtime.require_context,
             ),
             memory=memory,
             patch_coordinator_factory=patch_coordinator_factory,
-            patch_application=patch_application,
+            finalizer=FailureResolutionFinalizer(unit_of_work_factory),
             reference_values=reference_values,
             openapi_capability=capability_runtime.openapi_capability,
             tracing_runtime=runtime,

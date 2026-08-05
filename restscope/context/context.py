@@ -1,10 +1,12 @@
 """Manage one bounded LLM conversation without knowing its domain.
 
 An Agent constructs one :class:`AgentContext` from a system contract and a
-compact initial user message.  As the model calls tools or receives validation
-feedback, the Agent appends whole interaction groups.  Before each provider
-call, this module keeps the newest complete groups and summarizes omitted
-history without splitting an assistant tool call from its result.
+compact initial user message. As the model calls tools or receives validation
+feedback, the Agent appends whole interaction groups. Before each provider
+call, this module keeps the newest complete groups without splitting an
+assistant tool call from its result. A workflow may also clone the full saved
+history for model-driven compaction and atomically replace its dynamic groups;
+the immutable system contract and original user task always remain separate.
 """
 
 from __future__ import annotations
@@ -56,6 +58,8 @@ class ContextMetrics:
     omitted_history_count: int = 0
     tool_feedback_count: int = 0
     conversation_group_count: int = 0
+    compaction_count: int = 0
+    compacted_group_count: int = 0
 
     def trace_attributes(self, *, prefix: str = "restscope.context") -> dict[str, int]:
         """Return only numeric metrics, never the underlying sensitive text."""
@@ -167,6 +171,97 @@ class AgentContext:
             ]
         )
         self._refresh_group_metrics()
+
+    def clone_history(self) -> list[LLMMessage]:
+        """Return a deep copy of the replaceable conversation history ``H``.
+
+        The immutable system message ``B`` is deliberately absent. The initial
+        user task and every complete dynamic interaction are returned without
+        applying the ordinary request projection, so a compaction model can
+        summarize the history that this Context actually retains.
+        """
+        return [
+            LLMMessage(role="user", content=self._user),
+            *(
+                message.model_copy(deep=True)
+                for group in self._groups
+                for message in group
+            ),
+        ]
+
+    def messages_for_compaction(self, compact_instruction: str) -> list[LLMMessage]:
+        """Build temporary ``B + H + C`` messages without changing saved state.
+
+        Args:
+            compact_instruction: Harness-created instruction ``C`` asking a
+                model to summarize the preceding complete history.
+
+        Returns:
+            A new list containing the immutable system message, a deep copy of
+            the full replaceable history, and the temporary final instruction.
+
+        Raises:
+            ValueError: If the temporary instruction is blank.
+        """
+        if not compact_instruction.strip():
+            raise ValueError("compact_instruction must not be blank")
+        return [
+            LLMMessage(role="system", content=self._system),
+            *self.clone_history(),
+            LLMMessage(
+                role="user",
+                content=_clip_text(
+                    compact_instruction,
+                    self.limits.feedback_chars,
+                ),
+            ),
+        ]
+
+    def replace_compacted_history(
+        self,
+        compact_summary: str,
+        *,
+        max_summary_chars: int = 24_000,
+    ) -> int:
+        """Replace ``H`` with the original user task ``U`` plus summary ``S``.
+
+        The immutable system message and initial user task are stored outside
+        ``_groups`` and therefore survive unchanged. All assistant messages,
+        tool exchanges, Harness feedback, and any prior summary are replaced
+        atomically by one user-role summary message.
+
+        Args:
+            compact_summary: Complete replacement message prepared by the
+                workflow, including any domain-specific handoff prefix.
+            max_summary_chars: Maximum stored characters for the replacement
+                message. Oversized summaries visibly retain their head and tail.
+
+        Returns:
+            The number of dynamic interaction groups removed from the history.
+
+        Raises:
+            ValueError: If the summary is blank or its limit is not positive.
+        """
+        if not compact_summary.strip():
+            raise ValueError("compact_summary must not be blank")
+        if max_summary_chars <= 0:
+            raise ValueError("max_summary_chars must be greater than zero")
+
+        removed_group_count = len(self._groups)
+        replacement = LLMMessage(
+            role="user",
+            content=_clip_text(compact_summary, max_summary_chars),
+        )
+        self._groups = [[replacement]]
+        self._metrics = replace(
+            self._metrics,
+            compaction_count=self._metrics.compaction_count + 1,
+            compacted_group_count=(
+                self._metrics.compacted_group_count + removed_group_count
+            ),
+        )
+        self._refresh_group_metrics()
+        return removed_group_count
 
     def messages_for_request(self, model: LLMModelConfig) -> list[LLMMessage]:
         """Project the newest complete interaction groups into the model window.

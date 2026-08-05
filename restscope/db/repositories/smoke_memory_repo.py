@@ -1,4 +1,4 @@
-"""SQLAlchemy adapter for stable Failures and append-only Solve Attempts.
+"""SQLAlchemy adapter for stable Failures and append-only terminal Attempts.
 
 The adapter normalizes Failure identity, validates operation-local input links,
 and joins accepted Generator change events into read history.  It never stores
@@ -37,7 +37,7 @@ from ..time import utc_now
 
 
 class SqlAlchemySmokeMemoryRepository:
-    """Persist the narrow durable facts used by later Solve sessions."""
+    """Persist the narrow durable facts available to later Resolution sessions."""
 
     def __init__(self, session: Session) -> None:
         """Use the session and transaction owned by the surrounding workflow."""
@@ -51,11 +51,7 @@ class SqlAlchemySmokeMemoryRepository:
         output: list[RecordedFailure] = []
         for item in write.failures:
             messages = _normalized_messages(item.messages)
-            suspected = (
-                None
-                if item.suspected_input_node_ids is None
-                else sorted(item.suspected_input_node_ids)
-            )
+            suspected = sorted(item.suspected_input_node_ids)
             if suspected:
                 self._validate_inputs(
                     operation_key=write.operation_key,
@@ -113,7 +109,7 @@ class SqlAlchemySmokeMemoryRepository:
 
         failure = self.session.get(SmokeFailureORM, write.failure_id)
         if failure is None or failure.operation_key != write.operation_key:
-            raise ValueError("Solve Attempt Failure does not belong to the operation")
+            raise ValueError("Resolution Attempt Failure does not belong to the operation")
         self._validate_inputs(
             operation_key=write.operation_key,
             input_node_ids=[item.input_node_id for item in write.parameters],
@@ -278,7 +274,7 @@ class SqlAlchemySmokeMemoryRepository:
             )
         ).all()
         if {row.input_node_id for row in rows} != set(input_node_ids):
-            raise ValueError("Solve Attempt contains an unknown operation input")
+            raise ValueError("Resolution Attempt contains an unknown operation input")
 
 
 def _normalized_messages(messages: list[str]) -> list[str]:
@@ -294,9 +290,9 @@ def _failure_key(
     *,
     operation_key: str,
     messages: list[str],
-    suspected_input_node_ids: list[str] | None,
+    suspected_input_node_ids: list[str],
 ) -> str:
-    """Build a stable digest while preserving null versus empty attribution."""
+    """Build a stable digest with [] representing operation-level attribution."""
 
     payload = json.dumps(
         {

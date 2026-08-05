@@ -1,11 +1,11 @@
 # LLM-led Operation Smoke Design
 
-Status: User-approved on 2026-07-27; implementation in progress on
-`codex/llm-led-operation-smoke`
+Status: Superseded on 2026-08-05 by
+`docs/tasks/failure-resolution-agent.md`
 
-The original Plan/Effect and continuation design below is historical. Current
-runtime behavior is described by the amendments at the end of this document
-and by `README.md`.
+The Plan/Effect, separate Dedup/Solve, and per-Agent budget designs below are
+historical. Current runtime behavior is described by
+`docs/tasks/failure-resolution-agent.md` and `README.md`.
 
 ## Decision
 

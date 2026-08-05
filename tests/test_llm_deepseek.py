@@ -823,6 +823,46 @@ def test_deepseek_provider_retries_one_incomplete_tool_response() -> None:
     assert response.metadata["provider_retry_count"] == 1
 
 
+def test_deepseek_provider_recovers_after_two_incomplete_tool_responses() -> None:
+    """Two transient omissions are retried before any tool can run."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    incomplete = deepseek_response(
+        content="",
+        tool_calls=[_provider_tool_call()],
+        reasoning_content=None,
+    )
+    client = SequencedClient(
+        [
+            incomplete,
+            incomplete,
+            deepseek_response(
+                content="",
+                tool_calls=[_provider_tool_call()],
+                reasoning_content="Search the catalog before deciding.",
+            ),
+        ]
+    )
+
+    response = DeepSeekProvider(api_key="test-key", client=client).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-pro",
+            messages=[LLMMessage(role="user", content="Investigate")],
+            tools=[_search_tool()],
+            tool_choice="auto",
+            reasoning=LLMReasoningConfig(mode="enabled", effort="high"),
+        )
+    )
+
+    assert len(client.chat.completions.requests) == 3
+    assert response.tool_calls[0].provider_context["reasoning_content"] == (
+        "Search the catalog before deciding."
+    )
+    assert response.metadata["provider_retry_count"] == 2
+
+
 def test_deepseek_provider_rejects_thinking_history_without_reasoning() -> None:
     """Scenario: verify that deepseek provider rejects thinking history without reasoning."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest, ToolCall

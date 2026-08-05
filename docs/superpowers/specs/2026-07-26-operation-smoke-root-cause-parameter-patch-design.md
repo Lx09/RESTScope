@@ -1,7 +1,7 @@
 # Operation Smoke Root-Cause and Parameter Patch Design
 
-Status: Superseded on 2026-07-27 by
-`2026-07-27-llm-led-operation-smoke-design.md`
+Status: Superseded on 2026-07-27; the later design was itself superseded on
+2026-08-05 by `docs/tasks/failure-resolution-agent.md`
 
 This file remains historical evidence for the per-failure/Group implementation.
 The current approved design removes deterministic grouping, partial acceptance,

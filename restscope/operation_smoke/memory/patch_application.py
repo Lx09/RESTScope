@@ -1,8 +1,8 @@
-"""Atomically apply one complete Patch and record its terminal Solve Attempt.
+"""Atomically apply one complete Patch and record its terminal Attempt.
 
 Parameter Patch Agent creates a side-effect-free candidate.  This deterministic
 service derives stable Constraint identity and owner sets, computes the exact
-Generator/Constraint diff, and commits that diff with the selected Solve
+Generator/Constraint diff, and commits that diff with the selected Resolution
 conclusion.  Agents never name database actions or rows to delete.
 """
 
@@ -15,7 +15,10 @@ import json
 from types import TracebackType
 from typing import Protocol
 
-from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
+from restscope.operation_smoke.parameter_patch import (
+    CompiledConstraintPatch,
+    GeneratorPatchDraft,
+)
 from restscope.testing import (
     OperationConstraintRecord,
     OperationGeneratorConfig,
@@ -72,6 +75,23 @@ class AppliedSmokePatch:
     constraints: tuple[OperationConstraintRecord, ...]
 
 
+@dataclass(frozen=True)
+class PreparedSmokePatch:
+    """Hold one mechanically derived state transition before persistence.
+
+    The value contains the complete accepted Generator and Constraint state plus
+    their event diffs. It has no database identity and causes no side effects,
+    so one Resolution finalizer can prepare several non-overlapping candidate
+    events before committing their combined state in a single transaction.
+    """
+
+    config: OperationGeneratorConfig
+    expected_constraints: tuple[OperationConstraintRecord, ...]
+    constraints: tuple[OperationConstraintRecord, ...]
+    generator_changes: tuple[dict, ...]
+    constraint_changes: tuple[dict, ...]
+
+
 class SmokePatchApplication:
     """Apply one selected candidate using content comparison, not revisions."""
 
@@ -100,7 +120,7 @@ class SmokePatchApplication:
         patch: GeneratorPatchDraft,
         attempt: PatchSolveAttempt,
     ) -> AppliedSmokePatch:
-        """Commit the exact non-empty Patch diff and its Solve Attempt.
+        """Commit the exact non-empty Patch diff and its terminal Attempt.
 
         Stored input and Constraint content is compared with the exact state
         shown during candidate sampling inside the transaction. A mismatch
@@ -111,57 +131,22 @@ class SmokePatchApplication:
 
         if current.operation_key != attempt.operation_key:
             raise ValueError("Patch current state belongs to another operation")
-        accepted = (
-            prepare_accepted_generator_patch(current, patch.updates)
-            if patch.updates
-            else current
+        prepared = prepare_smoke_patch(
+            current=current,
+            expected_constraints=expected_constraints,
+            patch=patch,
         )
-        generator_changes = _generator_changes(current, accepted)
-        new_constraints = normalize_patch_constraints(
-            operation_key=attempt.operation_key,
-            patches=patch.constraints,
-        )
-        expected_constraint_records = normalize_patch_constraints(
-            operation_key=attempt.operation_key,
-            patches=expected_constraints,
-        )
-        valid_input_ids = {item.input_node_id for item in current.configs}
-        invalid_owner_ids = sorted(
-            {
-                input_node_id
-                for item in new_constraints
-                for input_node_id in item.owner_input_node_ids
-            }
-            - valid_input_ids
-        )
-        if invalid_owner_ids:
-            raise ValueError(
-                "Constraint references unknown operation inputs: "
-                + ", ".join(invalid_owner_ids)
-            )
 
         with self.unit_of_work_factory() as uow:
-            updated_constraints = replace_constraint_scope(
-                expected_constraint_records,
-                new_constraints,
-                has_constraint_patch=bool(patch.constraints),
-            )
-            constraint_changes = _constraint_changes(
-                expected_constraint_records,
-                updated_constraints,
-            )
-            if not generator_changes and not constraint_changes:
-                raise ValueError("The accepted Patch does not change current state")
-
             uow.generator_configs.replace_inputs(
                 operation_key=attempt.operation_key,
                 expected=current.configs,
-                updated=accepted.configs,
+                updated=prepared.config.configs,
             )
             uow.generator_configs.replace_constraints(
                 operation_key=attempt.operation_key,
-                expected=expected_constraint_records,
-                updated=updated_constraints,
+                expected=list(prepared.expected_constraints),
+                updated=list(prepared.constraints),
             )
             solve_attempt_id = uow.smoke_memory.record_solve_attempt(
                 SolveAttemptWrite(
@@ -178,16 +163,86 @@ class SmokePatchApplication:
                 solve_attempt_id=solve_attempt_id,
                 operation_key=attempt.operation_key,
                 reason=attempt.change_reason,
-                generator_changes=generator_changes,
-                constraint_changes=constraint_changes,
+                generator_changes=list(prepared.generator_changes),
+                constraint_changes=list(prepared.constraint_changes),
             )
             uow.commit()
             return AppliedSmokePatch(
-                config=accepted,
+                config=prepared.config,
                 solve_attempt_id=solve_attempt_id,
                 generator_change_event_id=event_id,
-                constraints=tuple(updated_constraints),
+                constraints=prepared.constraints,
             )
+
+
+def prepare_smoke_patch(
+    *,
+    current: OperationGeneratorConfig,
+    expected_constraints: list[CompiledConstraintPatch],
+    patch: GeneratorPatchDraft,
+) -> PreparedSmokePatch:
+    """Compile one exact candidate into a side-effect-free current-state diff.
+
+    Args:
+        current: Complete Generator configuration used when the candidate was
+            compiled and sampled.
+        expected_constraints: Complete Constraint baseline shown to the Patch
+            workflow.
+        patch: Reviewed executable Generator and Constraint replacements.
+
+    Returns:
+        The complete accepted state and deterministic event changes.
+
+    Raises:
+        ValueError: The candidate references an unknown input or produces no
+            actual state change.
+    """
+    accepted = (
+        prepare_accepted_generator_patch(current, patch.updates)
+        if patch.updates
+        else current
+    )
+    generator_changes = _generator_changes(current, accepted)
+    new_constraints = normalize_patch_constraints(
+        operation_key=current.operation_key,
+        patches=patch.constraints,
+    )
+    expected_constraint_records = normalize_patch_constraints(
+        operation_key=current.operation_key,
+        patches=expected_constraints,
+    )
+    valid_input_ids = {item.input_node_id for item in current.configs}
+    invalid_owner_ids = sorted(
+        {
+            input_node_id
+            for item in new_constraints
+            for input_node_id in item.owner_input_node_ids
+        }
+        - valid_input_ids
+    )
+    if invalid_owner_ids:
+        raise ValueError(
+            "Constraint references unknown operation inputs: "
+            + ", ".join(invalid_owner_ids)
+        )
+    updated_constraints = replace_constraint_scope(
+        expected_constraint_records,
+        new_constraints,
+        has_constraint_patch=bool(patch.constraints),
+    )
+    constraint_changes = _constraint_changes(
+        expected_constraint_records,
+        updated_constraints,
+    )
+    if not generator_changes and not constraint_changes:
+        raise ValueError("The accepted Patch does not change current state")
+    return PreparedSmokePatch(
+        config=accepted,
+        expected_constraints=tuple(expected_constraint_records),
+        constraints=tuple(updated_constraints),
+        generator_changes=tuple(generator_changes),
+        constraint_changes=tuple(constraint_changes),
+    )
 
 
 def normalize_patch_constraints(

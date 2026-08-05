@@ -38,8 +38,7 @@ def test_workflows_replace_the_retired_agent_category_package() -> None:
 def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
     """Scenario: each LLM role remains a named package inside its workflow."""
     for package_name in (
-        "failure_dedup",
-        "failure_solver",
+        "failure_resolution",
         "parameter_patch",
     ):
         package = OPERATION_SMOKE_ROOT / package_name
@@ -51,6 +50,12 @@ def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
     assert review.is_dir()
     assert (review / "agent.py").is_file()
     assert (review / "schemas.py").is_file()
+    compact = OPERATION_SMOKE_ROOT / "failure_resolution" / "compact"
+    assert compact.is_dir()
+    assert (compact / "__init__.py").is_file()
+    assert (compact / "agent.py").is_file()
+    assert (compact / "prompts.py").is_file()
+    assert not (compact / "schemas.py").exists()
     assert not (OPERATION_SMOKE_ROOT / "parameter_patch_review").exists()
     assert not (OPERATION_SMOKE_ROOT / "effect").exists()
     assert not (OPERATION_SMOKE_ROOT / "plan").exists()
@@ -95,10 +100,10 @@ def test_workflow_facades_export_only_the_approved_interfaces() -> None:
         "OperationSmokeCoordinator",
         "OperationSmokeRequest",
         "OperationSmokeResult",
-        "PatchAttemptSummary",
+        "ResolutionItemSummary",
+        "ResolutionPatchSummary",
         "SmokeBatchRunner",
         "SmokeRoundSummary",
-        "TodoRunSummary",
         "build_operation_smoke_coordinator",
     }
     assert set(behavior_monitor.__all__) == {
@@ -120,7 +125,7 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
 
     internal_names = {
         "APIBehaviorMonitorCoordinator",
-        "FailureSolveAgent",
+        "FailureResolutionAgent",
         "OperationSmokeCoordinator",
         "OperationSmokeRequest",
         "OperationSmokeResult",
@@ -129,7 +134,6 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
         "ParameterPatchReviewAgent",
         "ResourceIdentifierTracker",
         "SmokeEffectAgent",
-        "FailureDedupAgent",
         "build_api_behavior_monitor_coordinator",
         "build_operation_smoke_coordinator",
     }
@@ -139,8 +143,7 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
 def test_cross_role_imports_use_the_target_role_facade() -> None:
     """Scenario: one Agent never reaches into another Agent's implementation file."""
     role_names = {
-        "failure_dedup",
-        "failure_solver",
+        "failure_resolution",
         "parameter_patch",
     }
     violations: list[str] = []

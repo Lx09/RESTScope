@@ -141,17 +141,18 @@ explicit project decision:
   plans, queues, general Agent memory, or recovery snapshots.
 - Operation Smoke Memory is a second narrow exception approved for the current
   App lifecycle. It may persist stable per-operation Failures, append-only
-  terminal Solve Attempts, validated input attribution, current Constraints,
+  terminal Resolution Attempts, validated input attribution, current Constraints,
   and deterministic Generator/Constraint change events. It must not persist raw Batches,
   response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
-  queues, or a permanent `resolved` flag. Solve receives a read-only Parameter
-  memory tool. Failure Dedup uses only the current run's in-memory Test Case
-  Catalog, may query the global read-only OpenAPI operation capability, reads
-  no Failure Memory, and writes validated stable Failure occurrences through
-  deterministic runtime code. The Test Case Catalog stores every Batch and
-  Solve Probe case only until `OperationSmokeCoordinator.run` returns; it must
-  never be persisted.
-- Failure Solve's current-operation HTTP Probe is an operation-scoped view of
+  queues, or a permanent `resolved` flag. Failure Resolution receives a
+  read-only Parameter memory tool. Deterministic runtime folds exact duplicate
+  messages into session-local `E*` sources; one continuous Agent then owns
+  semantic grouping, investigation, worklist rewrites, root cause, candidate
+  selection, and completion. Its reference-only worklist, draft progress, and
+  unselected candidates are never persisted. The Test Case Catalog stores every
+  Batch and Resolution Probe case only until `OperationSmokeCoordinator.run`
+  returns; it must never be persisted.
+- Failure Resolution's current-operation HTTP Probe is an operation-scoped view of
   the global `restscope.http.request` tool. It remains available for every
   supported method, including POST, PUT, PATCH, and DELETE. The Probe must use
   the exact current operation method and a concrete path matching that
@@ -162,8 +163,8 @@ explicit project decision:
   action.
 - Do not reintroduce a database-backed Planner, static operation graph, or
   plan-first execution flow without a new explicit user decision supported by
-  current evidence. Operation Smoke Memory is evidence for Solve, not a
-  persisted test plan or a Dedup input.
+  current evidence. Operation Smoke Memory is evidence available on demand to
+  Resolution, not a persisted test plan or an input to exact message folding.
 
 This architecture is deliberately revisable, not a claim that the present MVP
 is final. Exploration should change the system through small, evidence-backed
@@ -185,7 +186,7 @@ These are hard project constraints:
   required. Deterministic orchestration classes use names such as
   `Coordinator`, `Graph`, or `Tracker`.
 - Every Agent must live in its own named subpackage inside its owning workflow,
-  such as `restscope/operation_smoke/failure_dedup/`. Do not place `<name>_agent.py`,
+  such as `restscope/operation_smoke/failure_resolution/`. Do not place `<name>_agent.py`,
   `<name>_schemas.py`, or other Agent implementation files at the workflow
   package root.
 - A workflow package's `__init__.py` is its small external Interface.

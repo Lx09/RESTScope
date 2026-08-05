@@ -22,10 +22,10 @@ __all__ = [
     "OperationSmokeCoordinator",
     "OperationSmokeRequest",
     "OperationSmokeResult",
-    "PatchAttemptSummary",
+    "ResolutionItemSummary",
+    "ResolutionPatchSummary",
     "SmokeRoundSummary",
     "SmokeBatchRunner",
-    "TodoRunSummary",
     "build_operation_smoke_coordinator",
 ]
 
@@ -38,10 +38,10 @@ _PUBLIC_MODULE_BY_NAME = {
     "OperationSmokeCoordinator": ".coordinator",
     "OperationSmokeRequest": ".schemas",
     "OperationSmokeResult": ".schemas",
-    "PatchAttemptSummary": ".schemas",
+    "ResolutionItemSummary": ".schemas",
+    "ResolutionPatchSummary": ".schemas",
     "SmokeRoundSummary": ".schemas",
     "SmokeBatchRunner": ".coordinator",
-    "TodoRunSummary": ".schemas",
     "build_operation_smoke_coordinator": ".factory",
 }
 

@@ -59,8 +59,8 @@ def test_operation_smoke_phases_select_independent_models() -> None:
     )
 
     for role, expected_model in (
-        ("operation_smoke_failure_dedup", "thinking-model"),
-        ("operation_smoke_failure_solve", "thinking-model"),
+        ("operation_smoke_failure_resolution", "thinking-model"),
+        ("operation_smoke_failure_resolution_compact", "fast-model"),
         ("parameter_patch_agent", "fast-model"),
         ("parameter_patch_review_agent", "fast-model"),
     ):
@@ -76,7 +76,7 @@ def test_llm_model_config_uses_large_context_defaults() -> None:
     from restscope.llm import LLMModelConfig
 
     model = LLMModelConfig(
-        role="operation_smoke_failure_dedup",
+        role="operation_smoke_failure_resolution",
         provider="stub",
         model="think",
     )
@@ -552,6 +552,35 @@ def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
     assert selector.select("intelligence_updater").model == "strong-model"
     assert selector.select("decision_maker").model == "fast-model"
     assert selector.select("decision_maker").provider == "fake"
+
+
+def test_deepseek_profiles_accept_one_m_context_and_384k_output(tmp_path: Path) -> None:
+    """The approved local DeepSeek capacities remain valid for both model slots."""
+    from restscope.restscope_config import RESTScopeConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "THINK_PROVIDER=deepseek",
+                "THINK_MODEL=deepseek-v4-flash",
+                "THINK_CONTEXT_WINDOW_TOKENS=1048576",
+                "THINK_MAX_TOKENS=393216",
+                "FAST_PROVIDER=deepseek",
+                "FAST_MODEL=deepseek-v4-flash",
+                "FAST_CONTEXT_WINDOW_TOKENS=1048576",
+                "FAST_MAX_TOKENS=393216",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    config = RESTScopeConfig.from_environment(env_file)
+
+    assert config.llm.thinking.context_window_tokens == 1_048_576
+    assert config.llm.thinking.max_tokens == 393_216
+    assert config.llm.fast.context_window_tokens == 1_048_576
+    assert config.llm.fast.max_tokens == 393_216
 
 
 def test_model_config_exposes_separate_context_and_output_limits(

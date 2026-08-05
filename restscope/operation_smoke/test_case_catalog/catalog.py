@@ -1,7 +1,7 @@
 """Store and query Test Cases for one Operation Smoke run.
 
 The Catalog receives every Batch case and every HTTP request actually attempted
-by Solve. It assigns compact identities, keeps request values plus bounded
+by Resolution. It assigns compact identities, keeps request values plus bounded
 failure evidence, and answers exact typed queries. The whole Module is
 in-memory: the Coordinator drops it when the operation's Smoke run ends.
 """
@@ -50,8 +50,8 @@ class TestCaseCatalog:
     def valid_parameters(self) -> frozenset[str]:
         """Expose the operation contract for deterministic Agent validation.
 
-        The set is never added to an initial Prompt. Dedup uses it only after a
-        final model response to reject invented semantic handles.
+        The set is never added to the initial Prompt. Worklist writes use it
+        only to reject invented semantic handles.
         """
         return frozenset(self._input_references)
 

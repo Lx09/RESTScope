@@ -1,8 +1,8 @@
-"""Map stable Failure knowledge and append-only terminal Solve Attempts.
+"""Map stable Failure knowledge and append-only terminal Attempts.
 
 Detailed Test Cases remain in the run-local catalog.  Persistence keeps only a
-stable Failure identity, occurrence metadata, each terminal Solve conclusion,
-and optional per-input causal attribution needed by later Solve sessions.
+stable Failure identity, occurrence metadata, each terminal Resolution
+conclusion, and optional per-input causal attribution needed by later sessions.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class SmokeFailureORM(Base):
 
 
 class SmokeSolveAttemptORM(CreatedAtMixin, Base):
-    """Map one immutable terminal conclusion produced by Failure Solve."""
+    """Map one immutable terminal conclusion produced by Failure Resolution."""
 
     __tablename__ = "smoke_solve_attempts"
     __table_args__ = (
@@ -56,7 +56,7 @@ class SmokeSolveAttemptORM(CreatedAtMixin, Base):
 
 
 class SmokeSolveAttemptParameterORM(Base):
-    """Map one validated input attribution attached to a Solve Attempt."""
+    """Map one validated input attribution attached to a terminal Attempt."""
 
     __tablename__ = "smoke_solve_attempt_parameters"
 

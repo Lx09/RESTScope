@@ -1,4 +1,4 @@
-"""Protect stable Failure, Solve Attempt, and atomic Patch persistence."""
+"""Protect stable Failure, terminal Attempt, and atomic Patch persistence."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _memory_fixture(*, initialize_generators: bool = False):
     session_factory = make_session_factory(engine)
     factory = lambda: SqlAlchemySmokeMemoryUnitOfWork(session_factory)
     if initialize_generators:
-        from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+        from tests._operation_smoke_resolution_fixtures import smoke_config
 
         config = smoke_config()
         with factory() as uow:
@@ -32,7 +32,7 @@ def _memory_fixture(*, initialize_generators: bool = False):
     return SmokeMemory(factory), SmokePatchApplication(factory), factory
 
 
-def _failure_write(*, suspected_input_node_ids=None):
+def _failure_write(*, suspected_input_node_ids=()):
     """Build one normalized Failure occurrence with explicit attribution state."""
 
     from restscope.operation_smoke.memory import FailureBatchWrite, FailureWrite
@@ -43,7 +43,7 @@ def _failure_write(*, suspected_input_node_ids=None):
             FailureWrite(
                 summary="Project identifier is rejected.",
                 messages=["HTTP 404: project missing"],
-                suspected_input_node_ids=suspected_input_node_ids,
+                suspected_input_node_ids=list(suspected_input_node_ids),
                 last_status_code=404,
             )
         ],
@@ -67,11 +67,15 @@ def test_stable_failure_reuses_identity_and_updates_occurrence_metadata() -> Non
     assert history.attempts == []
 
 
-def test_failure_key_preserves_null_empty_and_precise_suspected_input_states() -> None:
-    """Bypassed, operation-level, and input-attributed Failures remain distinct."""
+def test_failure_requires_list_and_distinguishes_operation_from_input_scope() -> None:
+    """The removed null state is invalid while [] and exact attribution differ."""
+
+    import pytest
+    from pydantic import ValidationError
+
+    from restscope.operation_smoke.memory import FailureWrite
 
     memory, _, _ = _memory_fixture(initialize_generators=True)
-    bypassed = memory.record_failures(_failure_write(suspected_input_node_ids=None))
     operation_level = memory.record_failures(
         _failure_write(suspected_input_node_ids=[])
     )
@@ -81,11 +85,25 @@ def test_failure_key_preserves_null_empty_and_precise_suspected_input_states() -
 
     assert len(
         {
-            bypassed.failures[0].failure_id,
             operation_level.failures[0].failure_id,
             attributed.failures[0].failure_id,
         }
-    ) == 3
+    ) == 2
+    with pytest.raises(ValidationError, match="suspected_input_node_ids"):
+        FailureWrite.model_validate(
+            {
+                "summary": "Missing attribution list.",
+                "messages": ["HTTP 400"],
+                "last_status_code": 400,
+            }
+        )
+    with pytest.raises(ValidationError, match="list"):
+        FailureWrite(
+            summary="Null attribution is retired.",
+            messages=["HTTP 400"],
+            suspected_input_node_ids=None,
+            last_status_code=400,
+        )
 
 
 def test_failure_rejects_suspected_input_outside_current_operation() -> None:
@@ -182,7 +200,7 @@ def _generator_patch():
 def test_patch_commits_current_generator_attempt_and_change_event_atomically() -> None:
     """An accepted Patch exposes current state and its exact before/after event."""
 
-    from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+    from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, factory = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(_failure_write()).failures[0].failure_id
@@ -226,7 +244,7 @@ def test_constraint_only_patch_persists_stable_expression_identity() -> None:
         GeneratorPatchDraft,
     )
     from restscope.testing import ConstraintSet, PresentPredicate
-    from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+    from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, _ = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(_failure_write()).failures[0].failure_id
@@ -269,7 +287,7 @@ def test_patch_rejects_constraint_state_changed_after_candidate_sampling() -> No
         PresentPredicate,
     )
     from restscope.testing.ports import GeneratorConfigConcurrentWrite
-    from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+    from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, factory = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(_failure_write()).failures[0].failure_id
@@ -352,7 +370,7 @@ def test_patch_rejects_no_actual_change_without_an_event() -> None:
 
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
     from restscope.testing import InputGeneratorPatch
-    from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+    from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, _ = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(_failure_write()).failures[0].failure_id
@@ -389,7 +407,7 @@ def test_patch_rejects_constraint_owner_outside_current_operation() -> None:
         GeneratorPatchDraft,
     )
     from restscope.testing import ConstraintSet, PresentPredicate
-    from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+    from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, _ = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(_failure_write()).failures[0].failure_id
@@ -429,7 +447,7 @@ def test_memory_failure_rolls_back_generator_constraint_and_event(monkeypatch) -
     """A failed Attempt insert leaves all current and audit tables unchanged."""
 
     from restscope.db.repositories import SqlAlchemySmokeMemoryRepository
-    from tests._operation_smoke_dedup_solve_fixtures import smoke_config
+    from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, factory = _memory_fixture(initialize_generators=True)
     failure_id = memory.record_failures(_failure_write()).failures[0].failure_id

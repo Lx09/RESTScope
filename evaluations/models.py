@@ -2,7 +2,7 @@
 
 The shared Module knows how to identify and upload examples, but it deliberately
 does not understand Failure, Investigation, Generator, or Constraint concepts.
-Those terms remain inside the Plan, Solve, and Patch suites.
+Those terms remain inside the continuous Resolution suite.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class EvaluationSuite:
     """Describe the small Interface the shared runner needs from one suite.
 
     The shared runner deliberately receives ready-made callbacks instead of
-    understanding the three Agents.  A suite owns its temporary collaborators,
+    understanding the workflow's Agents. A suite owns its temporary collaborators,
     prompt text, and semantic scores; this object only gives Phoenix a uniform
     way to start them.
     """

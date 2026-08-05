@@ -1,12 +1,6 @@
-"""Explicit registry for the three approved Operation Smoke evaluations."""
+"""Explicit registry for the continuous Failure Resolution evaluation."""
 
-from evaluations.agents.patch import SUITE as PATCH_SUITE
-from evaluations.agents.dedup import SUITE as DEDUP_SUITE
-from evaluations.agents.solve import SUITE as SOLVE_SUITE
+from evaluations.agents.resolution import SUITE as RESOLUTION_SUITE
 
 
-SUITES = {
-    "dedup": DEDUP_SUITE,
-    "solve": SOLVE_SUITE,
-    "patch": PATCH_SUITE,
-}
+SUITES = {"resolution": RESOLUTION_SUITE}

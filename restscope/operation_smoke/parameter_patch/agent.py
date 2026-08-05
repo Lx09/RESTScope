@@ -1,6 +1,6 @@
 """Ask the model for complete Parameter Patch proposals.
 
-The Patch Agent owns one bounded revision conversation for a Solve requirement.
+The Patch Agent owns one revision conversation for a Resolution requirement.
 It returns typed proposals and accepts deterministic compile or review feedback;
 it does not compile, sample, review, persist, or accept a candidate itself.
 """
@@ -34,6 +34,7 @@ from restscope.llm import (
     ToolResult,
 )
 from restscope.observability import TracingRuntime
+from restscope.operation_smoke.output_limit import ModelOutputLimit
 
 from .prompts import ParameterPatchPrompt
 from .schemas import ParameterPatchSubmission
@@ -63,6 +64,7 @@ class ParameterPatchAgent:
         client: LLMClient,
         model: LLMModelConfig,
         prompt: ParameterPatchPrompt,
+        output_limit: ModelOutputLimit,
         openapi_capability: OpenAPICapability | None = None,
         resource_capability: ResourceIdentifierCapability | None = None,
         validator: OutputValidator | None = None,
@@ -73,7 +75,7 @@ class ParameterPatchAgent:
         Args:
             client: Provider-neutral model client.
             model: FAST model selected for Patch proposals.
-            prompt: Initial Solve requirement and current Generator evidence.
+            prompt: Initial Resolution requirement and Generator evidence.
             openapi_capability: Current-IR observed response field lookup.
             resource_capability: Current Resource Identifier Catalog lookup.
             validator: Optional structured-output validator used by tests.
@@ -81,6 +83,7 @@ class ParameterPatchAgent:
         """
         self.client = client
         self.model = model
+        self.output_limit = output_limit
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.toolbox = _build_toolbox(
@@ -106,7 +109,7 @@ class ParameterPatchAgent:
             metrics=prompt.metrics,
         )
 
-    def propose(self, *, shared_output_number: int) -> ParameterPatchAttempt:
+    def propose(self) -> ParameterPatchAttempt:
         """Request one full proposal and validate its transport-level shape.
 
         The provider receives the same recursive DTO Schema used by local
@@ -114,12 +117,13 @@ class ParameterPatchAgent:
         """
         if not self.model.enabled:
             raise RuntimeError("The Parameter Patch model is not configured")
+        usage = self.output_limit.consume("parameter_patch_agent")
         with self.tracing_runtime.span(
             "ParameterPatchAgent.propose",
             kind="AGENT",
-            input_value={"shared_output_number": shared_output_number},
+            input_value={"shared_output_number": usage.used},
             attributes={
-                "restscope.patch.shared_output_number": shared_output_number,
+                "restscope.patch.shared_output_number": usage.used,
             },
         ) as span:
             response = self._invoke()

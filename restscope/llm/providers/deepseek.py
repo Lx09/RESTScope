@@ -20,6 +20,13 @@ from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 from restscope.llm.schemas import LLMMessage, LLMReasoningConfig, LLMRequest, LLMResponse
 
 
+# DeepSeek occasionally returns a thinking-mode tool call without the
+# ``reasoning_content`` that its own continuation contract requires. Three
+# total requests absorb a short transient streak without creating an
+# unbounded provider loop. No tool is visible to workflow code during retries.
+_REASONING_RESPONSE_ATTEMPTS = 3
+
+
 class DeepSeekCompatibilityError(ProviderInvokeError):
     """A request cannot be represented by the supported DeepSeek API contract."""
 
@@ -77,7 +84,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         )
 
     def invoke(self, request: LLMRequest) -> LLMResponse:
-        """Route strict tools to Beta and retry incomplete reasoning once.
+        """Route strict tools to Beta and retry incomplete reasoning briefly.
 
         A DeepSeek strict request must contain only strict functions. The
         official Beta endpoint validates those schemas before generation. If
@@ -92,8 +99,9 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         is safe here because normalization fails before RESTScope returns the
         tool call to an Agent, so no tool or target-API side effect has run.
 
-        Any second incomplete response, or any error from the standard
-        fallback, still propagates instead of creating an unbounded loop.
+        A short bounded series of incomplete responses is retried. Exhausting
+        that bound, or any error from the standard fallback, still propagates
+        instead of creating an unbounded loop.
         """
         strict_tools = [tool for tool in request.tools if tool.strict]
         if strict_tools and len(strict_tools) != len(request.tools):
@@ -155,34 +163,40 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         Returns:
             A normalized response with complete tool-call continuation data.
         """
-        try:
-            return self._invoke_with_client(request, client=client)
-        except DeepSeekCompatibilityError as exc:
-            if exc.code != "deepseek_reasoning_content_missing":
-                raise
-            # A malformed request history is deterministic and cannot improve
-            # on retry. Only retry when the history was complete, which means
-            # the provider's newly returned tool response omitted the field.
-            if any(
-                message.role == "assistant"
-                and message.tool_calls
-                and any(
-                    not call.provider_context.get("reasoning_content")
-                    for call in message.tool_calls
-                )
-                for message in request.messages
-            ):
-                raise
-
-        response = self._invoke_with_client(request, client=client)
-        return response.model_copy(
-            update={
-                "metadata": {
-                    **response.metadata,
-                    "provider_retry_count": 1,
-                }
-            }
+        # Invalid continuation history is deterministic. Validate it before
+        # the retry loop so a bad local request never reaches the provider.
+        self._validate_reasoning_history(
+            request,
+            reasoning=self._effective_reasoning(request),
         )
+        for attempt_index in range(_REASONING_RESPONSE_ATTEMPTS):
+            try:
+                response = self._invoke_with_client(request, client=client)
+            except DeepSeekCompatibilityError as exc:
+                if (
+                    exc.code != "deepseek_reasoning_content_missing"
+                    or attempt_index == _REASONING_RESPONSE_ATTEMPTS - 1
+                ):
+                    raise
+                # Normalization rejected the new response before its tool call
+                # became Agent-visible, so another provider request cannot
+                # duplicate a RESTScope tool or target-API side effect.
+                continue
+
+            if attempt_index == 0:
+                return response
+            return response.model_copy(
+                update={
+                    "metadata": {
+                        **response.metadata,
+                        "provider_retry_count": attempt_index,
+                    }
+                }
+            )
+
+        # The loop either returns a complete response or raises on its final
+        # incomplete one. This guard documents that invariant for type checkers.
+        raise AssertionError("DeepSeek reasoning retry loop ended unexpectedly")
 
     def _get_beta_client(self) -> Any:
         """Build the official Beta client only when a strict call needs it."""

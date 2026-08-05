@@ -309,13 +309,14 @@ def test_response_fragment_keeps_a_complete_real_array() -> None:
 
 
 def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> None:
-    """Five explicit tools return compact JSON and reject forged references."""
+    """Resolution receives four compact tools and forged references still fail."""
     from restscope.capabilities import AgentToolbox
     from restscope.llm import ToolCall
     from restscope.operation_smoke.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
+        get_failure_messages_tool_spec,
         register_test_case_tools,
         tool_result_json,
     )
@@ -350,8 +351,8 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
         "test_case.find_parameters_by_value",
         "test_case.get_response_field_value",
         "test_case.find_response_fields_by_value",
-        "test_case.get_failure_messages",
     ]
+    assert get_failure_messages_tool_spec().name == "test_case.get_failure_messages"
     assert all(
         "action" not in spec.input_schema["properties"]
         for spec in specs
@@ -387,9 +388,10 @@ def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> N
     forged = toolbox.execute(
         ToolCall(
             id="catalog-forged",
-            name="test_case.get_failure_messages",
+            name="test_case.get_parameter_value",
             arguments={
                 "case_ids": ["TC99"],
+                "parameter": "body.name",
             },
         )
     )

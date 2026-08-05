@@ -1,6 +1,6 @@
 """Define run-local values stored by the Test Case Catalog.
 
-Batch execution and Solve HTTP probes produce ``CatalogTestCaseDraft`` values.
+Batch execution and Resolution HTTP probes produce ``CatalogTestCaseDraft`` values.
 The Catalog assigns short ``TC*`` identities and returns immutable
 ``CatalogTestCase`` records. Agents never receive these DTOs wholesale; five
 single-purpose tools return only the exact requested facts.

@@ -8,9 +8,6 @@ Patch Coordinator is its only production caller.
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -21,11 +18,11 @@ from restscope.llm import (
     OutputValidator,
 )
 from restscope.observability import TracingRuntime
+from restscope.operation_smoke.output_limit import ModelOutputLimit
 
 from .prompts import build_parameter_patch_review_prompt
 from .schemas import (
     ParameterPatchReviewCandidate,
-    ParameterPatchReviewFailure,
     ParameterPatchReviewResult,
     ParameterPatchReviewSubmission,
 )
@@ -57,9 +54,8 @@ class ParameterPatchReviewAgent:
         self,
         candidate: ParameterPatchReviewCandidate,
         *,
-        max_outputs: int,
-        shared_outputs_used: int,
-    ) -> ParameterPatchReviewResult | ParameterPatchReviewFailure:
+        output_limit: ModelOutputLimit,
+    ) -> ParameterPatchReviewResult:
         """Review one candidate without importing any prior Agent conversation.
 
         Invalid Reviewer protocol is corrected in this same fresh context. The
@@ -67,8 +63,6 @@ class ParameterPatchReviewAgent:
         from whether that list is empty, so contradictory verdict fields cannot
         enter the Parameter Patch flow.
         """
-        if not 1 <= max_outputs <= 20:
-            raise ValueError("max_outputs must be between 1 and 20")
         if not self.model.enabled:
             raise RuntimeError("The Parameter Patch Review model is not configured")
         prompt = build_parameter_patch_review_prompt(
@@ -88,22 +82,21 @@ class ParameterPatchReviewAgent:
             metrics=prompt.metrics,
         )
         attempts: list[dict] = []
-        latest_errors: list[str] = []
-        last_fingerprint: str | None = None
-        repeated_count = 0
+        starting_outputs = output_limit.used
 
         with self.tracing_runtime.span(
             "ParameterPatchReviewAgent.run",
             kind="AGENT",
             input_value={
                 "affected_input_count": len(candidate.affected_inputs),
-                "max_outputs": max_outputs,
+                "shared_outputs_used": starting_outputs,
             },
             attributes={
-                "restscope.patch.shared_outputs_used": shared_outputs_used,
+                "restscope.patch.shared_outputs_used": starting_outputs,
             },
         ) as span:
-            for output_number in range(1, max_outputs + 1):
+            while True:
+                output_limit.consume("parameter_patch_review_agent")
                 response = self._invoke(context)
                 submission, errors = self._parse(response)
                 transport = "json_schema"
@@ -127,13 +120,13 @@ class ParameterPatchReviewAgent:
                     result = ParameterPatchReviewResult(
                         accepted=not issues,
                         issues=issues,
-                        outputs_used=output_number,
+                        outputs_used=output_limit.used - starting_outputs,
                         attempt_history=attempts,
                     )
                     span.set_attribute("restscope.patch.review.issue_count", len(issues))
                     span.set_attribute(
                         "restscope.patch.shared_outputs_used",
-                        shared_outputs_used + output_number,
+                        output_limit.used,
                     )
                     span.set_output(
                         {"accepted": result.accepted, "issue_count": len(issues)}
@@ -141,31 +134,11 @@ class ParameterPatchReviewAgent:
                     return result
 
                 latest_errors = errors or ["The Review output could not be used."]
-                fingerprint = _invalid_fingerprint(response, latest_errors)
-                if fingerprint == last_fingerprint:
-                    repeated_count += 1
-                else:
-                    last_fingerprint = fingerprint
-                    repeated_count = 1
-                if repeated_count >= 3:
-                    return ParameterPatchReviewFailure(
-                        reason="repeated_invalid_output",
-                        outputs_used=output_number,
-                        errors=latest_errors,
-                        attempt_history=attempts,
-                    )
                 _append_correction(
                     context,
                     response,
                     _invalid_review_feedback(latest_errors),
                 )
-
-            return ParameterPatchReviewFailure(
-                reason="output_budget_exhausted",
-                outputs_used=max_outputs,
-                errors=latest_errors,
-                attempt_history=attempts,
-            )
 
     def _invoke(self, context: AgentContext) -> LLMResponse:
         """Request one issue list through the provider's JSON Schema boundary."""
@@ -237,19 +210,3 @@ def _invalid_review_feedback(errors: list[str]) -> str:
     writer.text("next", "Return one JSON object matching the response schema.")
     writer.text("fields", "Provide only issues:array of strings.")
     return writer.render(max_chars=8_000).text
-
-
-def _invalid_fingerprint(response: LLMResponse, errors: list[str]) -> str:
-    """Identify three repeated invalid Review protocol outputs."""
-    value = [
-        {"name": call.name, "arguments": call.arguments}
-        for call in response.tool_calls
-    ] or response.parsed_json or response.content
-    normalized = json.dumps(
-        {"candidate": value, "errors": errors},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(normalized.encode()).hexdigest()

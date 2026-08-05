@@ -1,6 +1,7 @@
 # Operation Smoke Root-Cause and Parameter Patch Implementation Plan
 
-Status: Implemented and offline-verified
+Status: Historical implementation; superseded by
+`docs/tasks/failure-resolution-agent.md`
 
 ## Scope
 

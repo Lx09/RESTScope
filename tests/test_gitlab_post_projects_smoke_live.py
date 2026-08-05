@@ -209,15 +209,32 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _default_env_file() -> Path:
-    """Find the ignored local model config from main or a feature worktree.
+    """Find ignored model config in this checkout or its owning main checkout.
 
-    A normal checkout keeps ``.env`` at ``PROJECT_ROOT``. Git worktrees do not
-    copy that ignored file, so this repository's ``.worktrees/<name>`` layout
-    falls back to the owning main checkout two parents above.
+    Git worktrees do not copy ignored files and may live either inside or next
+    to the main repository. Asking Git for its absolute common directory avoids
+    assuming either filesystem layout; that directory is ``<main>/.git``.
     """
     checkout_env = PROJECT_ROOT / ".env"
     if checkout_env.is_file():
         return checkout_env
+
+    common_dir = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if common_dir.returncode == 0 and common_dir.stdout.strip():
+        main_env = Path(common_dir.stdout.strip()).parent / ".env"
+        if main_env.is_file():
+            return main_env
     return PROJECT_ROOT.parents[1] / ".env"
 
 

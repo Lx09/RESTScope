@@ -1,4 +1,4 @@
-"""Transaction wrapper for stable Failure and terminal Solve knowledge."""
+"""Transaction wrapper for stable Failure and terminal Resolution knowledge."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .schemas import (
 
 
 class SmokeMemory:
-    """Hide database sessions from Failure Dedup and Failure Solve."""
+    """Hide database sessions from Failure Resolution and Patch finalization."""
 
     def __init__(self, unit_of_work_factory: SmokeMemoryUnitOfWorkFactory) -> None:
         """Store the factory used for one short transaction per operation."""
@@ -29,7 +29,7 @@ class SmokeMemory:
             return recorded
 
     def record_solve_attempt(self, write: SolveAttemptWrite) -> str:
-        """Append one no-Patch or conflict terminal Solve conclusion."""
+        """Append one terminal no-Patch or conflict conclusion."""
 
         with self.unit_of_work_factory() as uow:
             attempt_id = uow.smoke_memory.record_solve_attempt(write)

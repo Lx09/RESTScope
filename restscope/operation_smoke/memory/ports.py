@@ -1,4 +1,4 @@
-"""Persistence ports for stable Failure and Solve Attempt knowledge."""
+"""Persistence ports for stable Failure and terminal Attempt knowledge."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .schemas import (
 
 
 class SmokeMemoryRepository(Protocol):
-    """Describe the exact reads and writes shared by Dedup and Solve."""
+    """Describe exact reads and writes used by Resolution finalization."""
 
     def record_failures(self, write: FailureBatchWrite) -> RecordedFailures: ...
 

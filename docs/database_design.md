@@ -15,7 +15,7 @@ business tables plus Alembic's `alembic_version` table.
   per-input Generator and Constraint contracts.
 - API Behavior Monitor owns bounded Resource Identifier and Response Value
   evidence.
-- Operation Smoke owns stable Failures and append-only terminal Solve Attempts.
+- Operation Smoke owns stable Failures and append-only terminal Resolution Attempts.
 - `restscope.db` owns SQLAlchemy mappings, repositories, transactions, foreign
   key setup, and the one baseline migration.
 - Raw responses, Test Cases, Batches, model messages, Patch samples, plans,
@@ -71,17 +71,17 @@ uses this final replacement set.
 
 ### `generator_change_events`
 
-One append-only event is linked one-to-one with the successful Solve Attempt
+One append-only event is linked one-to-one with the successful Resolution Attempt
 that applied it. It records only deterministic Generator and Constraint
 insert/update/delete changes with per-item before and after values. Samples are
 run-local and are never stored. A candidate with no actual current-state change
 is rejected before an Attempt or event is written.
 
-Current Generator rows, Constraint replacement, the applied Solve Attempt, its
-input links, and the change event commit in one transaction. Exact current
-content provides optimistic locking; a stale candidate rolls back and becomes
-a separate `conflict` Solve Attempt whose root cause and input links come from
-that candidate.
+All decided stable Failures and Attempts, current Generator rows, compatible
+Constraint replacements, input links, and per-candidate change events commit in
+one transaction at Resolution finalization. Exact current content provides
+optimistic locking; a stale or overlapping candidate rejects the whole
+finalization and writes nothing before the same Agent session continues.
 
 ## Resource Identifier: 6 tables
 
@@ -120,30 +120,37 @@ transaction. A failure cannot leave partial observation or pool evidence.
 ### `smoke_failures`
 
 A stable Failure key hashes the operation, normalized sorted message set, and
-the complete suspected-input state. `null` means the one-fingerprint path
-skipped attribution, `[]` means operation-level, and a non-empty array means
-exact input attribution. Repeated evidence reuses the row and updates occurrence
-count, last-seen time, and last HTTP status.
+the complete suspected-input list. `[]` means operation-level, while a
+non-empty array contains exact input identities resolved from worklist handles
+or a selected candidate. There is no `null` attribution state. Repeated evidence
+reuses the row and updates occurrence count, last-seen time, and last HTTP
+status; one final Batch increments the same key at most once.
 
 ### `smoke_solve_attempts`
 
-Every terminal `applied_patch`, `no_patch`, or `conflict` conclusion appends a
-row with one non-empty `reason`. Applied and runtime-conflict rows also store
-the selected reviewed candidate's root cause; no-Patch rows leave root cause
-null. Attempts are never overwritten and there is no permanent resolved flag.
+The physical table keeps its original exploratory name, but current runtime
+rows are terminal decisions from the continuous Failure Resolution session.
+
+Every terminal `applied_patch`, `no_patch`, or lower-level `conflict` conclusion
+appends a row with one non-empty `reason`. Current Resolution decisions store
+the final worklist root cause for both apply-Patch and no-Patch outcomes.
+Attempts are never overwritten and there is no permanent resolved flag.
 
 ### `smoke_solve_attempt_parameters`
 
-A composite Attempt/input key stores candidate-derived cause attribution in
-affected-input order. Applied and runtime-conflict Attempts retain these links;
-no-Patch has none and therefore does not appear in Parameter-specific history.
-Input links reference current operation input rows; the deterministic
-repository rejects unknown or cross-operation attribution.
+A composite Attempt/input key stores cause attribution in affected-input order.
+Applied-Patch and lower-level conflict Attempts use candidate input identities;
+no-Patch Resolution converts its validated suspected handles to the same stable
+input identities. An operation-level no-Patch decision uses `[]` and therefore
+has no rows here. Input links reference current operation input rows; the
+deterministic repository rejects unknown or cross-operation attribution.
 
-Failure Dedup uses only the current run's in-memory Test Case Catalog and
-persists messages, attribution state, and occurrence metadata—not the
-representative case. Solve reads Failure and Parameter projections from this
-memory, while HTTP probes and candidate samples stay temporary.
+Failure Resolution uses only the current run's in-memory Test Case Catalog for
+`TC*` evidence and persists decided source messages, input attribution, and
+occurrence metadata—not worklist state or Test Case references. It reads
+Parameter projections on demand, while HTTP probes and candidate samples stay
+temporary. Exact message folding, semantic grouping, and candidate selection
+all happen before the single final transaction.
 
 ## Lifecycle and compatibility
 

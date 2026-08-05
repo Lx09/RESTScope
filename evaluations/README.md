@@ -1,27 +1,30 @@
-# Operation Smoke Agent Evaluations
+# Failure Resolution Agent Evaluation
 
-This directory evaluates the three LLM decision components independently:
-`FailureDedupAgent`, `FailureSolveAgent`, and `ParameterPatchAgent`.
+This directory evaluates the continuous `FailureResolutionAgent` boundary as
+one Phoenix suite. The Agent owns semantic grouping, investigation, worklist
+rewrites, candidate selection, and finish timing. Long sessions may invoke the
+real nested Compact Agent, and a Patch scenario invokes the real nested
+Parameter Patch and Review Agents under the same output guard.
 
-The repository YAML files are the source of truth. A run synchronizes them into
-one Phoenix Dataset per Agent, starts a native Phoenix Experiment, invokes the
-real configured DeepSeek model, and records independent Phoenix code-evaluator
-scores plus linked traces. It does not connect to the RESTScope database or send
-requests to a target API.
+Repository YAML files are the source of truth. A run synchronizes them into the
+single `restscope-operation-smoke-resolution` Dataset, starts a native Phoenix
+Experiment, invokes the configured models, and records independent code scores
+plus linked traces. Each example receives fresh session registries and a
+storage-free finalizer; it never connects to the RESTScope database or sends a
+request to a target API.
 
 ## Setup
 
-Install the development group and start the local Phoenix service:
+Install the evaluation dependency group and start the local Phoenix service:
 
 ```bash
 uv sync --group evaluation
 docker compose -f compose.phoenix.yaml up -d
 ```
 
-The existing `.env` supplies the THINK/FAST DeepSeek settings and Phoenix
-endpoint. Experiment runs always enable RESTScope tracing and use the Phoenix
-projects `restscope-evals-dedup`, `restscope-evals-solve`, or
-`restscope-evals-patch`.
+The existing `.env` supplies model settings and the Phoenix endpoint.
+Experiment runs enable RESTScope tracing in the project
+`restscope-evals-resolution`.
 
 ## Commands
 
@@ -29,49 +32,44 @@ projects `restscope-evals-dedup`, `restscope-evals-solve`, or
 # Inspect stable scenario IDs and available complete prompts.
 uv run --group evaluation python -m evaluations list
 
-# Synchronize one Dataset, or use "all".
-uv run --group evaluation python -m evaluations sync dedup
+# Synchronize the one Dataset. "all" is accepted for CLI consistency.
+uv run --group evaluation python -m evaluations sync resolution
 
-# One cheap exploratory run.
-uv run --group evaluation python -m evaluations run dedup \
-  --scenario dedup-merge-same-parameter \
+# One exploratory run of semantic grouping.
+uv run --group evaluation python -m evaluations run resolution \
+  --scenario resolution-merge-shared-parameter \
   --prompt current --repetitions 1 --seed 0
 
-# A prompt comparison keeps all three repetitions.
-uv run --group evaluation python -m evaluations run patch \
-  --scenario patch-integer-range \
-  --prompt candidate-name --repetitions 3 --seed 0
+# Exercise Resolution plus nested Patch and Review.
+uv run --group evaluation python -m evaluations run resolution \
+  --scenario resolution-patch-bounded-identifier \
+  --prompt current --repetitions 3 --seed 0
 ```
 
-Place a complete candidate system prompt at
-`evaluations/agents/<agent>/prompts/<candidate-name>.txt`. `current` always
+Place a complete candidate Resolution system prompt at
+`evaluations/agents/resolution/prompts/<candidate-name>.txt`. `current` always
 means the production prompt and passes no override into production assembly.
 Experiments never write a candidate prompt back to `restscope/`.
 
-## Adding a Scenario or Agent
+## Adding a Scenario
 
-For an existing Agent, copy one YAML file in its `scenarios/` directory, give it
-a stable unique `scenario_id`, replace all input facts, and declare only the
+Copy one YAML file in `evaluations/agents/resolution/scenarios/`, give it a
+stable unique `resolution-*` ID, replace every input fact, and declare only the
 independent properties that should be scored. A missing expected property is
-reported as `not_applicable` and does not receive a numeric score.
+reported as `not_applicable` and receives no numeric score.
 
-Dedup Scenarios contain current-Batch cases only. Solve still uses scripted
-Parameter Memory, HTTP Probe, and nested Patch tools.
-All three production Agents render Scenario facts through `restscope.context`,
-so prompt variants compare the same compact text path used by the App.
+Scenarios contain a failed Batch's request identity, sanitized OpenAPI source,
+run-local Test Case drafts, and an optional executable Generator baseline. The
+baseline enables the real Patch/Review path; omitting it leaves candidate and
+HTTP mutation tools unavailable. Production code renders initial model context,
+so prompt variants compare the same minimal operation/message/E-to-TC input and
+on-demand tool path used by the App.
 
-An old trace explains why a Scenario matters but is not an answer oracle.
-Sanitize credentials, raw response bodies, and identifying target data before
-committing a Scenario. Keep the original export under ignored
-`artifacts/phoenix-exports/`.
+Trace provenance explains why a Scenario matters but is not an answer oracle.
+Sanitize credentials and identifying target data before committing a Scenario.
+Keep original exports under ignored `artifacts/phoenix-exports/`.
 
-Adding another Agent requires one suite Module with its DTO, fresh temporary
-collaborators, task, and code evaluators; add exactly one line to
-`evaluations/registry.py`. The shared runner does not need Agent-specific
-branches.
-
-Task output contains the native Agent result, a compact tool-call record, and a
-separate `runtime_error`. A low score or a single-example runtime error remains
-valid evaluation data and does not make the command fail. Invalid Scenario,
-DeepSeek/Phoenix configuration, Dataset synchronization, or Experiment
-infrastructure does make it fail.
+Task output contains the native Resolution result and a separate
+`runtime_error`. A low score or one example's runtime error remains valid
+evaluation data. Invalid Scenarios, model/Phoenix configuration, Dataset sync,
+or Experiment infrastructure still make the command fail.

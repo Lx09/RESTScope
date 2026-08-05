@@ -1,10 +1,12 @@
-"""Expose five single-purpose model tools for run-local Test Case evidence.
+"""Expose single-purpose model tools for run-local Test Case evidence.
 
-Failure Dedup and Failure Solve share these tool definitions. Each tool names
-one exact Catalog query, validates only the arguments needed by that query, and
-returns bounded native JSON. The shared :class:`TestCaseCatalog` remains
-responsible for storage, Test Case identity, typed comparison, and response
-path traversal.
+Failure Resolution receives four registered tools for request and response
+investigation. The already-rendered Failure messages have a retained lookup
+spec for other callers but are deliberately not registered for Resolution.
+Each tool names one exact Catalog query, validates only the arguments needed by
+that query, and returns bounded native JSON. The shared
+:class:`TestCaseCatalog` remains responsible for storage, Test Case identity,
+typed comparison, and response path traversal.
 """
 
 from __future__ import annotations
@@ -40,7 +42,6 @@ TEST_CASE_TOOL_NAMES = frozenset(
         FIND_PARAMETERS_BY_VALUE_TOOL_NAME,
         GET_RESPONSE_FIELD_VALUE_TOOL_NAME,
         FIND_RESPONSE_FIELDS_BY_VALUE_TOOL_NAME,
-        GET_FAILURE_MESSAGES_TOOL_NAME,
     }
 )
 
@@ -239,14 +240,15 @@ def register_test_case_tools(
     toolbox: AgentToolbox,
     catalog: TestCaseCatalog,
 ) -> None:
-    """Register the five explicit Catalog reads in one Agent-owned toolbox.
+    """Register the four Catalog reads exposed to Failure Resolution.
 
     Args:
-        toolbox: The Dedup- or Solve-owned tool Module to extend.
+        toolbox: The Resolution-owned tool Module to extend.
         catalog: The run-local evidence store used by every registered query.
 
-    This shared adapter keeps both Agents on the exact same tool contracts. It
-    changes only the supplied toolbox and never changes Catalog evidence.
+    This adapter keeps Resolution's registered queries on the Catalog's exact
+    contracts. It changes only the supplied toolbox and never changes Catalog
+    evidence.
     """
     toolbox.register(
         spec=get_parameter_value_tool_spec(),
@@ -296,18 +298,6 @@ def register_test_case_tools(
                 execute=lambda query: catalog.find_response_fields_by_value(
                     case_ids=query.case_ids,
                     value=query.value,
-                ),
-            )
-        },
-    )
-    toolbox.register(
-        spec=get_failure_messages_tool_spec(),
-        execute=lambda **arguments: {
-            "structured": _run_catalog_query(
-                model_type=_CaseIdsInput,
-                arguments=arguments,
-                execute=lambda query: catalog.get_failure_messages(
-                    case_ids=query.case_ids,
                 ),
             )
         },
