@@ -35,7 +35,7 @@ from restscope.capabilities import (
 from restscope.http_transport import TargetHTTPTransport
 from restscope.catalog import OpenAPIChangeEventRecord
 from restscope.openapi_parser import OpenAPIParser, build_openapi_document
-from restscope.observability import TracingRuntime, build_tracing_runtime
+from restscope.observability import LiveRunObserver, TracingRuntime, build_tracing_runtime
 from restscope.redaction import Redactor
 from restscope.randomness import SeededRandom
 from restscope.restscope_config import RESTScopeConfig
@@ -77,6 +77,8 @@ class RESTScopeApp:
         built_runtime: CapabilityRuntime | Any | None = None
         built_tracing_runtime = tracing_runtime is None
         trace_runtime: TracingRuntime | None = None
+        run_observer: LiveRunObserver | None = None
+        ui_service: Any | None = None
         try:
             config = _resolve_app_random_seed(config)
             # A default runtime needs a private, freshly migrated SQLite file.
@@ -101,6 +103,11 @@ class RESTScopeApp:
                     config.tracing.api_key,
                 )
             )
+            if config.ui.enabled:
+                run_observer = LiveRunObserver(
+                    redactor=self._tracing_runtime.redactor
+                )
+                self._tracing_runtime.bind_run_observer(run_observer)
             if capability_runtime is None:
                 # The catalog stores only current per-input Generators.  The
                 # behavior monitor supplies observed identifiers/response values to
@@ -117,7 +124,8 @@ class RESTScopeApp:
                 target_transport = TargetHTTPTransport(
                     response_processor=APIBehaviorResponseProcessor(
                         api_behavior_monitor_coordinator
-                    )
+                    ),
+                    run_observer=run_observer,
                 )
                 operation_testing_service = OperationTestingService(
                     config_catalog=generator_catalog,
@@ -168,12 +176,31 @@ class RESTScopeApp:
             )
             if callable(bind_tracing_runtime):
                 bind_tracing_runtime(self._tracing_runtime)
+            _bind_run_observer(self.capability_runtime, run_observer)
+            if run_observer is not None:
+                from restscope.ui import start_ui_service
+
+                ui_service = start_ui_service(
+                    observer=run_observer,
+                    port=config.ui.port,
+                )
+                if ui_service is None:
+                    run_observer.close()
+                    self._tracing_runtime.bind_run_observer(None)
+                    _bind_run_observer(self.capability_runtime, None)
+                    run_observer = None
+            self._run_observer = run_observer
+            self._ui_service = ui_service
             self._closed = False
         except BaseException:
             # Startup is transactional from the caller's perspective: a failed
             # constructor must not leave an MCP host, exporter, or temporary
             # database running in the background.
             _close_runtime_host(built_runtime)
+            if ui_service is not None:
+                ui_service.close()
+            if run_observer is not None:
+                run_observer.close()
             if built_tracing_runtime and trace_runtime is not None:
                 trace_runtime.close()
             if database is not None:
@@ -340,6 +367,12 @@ class RESTScopeApp:
         """
         return self._tracing_runtime
 
+    @property
+    def ui_url(self) -> str | None:
+        """Return the active loopback observer URL, or ``None`` when disabled."""
+        service = self._ui_service
+        return service.url if service is not None else None
+
     def initialize(
         self,
         *,
@@ -444,7 +477,13 @@ class RESTScopeApp:
         return catalog.list_changes(operation_key)
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
-        """Run the global RESTScope supervisor graph."""
+        """Run the global RESTScope supervisor graph.
+
+        ``KeyboardInterrupt`` stops this Run and is re-raised for the caller to
+        acknowledge, but it does not close the App, observer, or UI server.
+        The stopped timeline remains readable until another call replaces it
+        or :meth:`close` explicitly ends the App lifetime.
+        """
 
         self._ensure_open()
         context = self.tool_context
@@ -453,25 +492,38 @@ class RESTScopeApp:
                 "tool_context_not_initialized",
                 "Tool context is not initialized",
             )
+        if self._run_observer is not None:
+            self._run_observer.begin_run(request)
         task_id = request.metadata.get("task_id")
         attributes = {"restscope.task_id": task_id} if task_id else {}
-        with self.tracing_runtime.span(
-            "RESTScopeApp.run",
-            kind="CHAIN",
-            input_value=request,
-            attributes=attributes,
-        ) as span:
-            report = RESTScopeMainGraph(
-                operation_smoke_coordinator=self.operation_smoke_coordinator,
-                tool_context=context,
-                random_seed=self.random_source.seed,
-                tracing_runtime=self.tracing_runtime,
-            ).run(request)
-            span.set_output(_app_run_trace_summary(report))
-            span.set_attribute("restscope.run.status", report.status)
-            if report.status == "errored":
-                span.mark_error("RESTScope run returned an errored report")
-            return report
+        try:
+            with self.tracing_runtime.span(
+                "RESTScopeApp.run",
+                kind="CHAIN",
+                input_value=request,
+                attributes=attributes,
+            ) as span:
+                report = RESTScopeMainGraph(
+                    operation_smoke_coordinator=self.operation_smoke_coordinator,
+                    tool_context=context,
+                    random_seed=self.random_source.seed,
+                    tracing_runtime=self.tracing_runtime,
+                ).run(request)
+                span.set_output(_app_run_trace_summary(report))
+                span.set_attribute("restscope.run.status", report.status)
+                if report.status == "errored":
+                    span.mark_error("RESTScope run returned an errored report")
+        except KeyboardInterrupt:
+            if self._run_observer is not None:
+                self._run_observer.interrupt_run()
+            raise
+        except BaseException as exc:
+            if self._run_observer is not None:
+                self._run_observer.end_run(error=exc)
+            raise
+        if self._run_observer is not None:
+            self._run_observer.end_run(report)
+        return report
 
     def close(self) -> None:
         """Close owned runtime resources."""
@@ -498,8 +550,14 @@ class RESTScopeApp:
             if mcp_host is not None:
                 mcp_host.close()
         finally:
-            self.tracing_runtime.close()
-            self._closed = True
+            try:
+                if self._ui_service is not None:
+                    self._ui_service.close()
+                if self._run_observer is not None:
+                    self._run_observer.close()
+            finally:
+                self.tracing_runtime.close()
+                self._closed = True
 
     def __enter__(self) -> "RESTScopeApp":
         self._ensure_open()
@@ -579,3 +637,15 @@ def _close_runtime_host(runtime: Any | None) -> None:
             host.close()
         except Exception:
             pass
+
+
+def _bind_run_observer(runtime: Any, observer: LiveRunObserver | None) -> None:
+    """Attach HTTP observation to built-in transports behind CapabilityRuntime."""
+    target_tool = getattr(runtime, "target_http_tool", None)
+    target_transport = getattr(target_tool, "transport", None)
+    if target_transport is not None:
+        target_transport.run_observer = observer
+    testing_service = getattr(runtime, "operation_testing_service", None)
+    testing_transport = getattr(testing_service, "transport", None)
+    if testing_transport is not None:
+        testing_transport.run_observer = observer

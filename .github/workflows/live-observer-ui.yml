@@ -1,0 +1,43 @@
+name: Live observer UI
+
+on:
+  pull_request:
+    paths:
+      - "ui/**"
+      - "restscope/ui/static/**"
+      - ".github/workflows/live-observer-ui.yml"
+  push:
+    paths:
+      - "ui/**"
+      - "restscope/ui/static/**"
+      - ".github/workflows/live-observer-ui.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Lint TypeScript
+        run: npm run lint
+      - name: Test reducer and views
+        run: npm test
+      - name: Check Ant Design 6 usage
+        run: npx --yes @ant-design/cli@6.5.3 --version 6.5.3 lint src
+      - name: Rebuild committed assets
+        run: npm run build
+      - name: Check built assets for drift
+        working-directory: .
+        run: git diff --exit-code -- restscope/ui/static

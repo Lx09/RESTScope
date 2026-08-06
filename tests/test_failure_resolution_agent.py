@@ -281,7 +281,7 @@ def _request():
     )
 
 
-def _write_call(*, call_id="write-1", active_item_id="invalid-name"):
+def _write_call(*, call_id="write-1", active_item_id="WI-001"):
     """Replace the worklist with one item covering both exact associations."""
     from restscope.operation_smoke.failure_resolution import WRITE_WORKLIST_TOOL_NAME
 
@@ -297,7 +297,7 @@ def _write_call(*, call_id="write-1", active_item_id="invalid-name"):
                     "active_item_id": active_item_id,
                     "items": [
                         {
-                            "item_id": "invalid-name",
+                            "item_id": "WI-001",
                             "source_failure_refs": ["E1"],
                             "test_case_refs": ["TC1", "TC2"],
                             "suspected_parameters": ["query.name"],
@@ -400,6 +400,11 @@ def test_one_continuous_session_groups_exact_sources_then_finishes() -> None:
     assert "test_case.get_response_field_value" in system
     assert "Failure Resolution context checkpoint" in system
     assert "return Markdown only" in system
+    assert "Assign WI-001" in system
+    assert "Never reuse a\n  deleted ID" in system
+    assert "When splitting an item, keep its ID" in system
+    assert "When merging items, keep the earliest ID" in system
+    assert "WI-1000" in system
 
 
 def test_resolution_compacts_b_plus_h_into_b_plus_h_prime_at_eighty_percent() -> None:
@@ -414,7 +419,7 @@ def test_resolution_compacts_b_plus_h_into_b_plus_h_prime_at_eighty_percent() ->
     first_resolution.prompt_tokens = 102_000
     compact_summary = (
         "# Failure Resolution checkpoint\n\n"
-        "E1 is covered by invalid-name and has a no_patch decision."
+        "E1 is covered by WI-001 and has a no_patch decision."
     )
     client = StubClient(
         [
@@ -966,7 +971,7 @@ def test_patch_tool_returns_only_p_ref_while_registry_keeps_exact_candidate() ->
     assert outcome.outputs_used == 7
     assert output_limit.used == 7
     assert output_limit.consume  # The same instance remains the single guard.
-    assert patch_factory.coordinator.calls[0].todo_id == "invalid-name"
+    assert patch_factory.coordinator.calls[0].todo_id == "WI-001"
     precise = finalizer.calls[0]["candidates"].get("P1")
     assert precise.patch.updates[0].strategy.model_dump(mode="json") == {
         "type": "constant",

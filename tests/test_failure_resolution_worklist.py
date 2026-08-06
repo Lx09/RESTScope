@@ -66,7 +66,7 @@ def _item(**changes):
     from restscope.operation_smoke.failure_resolution import WorklistItem
 
     value = {
-        "item_id": "name-conflict",
+        "item_id": "WI-001",
         "source_failure_refs": ["E1"],
         "test_case_refs": ["TC1"],
         "suspected_parameters": ["body.name"],
@@ -124,7 +124,7 @@ def test_worklist_write_is_revision_checked_and_atomic() -> None:
     store = _store()
     first = store.write(
         expected_revision=0,
-        active_item_id="name-conflict",
+        active_item_id="WI-001",
         items=[_item()],
     )
     assert first.revision == 1
@@ -141,10 +141,100 @@ def test_worklist_write_is_revision_checked_and_atomic() -> None:
     with pytest.raises(ToolFailure, match="does not belong"):
         store.write(
             expected_revision=1,
-            active_item_id="name-conflict",
+            active_item_id="WI-001",
             items=[forged],
         )
     assert store.read() == first
+
+
+def test_worklist_item_id_uses_the_fixed_wi_number_format() -> None:
+    """A Worklist item uses identity like WI-001 instead of a semantic slug."""
+    from restscope.operation_smoke.failure_resolution import WorklistItem
+
+    invalid = _item().model_dump(mode="json")
+    invalid["item_id"] = "name-conflict"
+    with pytest.raises(ValidationError, match="item_id"):
+        WorklistItem.model_validate(invalid)
+
+    assert _item(item_id="WI-001").item_id == "WI-001"
+    assert _item(item_id="WI-1000").item_id == "WI-1000"
+
+
+def test_worklist_item_ids_start_at_wi_001_and_add_contiguous_numbers() -> None:
+    """A session cannot skip the next never-before-issued WI number."""
+    from restscope.capabilities import ToolFailure
+
+    store = _store()
+
+    first = store.write(
+        expected_revision=0,
+        active_item_id="WI-001",
+        items=[
+            _item(item_id="WI-001"),
+            _item(
+                item_id="WI-002",
+                source_failure_refs=["E2"],
+                test_case_refs=["TC3"],
+                suspected_parameters=["body.namespace_id"],
+            ),
+        ],
+    )
+    assert [item.item_id for item in first.items] == ["WI-001", "WI-002"]
+
+    with pytest.raises(ToolFailure, match="WI-003"):
+        store.write(
+            expected_revision=1,
+            active_item_id="WI-001",
+            items=[
+                first.items[0],
+                first.items[1],
+                _item(item_id="WI-004", test_case_refs=["TC2"]),
+            ],
+        )
+    assert store.read() == first
+
+    accepted = store.write(
+        expected_revision=first.revision,
+        active_item_id="WI-003",
+        items=[
+            *first.items,
+            _item(item_id="WI-003", test_case_refs=["TC2"]),
+        ],
+    )
+    assert accepted.revision == 2
+    assert accepted.active_item_id == "WI-003"
+
+
+def test_deleted_worklist_item_id_cannot_be_reused() -> None:
+    """A removed WI identity never points at a later unrelated diagnosis."""
+    from restscope.capabilities import ToolFailure
+
+    store = _store()
+    first = store.write(
+        expected_revision=0,
+        active_item_id="WI-001",
+        items=[_item(item_id="WI-001")],
+    )
+    without_item = store.write(
+        expected_revision=first.revision,
+        active_item_id=None,
+        items=[],
+    )
+
+    with pytest.raises(ToolFailure, match="Retired.*WI-001"):
+        store.write(
+            expected_revision=without_item.revision,
+            active_item_id="WI-001",
+            items=[_item(item_id="WI-001", test_case_refs=["TC2"])],
+        )
+    assert store.read() == without_item
+
+    replacement = store.write(
+        expected_revision=without_item.revision,
+        active_item_id="WI-002",
+        items=[_item(item_id="WI-002", test_case_refs=["TC2"])],
+    )
+    assert replacement.active_item_id == "WI-002"
 
 
 def test_worklist_accepts_agent_owned_overlap_split_and_reordering() -> None:
@@ -152,23 +242,23 @@ def test_worklist_accepts_agent_owned_overlap_split_and_reordering() -> None:
     store = _store()
     snapshot = store.write(
         expected_revision=0,
-        active_item_id="second-cause",
+        active_item_id="WI-002",
         items=[
             _item(
-                item_id="first-cause",
+                item_id="WI-001",
                 test_case_refs=["TC1"],
             ),
             _item(
-                item_id="second-cause",
+                item_id="WI-002",
                 test_case_refs=["TC2"],
             ),
         ],
     )
 
-    assert snapshot.active_item_id == "second-cause"
+    assert snapshot.active_item_id == "WI-002"
     assert [item.item_id for item in snapshot.items] == [
-        "first-cause",
-        "second-cause",
+        "WI-001",
+        "WI-002",
     ]
 
 
@@ -223,13 +313,13 @@ def test_final_coverage_requires_every_source_case_association_once_or_more() ->
         items=[
             _item(test_case_refs=["TC1", "TC2"]),
             _item(
-                item_id="namespace",
+                item_id="WI-002",
                 source_failure_refs=["E2"],
                 test_case_refs=["TC3"],
                 suspected_parameters=["body.namespace_id"],
             ),
             _item(
-                item_id="overlapping-name-view",
+                item_id="WI-003",
                 test_case_refs=["TC1"],
             ),
         ],
@@ -263,7 +353,7 @@ def test_exact_probe_evidence_is_valid_but_not_new_required_coverage() -> None:
         items=[
             _item(test_case_refs=["TC1", "TC2", "TC4"]),
             _item(
-                item_id="namespace",
+                item_id="WI-002",
                 source_failure_refs=["E2"],
                 test_case_refs=["TC3"],
                 suspected_parameters=["body.namespace_id"],

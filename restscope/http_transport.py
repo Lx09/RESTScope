@@ -176,9 +176,20 @@ class TargetHTTPTransport:
         *,
         client_factory: ClientFactory = httpx.Client,
         response_processor: TargetResponseProcessor | None = None,
+        run_observer: Any | None = None,
     ) -> None:
+        """Keep target I/O collaborators and an optional run observer.
+
+        Args:
+            client_factory: Builds the bounded synchronous HTTP client.
+            response_processor: Optional API Behavior Monitor callback.
+            run_observer: Optional current-run observer. It receives copies of
+                prepared requests and already-bounded responses, and its
+                failures never replace the target result.
+        """
         self.client_factory = client_factory
         self.response_processor = response_processor
+        self.run_observer = run_observer
 
     @property
     def has_response_processor(self) -> bool:
@@ -277,6 +288,54 @@ class TargetHTTPTransport:
             ) from exc
 
     def request_prepared(
+        self,
+        prepared: PreparedTargetRequest,
+        *,
+        timeout_seconds: float = 30,
+        request_kwargs: Mapping[str, Any] | None = None,
+        response_body_limit: int | None = None,
+        failure_response_body_limit: int | None = None,
+        truncate_response_body: bool = False,
+        buffer_success_body_only: bool = False,
+        processor_context: TargetResponseOperationContext | None = None,
+    ) -> BufferedTargetResponse:
+        """Execute one prepared request and publish its bounded live evidence.
+
+        Observation wraps the existing transport operation so request
+        validation, target effects, response processing, and exception types
+        remain unchanged. An observer defect is swallowed independently.
+        """
+        exchange = self._start_observed_exchange(
+            prepared=prepared,
+            request_kwargs=request_kwargs,
+            processor_context=processor_context,
+        )
+        try:
+            result = self._request_prepared_unobserved(
+                prepared,
+                timeout_seconds=timeout_seconds,
+                request_kwargs=request_kwargs,
+                response_body_limit=response_body_limit,
+                failure_response_body_limit=failure_response_body_limit,
+                truncate_response_body=truncate_response_body,
+                buffer_success_body_only=buffer_success_body_only,
+                processor_context=processor_context,
+            )
+        except BaseException as exc:
+            if exchange is not None:
+                try:
+                    exchange.fail(exc)
+                except Exception:
+                    pass
+            raise
+        if exchange is not None:
+            try:
+                exchange.finish(result)
+            except Exception:
+                pass
+        return result
+
+    def _request_prepared_unobserved(
         self,
         prepared: PreparedTargetRequest,
         *,
@@ -388,6 +447,37 @@ class TargetHTTPTransport:
                 body_truncated=body_truncated,
                 processor_result=processor_result,
             )
+
+    def _start_observed_exchange(
+        self,
+        *,
+        prepared: PreparedTargetRequest,
+        request_kwargs: Mapping[str, Any] | None,
+        processor_context: TargetResponseOperationContext | None,
+    ) -> Any | None:
+        """Open one observer handle without making it part of HTTP success."""
+        if self.run_observer is None:
+            return None
+        try:
+            return self.run_observer.start_http_exchange(
+                method=prepared.method,
+                path=prepared.path,
+                url=str(prepared.url),
+                headers=prepared.headers,
+                request_kwargs=request_kwargs,
+                operation_key=(
+                    processor_context.operation_key
+                    if processor_context is not None
+                    else None
+                ),
+                path_template=(
+                    processor_context.operation_path
+                    if processor_context is not None
+                    else None
+                ),
+            )
+        except Exception:
+            return None
 
 
 def _read_bounded_response(

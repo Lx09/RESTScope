@@ -46,6 +46,35 @@ def test_tracing_config_reads_every_explicit_environment_field(tmp_path: Path) -
     assert "phoenix-secret" not in repr(tracing)
 
 
+def test_ui_config_is_disabled_by_default_and_reads_flat_environment_fields(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Scenario: UI hosting is opt-in and accepts one valid loopback port."""
+    from restscope.restscope_config import RESTScopeConfig
+
+    monkeypatch.delenv("UI_ENABLED", raising=False)
+    monkeypatch.delenv("UI_PORT", raising=False)
+    default_config = RESTScopeConfig.from_environment(tmp_path / "missing.env")
+    env_file = tmp_path / ".env"
+    env_file.write_text("UI_ENABLED=true\nUI_PORT=9876\n", encoding="utf-8")
+    enabled_config = RESTScopeConfig.from_environment(env_file)
+
+    assert default_config.ui.enabled is False
+    assert default_config.ui.port == 8765
+    assert enabled_config.ui.enabled is True
+    assert enabled_config.ui.port == 9876
+
+
+@pytest.mark.parametrize("port", [0, 65536])
+def test_ui_config_rejects_values_outside_the_tcp_port_range(port: int) -> None:
+    """Scenario: an invalid UI port fails configuration before App startup."""
+    from restscope.restscope_config import UIConfig
+
+    with pytest.raises(ValueError, match="UI_PORT"):
+        UIConfig(port=port)
+
+
 def test_trace_content_encoder_only_redacts_registered_values() -> None:
     """Scenario: verify that trace content encoder only redacts registered values."""
     from restscope.observability.content import TraceContentEncoder

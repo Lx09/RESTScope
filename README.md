@@ -31,6 +31,10 @@ THINK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 FAST_PROVIDER=openai_compatible
 FAST_MODEL=glm-4.7-flash
 # FAST_PROVIDER, FAST_API_KEY, and FAST_BASE_URL default to THINK_* values
+
+# Optional local read-only run observer.
+UI_ENABLED=false
+UI_PORT=8765
 ```
 
 The default `RESTScopeApp` runtime accepts only a local file SQLite URL whose
@@ -137,6 +141,92 @@ saved history, and one temporary summary instruction. The next Resolution turn
 retains the original Failure prompt plus the Markdown handoff; worklists and
 candidate registries are not replaced or persisted. Strict Agent outputs and
 provider tool protocols remain JSON.
+
+## Local live run observer
+
+RESTScope can host a read-only React/Ant Design page for the current App run.
+It is disabled by default and is independent of Phoenix. Install the optional
+server dependencies and enable it in the worktree's local `.env`:
+
+```bash
+uv sync --extra ui
+```
+
+```env
+UI_ENABLED=true
+UI_PORT=8765
+```
+
+The host is fixed to `127.0.0.1`; remote binding and viewer authentication are
+not available. After App construction, `app.ui_url` is the actual page URL or
+`None` when hosting is disabled or could not start. Missing optional packages,
+an occupied port, a disconnected viewer, or observation errors do not change a
+test result.
+
+The page shows a read-only Agent-session canvas built from only three semantic
+event types: `Agent`, `Tool`, and `Smoke Batch`. Every runtime Agent session is
+one node whose message cards remain in chronological System, User/Harness,
+Assistant, and Tool-result order. Tool edges start at the exact Assistant
+message that requested them; Tool and Smoke Batch executions remain separate
+nodes. Clicking a message, Tool, or Batch expands its complete details
+vertically inside that same node—there is no separate detail page or overlay.
+Each collapsed Agent message shows at most 160 Unicode characters. Expanding it
+replaces that summary with only the complete selected message and its own Tool
+call metadata; it does not repeat the whole turn, Prompt, or model response.
+The expanded content remains inside the same role-colored message surface, and
+long bodies scroll within a fixed-height region. Tool and Batch details follow
+the same continuous-card pattern instead of adding a second bordered panel. A
+Tool expansion contains its complete executed Input and ToolResult. The
+`restscope.http.request` Tool also contains its final prepared Request and real
+Response or transport error.
+
+Ordinary generated HTTP calls do not appear as separate cards. One Smoke Batch
+card contains every Test Case in an expandable table, including final URL,
+headers, query, body, response or transport error, duration, byte size, and
+truncation state. The latest Worklist remains in the fixed sidebar; its history
+is visible through `failure_resolution.write_worklist` Tool cards. Each
+Worklist item has a stable session identity (`WI-001`, `WI-002`, and so on),
+shows the exact Failure message behind every E evidence reference, and separates
+TC Test Cases, suspected parameters, and P Patch candidates into readable
+sections. The sidebar also identifies the operation that owns the latest
+successful Worklist write. Search, semantic filters, node/message collapse,
+copying, theme switching, canvas zoom/pan, and auto-follow are viewer-only; the
+service exposes no mutation route.
+
+Observer data lives only in the RESTScope process and browser memory. A new run
+replaces the previous run, and App shutdown clears it. Details are deliberately
+not evicted, so long runs can consume enough memory to slow or terminate the
+process. The page applies the same exact-value Redactor as tracing: configured
+THINK, FAST, and Phoenix API key values are replaced, while ordinary target
+Authorization, Cookie, and business fields remain visible. Use the loopback
+page as a developer diagnostic surface, not a credential boundary.
+
+Stopping a Run and closing the App are separate lifecycle events. A
+`KeyboardInterrupt` such as Ctrl-C ends the current Run with status `stopped`
+and re-raises to the caller, but the App, UI server, complete event snapshot,
+and latest Worklist remain available. Catch the interrupt inside the App
+lifetime when a local runner should keep the observer open:
+
+```python
+app = RESTScopeApp.from_environment()
+try:
+    app.initialize(
+        schema_source={"kind": "file", "path": "openapi.yaml"},
+        base_url="http://127.0.0.1:8000",
+    )
+    try:
+        app.run(RESTScopeRunRequest())
+    except KeyboardInterrupt:
+        print(f"Run stopped; observer retained at {app.ui_url}")
+        input("Press Enter to close RESTScope and its observer...")
+finally:
+    app.close()
+```
+
+This is process-local interruption, not a remote control interface: the page
+remains GET-only and offers no stop, pause, retry, or mutation action. A later
+`app.run(...)` replaces the retained snapshot; `app.close()` remains the only
+operation that shuts down the App-owned UI and clears its memory.
 
 ## Local trace monitoring with Phoenix
 

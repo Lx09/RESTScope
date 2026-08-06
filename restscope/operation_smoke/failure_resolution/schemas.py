@@ -13,6 +13,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+_WORKLIST_ITEM_ID_PATTERN = r"^WI-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})$"
+
+
 class _Model(BaseModel):
     """Reject embedded runtime objects and other undeclared model output."""
 
@@ -73,7 +76,11 @@ class WorklistItem(_Model):
     ``root_cause``.
     """
 
-    item_id: str = Field(min_length=1, max_length=120)
+    item_id: str = Field(
+        min_length=6,
+        max_length=120,
+        pattern=_WORKLIST_ITEM_ID_PATTERN,
+    )
     source_failure_refs: list[str] = Field(min_length=1, max_length=100)
     test_case_refs: list[str] = Field(min_length=1, max_length=1_100)
     suspected_parameters: list[str] = Field(default_factory=list, max_length=100)
@@ -127,7 +134,12 @@ class FailureWorklist(_Model):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     revision: int = Field(ge=0)
-    active_item_id: str | None = Field(default=None, min_length=1, max_length=120)
+    active_item_id: str | None = Field(
+        default=None,
+        min_length=6,
+        max_length=120,
+        pattern=_WORKLIST_ITEM_ID_PATTERN,
+    )
     items: list[WorklistItem] = Field(default_factory=list)
 
 
@@ -171,7 +183,11 @@ class ResolutionItemCommit(_Model):
     copied from Agent-authored worklist text.
     """
 
-    item_id: str = Field(min_length=1, max_length=120)
+    item_id: str = Field(
+        min_length=6,
+        max_length=120,
+        pattern=_WORKLIST_ITEM_ID_PATTERN,
+    )
     failure_summary: str = Field(min_length=1, max_length=1_200)
     outcome: Literal["apply_patch", "no_patch"]
     failure_id: str = Field(min_length=1)

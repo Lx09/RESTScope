@@ -2,6 +2,206 @@
 
 ## Session: 2026-08-05
 
+### Phase 17: Scroll-like detail motion (2026-08-06)
+- **Status:** complete; implementation remains unstaged and Git delivery is not authorized
+- Recovered the existing observer worktree and confirmed all prior UI changes
+  remain unstaged while the retained App/UI continues on port 8766.
+- Re-read project rules plus the Ant Design and file-planning instructions.
+- Queried the locked Ant Design 6.5.3 Card/Button APIs, Card tokens, and design
+  motion guidance. The approved 300 ms open and 200 ms close durations map to
+  the official slow/mid tokens, so no new animation dependency is needed.
+- Confirmed the current jump is caused by immediate conditional detail mounting
+  plus a non-animated structural G6 render. Tests and implementation follow.
+- Added focused tests for same-origin open/close presence, 300/200 ms timing,
+  reduced motion, replacement-height geometry, stable source ports, and G6
+  animation fields. The first run failed because the approved component and
+  constants do not exist yet, establishing the expected red state.
+- Implemented the shared reveal, replacement-height canvas geometry, header
+  ports, fused node structure, and opt-in G6 motion. The first green attempt
+  passed 21/24 focused scenarios; three assertions still described the old
+  button nesting, exact floating-point equality, or the wrong aria-hidden DOM
+  level and were updated to the approved structure.
+- All seven Vitest files now pass 41 tests and ESLint passes. The first
+  TypeScript build rejected only the test Animation double's broad mock/event
+  types; the browser contract annotations were narrowed before rebuilding.
+- The next production build passed. Real 1440x900 Chromium measurement then
+  exposed Ant Design Flex hiding empty message footers, shortening four of six
+  cards by 32 px relative to the G6 model. Added a non-visual child so every
+  role retains the deterministic footer geometry.
+- Real-page expansion then exposed a second integration defect: the React
+  detail grew but G6 retained the collapsed Agent frame. G6 animation options
+  were refreshing the newly supplied data because they were installed too
+  late, and animating abstract `size` did not resize an HTML node's key shape.
+  The structural renderer now installs motion first, animates the visible key,
+  bounds, ports, positions, and edges, then restores and flushes static mode.
+- At 1440×900, the corrected Agent frame grew from about 735 px to 1114 px and
+  the Tool frame to about 595 px. Both remained single continuous Cards in
+  light and dark themes; Worklist stayed 360 px, horizontal overflow remained
+  zero, message-port edges stayed attached, and browser logs were empty.
+- Final frontend verification passed ESLint, 42 Vitest tests, TypeScript/Vite
+  build, and zero-issue Ant Design lint. Focused Python checks passed 56 tests;
+  the complete optional suite passed 694 tests with 6 skips. Two builds had
+  identical five-file hashes; compileall and `git diff --check` passed.
+
+### Phase 14: Worklist real-time state and readability (2026-08-06)
+- **Status:** complete; implementation remains unstaged
+- Preserved the user-approved no-deduplication behavior. E and TC evidence may
+  continue to overlap across diagnoses.
+- Reproduced and fixed the StrictMode race: cancelled snapshot requests cannot
+  dispatch or open SSE; stale cursors, replayed events, and older Worklist
+  revisions cannot replace the latest active item.
+- Added the stable `WI-001` identity contract to the prompt and mechanically
+  enforced contiguous issuance, stable retention, and no reuse in the store.
+- Kept exact Failure text outside the Agent-authored Worklist and persistence;
+  the observer now resolves E references from the current Agent session only.
+- Rebuilt the sidebar into separate Failure, Test cases, suspected parameters,
+  and Patch candidates sections with fixed-column wrapping and no horizontal
+  overflow styles.
+- Added the owning operation key to each latest Worklist projection and its
+  fixed sidebar display; historical revisions remain complete Tool cards.
+- Focused Resolution/Worklist/Observer Python checks pass 54 tests with one
+  skip. Focused reducer, connection, and UI component checks pass 15 tests.
+- Frontend ESLint, all four Vitest files / 18 tests, TypeScript/Vite build, and
+  Ant Design 6.5.3 lint passed with zero issues.
+- The complete Python suite passed 694 tests with six skips. Two consecutive
+  builds had identical hashes; compileall and `git diff --check` passed.
+- At 1440x900 in both themes, the Worklist measured exactly 360px with no
+  horizontal overflow. Long Failure and parameter text, all E/TC/P references,
+  unavailable Failure detail, Revision 6, and active `WI-006` remained readable;
+  browser logs were empty. The diagnostic service and port 8766 were closed.
+
+### Phase 13: Ten-minute GitLab live test (2026-08-06)
+- **Status:** complete
+- User explicitly authorized the destructive five-operation local GitLab live
+  test and requested backend termination after a 600-second run.
+- The feature worktree remains unstaged on `codex/live-run-observer-ui`.
+- Initial preflight found no `gitlab-test` container and no listeners on the
+  GitLab 7077 or Phoenix 6006 ports. Dependency startup precedes the measured
+  test window.
+- Started the existing disposable `gitlab-test` container and a local Phoenix
+  19.0.0 service. Docker health, GitLab `/users/sign_in`, and Phoenix `/healthz`
+  all passed. The ignored main-checkout `.env`, both configured model roles,
+  all five approved operation keys, and the loopback UI override were verified
+  without printing credentials.
+- The measured live child started at `2026-08-05T23:48:33.720101Z`
+  (`2026-08-06 07:48:33` Asia/Shanghai) with a hard deadline at
+  `2026-08-05T23:58:33.720101Z`. The supervisor will send SIGINT at 600 seconds
+  and escalate only if graceful cleanup does not finish within 45 seconds.
+- At 07:49:58 CST the live observer reported a running Run with 30 semantic
+  cards: 10 Agent turns, 19 Tool calls, and one Smoke Batch. The active card
+  was `FailureResolutionAgent.resolve` for `GET /api/v4/projects`, round 1.
+- At 07:51:59 CST the observer held 106 cards. GET Projects improved from a
+  1/10 warning Batch to a 10/10 successful Batch; POST Projects then produced
+  a 0/10 Batch and entered `FailureResolutionAgent.resolve`. The process was
+  still running normally.
+- At 07:54:04 CST the Run had 151 cards (65 Agent turns, 83 Tool calls, three
+  Batches). POST Projects remained in its first Resolution round after the
+  0/10 Batch; no technical process failure or early termination was observed.
+- At 07:56:12 CST the Run had 197 cards. POST Projects reached Resolution round
+  2; Worklist revision 6 contained four decided items out of four, with
+  `tc2-missing-name-path` active. The run continued toward the hard deadline.
+- At 07:58:23 CST, ten seconds before the deadline, the observer held 221 cards
+  and four complete Batches: GET 1/10 then 10/10, and two POST 0/10 Batches.
+  POST Resolution round 2 remained active.
+- The supervisor sent SIGINT at exactly 600 seconds. Pytest reported the
+  expected KeyboardInterrupt after 600.71 seconds, and graceful App/UI/backend
+  shutdown completed after 615.97 total seconds without SIGTERM escalation.
+  Port 8765 was released and the known supervisor/pytest PIDs were gone.
+- The run artifact is
+  `artifacts/gitlab-projects-five-live/gitlab-projects-five-20260805T234838Z-7c86f0a5`.
+  Interruption occurred before report/coverage export, so it contains
+  `run-metadata.json` and `evidence.sqlite` only.
+- Phoenix retained 348 spans: 341 OK and 7 ERROR, including 86 LLM calls, 40
+  real Test Case executions, four Smoke Batch spans, and two Operation Smoke
+  spans. Six ERROR spans are the deliberate interruption cascade; one rejected
+  Worklist write referenced TC2 outside its Failure sources.
+- Persistent evidence contains six Failures, six terminal Resolution Attempts,
+  five Generator change events, and three Constraints. A post-run GitLab query
+  found three projects created during the window by authorized POST probes:
+  `cep-probe-flat-1`, `cep-probe-tc12-1`, and `cep-probe-tc11-1`.
+- Stopped the disposable GitLab container and removed the temporary Phoenix
+  container/network while retaining their volumes. Final checks found no
+  listeners on 8765, 7077, or 6006 and no RESTScope supervisor/pytest process.
+
+### Phase 12: Schema-v2 semantic timeline
+- **Status:** complete; implementation remains unstaged
+- Actions taken:
+  - Recovered the existing observer worktree, task records, and retained stopped
+    UI process without closing it.
+  - Re-read the required planning, deep-Module design, and Ant Design CLI
+    instructions before changing the cross-module observer Interface.
+  - Confirmed the observer seam already receives exact LLM messages, tool
+    inputs/outputs, prepared target requests, bounded target responses, and
+    Worklist snapshots; the refactor can stay App-owned without changing
+    workflow DTOs or Phoenix spans.
+  - Replaced the old observer expectations with 11 schema-v2 behavior contracts;
+    the first run failed 10 tests in the expected red state.
+  - Implemented semantic Agent-turn deltas, Tool cards, HTTP Tool merging,
+    complete Smoke Batch case aggregation, Worklist-only sidebar updates, and
+    stopped-warning status. The focused observer contracts now pass 11 tests.
+  - Added an observer-only detail outlet for the actual random Batch seed and
+    observer-only Tool spans for the two direct Resolution tools, preserving
+    all established Phoenix span names and exported fields.
+  - Queried the locked Ant Design 6.5.3 Table, Tabs, Card, and Collapse APIs and
+    based the expandable Test Case table on the official `Table expand` demo.
+  - Replaced message-role filtering and compound HTTP composition with three
+    semantic event filters and direct cards. Agent and Tool cards now expose
+    Input/Output Tabs; Smoke Batches expose a compact expandable Table with
+    complete Request/Response Tabs per Test Case.
+  - Frontend red tests initially failed five semantic-card expectations. After
+    implementation, ESLint, 4 Vitest files / 13 tests, TypeScript/Vite build,
+    and Ant Design CLI lint all pass; the CLI reports zero issues.
+
+### Phase 8: Live run observer foundation
+- **Status:** complete
+- Actions taken:
+  - Confirmed the user-approved implementation plan and Git authorization boundary.
+  - Created `/Users/lixin/Workplace/RESTScope-worktrees/live-run-observer-ui` on `codex/live-run-observer-ui` from current local `main`.
+  - Read the project governance, existing tracing/HTTP/worklist implementation, and selected implementation skills.
+  - Installed and verified `@ant-design/cli` 6.5.3.
+  - Attempted the required `ui-ux-pro-max` design-system query; its documented `scripts/search.py` is absent, so retained the written design rules as the fallback.
+  - Added the live observer/event store and connected it to the tracing facade without changing the Phoenix backend Interface.
+  - The first broad HTTP transport patch missed the current header-normalization return block; no partial edit occurred, and the successful replacement wraps the unchanged transport operation through an observer-only helper.
+  - Added focused contracts for Phoenix-disabled observation, exact prompt snapshots with de-duplicated timeline messages, Worklist revision projection, HTTP evidence, cursor changes, run replacement, and close cleanup.
+  - Fresh core check passed: `uv run pytest -q tests/test_live_run_observer.py tests/test_observability.py tests/test_observability_integration.py` -> 12 passed, 11 skipped.
+  - Added `UIConfig`, loopback-only Starlette/Uvicorn hosting, snapshot and SSE routes, security headers, App lifecycle wiring, and fail-open dependency/port handling.
+  - Added exact HTTP query/header/body observation, bounded JSON/text/Base64 response views, timeout/transport failures, and UI-only finalize phases that do not add Phoenix spans.
+  - Expanded focused backend verification to 25 passed and 11 optional Phoenix skips; a 100-test workflow/transport/App regression group also passed with one skip.
+
+### Phase 9: Ant Design observer interface
+- **Status:** complete
+- Actions taken:
+  - Created the locked React 19, TypeScript, Vite, and Ant Design 6 project plus committed-runtime build output.
+  - Implemented the fixed run header, search and five filter dimensions, virtual chronological timeline, compound Agent HTTP tool cards, safe Markdown, exact prompt JSON, copy actions, theme preference, auto-follow pause, and latest Worklist sidebar.
+  - Added reducer, filtering/composition, visual-label, copy, follow, theme, HTTP, and Worklist tests: 3 files and 12 tests passed.
+  - Frontend ESLint passed. Ant Design CLI lint initially found six v6-deprecated props; after using the v6 names, its deprecated, accessibility, usage, and performance counts were all zero.
+
+### Phase 10: Verification and delivery
+- **Status:** complete
+- Actions taken:
+  - Verified the production build at 1440×900 in the local browser with dark and light themes, a long prompt, compound HTTP JSON, and a complex Worklist; browser logs contained no warnings or errors.
+  - Added a GitHub Actions frontend job that installs the lock file, lints, tests, runs Ant Design lint, rebuilds static assets, and fails on committed-asset drift.
+  - Frontend final verification passed: ESLint, 4 Vitest files / 13 tests, Vite build, and zero-issue Ant Design CLI lint.
+  - `uv run --extra ui pytest -q` passed 663 tests with 18 skips; `uv run --all-extras pytest -q` passed 685 tests with 6 skips.
+  - Python compileall, `git diff --check`, deterministic asset hashes, and wheel inclusion of the built UI all passed.
+  - Kept every task change unstaged and uncommitted in the dedicated feature worktree.
+
+### Phase 11: Independent Run and App/UI lifecycles
+- **Status:** complete
+- Actions taken:
+  - Reproduced the lifecycle defect with two red tests: caller interruption was
+    recorded as `errored`, and the observer had no Run-only terminal operation.
+  - Added a deep observer operation that marks the current Run `stopped` while
+    retaining its events, Worklist, SSE stream, and eligibility for a later Run.
+  - Routed `RESTScopeApp.run()` keyboard interruption through that operation
+    without closing the App or UI; the original `KeyboardInterrupt` still
+    reaches the caller.
+  - Focused lifecycle contracts now pass: 2 tests.
+  - Expanded observer/UI lifecycle verification passed 16 tests; the broader
+    observability, App, SSE, and tracing group passed 88 tests with one skipped
+    opt-in Phoenix scenario.
+  - Complete optional-dependency verification passed 687 tests with 6 skips.
+
 ### Phase 1: Discovery and executable seams
 - **Status:** complete
 - **Started:** 2026-08-05
@@ -114,6 +314,65 @@
 | Failure investigation refinement | Catalog, Resolution, Evaluation, boundaries, tracing | Four-tool interface and progressive response evidence path work | 42 passed | pass |
 | Full suite after tool refinement | Entire repository | No offline regressions | 657 passed, 5 skipped | pass |
 | Final bounded GitLab live run | Five operations, 600-second cutoff | No crash; capture real progress | 2 operations and 5 Patch Attempts completed before cutoff | partial |
+| Schema-v2 focused backend group | Observer, UI server/App, Phoenix, execution, Resolution | Semantic aggregation and unchanged tracing pass | 76 passed | pass |
+| Schema-v2 frontend | ESLint, Vitest, Vite, Ant Design 6.5.3 lint | Three semantic cards and UI interactions pass | 13 tests; zero lint issues | pass |
+| Complete optional suite after schema v2 | Entire repository | No regressions across all installed integrations | 691 passed, 6 skipped | pass |
+| Schema-v2 browser acceptance | 1440×900 dark/light, 20-case Batch, multi-turn Agent, HTTP Tool, stopped Run | All semantic details remain readable and UI stays online | Passed; no browser warnings/errors | pass |
+
+### Phase 12: Schema-v2 semantic timeline
+- **Status:** complete; Git delivery is not authorized
+- Actions taken:
+  - Replaced low-level trace cards with only Agent turn, Tool call, and Smoke
+    Batch events while leaving Phoenix span names, attributes, and outputs intact.
+  - Verified later Agent cards contain every new tool/harness message without
+    replaying system/user history; assistant Tool-call intent remains visible
+    beside the actual Tool execution card.
+  - Aggregated all 20 generated requests into one expandable Batch, including
+    JSON, binary Base64, truncation, timeout, and transport-error shapes.
+  - Retained the stopped Run snapshot and UI; unfinished semantic work is a
+    stopped warning and the header failure count remains zero.
+  - Built the frontend twice with identical SHA-256 hashes and retained the
+    accepted page at `http://127.0.0.1:8765/`.
+
+### Phase 15: Agent-session graph canvas
+- **Status:** complete; Git delivery is not authorized
+- Actions taken:
+  - Folded all turns from one `agent.session_id` into one dynamic Agent node
+    with chronological role-specific message cards.
+  - Connected Tool nodes to exact Assistant message ports using
+    `tool_call_id`, with documented parent-turn and Agent-header fallbacks.
+  - Replaced the virtual timeline with a non-editable AntV G6 canvas and kept
+    the latest Worklist in its fixed 360 px sidebar.
+  - Replaced the detail Drawer with vertical in-node expansion for full Agent
+    prompts/outputs, Tool/HTTP exchanges, and Smoke Batch cases.
+  - Passed 33 frontend tests, Ant Design lint, 80 focused Python tests, the
+  complete 694-pass/6-skip suite, deterministic-build comparison,
+  compilation, diff checks, and real-page 1440×900 dark/light acceptance.
+
+### Phase 16: Fused single-message expansion
+- **Status:** complete; Git delivery is not authorized
+- Actions taken:
+  - Replaced whole-turn Prompt/response detail with the complete selected
+    message only, including message-owned Assistant Tool calls or Tool-result
+    name and call ID.
+  - Added a Unicode-safe 160-character collapsed preview and an explicit empty
+    message state.
+  - Removed the nested detail border, background, radius, and gap from Agent,
+    Tool/HTTP, and Smoke Batch nodes; expansion now stretches the original
+    surface with one internal divider.
+  - Updated deterministic height and message-port calculations to match the
+    fused DOM geometry.
+  - Passed all 38 frontend tests, ESLint, TypeScript/Vite build, and zero-issue
+    Ant Design 6.5.3 lint. The complete Python suite passed 694 tests with six
+    skips; compileall and `git diff --check` passed.
+  - Two consecutive production builds produced identical SHA-256 hashes.
+  - Browser acceptance at 1440×900 passed in light and dark themes. The Agent
+    detail measured 440px inside an exact 544px expanded message, Tool detail
+    measured 520px, both were transparent and radius-free inside their original
+    surface, Worklist remained 360px without horizontal overflow, and browser
+    logs were empty. The retained Run had no Batch node, whose fused boundary
+    is covered by the frontend component regression instead.
+  - Kept the 8766 App/UI running and left every change unstaged and uncommitted.
 
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |
@@ -134,6 +393,19 @@
 | 2026-08-05 | Exact target Failure text exceeded the E-registry schema cap | 1 | Remove the registry cap and keep prompt bounding in the Context adapter |
 | 2026-08-05 | Resolution repeatedly probed before naming an active item | 1 | Require `active_item_id` before HTTP Probe and add a regression scenario |
 | 2026-08-05 | DeepSeek thinking tool calls omitted `reasoning_content` on two consecutive responses | 1 | Add a third bounded pre-tool attempt; reject after exhaustion and never fabricate continuation content |
+| 2026-08-05 | Repeated wheel build retained one obsolete hashed UI asset from ignored setuptools cache | 1 | Move generated build caches out of the worktree, rebuild cleanly, and verify the wheel contains only the current hashed JS/CSS |
+| 2026-08-05 | Browser acceptance requested an unsupported `networkidle` wait state | 1 | Use the supported `load` state and take a fresh DOM snapshot |
+| 2026-08-05 | An empty automation fill did not clear the controlled Ant Design search input | 1 | Click the unique visible clear control and verify all seven cards return |
+| 2026-08-06 | GitLab and Phoenix preflight endpoints were offline | 1 | Start the existing disposable dependencies and health-check them before starting the 600-second run |
+| 2026-08-06 | The initial readiness loop assigned zsh's reserved `status` variable | 1 | Use task-specific variable names for the next bounded health check |
+| 2026-08-06 | The running GitLab image does not expose `/-/readiness` | 1 | Verify Docker health plus the harness's `/users/sign_in` endpoint |
+| 2026-08-06 | A combined progress patch had an invalid file-marker anchor | 1 | Reapply the unchanged content with valid patch markers; no partial edit occurred |
+| 2026-08-06 | The timed supervisor imported `datetime.UTC` under system Python 3.9 | 1 | No child process was created; use `timezone.utc` and restart the full timer |
+| 2026-08-06 | `pgrep -af` returned an ambiguous numeric match while checking shutdown | 1 | Check the known PIDs and full process table explicitly; no RESTScope backend remained |
+| 2026-08-06 | The first repeated-build command ran from the repository root without a package manifest | 1 | No build ran and no asset changed; rerun from `ui/` and compare the complete static manifest successfully |
+| 2026-08-06 | The browser motion sampler called unsupported `performance.now()` after toggling the Assistant card | 1 | Inspect the resulting expansion first, then retry with ordered geometry samples and no restricted timing API |
+| 2026-08-06 | The first browser locator call targeted the tab wrapper instead of its Playwright surface | 1 | Use the retained tab's supported `playwright.locator` interface; no click occurred |
+| 2026-08-06 | Restricted page evaluation did not expose DOM `click()` or a `MouseEvent` constructor for frame-level sampling | 1 | Use supported locator clicks plus component-level Web Animations tests for reversal timing; page geometry still verifies stable endpoints |
 
 ## 5-Question Reboot Check
 | Question | Answer |

@@ -25,9 +25,11 @@ class TraceSpan:
         *,
         span: Any | None = None,
         content_encoder: TraceContentEncoder | None = None,
+        live_span: Any | None = None,
     ) -> None:
         self._span = span
         self._content_encoder = content_encoder
+        self._live_span = live_span
         self._has_error = False
 
     def set_output(self, value: Any) -> None:
@@ -85,6 +87,11 @@ class TraceSpan:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
+        if self._live_span is not None:
+            try:
+                self._live_span.set_attribute(name, value)
+            except Exception:
+                pass
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -104,8 +111,36 @@ class TraceSpan:
         """
         self._set_content("input", value)
 
+    def set_live_detail(self, name: str, value: Any) -> None:
+        """Add one observer-only detail without changing Phoenix attributes.
+
+        Args:
+            name: Stable field name inside the semantic event detail.
+            value: JSON-compatible evidence owned by the current workflow.
+
+        This narrow outlet is used when the semantic UI needs a value, such as
+        the generated Smoke Batch seed, that was deliberately absent from the
+        established exported span contract. Observer failure remains fail-open.
+        """
+        if self._live_span is None:
+            return
+        try:
+            self._live_span.set_detail(name, value)
+        except Exception:
+            pass
+
     def record_error(self, exc: BaseException) -> None:
         """Record a redacted internal traceback without exposing it to callers."""
+        if self._live_span is not None:
+            try:
+                if isinstance(exc, KeyboardInterrupt):
+                    # A caller stop is terminal for the local Run but is not a
+                    # failed Agent decision, tool, or Batch in the read-only UI.
+                    self._live_span.mark_interrupted()
+                else:
+                    self._live_span.mark_error(str(exc))
+            except Exception:
+                pass
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -113,7 +148,10 @@ class TraceSpan:
             stacktrace = self._content_encoder.redactor.redact_text(
                 "".join(traceback.format_exception(exc))
             )
-            self.mark_error(message)
+            # The live observer was updated above, including the special
+            # stopped-warning treatment for KeyboardInterrupt. Set only the
+            # exported span here so Phoenix cannot overwrite that UI status.
+            self._mark_export_error(message)
             self._span.add_event(
                 "exception",
                 {
@@ -132,14 +170,16 @@ class TraceSpan:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
+        if self._live_span is not None:
+            try:
+                self._live_span.mark_error(message)
+            except Exception:
+                pass
         if self._span is None or self._content_encoder is None:
             return
         try:
-            from opentelemetry.trace.status import Status, StatusCode
-
             redacted = self._content_encoder.redactor.redact_text(message)
-            self._span.set_status(Status(StatusCode.ERROR, redacted))
-            self._has_error = True
+            self._mark_export_error(redacted)
         except Exception:
             return
 
@@ -150,6 +190,11 @@ class TraceSpan:
         The class owns any required collaborators or state; arguments supply only the
         data needed for this call.
         """
+        if self._live_span is not None and not self._has_error:
+            try:
+                self._live_span.mark_ok()
+            except Exception:
+                pass
         if self._span is None or self._has_error:
             return
         try:
@@ -160,6 +205,11 @@ class TraceSpan:
             return
 
     def _set_content(self, prefix: str, value: Any) -> None:
+        if self._live_span is not None:
+            try:
+                self._live_span.set_content(prefix, value)
+            except Exception:
+                pass
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -169,6 +219,15 @@ class TraceSpan:
             self._set_size_attributes(prefix, prepared)
         except Exception:
             return
+
+    def _mark_export_error(self, message: str) -> None:
+        """Set only Phoenix/OpenTelemetry failure state, never live UI state."""
+        if self._span is None:
+            return
+        from opentelemetry.trace.status import Status, StatusCode
+
+        self._span.set_status(Status(StatusCode.ERROR, message))
+        self._has_error = True
 
     def _set_llm_messages(
         self,
@@ -183,6 +242,11 @@ class TraceSpan:
         This private helper keeps one transformation or policy decision explicit so the
         surrounding orchestration remains readable.
         """
+        if self._live_span is not None:
+            try:
+                self._live_span.set_messages(prefix, messages, summary=summary)
+            except Exception:
+                pass
         if self._span is None or self._content_encoder is None:
             return
         try:
@@ -273,6 +337,7 @@ class TracingRuntime:
         redactor: Redactor | None = None,
         max_content_bytes: int = 65536,
         backend: Any | None = None,
+        run_observer: Any | None = None,
     ) -> None:
         self._redactor = redactor or Redactor()
         self._content_encoder = TraceContentEncoder(
@@ -280,6 +345,7 @@ class TracingRuntime:
             max_content_bytes=max_content_bytes,
         )
         self._backend = backend
+        self._run_observer = run_observer
         self._closed = False
 
     @classmethod
@@ -297,6 +363,69 @@ class TracingRuntime:
         """Expose the same redactor used for every trace input and output."""
         return self._redactor
 
+    @property
+    def run_observer(self) -> Any | None:
+        """Return the optional current-run observer used by UI adapters."""
+        return self._run_observer
+
+    @property
+    def live_enabled(self) -> bool:
+        """Report whether a live observer can currently accept run events."""
+        return self._run_observer is not None and not self._closed
+
+    def bind_run_observer(self, observer: Any | None) -> None:
+        """Attach one App-owned observer without changing Phoenix registration."""
+        self._run_observer = observer
+
+    @contextmanager
+    def live_span(
+        self,
+        name: str,
+        *,
+        kind: str,
+        input_value: Any | None = None,
+        attributes: Mapping[str, Any] | None = None,
+    ) -> Iterator[TraceSpan]:
+        """Open a UI-only aggregation scope that never changes Phoenix.
+
+        This narrow outlet covers observer evidence that was not represented by
+        an existing exported span, such as direct Resolution tool execution.
+        It mirrors :meth:`span` fail-open behavior, records business exceptions,
+        and always re-raises the original exception unchanged.
+        """
+        live_span = None
+        if self.live_enabled:
+            try:
+                live_span = self._run_observer.start_span(
+                    name=name,
+                    kind=kind,
+                    input_value=input_value,
+                    attributes=attributes,
+                )
+            except Exception:
+                live_span = None
+        span = TraceSpan(
+            content_encoder=self._content_encoder,
+            live_span=live_span,
+        )
+        if input_value is not None:
+            span.set_input(input_value)
+        for key, value in (attributes or {}).items():
+            span.set_attribute(key, value)
+        try:
+            yield span
+        except BaseException as exc:
+            span.record_error(exc)
+            raise
+        else:
+            span.mark_ok()
+        finally:
+            if live_span is not None:
+                try:
+                    live_span.finish()
+                except Exception:
+                    pass
+
     @contextmanager
     def span(
         self,
@@ -311,18 +440,34 @@ class TracingRuntime:
         Creation/finalization failures degrade to a no-op span. Exceptions from
         business code are recorded and re-raised unchanged.
         """
-        if not self.enabled:
+        if not self.enabled and not self.live_enabled:
             yield TraceSpan()
             return
-        try:
-            manager = self._backend.start_as_current_span(name)
-            otel_span = manager.__enter__()
-        except Exception as exc:
-            self._warn("Tracing span creation failed", exc)
-            yield TraceSpan()
-            return
+        live_span = None
+        if self._run_observer is not None:
+            try:
+                live_span = self._run_observer.start_span(
+                    name=name,
+                    kind=kind,
+                    input_value=input_value,
+                    attributes=attributes,
+                )
+            except Exception:
+                live_span = None
+        manager = None
+        otel_span = None
+        if self.enabled:
+            try:
+                manager = self._backend.start_as_current_span(name)
+                otel_span = manager.__enter__()
+            except Exception as exc:
+                self._warn("Tracing span creation failed", exc)
 
-        span = TraceSpan(span=otel_span, content_encoder=self._content_encoder)
+        span = TraceSpan(
+            span=otel_span,
+            content_encoder=self._content_encoder,
+            live_span=live_span,
+        )
         span.set_attribute("openinference.span.kind", kind)
         if kind == "AGENT":
             span.set_attribute("agent.name", name)
@@ -341,10 +486,16 @@ class TracingRuntime:
         else:
             span.mark_ok()
         finally:
-            try:
-                manager.__exit__(None, None, None)
-            except Exception as exc:
-                self._warn("Tracing span finalization failed", exc)
+            if manager is not None:
+                try:
+                    manager.__exit__(None, None, None)
+                except Exception as exc:
+                    self._warn("Tracing span finalization failed", exc)
+            if live_span is not None:
+                try:
+                    live_span.finish()
+                except Exception:
+                    pass
 
     def close(self) -> None:
         """
@@ -379,6 +530,7 @@ def build_tracing_runtime(
     config: Any,
     *,
     redactor: Redactor | None = None,
+    run_observer: Any | None = None,
 ) -> TracingRuntime:
     """Build Phoenix tracing when enabled, otherwise return a safe no-op."""
 
@@ -389,6 +541,7 @@ def build_tracing_runtime(
         return TracingRuntime(
             redactor=shared_redactor,
             max_content_bytes=max_content_bytes,
+            run_observer=run_observer,
         )
     try:
         from restscope.observability.phoenix import build_phoenix_backend
@@ -404,4 +557,5 @@ def build_tracing_runtime(
         redactor=shared_redactor,
         max_content_bytes=max_content_bytes,
         backend=backend,
+        run_observer=run_observer,
     )

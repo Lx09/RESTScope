@@ -208,7 +208,7 @@ def _resolution(*, applied: bool, outputs_used: int = 4):
         ),
     )
     item = WorklistItem(
-        item_id="missing-project",
+        item_id="WI-001",
         source_failure_refs=["E1"],
         test_case_refs=["TC1"],
         suspected_parameters=["path.projectId"],
@@ -403,7 +403,7 @@ def test_public_contract_rejects_removed_agent_budgets_and_old_summary_names() -
     with pytest.raises(ValidationError, match="todo_id"):
         ResolutionItemSummary.model_validate(
             {
-                "item_id": "item-1",
+                "item_id": "WI-001",
                 "failure_summary": "Missing project",
                 "outcome": "no_patch",
                 "attempt_id": "attempt-1",
