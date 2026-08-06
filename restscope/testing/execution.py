@@ -189,6 +189,12 @@ class OperationTestingService:
                     "success_count": outcome.success_count,
                 }
             )
+            # The random seed is needed to understand and reproduce the Batch,
+            # but adding it to the established Phoenix output would change that
+            # tracing contract. Send it only to the App-owned semantic observer.
+            set_live_detail = getattr(span, "set_live_detail", None)
+            if callable(set_live_detail):
+                set_live_detail("seed", outcome.seed)
             span.set_attribute("restscope.test.run_id", outcome.run_id)
             span.set_attribute(
                 "restscope.test.observed_2xx",
@@ -326,6 +332,7 @@ class OperationTestingService:
                     response_body_limit=(
                         BEHAVIOR_MONITOR_RESPONSE_BYTES
                         if self.transport.has_response_processor
+                        or getattr(self.transport, "run_observer", None) is not None
                         else None
                     ),
                     failure_response_body_limit=SMOKE_FAILURE_RESPONSE_BYTES,

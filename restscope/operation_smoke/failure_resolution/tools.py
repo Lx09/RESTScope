@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from restscope.capabilities import AgentToolbox
 from restscope.llm import ToolSpec
 
-from .schemas import FailureWorklist, WorklistItem
+from .schemas import FailureWorklist, WorklistItem, _WORKLIST_ITEM_ID_PATTERN
 from .worklist import FailureWorklistStore
 
 
@@ -32,7 +32,12 @@ class _WriteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
-    active_item_id: str | None = Field(default=None, min_length=1, max_length=120)
+    active_item_id: str | None = Field(
+        default=None,
+        min_length=6,
+        max_length=120,
+        pattern=_WORKLIST_ITEM_ID_PATTERN,
+    )
     items: list[WorklistItem]
 
 

@@ -177,8 +177,8 @@ def test_duplicate_stable_failure_in_one_batch_increments_occurrence_once() -> N
     worklist = _worklist(
         registry=registry,
         items=[
-            _item(item_id="first-view", outcome="no_patch"),
-            _item(item_id="second-view", outcome="no_patch"),
+            _item(item_id="WI-001", outcome="no_patch"),
+            _item(item_id="WI-002", outcome="no_patch"),
         ],
     )
 
@@ -229,7 +229,7 @@ def test_grouped_failure_summary_is_derived_from_canonical_exact_messages() -> N
         sources=sources,
         items=[
             _item(
-                item_id="grouped",
+                item_id="WI-001",
                 outcome="no_patch",
                 # Agent ordering cannot change the canonical display summary.
                 source_failure_refs=("E2", "E1"),
@@ -277,7 +277,7 @@ def test_apply_patch_dereferences_candidate_and_recomputes_combined_state() -> N
         registry=registry,
         items=[
             _item(
-                item_id="missing-project",
+                item_id="WI-001",
                 outcome="apply_patch",
                 candidate_ref=candidate.candidate_ref,
                 suspected_parameters=(),
@@ -343,8 +343,8 @@ def test_overlapping_selected_candidates_are_rejected_before_persistence() -> No
     worklist = _worklist(
         registry=registry,
         items=[
-            _item(item_id="first", outcome="apply_patch", candidate_ref=first.candidate_ref),
-            _item(item_id="second", outcome="apply_patch", candidate_ref=second.candidate_ref),
+            _item(item_id="WI-001", outcome="apply_patch", candidate_ref=first.candidate_ref),
+            _item(item_id="WI-002", outcome="apply_patch", candidate_ref=second.candidate_ref),
         ],
     )
 
@@ -418,9 +418,9 @@ def test_second_patch_event_failure_rolls_back_the_entire_finalization() -> None
     worklist = _worklist(
         registry=registry,
         items=[
-            _item(item_id="path", outcome="apply_patch", candidate_ref=path.candidate_ref),
+            _item(item_id="WI-001", outcome="apply_patch", candidate_ref=path.candidate_ref),
             _item(
-                item_id="region",
+                item_id="WI-002",
                 outcome="apply_patch",
                 candidate_ref=region.candidate_ref,
                 suspected_parameters=("query.region",),

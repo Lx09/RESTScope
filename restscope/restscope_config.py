@@ -140,6 +140,25 @@ class TracingConfig:
 
 
 @dataclass(frozen=True)
+class UIConfig:
+    """Optional loopback-only live observer settings.
+
+    Args:
+        enabled: Whether the App should collect and serve current-run events.
+        port: Fixed local TCP port. The host is intentionally not configurable
+            because v1 displays target credentials without viewer authentication.
+    """
+
+    enabled: bool = False
+    port: int = 8765
+
+    def __post_init__(self) -> None:
+        """Reject ports that cannot be bound by a TCP server."""
+        if not 1 <= self.port <= 65535:
+            raise ValueError("UI_PORT must be between 1 and 65535")
+
+
+@dataclass(frozen=True)
 class RESTScopeConfig:
     """RESTScope configuration loaded from `.env` and environment variables."""
 
@@ -150,6 +169,7 @@ class RESTScopeConfig:
     mcp: MCPConfig
     tracing: TracingConfig = field(default_factory=TracingConfig)
     random: RandomConfig = field(default_factory=RandomConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
@@ -215,6 +235,10 @@ class RESTScopeConfig:
             ),
             random=RandomConfig(
                 seed=_optional_int_value(values.get("RANDOM_SEED")),
+            ),
+            ui=UIConfig(
+                enabled=_bool_value(values.get("UI_ENABLED"), False),
+                port=_int_value(values.get("UI_PORT"), 8765),
             ),
         )
 

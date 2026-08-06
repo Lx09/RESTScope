@@ -42,6 +42,8 @@ class FailureWorklistStore:
         self._valid_parameters = frozenset(valid_parameters)
         self._candidate_refs = candidate_refs
         self._value = FailureWorklist(revision=0, items=[])
+        self._issued_item_ids: set[str] = set()
+        self._next_item_number = 1
 
     @property
     def sources(self) -> tuple[FailureSource, ...]:
@@ -101,7 +103,26 @@ class FailureWorklistStore:
         active_item_id: str | None,
         items: list[WorklistItem],
     ) -> FailureWorklist:
-        """Atomically replace the whole list after mechanical validation."""
+        """Atomically replace the whole list after mechanical validation.
+
+        Args:
+            expected_revision: Revision returned by the latest successful read
+                or write. A stale value prevents lost updates.
+            active_item_id: Stable ``WI-*`` identity to investigate next, or
+                ``None`` when no item is active.
+            items: Complete replacement list. Existing identities may move;
+                new identities must consume the next contiguous numbers.
+
+        Returns:
+            A defensive copy of the newly stored revision.
+
+        State changes and errors:
+            A valid write advances the revision and permanently records every
+            newly issued identity. A :class:`ToolFailure` rejects the entire
+            write for stale revision, invalid references, an unknown active
+            item, skipped numbers, or reuse of a retired identity; no state or
+            identity counter changes on rejection.
+        """
         if expected_revision != self._value.revision:
             self._reject(
                 code="stale_worklist_revision",
@@ -116,6 +137,7 @@ class FailureWorklistStore:
                 code="duplicate_worklist_item",
                 message="Worklist item IDs must be unique.",
             )
+        new_item_ids = self._validate_item_id_sequence(item_ids)
         if active_item_id is not None and active_item_id not in set(item_ids):
             self._reject(
                 code="unknown_active_worklist_item",
@@ -131,7 +153,45 @@ class FailureWorklistStore:
             items=items,
         )
         self._value = replacement.model_copy(deep=True)
+        self._issued_item_ids.update(new_item_ids)
+        self._next_item_number += len(new_item_ids)
         return replacement.model_copy(deep=True)
+
+    def _validate_item_id_sequence(self, item_ids: list[str]) -> set[str]:
+        """Require new WI identities to use the next contiguous session numbers.
+
+        Existing items may be reordered freely. Once an item disappears from a
+        successful replacement, its identity becomes retired and cannot later
+        refer to a different diagnosis. The returned set is committed only
+        after every other Worklist check succeeds, preserving atomic writes.
+        """
+        incoming = set(item_ids)
+        current = {item.item_id for item in self._value.items}
+        reused = sorted((incoming & self._issued_item_ids) - current)
+        if reused:
+            self._reject(
+                code="retired_worklist_item_id",
+                message="Retired Worklist item IDs cannot be reused: " + ", ".join(reused),
+            )
+
+        new_item_ids = incoming - self._issued_item_ids
+        expected = {
+            _format_worklist_item_id(number)
+            for number in range(
+                self._next_item_number,
+                self._next_item_number + len(new_item_ids),
+            )
+        }
+        if new_item_ids != expected:
+            self._reject(
+                code="worklist_item_id_out_of_sequence",
+                message=(
+                    "New Worklist item IDs must be assigned contiguously starting at "
+                    + _format_worklist_item_id(self._next_item_number)
+                    + "."
+                ),
+            )
+        return new_item_ids
 
     def require_complete_coverage(self) -> None:
         """Require every original Failure/Test Case association at least once."""
@@ -196,3 +256,8 @@ class FailureWorklistStore:
     def _reject(*, code: str, message: str) -> None:
         """Raise one model-safe rejection without changing stored state."""
         raise ToolFailure(code=code, message=message)
+
+
+def _format_worklist_item_id(number: int) -> str:
+    """Render one positive session sequence with at least three digits."""
+    return f"WI-{number:03d}"

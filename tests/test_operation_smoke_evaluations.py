@@ -151,10 +151,10 @@ def test_resolution_task_runs_real_worklist_loop_without_storage() -> None:
                         name="failure_resolution.write_worklist",
                         arguments={
                             "expected_revision": 0,
-                            "active_item_id": "name-conflict",
+                            "active_item_id": "WI-001",
                             "items": [
                                 {
-                                    "item_id": "name-conflict",
+                                    "item_id": "WI-001",
                                     "source_failure_refs": ["E1", "E2"],
                                     "test_case_refs": ["TC1", "TC2"],
                                     "suspected_parameters": ["body.name"],

@@ -23,6 +23,10 @@ dependencies = [
 tracing = [
     "arize-phoenix-otel>=0.16.1,<0.17",
 ]
+ui = [
+    "starlette>=0.47,<1",
+    "uvicorn>=0.35,<1",
+]
 
 [dependency-groups]
 dev = [
@@ -36,6 +40,9 @@ evaluation = [
 
 [tool.setuptools.packages.find]
 include = ["restscope*"]
+
+[tool.setuptools.package-data]
+"restscope.ui" = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

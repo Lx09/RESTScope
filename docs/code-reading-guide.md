@@ -357,9 +357,30 @@ foreign keys, and the default App always rejects existing database paths.
 
 ### `restscope/observability/`
 
-Creates Phoenix/OpenTelemetry spans while applying redaction and size limits.
-Tracing is optional: the disabled runtime preserves behavior without exporting
-data.
+Creates Phoenix/OpenTelemetry spans and the independent current-run live event
+narrative while applying the shared exact-value Redactor. `runtime.py` is the
+business-code tracing seam; `live.py` owns current-run event ordering, updates,
+Agent-turn message deltas, Tool input/output, complete Smoke Batch Test Cases,
+and the current Worklist projection. Phoenix retains its lower-level spans;
+the browser schema exposes only `agent_turn`, `tool_call`, and `smoke_batch`.
+Both outputs are optional and fail-open.
+
+### `restscope/ui/` and `ui/`
+
+`restscope/ui/` adapts the live observer to loopback-only snapshot, SSE, and
+static GET routes. The top-level `ui/` directory contains the React/TypeScript/
+Ant Design source; its Vite build is versioned under `restscope/ui/static/` so
+Python installations do not require Node.js at runtime. The page has no command
+or write route and retains data only in browser memory. `canvasModel.ts` folds
+Agent turns by session and resolves Tool edges to Assistant-message ports;
+`EventCanvas.tsx` owns the read-only G6 lifecycle. Agent messages, Tools, and
+Smoke Batches expand complete details vertically inside their owning node. A
+Smoke Batch uses one expandable table with the complete bounded Request and
+Response evidence for every generated Test Case.
+The Worklist sidebar accepts only monotonically newer successful revisions,
+resolves session-local E references to exact Failure messages, and wraps long
+parameter handles inside its fixed-width column. `WI-*` identities are issued
+and validated by the Failure Resolution worklist store, not inferred by the UI.
 
 ### `evaluations/`
 

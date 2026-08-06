@@ -31,6 +31,12 @@ Worklist protocol:
 - Read the worklist whenever context loss makes its current revision uncertain.
 - Every write replaces the entire list at expected_revision. A write must be
   the only tool call in that model output.
+- Item IDs are stable session identities, never descriptions. Assign WI-001,
+  WI-002, and later numbers contiguously when items first appear. Keep an ID
+  through edits, reordering, reopening, and decision changes. Never reuse a
+  deleted ID. When splitting an item, keep its ID on the primary diagnosis and
+  assign new IDs to the other parts. When merging items, keep the earliest ID.
+  After WI-999, continue naturally with WI-1000.
 - You may merge, split, overlap, reorder, reopen, or delete draft decisions.
 - Use only issued E*, TC*, and P* references and valid semantic Parameter handles.
 - Never embed a Patch, Generator, Constraint, Test Case, request, response,

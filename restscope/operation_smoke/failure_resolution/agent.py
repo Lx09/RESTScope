@@ -354,7 +354,18 @@ class FailureResolutionSession:
                 "operation_key": self.request.operation_key,
                 "source_count": len(self.worklist.sources),
             },
+            attributes={
+                "restscope.operation.key": self.request.operation_key,
+                "restscope.operation.round": self.request.round_number,
+            },
         ) as span:
+            span.set_live_detail(
+                "failure_messages",
+                {
+                    source.failure_ref: source.message
+                    for source in self.worklist.sources
+                },
+            )
             while True:
                 active_item_id = self.worklist.read().active_item_id
                 try:
@@ -631,16 +642,26 @@ class FailureResolutionSession:
         """Execute a fully validated group and append one result per call."""
         self.context.append_assistant(response)
         if len(response.tool_calls) == 1 and response.tool_calls[0].name == _PATCH_TOOL_NAME:
-            results = [self._execute_patch_tool(response.tool_calls[0])]
+            call = response.tool_calls[0]
+            results = [
+                self._execute_direct_tool(
+                    call,
+                    lambda: self._execute_patch_tool(call),
+                )
+            ]
         elif (
             len(response.tool_calls) == 1
             and response.tool_calls[0].name == HTTP_REQUEST_TOOL_NAME
         ):
             assert self.config is not None and self.http_probe is not None
-            result = self.http_probe.execute(
-                config=self.config,
-                tool_call=response.tool_calls[0],
-                catalog=self.catalog,
+            call = response.tool_calls[0]
+            result = self._execute_direct_tool(
+                call,
+                lambda: self.http_probe.execute(
+                    config=self.config,
+                    tool_call=call,
+                    catalog=self.catalog,
+                ),
             )
             self._associate_probe_case(result)
             results = [result]
@@ -661,6 +682,30 @@ class FailureResolutionSession:
                     else _tool_result_text(result)
                 ),
             )
+
+    def _execute_direct_tool(
+        self,
+        call: ToolCall,
+        execute: Callable[[], ToolResult],
+    ) -> ToolResult:
+        """Observe one special in-session tool without adding a Phoenix span.
+
+        Most Resolution tools run through :class:`AgentToolbox`, which already
+        owns their normal Tool span. Parameter Patch and the current-operation
+        HTTP Probe intentionally execute through deeper workflow Modules, so
+        this observer-only span records their actual start, complete arguments,
+        final ToolResult, and failure status without changing the established
+        Phoenix contract.
+        """
+        with self.tracing_runtime.live_span(
+            call.name,
+            kind="TOOL",
+            input_value={"arguments": call.arguments},
+        ) as span:
+            result = execute()
+            span.set_output(result)
+            span.set_attribute("restscope.tool.status", result.status)
+            return result
 
     def _associate_probe_case(self, result: ToolResult) -> None:
         """Make an exact repeated Probe Failure available as optional E evidence."""

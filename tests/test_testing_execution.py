@@ -124,6 +124,45 @@ def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
     return operation, catalog, service, context, requests
 
 
+def test_smoke_execution_projects_all_real_cases_into_one_semantic_batch(
+    tmp_path: Path,
+) -> None:
+    """Scenario: the production Batch path emits one card with every final request."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+
+    observer = LiveRunObserver()
+    observer.begin_run({})
+    tracing = TracingRuntime(run_observer=observer)
+    operation, _catalog, service, context, requests = _constrained_execution_setup(
+        tmp_path,
+        tracing_runtime=tracing,
+    )
+    # App construction normally binds the same observer to both tracing and
+    # target transport. This focused setup mirrors that ownership explicitly.
+    service.transport.run_observer = observer
+
+    result = service.run_smoke_batch(
+        context,
+        operation_key=operation.operation_key,
+        case_count=2,
+        seed=17,
+    )
+    snapshot = observer.snapshot()
+
+    assert len(requests) == 2
+    assert len(snapshot["events"]) == 1
+    batch = snapshot["events"][0]
+    assert batch["kind"] == "smoke_batch"
+    assert batch["detail"]["run_id"] == result.run_id
+    assert batch["detail"]["seed"] == 17
+    assert batch["detail"]["success_count"] == 2
+    assert [case["case_id"] for case in batch["detail"]["cases"]] == ["TC1", "TC2"]
+    assert [case["request"]["url"] for case in batch["detail"]["cases"]] == [
+        str(request.url) for request in requests
+    ]
+    assert all(case["response"]["body_retained"] for case in batch["detail"]["cases"])
+
+
 def test_operation_testing_returns_catalog_cases_and_only_keeps_failure_body(
     tmp_path: Path,
 ) -> None:
