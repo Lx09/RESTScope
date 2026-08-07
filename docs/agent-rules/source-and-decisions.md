@@ -86,6 +86,13 @@ as the active project direction.
   OpenAPI IR stay in memory for the current App lifetime. This exception does
   not authorize raw-response, LLM-reasoning, evolved-IR snapshot, plan, queue,
   or general Agent-memory persistence.
+- The user has also approved a browser-only Live Observer recovery boundary.
+  The loopback React page may keep the latest five complete schema-v2 snapshots
+  in same-origin IndexedDB. Those snapshots contain exactly the already-redacted
+  UI payload, including visible target credentials, Agent prompts, Tool results,
+  HTTP exchanges, Smoke Batches, and the latest Worklist. This is local testing
+  history, not backend evidence or App recovery: no workflow reads it, no API or
+  SQLite schema exposes it, and clearing browser site data deletes it.
 - Earlier database-backed Planner and catalog documents remain historical
   evidence only where later task records mark them as superseded.
 

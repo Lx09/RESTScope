@@ -152,6 +152,14 @@ explicit project decision:
   unselected candidates are never persisted. The Test Case Catalog stores every
   Batch and Resolution Probe case only until `OperationSmokeCoordinator.run`
   returns; it must never be persisted.
+- The Live Observer browser history is a third narrow exception approved only
+  for local UI testing and recovery. The React page may persist the latest five
+  complete schema-v2 snapshots in same-origin IndexedDB, including the
+  already-redacted Agent messages, target Authorization/Cookie values, Tool
+  details, HTTP exchanges, Smoke Batches, and Worklist projection delivered to
+  that browser. It must not add a backend write API, SQLite record, cross-origin
+  sync, or runtime input. Clearing browser site data removes this history; the
+  App and workflows never read it, so it cannot resume or influence a test.
 - Failure Resolution's current-operation HTTP Probe is an operation-scoped view of
   the global `restscope.http.request` tool. It remains available for every
   supported method, including POST, PUT, PATCH, and DELETE. The Probe must use

@@ -1,13 +1,14 @@
 # Live Run Observer UI
 
-Status: Implementation and verification complete — Git delivery not authorized
+Status: IndexedDB history implementation and verification complete — Git delivery not authorized
 
 ## Objective
 
 Add a loopback-only, read-only, real-time RESTScope observer that displays key
 Agent turns, tool executions, complete Smoke Batches, and the latest Failure
-Resolution worklist without changing testing decisions or persisting observer
-state.
+Resolution worklist without changing testing decisions. The backend observer
+remains process-local; the browser may retain five complete snapshots solely
+for reopening recent UI evidence.
 
 ## Approved scope
 
@@ -38,10 +39,15 @@ state.
 - Animate that fused surface from the summary's original content position:
   opening uses 300 ms, closing uses 200 ms, and the G6 node, message ports,
   connected edges, and surrounding layout move with the same transition.
+- Persist the latest five complete schema-v2 snapshots in same-origin browser
+  IndexedDB. Restore the newest snapshot when no live Run is available, keep
+  SSE updating in the background while history is viewed, and provide only
+  browser-local delete and clear actions.
 
 ## Explicit non-goals
 
-- Cross-run history, database persistence, recovery, authentication, or remote binding.
+- Backend/SQLite observer persistence, App or workflow recovery, cross-origin
+  history, authentication, or remote binding.
 - Replacing Phoenix, changing Agent decisions, or adding a general event platform.
 - Supporting concurrent `RESTScopeApp.run` calls in one observer.
 
@@ -50,6 +56,10 @@ state.
 - `UI_ENABLED` defaults to false; `UI_PORT` defaults to 8765; host is fixed to `127.0.0.1`.
 - Observer and server failures are fail-open and must not change testing results.
 - Target Authorization, Cookie, and business fields remain visible, matching the approved trace boundary.
+- Browser history stores the exact already-redacted UI payload without further
+  encryption or field removal. It therefore includes visible Authorization,
+  Cookie, Prompt, Tool, HTTP, Batch, and Worklist details until the record ages
+  out of the latest five or the user clears site data.
 - Details are not evicted. Large runs may exhaust server/browser memory; the user explicitly accepted this risk.
 - The observer module owns event normalization, storage, and subscription behind a small sink Interface. Workflows never import UI DTOs.
 - `KeyboardInterrupt` is the current process-local stop seam. It re-raises to
@@ -57,6 +67,34 @@ state.
   unsafe cross-thread cancellation Interface is introduced.
 
 ## Verification record
+
+IndexedDB browser-history follow-up:
+
+- Added same-origin browser persistence for the latest five complete schema-v2
+  snapshots. Same-Run updates coalesce over 100 ms, while a `run.reset` in the
+  same window still preserves both Runs. Saving returns only the changed summary
+  and pruned IDs, so frequent writes do not reread five large Prompt/HTTP bodies.
+- Startup restoration, server authority, explicit frozen-history selection,
+  background live resets, local deletion/clear, incompatible records, quota
+  failure, exact sensitive-field retention, and React StrictMode are covered by
+  `fake-indexeddb` and component tests. The dependency is development-only.
+- `npm test -- --run` passed 10 files and 70 tests. `npm run lint` and Ant
+  Design 6.5.3 lint passed with zero issues; TypeScript and the Vite production
+  build passed.
+- `uv run --all-extras pytest -q` passed 696 tests with 6 skips. Two consecutive
+  production builds produced identical hashes for all five static assets;
+  compileall and `git diff --check` passed.
+- Real browser acceptance used the production assets at 1440×900. A local
+  schema-v2 Run was received and saved, then the snapshot endpoint was removed
+  and the page reloaded. The same Agent Run, event, operation, and three-second
+  duration restored from IndexedDB while the connection warning remained
+  honest. Dark and light themes had equal document/client dimensions with no
+  overflow, local clear immediately removed the Run, and browser logs contained
+  no warnings or errors. The temporary server and QA tab were closed afterward.
+- The backend observer, GET/SSE schema, Phoenix, SQLite, testing decisions, and
+  filters/canvas preferences remain unchanged. No IndexedDB history is available
+  across browser profiles, origins, or UI ports. No feature files have been
+  staged or committed.
 
 Collapsed Tool summary follow-up:
 

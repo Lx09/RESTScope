@@ -1,4 +1,4 @@
-/** Connect the snapshot and cursor stream while keeping browser data ephemeral. */
+/** Connect the authoritative server snapshot and cursor stream for the live view. */
 
 import type { Dispatch } from "react";
 

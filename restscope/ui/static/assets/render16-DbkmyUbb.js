@@ -1,1 +1,0 @@
-import{i as e,r as t}from"./index-Nj634fYF.js";var{render:n,unmountComponentAtNode:r}=e(t());function i(e,t){n(e,t)}function a(e){r(e)}export{i as render,a as unmount};
