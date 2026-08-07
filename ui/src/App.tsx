@@ -17,9 +17,10 @@ import {
   Switch,
   Typography,
 } from "antd";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { EventCanvas } from "./components/EventCanvas";
+import { RunHistoryBar } from "./components/RunHistoryBar";
 import { WorklistPanel } from "./components/WorklistPanel";
 import {
   EMPTY_FILTERS,
@@ -27,12 +28,24 @@ import {
   STATUS_LABELS,
   TOOL_FAMILY_LABELS,
 } from "./presentation";
+import {
+  RunHistoryStore,
+  RunHistoryWriter,
+  observerStateToSnapshot,
+  selectObserverView,
+  type HistoryViewMode,
+  type RunHistoryListing,
+  type RunHistorySaveResult,
+  type RunHistoryStorageStatus,
+  type RunHistorySummary,
+} from "./runHistory";
 import { initialObserverState, observerReducer } from "./state";
 import { connectLiveRun, type LiveConnection } from "./stream";
 import { observerTheme, type ThemeMode } from "./theme";
 import type {
   EventKind,
   EventStatus,
+  ObserverSnapshot,
   StreamStatus,
   TimelineFilters,
 } from "./types";
@@ -62,18 +75,125 @@ const STREAM_PRESENTATION: Record<StreamStatus, { status: "success" | "processin
 };
 
 export default function ObserverApp() {
-  const [state, dispatch] = useReducer(observerReducer, initialObserverState);
+  const [liveState, dispatch] = useReducer(observerReducer, initialObserverState);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyWarning, setHistoryWarning] = useState<string | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<RunHistoryStorageStatus>("loading");
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historySummaries, setHistorySummaries] = useState<RunHistorySummary[]>([]);
+  const [automaticHistory, setAutomaticHistory] = useState<ObserverSnapshot | null>(null);
+  const [selectedHistory, setSelectedHistory] = useState<ObserverSnapshot | null>(null);
+  const [historyMode, setHistoryMode] = useState<HistoryViewMode>("auto");
   const [filters, setFilters] = useState<TimelineFilters>(EMPTY_FILTERS);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
   const [, refreshElapsed] = useState(0);
+  const historyStore = useRef<RunHistoryStore | null>(null);
+  const historyWriter = useRef<RunHistoryWriter | null>(null);
+  const selectionRequest = useRef(0);
+
+  function acceptHistoryListing(listing: RunHistoryListing): void {
+    setHistorySummaries(listing.summaries);
+    setHistoryWarning(
+      listing.invalidCount > 0
+        ? `${listing.invalidCount} 条本地历史格式不兼容，已安全忽略。可使用“清空全部”删除。`
+        : null,
+    );
+  }
+
+  function acceptSavedRun(result: RunHistorySaveResult): void {
+    setHistorySummaries((current) => {
+      const deleted = new Set(result.deletedRunIds);
+      return [
+        result.summary,
+        ...current.filter((summary) => (
+          summary.runId !== result.summary.runId && !deleted.has(summary.runId)
+        )),
+      ]
+        .sort((left, right) => right.savedAt.localeCompare(left.savedAt))
+        .slice(0, 5);
+    });
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    if (window.indexedDB === undefined) {
+      setHistoryStatus("error");
+      setHistoryError("当前浏览器不支持 IndexedDB；实时观察不受影响。");
+      return undefined;
+    }
+
+    const store = new RunHistoryStore(window.indexedDB);
+    const writer = new RunHistoryWriter(store, {
+      delayMs: 100,
+      onSaving: () => {
+        if (!cancelled) setHistoryStatus("saving");
+      },
+      onSaved: (result) => {
+        if (cancelled) return;
+        acceptSavedRun(result);
+        setHistoryStatus("saved");
+        setHistoryError(null);
+      },
+      onError: (message) => {
+        if (cancelled) return;
+        setHistoryStatus("error");
+        setHistoryError(`浏览器未能保存最新运行：${message}。实时观察仍会继续。`);
+      },
+    });
+    historyStore.current = store;
+    historyWriter.current = writer;
+
+    // Startup restoration and the server snapshot run independently. The
+    // view selector below gives a real live Run priority unless the user has
+    // explicitly chosen a historical record.
+    const initialize = store.list().then(async (listing) => {
+      if (cancelled) return;
+      acceptHistoryListing(listing);
+      const newest = listing.summaries[0];
+      if (newest !== undefined) {
+        const loaded = await store.load(newest.runId);
+        if (!cancelled && loaded.record !== null) setAutomaticHistory(loaded.record.snapshot);
+      }
+      if (!cancelled) {
+        setHistoryStatus("ready");
+        setHistoryReady(true);
+      }
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      const message = error instanceof Error ? error.message : "IndexedDB could not be opened";
+      setHistoryStatus("error");
+      setHistoryError(`本地运行历史不可用：${message}。实时观察不受影响。`);
+    });
+
+    const flushBeforePageLeaves = () => {
+      void writer.flush();
+    };
+    window.addEventListener("pagehide", flushBeforePageLeaves);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pagehide", flushBeforePageLeaves);
+      historyStore.current = null;
+      historyWriter.current = null;
+      // React cannot await effect cleanup, but starting the final IndexedDB
+      // transaction here gives normal navigation the best chance to retain the
+      // latest complete state. StrictMode's first mount closes only its handle.
+      void writer.flush().finally(async () => {
+        await initialize.catch(() => undefined);
+        store.close();
+      });
+    };
+  }, []);
 
   useEffect(() => {
     let connection: LiveConnection | null = null;
     let cancelled = false;
     const controller = new AbortController();
-    void connectLiveRun(dispatch, setStreamStatus, controller.signal)
+    void connectLiveRun(dispatch, (status) => {
+      setStreamStatus(status);
+      if (status === "live") setConnectionError(null);
+    }, controller.signal)
       .then((opened) => {
         if (cancelled) opened.close();
         else connection = opened;
@@ -92,10 +212,25 @@ export default function ObserverApp() {
   }, []);
 
   useEffect(() => {
-    if (state.run?.ended_at) return undefined;
+    if (!historyReady || liveState.run === null) return;
+    historyWriter.current?.schedule(observerStateToSnapshot(liveState));
+  }, [historyReady, liveState]);
+
+  const selectedView = useMemo(
+    () => selectObserverView(liveState, automaticHistory, selectedHistory, historyMode),
+    [automaticHistory, historyMode, liveState, selectedHistory],
+  );
+  const state = selectedView.state;
+  const displayedRunId = state.run?.run_id ?? null;
+  const displayedHistorySummary = selectedView.source === "history"
+    ? historySummaries.find((summary) => summary.runId === displayedRunId) ?? null
+    : null;
+
+  useEffect(() => {
+    if (selectedView.source === "history" || state.run?.ended_at) return undefined;
     const timer = window.setInterval(() => refreshElapsed((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [state.run?.ended_at]);
+  }, [selectedView.source, state.run?.ended_at]);
 
   const allEvents = useMemo(
     () => state.eventIds.map((eventId) => state.eventById[eventId]),
@@ -123,6 +258,93 @@ export default function ObserverApp() {
     window.localStorage.setItem(THEME_KEY, next);
   }
 
+  async function loadHistory(runId: string): Promise<void> {
+    const store = historyStore.current;
+    if (store === null) return;
+    const requestNumber = selectionRequest.current + 1;
+    selectionRequest.current = requestNumber;
+    try {
+      const loaded = await store.load(runId);
+      if (requestNumber !== selectionRequest.current) return;
+      if (loaded.record === null) {
+        setHistoryWarning(
+          loaded.invalid
+            ? "所选本地历史格式不兼容，已安全忽略。"
+            : "所选本地历史已不存在。",
+        );
+        setHistoryMode("live");
+        setSelectedHistory(null);
+        return;
+      }
+      setSelectedHistory(loaded.record.snapshot);
+      setHistoryMode("history");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "History record could not be loaded";
+      setHistoryError(`无法读取所选本地历史：${message}`);
+      setHistoryStatus("error");
+    }
+  }
+
+  function selectHistory(runId: string | null): void {
+    if (runId === null) {
+      selectionRequest.current += 1;
+      setSelectedHistory(null);
+      setHistoryMode("live");
+      return;
+    }
+    void loadHistory(runId);
+  }
+
+  async function loadNewestAutomaticHistory(listing: RunHistoryListing): Promise<void> {
+    const store = historyStore.current;
+    const newest = listing.summaries[0];
+    if (store === null || newest === undefined) {
+      setAutomaticHistory(null);
+      return;
+    }
+    const loaded = await store.load(newest.runId);
+    setAutomaticHistory(loaded.record?.snapshot ?? null);
+  }
+
+  async function deleteSelectedHistory(): Promise<void> {
+    const runId = selectedView.source === "history" ? displayedRunId : null;
+    const store = historyStore.current;
+    if (runId === null || store === null) return;
+    historyWriter.current?.cancelPending();
+    try {
+      const listing = await store.delete(runId);
+      acceptHistoryListing(listing);
+      setSelectedHistory(null);
+      setHistoryMode(liveState.run === null ? "auto" : "live");
+      await loadNewestAutomaticHistory(listing);
+      setHistoryStatus("ready");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "History record could not be deleted";
+      setHistoryError(`无法删除本地历史：${message}`);
+      setHistoryStatus("error");
+    }
+  }
+
+  async function clearHistory(): Promise<void> {
+    const store = historyStore.current;
+    if (store === null) return;
+    historyWriter.current?.cancelPending();
+    try {
+      await store.clear();
+      setHistorySummaries([]);
+      setAutomaticHistory(null);
+      setSelectedHistory(null);
+      setHistoryWarning(null);
+      setHistoryMode(liveState.run === null ? "auto" : "live");
+      setHistoryStatus("ready");
+      setHistoryError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Browser history could not be cleared";
+      setHistoryError(`无法清空本地历史：${message}`);
+      setHistoryStatus("error");
+    }
+  }
+
   return (
     <ConfigProvider theme={observerTheme(themeMode)}>
       <div className={`observer-shell theme-${themeMode}`}>
@@ -131,12 +353,12 @@ export default function ObserverApp() {
             <BugOutlined className="brand-icon" />
             <div>
               <Title level={4}>RESTScope Live Observer</Title>
-              <Text type="secondary">只读 · 当前运行 · 本机内存</Text>
+              <Text type="secondary">只读 · 实时与本地历史 · 浏览器 IndexedDB</Text>
             </div>
           </div>
           <Flex className="run-metrics" align="center" gap={18} wrap>
-            <div className="metric"><span>运行状态</span><strong>{state.run?.status ?? "等待运行"}</strong></div>
-            <div className="metric"><span>耗时</span><strong className="mono">{elapsed(state.run?.started_at, state.run?.ended_at)}</strong></div>
+            <div className="metric"><span>运行状态</span><strong>{selectedView.source === "history" && state.run?.status === "running" ? "历史快照 / 可能已中断" : state.run?.status ?? "等待运行"}</strong></div>
+            <div className="metric"><span>耗时</span><strong className="mono">{elapsed(state.run?.started_at, state.run?.ended_at ?? displayedHistorySummary?.savedAt)}</strong></div>
             <div className="metric metric-wide"><span>当前 operation / round</span><strong>{currentScopedEvent?.operation_key ?? "—"} {currentScopedEvent?.round_number !== null && currentScopedEvent?.round_number !== undefined ? `/ ${currentScopedEvent.round_number}` : ""}</strong></div>
             <div className="metric"><span>事件</span><strong>{allEvents.length.toLocaleString()}</strong></div>
             <div className="metric"><span>失败</span><strong className={failedCount ? "danger-text" : ""}>{failedCount}</strong></div>
@@ -150,6 +372,20 @@ export default function ObserverApp() {
             />
           </Flex>
         </header>
+
+        <RunHistoryBar
+          summaries={historySummaries}
+          selectedRunId={selectedView.source === "history" ? displayedRunId : null}
+          source={selectedView.source}
+          liveRunId={liveState.run?.run_id ?? null}
+          storageStatus={historyStatus}
+          historyRunStatus={selectedView.source === "history" ? state.run?.status ?? null : null}
+          canClear={historySummaries.length > 0 || historyWarning !== null}
+          onSelect={selectHistory}
+          onReturnLive={() => selectHistory(null)}
+          onDeleteSelected={() => { void deleteSelectedHistory(); }}
+          onClear={() => { void clearHistory(); }}
+        />
 
         <section className="filter-bar" aria-label="画布筛选">
           <Input
@@ -207,6 +443,16 @@ export default function ObserverApp() {
             icon={<DisconnectOutlined />}
             title="实时连接暂不可用"
             description={connectionError}
+            showIcon
+            type="warning"
+          />
+        )}
+
+        {(historyError || historyWarning) && (
+          <Alert
+            className="connection-alert"
+            title={historyError ? "本地历史暂不可用" : "部分本地历史已忽略"}
+            description={historyError ?? historyWarning}
             showIcon
             type="warning"
           />

@@ -45,10 +45,14 @@ The core loop is:
     validates decided items and atomically commits compatible candidates plus
     their Failures and Attempts before the next complete Batch.
 
-Most state used in steps 4–10 is deliberately temporary. RESTScope does not
-persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases, or
-Patch samples. It persists the complete current normalized OpenAPI plus change
-events for audit/export, current per-input Generators and Constraints, bounded
+Most backend state used in steps 4–10 is deliberately temporary. RESTScope does
+not persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases,
+or Patch samples in its database. The local observer page is a narrow testing
+exception: it may cache the latest five complete, already-redacted UI snapshots
+in that browser's same-origin IndexedDB, but the App never reads them and cannot
+recover or influence a test from them. RESTScope persists the complete current
+normalized OpenAPI plus change events for audit/export, current per-input
+Generators and Constraints, bounded
 Behavior Monitor evidence, stable Failures, terminal Resolution Attempts, validated
 input attribution, and deterministic accepted-change events. None of these
 artifacts restores an App.
@@ -371,7 +375,11 @@ Both outputs are optional and fail-open.
 static GET routes. The top-level `ui/` directory contains the React/TypeScript/
 Ant Design source; its Vite build is versioned under `restscope/ui/static/` so
 Python installations do not require Node.js at runtime. The page has no command
-or write route and retains data only in browser memory. `canvasModel.ts` folds
+or write route. Its live state comes from server memory; `runHistory.ts` may
+additionally retain the latest five complete snapshots in same-origin browser
+IndexedDB so a tester can reopen recent visual evidence. This local cache
+contains every detail visible in the UI, including target credentials, and is
+never read by the backend. `canvasModel.ts` folds
 Agent turns by session and resolves Tool edges to Assistant-message ports;
 `EventCanvas.tsx` owns the read-only G6 lifecycle. Agent messages, Tools, and
 Smoke Batches expand complete details vertically inside their owning node. A
