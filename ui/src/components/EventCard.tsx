@@ -105,11 +105,30 @@ function EventMeta({ event }: { event: TimelineEvent }) {
   );
 }
 
+/** Parse only top-level JSON objects and arrays from a message string.
+ *
+ * The first non-whitespace character is the deliberate display boundary. A
+ * malformed container or a primitive remains ordinary Markdown so presenting
+ * the message never changes or hides its original text.
+ */
+export function parseJsonContainerText(value: string): UnknownRecord | unknown[] | null {
+  const trimmed = value.trimStart();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return parsed !== null && typeof parsed === "object" ? parsed as UnknownRecord | unknown[] : null;
+  } catch {
+    return null;
+  }
+}
+
 function MarkdownValue({ value }: { value: unknown }) {
   if (value === null || value === undefined || value === "") {
     return <Text type="secondary">（空消息）</Text>;
   }
   if (typeof value !== "string") return <CodeView value={value ?? null} />;
+  const structured = parseJsonContainerText(value);
+  if (structured !== null) return <CodeView value={structured} />;
   return (
     <div className="markdown-content">
       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>

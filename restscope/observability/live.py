@@ -488,9 +488,16 @@ class LiveRunObserver:
 
         Repeated Agent method spans beneath one long-lived Coordinator belong to
         one session. Operation and round prevent unrelated conversations under
-        that Coordinator from sharing prompt-delta state.
+        that Coordinator from sharing prompt-delta state. Nested Agents also
+        retain their exact parent session so the read-only canvas can preserve
+        a direct call when no visible Tool or Agent-turn event owns that hop.
         """
         path = [*(parent.agent.get("path", []) if parent.agent else []), name]
+        parent_session_id = (
+            str(parent.agent["session_id"])
+            if parent.agent is not None and parent.agent.get("session_id") is not None
+            else None
+        )
         if parent.context_id is None:
             session_id = f"agent_{uuid4().hex}"
         else:
@@ -504,7 +511,12 @@ class LiveRunObserver:
                 key,
                 f"agent_{uuid4().hex}",
             )
-        return {"session_id": session_id, "name": name, "path": path}
+        identity = {"session_id": session_id, "name": name, "path": path}
+        # Root Agents keep their existing compact wire shape. Only a true
+        # nested session needs the additive relationship field.
+        if parent_session_id is not None:
+            identity["parent_session_id"] = parent_session_id
+        return identity
 
     def _new_event(
         self,

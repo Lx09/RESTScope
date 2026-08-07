@@ -254,3 +254,50 @@ SIGKILL escalation.
 - Final checks confirmed no RESTScope process and no listeners on 8765, 7077,
   or 6006. GitLab and the temporary Phoenix service were stopped; data volumes
   and artifacts remain. No files were staged, committed, merged, or pushed.
+
+## 2026-08-06 Agent call-chain and stable-column follow-up
+
+- App-owned Agent identity now carries the optional parent session for nested
+  Agents. A Tool-started child keeps both its visible Tool parent event and its
+  Agent-session ancestry; direct nested Agents can therefore fall back to the
+  parent Agent header without changing Phoenix spans or schema-v2 event kinds.
+- The canvas resolves the full causal chain before filtering: an Assistant
+  message points to its Tool, a Tool output points to the child Agent it starts,
+  and a direct nested Agent points to the exact Assistant message when possible.
+  Tool-mediated calls do not receive a duplicate Agent-to-Agent shortcut, and
+  Tool-result messages still create no return edge.
+- Parallel calls from one Assistant message share one stable call-group column.
+  Later message groups and nested calls advance to the right. Columns are
+  computed from the complete event set, so filtering, collapse, search, and
+  ordinary event revisions do not move previously assigned groups.
+- G6's built-in layout adapter discards custom node data before Dagre runs. The
+  canvas now calls G6's exported AntV Dagre layout directly, preserving the
+  stable `layer`, then renders the resulting positions. This keeps the intended
+  columns visible in the real canvas rather than only in the view model.
+- Tool nodes expose a fixed Output port for child-Agent edges. Nested edges use
+  the lightweight “启动 Agent” label, with “调用消息不可用” added only for a
+  session-header fallback.
+- Every role's string body is checked after leading whitespace is removed. A
+  body beginning with `{` or `[` is formatted as JSON only when parsing yields
+  an object or array; invalid JSON and primitives remain safe Markdown. The
+  observer payload and searchable source text are unchanged.
+- Focused observer/UI tests passed 51 tests. Frontend ESLint, 53 Vitest tests,
+  TypeScript/Vite build, and Ant Design 6.5.3 lint passed. The complete optional
+  suite passed 696 tests with 6 skips; compileall and `git diff --check` passed.
+  Two consecutive builds produced identical hashes for all five static assets.
+- Real-page 1440×900 acceptance passed in dark and light themes with no page
+  overflow. It verified columns 0/1/2/3, parallel Tools sharing column 1,
+  Tool-to-child and direct nested-Agent edges, and formatted expanded JSON.
+  The temporary 8767 QA server was stopped afterward; the existing 8766 UI was
+  not changed. No files were staged, committed, merged, pushed, or cleaned up.
+- A later real GitLab run exposed two canvas follow-ups. AntV Dagre applies the
+  configured 120px rank separation both as node expansion and layer spacing,
+  producing a measured 240px empty gap; sequential Agent call groups also add
+  columns, so long-session parent/child edges can span much farther. High-rate
+  SSE revisions can cancel an in-flight layout, which explains transient
+  geometry during updates but still needs an exact visual regression before a
+  layout fix is approved.
+- Trackpad navigation now separates wheel gestures using the browser's pinch
+  modifier: ordinary two-finger movement runs G6 `scroll-canvas`, while pinch
+  runs `zoom-canvas`. The focused component file passed 20 tests; ESLint,
+  TypeScript/Vite build, Ant Design 6.5.3 lint, and `git diff --check` passed.

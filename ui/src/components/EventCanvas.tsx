@@ -15,6 +15,7 @@ import {
 } from "@ant-design/icons";
 import { ReactNode } from "@antv/g6-extension-react";
 import {
+  AntVDagreLayout,
   CanvasEvent,
   ExtensionCategory,
   Graph,
@@ -74,6 +75,48 @@ interface PendingDetailMotion {
 }
 
 type GraphMotionOptions = Pick<GraphOptions, "animation" | "edge" | "node">;
+type CanvasBehaviorOptions = NonNullable<GraphOptions["behaviors"]>;
+
+function isTrackpadPinch(event: unknown): boolean {
+  return typeof event === "object"
+    && event !== null
+    && "ctrlKey" in event
+    && (event as { ctrlKey?: boolean }).ctrlKey === true;
+}
+
+/** Keep two-finger movement and pinch as distinct canvas gestures.
+ *
+ * Desktop browsers expose ordinary trackpad scrolling as a wheel event and a
+ * trackpad pinch as a wheel event carrying `ctrlKey`. G6's default zoom
+ * behavior consumes both, so RESTScope explicitly routes the two forms to
+ * scroll and zoom behaviors instead.
+ */
+export function canvasNavigationBehaviors(): CanvasBehaviorOptions {
+  return [
+    "drag-canvas",
+    {
+      type: "scroll-canvas",
+      enable: (event: unknown) => !isTrackpadPinch(event),
+      range: Infinity,
+      sensitivity: 1,
+    },
+    {
+      type: "zoom-canvas",
+      animation: false,
+      enable: isTrackpadPinch,
+      sensitivity: 1,
+      trigger: [],
+    },
+  ];
+}
+
+const STABLE_LAYOUT_OPTIONS = {
+  align: "UL",
+  controlPoints: true,
+  nodesep: 46,
+  rankdir: "LR",
+  ranksep: 120,
+} as const;
 
 /** Build the G6 motion that keeps node geometry and connected edges together. */
 export function detailGraphMotionOptions(
@@ -128,11 +171,15 @@ interface DetailGraphMotionRequest {
 export async function renderStructuralGraphUpdate(
   graph: Graph,
   graphData: GraphData,
-  layout: Parameters<Graph["setLayout"]>[0],
+  layout: Parameters<Graph["setLayout"]>[0] | null,
   motion: DetailGraphMotionRequest | null,
 ): Promise<void> {
   if (motion) graph.setOptions(detailGraphMotionOptions(motion.expanded, motion.portKeys));
-  graph.setLayout(layout);
+  // Pre-positioned data must bypass G6's layout adapter. The adapter copies
+  // geometry but drops custom node data, including the stable `layer` that
+  // distinguishes consecutive call groups.
+  if (layout) graph.setLayout(layout);
+  else graph.setOptions({ layout: undefined });
   graph.setData(graphData);
   try {
     await graph.render();
@@ -142,6 +189,54 @@ export async function renderStructuralGraphUpdate(
       await graph.draw();
     }
   }
+}
+
+/** Position G6 data with AntV Dagre while preserving RESTScope's stable layer.
+ *
+ * G6 normally adapts its node data before invoking Dagre. That adapter omits
+ * custom fields, so calling the exported layout directly is the only way to
+ * let `data.layer` constrain a node to its assigned call-group column. The
+ * returned data keeps the original React components and ports, adding only
+ * the calculated x/y positions used by G6's normal renderer.
+ */
+export async function positionGraphDataByStableColumns(
+  graphData: GraphData,
+): Promise<GraphData> {
+  const nodes = graphData.nodes ?? [];
+  const edges = graphData.edges ?? [];
+  if (!nodes.length) return graphData;
+
+  const layout = new AntVDagreLayout({
+    ...STABLE_LAYOUT_OPTIONS,
+    nodeOrder: [...nodes]
+      .sort((left, right) => Number(left.data?.order ?? 0) - Number(right.data?.order ?? 0))
+      .map((node) => node.id),
+    node: (node) => ({ id: node.id, data: node.data }),
+    edge: (edge) => ({ id: edge.id, source: edge.source, target: edge.target }),
+    nodeSize: (node) => {
+      const size = node.style?.size;
+      return Array.isArray(size) && size.length >= 2
+        ? [Number(size[0]), Number(size[1])]
+        : [10, 10];
+    },
+  });
+  const positions = new Map<string, { x: number; y: number }>();
+  try {
+    await layout.execute({ nodes, edges });
+    layout.forEachNode((node) => positions.set(String(node.id), { x: node.x, y: node.y }));
+  } finally {
+    layout.destroy();
+  }
+
+  return {
+    ...graphData,
+    nodes: nodes.map((node) => {
+      const position = positions.get(String(node.id));
+      return position
+        ? { ...node, style: { ...node.style, x: position.x, y: position.y } }
+        : node;
+    }),
+  };
 }
 
 function staticGraphMotionOptions(): GraphMotionOptions {
@@ -192,7 +287,7 @@ export function graphDataForModel(
         return {
           id: node.id,
           type: REACT_NODE_TYPE,
-          data: { order: node.order },
+          data: { order: node.order, layer: node.layoutColumn },
           style: {
             size: [node.width, node.height],
             dx: -node.width / 2,
@@ -212,19 +307,29 @@ export function graphDataForModel(
       return {
         id: node.id,
         type: REACT_NODE_TYPE,
-        data: { order: node.order },
+        data: { order: node.order, layer: node.layoutColumn },
         style: {
           size: [node.width, node.height],
           dx: -node.width / 2,
           dy: -node.height / 2,
-          ports: [{
-            key: "input",
-            placement: [0, 0.5] as [number, number],
-            r: 4,
-            fill: "#4f8cff",
-            stroke: "#d6e4ff",
-            lineWidth: 1,
-          }],
+          ports: [
+            {
+              key: "input",
+              placement: [0, 0.5] as [number, number],
+              r: 4,
+              fill: "#4f8cff",
+              stroke: "#d6e4ff",
+              lineWidth: 1,
+            },
+            ...(node.kind === "tool_call" ? [{
+              key: "output",
+              placement: [1, 0.5] as [number, number],
+              r: 4,
+              fill: "#9254de",
+              stroke: "#efdbff",
+              lineWidth: 1,
+            }] : []),
+          ],
           component: (
             <EventCanvasNodeView
               node={node}
@@ -252,7 +357,9 @@ export function graphDataForModel(
         endArrow: true,
         radius: 10,
         router: { type: "orth" },
-        labelText: edge.fallback ? "调用消息不可用" : undefined,
+        labelText: edge.relationship === "nested_agent"
+          ? edge.fallback ? "启动 Agent · 调用消息不可用" : "启动 Agent"
+          : edge.fallback ? "调用消息不可用" : undefined,
         labelFill: EDGE_COLORS[edge.status],
         labelBackground: true,
         labelBackgroundFill: themeMode === "dark" ? "#131c2b" : "#ffffff",
@@ -264,7 +371,13 @@ export function graphDataForModel(
 
 function structuralSignature(model: CanvasModel): string {
   return JSON.stringify({
-    nodes: model.nodes.map((node) => [node.id, node.width, node.height, node.order]),
+    nodes: model.nodes.map((node) => [
+      node.id,
+      node.width,
+      node.height,
+      node.order,
+      node.layoutColumn,
+    ]),
     edges: model.edges.map((edge) => [
       edge.id,
       edge.source,
@@ -449,7 +562,7 @@ export function EventCanvas({
     const graph = new Graph({
       animation: false,
       autoResize: true,
-      behaviors: ["drag-canvas", "zoom-canvas"],
+      behaviors: canvasNavigationBehaviors(),
       container,
       data: { nodes: [], edges: [] },
       edge: { type: "polyline", animation: false },
@@ -515,22 +628,15 @@ export function EventCanvas({
           setGraphError(null);
           if (structureChanged) {
             const animateDetail = requestedMotion !== null && !reducedMotion();
-            const layout = {
-              type: "antv-dagre",
-              rankdir: "LR",
-              align: "UL",
-              nodesep: 46,
-              ranksep: 120,
-              controlPoints: true,
-              nodeOrder: model.nodes.map((node) => node.id),
-            } as const;
+            const positionedGraphData = await positionGraphDataByStableColumns(graphData);
+            if (graph.destroyed || generation !== generationRef.current) return;
             const portKeys = model.nodes.flatMap((node) => node.kind === "agent_session"
               ? ["input", "agent_header", ...node.messages.map((message) => message.portKey)]
-              : ["input"]);
+              : node.kind === "tool_call" ? ["input", "output"] : ["input"]);
             await renderStructuralGraphUpdate(
               graph,
-              graphData,
-              layout,
+              positionedGraphData,
+              null,
               animateDetail && requestedMotion
                 ? { expanded: requestedMotion.expanded, portKeys }
                 : null,
@@ -601,7 +707,7 @@ export function EventCanvas({
           <Tag>{model.batchNodeCount} Batch</Tag>
           <Tag>{model.matchCount} / {model.semanticEventCount} 匹配事件</Tag>
         </Flex>
-        <Text type="secondary">拖动画布 · 滚轮缩放 · 节点只读</Text>
+        <Text type="secondary">拖动画布 · 双指滚动 · 捏合缩放 · 节点只读</Text>
       </div>
       <div className="canvas-stage">
         <div className="g6-container" ref={containerRef} />

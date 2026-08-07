@@ -377,6 +377,188 @@ describe("Agent-session canvas model", () => {
     expect(model.edges.some((edge) => edge.target === "event:root-tool")).toBe(false);
   });
 
+  it("keeps the exact Agent message to Tool to child Agent chain", () => {
+    const parent = agentTurn(
+      "turn-parent-chain",
+      1,
+      "session-parent-chain",
+      [{ role: "user", content: "Draft a patch." }],
+      {
+        role: "assistant",
+        content: "Starting patch work.",
+        tool_calls: [{ id: "call-patch", name: "failure_resolution.draft_parameter_patch", arguments: {} }],
+      },
+    );
+    const tool = makeEvent({
+      event_id: "tool-patch-chain",
+      order: 2,
+      kind: "tool_call",
+      name: "failure_resolution.draft_parameter_patch",
+      parent_event_id: parent.event_id,
+      agent: parent.agent,
+      detail: { output: { tool_call_id: "call-patch", status: "succeeded" } },
+    });
+    const child = agentTurn(
+      "turn-child-chain",
+      3,
+      "session-child-chain",
+      [{ role: "system", content: "Propose the patch." }],
+      { role: "assistant", content: "Patch ready.", tool_calls: [] },
+    );
+    child.parent_event_id = tool.event_id;
+    child.agent = {
+      ...child.agent!,
+      parent_session_id: parent.agent!.session_id,
+      path: [...parent.agent!.path, "ParameterPatchAgent.propose"],
+    };
+
+    const model = buildCanvasModel([parent, tool, child], EMPTY_FILTERS, new Set());
+
+    expect(model.edges).toHaveLength(2);
+    expect(model.edges[0]).toMatchObject({
+      source: "agent:session-parent-chain",
+      target: "event:tool-patch-chain",
+      relationship: "tool_call",
+    });
+    expect(model.edges[1]).toMatchObject({
+      source: "event:tool-patch-chain",
+      sourcePort: "output",
+      target: "agent:session-child-chain",
+      relationship: "nested_agent",
+      fallback: false,
+    });
+    expect(model.edges.some((edge) => (
+      edge.source === "agent:session-parent-chain"
+      && edge.target === "agent:session-child-chain"
+    ))).toBe(false);
+    expect(model.nodes.find((node) => node.id === "agent:session-parent-chain")?.layoutColumn)
+      .toBe(0);
+    expect(model.nodes.find((node) => node.id === "event:tool-patch-chain")?.layoutColumn)
+      .toBe(1);
+    expect(model.nodes.find((node) => node.id === "agent:session-child-chain")?.layoutColumn)
+      .toBe(2);
+  });
+
+  it("falls back from the parent Agent header for a direct nested Agent", () => {
+    const parent = agentTurn(
+      "turn-parent-direct",
+      1,
+      "session-parent-direct",
+      [{ role: "user", content: "Compact this." }],
+      { role: "assistant", content: "Compaction is needed.", tool_calls: [] },
+    );
+    const child = agentTurn(
+      "turn-child-direct",
+      2,
+      "session-child-direct",
+      [{ role: "system", content: "Compact." }],
+      { role: "assistant", content: "Summary", tool_calls: [] },
+    );
+    child.agent = {
+      ...child.agent!,
+      parent_session_id: parent.agent!.session_id,
+      path: [...parent.agent!.path, "FailureResolutionCompactAgent.run"],
+    };
+
+    const model = buildCanvasModel([parent, child], EMPTY_FILTERS, new Set());
+
+    expect(model.edges).toHaveLength(1);
+    expect(model.edges[0]).toMatchObject({
+      source: "agent:session-parent-direct",
+      sourcePort: "agent_header",
+      target: "agent:session-child-direct",
+      relationship: "nested_agent",
+      fallback: true,
+    });
+    expect(model.nodes.find((node) => node.id === "agent:session-child-direct")?.layoutColumn)
+      .toBe(1);
+  });
+
+  it("assigns stable columns per Assistant message call group", () => {
+    const first = agentTurn(
+      "turn-group-one",
+      1,
+      "session-groups",
+      [{ role: "user", content: "Inspect both." }],
+      {
+        role: "assistant",
+        content: "First group.",
+        tool_calls: [
+          { id: "call-a", name: "resource.list", arguments: {} },
+          { id: "call-b", name: "openapi.list_inputs", arguments: {} },
+        ],
+      },
+    );
+    const firstTool = makeEvent({
+      event_id: "tool-group-a",
+      order: 2,
+      kind: "tool_call",
+      name: "resource.list",
+      parent_event_id: first.event_id,
+      agent: first.agent,
+      detail: { output: { tool_call_id: "call-a" } },
+    });
+    const parallelTool = makeEvent({
+      event_id: "tool-group-b",
+      order: 3,
+      kind: "tool_call",
+      name: "openapi.list_inputs",
+      parent_event_id: first.event_id,
+      agent: first.agent,
+      detail: { output: { tool_call_id: "call-b" } },
+    });
+    const second = agentTurn(
+      "turn-group-two",
+      4,
+      "session-groups",
+      [{ role: "tool", tool_call_id: "call-a", content: "[]" }],
+      {
+        role: "assistant",
+        content: "Second group.",
+        tool_calls: [{ id: "call-c", name: "test_case.get", arguments: {} }],
+      },
+    );
+    const laterTool = makeEvent({
+      event_id: "tool-group-c",
+      order: 5,
+      kind: "tool_call",
+      name: "test_case.get",
+      parent_event_id: second.event_id,
+      agent: second.agent,
+      detail: { output: { tool_call_id: "call-c" } },
+    });
+
+    const unfiltered = buildCanvasModel(
+      [first, firstTool, parallelTool, second, laterTool],
+      EMPTY_FILTERS,
+      new Set(),
+    );
+    const filtered = buildCanvasModel(
+      [first, firstTool, parallelTool, second, laterTool],
+      { ...EMPTY_FILTERS, search: "test_case.get" },
+      new Set(),
+    );
+    const byId = new Map(unfiltered.nodes.map((node) => [node.id, node]));
+    const filteredLater = filtered.nodes.find((node) => node.id === "event:tool-group-c");
+    const revisedLater = {
+      ...laterTool,
+      revision: laterTool.revision + 1,
+      detail: { ...laterTool.detail, output: { tool_call_id: "call-c", status: "succeeded" } },
+    };
+    const revised = buildCanvasModel(
+      [first, firstTool, parallelTool, second, revisedLater],
+      EMPTY_FILTERS,
+      new Set(),
+    );
+
+    expect(byId.get("agent:session-groups")?.layoutColumn).toBe(0);
+    expect(byId.get("event:tool-group-a")?.layoutColumn).toBe(1);
+    expect(byId.get("event:tool-group-b")?.layoutColumn).toBe(1);
+    expect(byId.get("event:tool-group-c")?.layoutColumn).toBe(2);
+    expect(filteredLater?.layoutColumn).toBe(2);
+    expect(revised.nodes.find((node) => node.id === "event:tool-group-c")?.layoutColumn).toBe(2);
+  });
+
   it("keeps message IDs and order stable when an SSE revision updates content", () => {
     const original = agentTurn(
       "turn-revision",
