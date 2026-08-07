@@ -211,6 +211,84 @@ def test_agent_session_produces_incremental_turn_cards_with_exact_outputs() -> N
     assert all("llm.model_name" not in event["attributes"] for event in turns)
 
 
+def test_nested_agent_identity_keeps_its_direct_parent_session() -> None:
+    """Scenario: a direct nested Agent remains attributable without a visible parent event."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+
+    observer = LiveRunObserver()
+    observer.begin_run({})
+    runtime = TracingRuntime(run_observer=observer)
+
+    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+        with runtime.span("LLMClient.invoke", kind="LLM") as parent_turn:
+            parent_turn.set_llm_input_messages(
+                [{"role": "user", "content": "Compact the current investigation."}]
+            )
+            parent_turn.set_llm_output_messages(
+                [{"role": "assistant", "content": "Compaction is needed.", "tool_calls": []}]
+            )
+        with runtime.span("FailureResolutionCompactAgent.run", kind="AGENT"):
+            with runtime.span("LLMClient.invoke", kind="LLM") as child_turn:
+                child_turn.set_llm_input_messages(
+                    [{"role": "system", "content": "Summarize the investigation."}]
+                )
+                child_turn.set_llm_output_messages(
+                    [{"role": "assistant", "content": "Summary", "tool_calls": []}]
+                )
+
+    parent, child = observer.snapshot()["events"]
+
+    assert parent["agent"].get("parent_session_id") is None
+    assert child["agent"]["parent_session_id"] == parent["agent"]["session_id"]
+    assert child["parent_event_id"] is None
+
+
+def test_tool_mediated_agent_keeps_the_tool_as_its_visible_parent() -> None:
+    """Scenario: a Tool-started Agent preserves both the Tool hop and Agent ancestry."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+
+    observer = LiveRunObserver()
+    observer.begin_run({})
+    runtime = TracingRuntime(run_observer=observer)
+
+    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+        with runtime.span("LLMClient.invoke", kind="LLM") as parent_turn:
+            parent_turn.set_llm_input_messages(
+                [{"role": "user", "content": "Draft a parameter patch."}]
+            )
+            parent_turn.set_llm_output_messages(
+                [{
+                    "role": "assistant",
+                    "content": "Starting patch work.",
+                    "tool_calls": [{
+                        "id": "call-patch",
+                        "name": "failure_resolution.draft_parameter_patch",
+                        "arguments": {},
+                    }],
+                }]
+            )
+        with runtime.span(
+            "failure_resolution.draft_parameter_patch",
+            kind="TOOL",
+            input_value={"arguments": {}},
+        ) as tool:
+            with runtime.span("ParameterPatchAgent.propose", kind="AGENT"):
+                with runtime.span("LLMClient.invoke", kind="LLM") as child_turn:
+                    child_turn.set_llm_input_messages(
+                        [{"role": "system", "content": "Propose a patch."}]
+                    )
+                    child_turn.set_llm_output_messages(
+                        [{"role": "assistant", "content": "Patch", "tool_calls": []}]
+                    )
+            tool.set_output({"tool_call_id": "call-patch", "status": "succeeded"})
+
+    parent, tool_event, child = observer.snapshot()["events"]
+
+    assert tool_event["parent_event_id"] == parent["event_id"]
+    assert child["parent_event_id"] == tool_event["event_id"]
+    assert child["agent"]["parent_session_id"] == parent["agent"]["session_id"]
+
+
 def test_tool_request_and_parallel_executions_keep_their_own_inputs_and_outputs() -> None:
     """Scenario: Agent intent and two actual tool results remain independently visible."""
     from restscope.observability import LiveRunObserver, TracingRuntime

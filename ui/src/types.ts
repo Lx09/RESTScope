@@ -6,6 +6,7 @@ export type EventStatus = "running" | "succeeded" | "warning" | "failed";
 
 export interface AgentIdentity {
   session_id: string;
+  parent_session_id?: string | null;
   name: string;
   path: string[];
 }

@@ -4,10 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildCanvasModel, eventDetailKey, messageDetailKey } from "../canvasModel";
 import { AgentSessionNodeView, EventCanvasNodeView } from "../components/CanvasNodes";
+import { AgentMessageBody } from "../components/EventCard";
 import {
+  canvasNavigationBehaviors,
   detailGraphMotionOptions,
   graphDataForModel,
   liveFocusIds,
+  positionGraphDataByStableColumns,
   renderStructuralGraphUpdate,
 } from "../components/EventCanvas";
 import { DETAIL_CLOSE_DURATION_MS, DETAIL_OPEN_DURATION_MS } from "../components/InlineReveal";
@@ -62,6 +65,26 @@ function canvasFixture() {
 }
 
 describe("canvas node presentation", () => {
+  it("scrolls for two-finger movement and zooms only for trackpad pinch", () => {
+    const behaviors = canvasNavigationBehaviors();
+    const scroll = behaviors.find((behavior) => (
+      typeof behavior === "object" && behavior.type === "scroll-canvas"
+    ));
+    const zoom = behaviors.find((behavior) => (
+      typeof behavior === "object" && behavior.type === "zoom-canvas"
+    ));
+    expect(scroll).toMatchObject({ type: "scroll-canvas", range: Infinity });
+    expect(zoom).toMatchObject({ type: "zoom-canvas", trigger: [], animation: false });
+    if (typeof scroll !== "object" || typeof zoom !== "object") return;
+
+    const scrollEnabled = scroll.enable as (event: { ctrlKey?: boolean }) => boolean;
+    const zoomEnabled = zoom.enable as (event: { ctrlKey?: boolean }) => boolean;
+    expect(scrollEnabled({ ctrlKey: false })).toBe(true);
+    expect(zoomEnabled({ ctrlKey: false })).toBe(false);
+    expect(scrollEnabled({ ctrlKey: true })).toBe(false);
+    expect(zoomEnabled({ ctrlKey: true })).toBe(true);
+  });
+
   it("renders one session header and separate chronological role message cards", async () => {
     const { model } = canvasFixture();
     const agent = model.nodes.find((node) => node.kind === "agent_session");
@@ -173,6 +196,83 @@ describe("canvas node presentation", () => {
     expect(data.edges?.[0].style?.sourcePort).toBe(assistant?.portKey);
     expect(data.edges?.[0].style?.targetPort).toBe("input");
     expect(liveFocusIds(model)).toEqual(["agent:agent-1", "event:tool-http"]);
+  });
+
+  it("exposes a Tool output port and labels a nested Agent edge", () => {
+    const { events } = canvasFixture();
+    const child = makeEvent({
+      event_id: "turn-child",
+      order: 3,
+      agent: {
+        session_id: "agent-child",
+        parent_session_id: events[0].agent!.session_id,
+        name: "ParameterPatchAgent.propose",
+        path: [...events[0].agent!.path, "ParameterPatchAgent.propose"],
+      },
+      parent_event_id: events[1].event_id,
+      detail: {
+        input: { messages: [{ role: "system", content: "Patch." }] },
+        output: { messages: [{ role: "assistant", content: "Done.", tool_calls: [] }] },
+      },
+    });
+    const model = buildCanvasModel([...events, child], EMPTY_FILTERS, new Set());
+    const data = graphDataForModel(model, "dark", {
+      openEvent: vi.fn(),
+      openMessage: vi.fn(),
+      toggleSession: vi.fn(),
+    });
+    const toolData = data.nodes?.find((node) => node.id === `event:${events[1].event_id}`);
+    const ports = toolData?.style?.ports as Array<{ key: string }>;
+    const nestedEdge = data.edges?.find((edge) => edge.target === "agent:agent-child");
+
+    expect(ports.map((port) => port.key)).toContain("output");
+    expect(nestedEdge?.style?.sourcePort).toBe("output");
+    expect(nestedEdge?.style?.labelText).toBe("启动 Agent");
+  });
+
+  it("turns stable call-group layers into distinct canvas columns", async () => {
+    const data = await positionGraphDataByStableColumns({
+      nodes: [
+        { id: "agent", data: { order: 1, layer: 0 }, style: { size: [100, 100] } },
+        { id: "tool-a", data: { order: 2, layer: 1 }, style: { size: [100, 100] } },
+        { id: "tool-b", data: { order: 3, layer: 1 }, style: { size: [100, 100] } },
+        { id: "tool-later", data: { order: 4, layer: 2 }, style: { size: [100, 100] } },
+      ],
+      edges: [
+        { id: "agent-tool-a", source: "agent", target: "tool-a" },
+        { id: "agent-tool-b", source: "agent", target: "tool-b" },
+        { id: "agent-tool-later", source: "agent", target: "tool-later" },
+      ],
+    });
+    const x = (id: string) => Number(data.nodes?.find((node) => node.id === id)?.style?.x);
+
+    expect(x("tool-a")).toBe(x("tool-b"));
+    expect(x("agent")).toBeLessThan(x("tool-a"));
+    expect(x("tool-a")).toBeLessThan(x("tool-later"));
+  });
+
+  it.each([
+    ["system", "  {\"safe\":true}", { safe: true }],
+    ["user", "[1,2]", [1, 2]],
+    ["assistant", "{\"answer\":42}", { answer: 42 }],
+    ["tool", `[{"id":1}]`, [{ id: 1 }]],
+  ])("formats valid %s message JSON containers", (role, content, expected) => {
+    render(<AgentMessageBody message={{ role, content }} />);
+
+    expect(document.querySelector(".code-view pre")?.textContent)
+      .toBe(JSON.stringify(expected, null, 2));
+  });
+
+  it("keeps invalid containers and JSON primitives as Markdown text", () => {
+    const { rerender } = render(
+      <AgentMessageBody message={{ role: "tool", content: "{not json}" }} />,
+    );
+    expect(screen.getByText("{not json}")).toBeVisible();
+    expect(document.querySelector(".code-view")).toBeNull();
+
+    rerender(<AgentMessageBody message={{ role: "assistant", content: "42" }} />);
+    expect(screen.getByText("42")).toBeVisible();
+    expect(document.querySelector(".code-view")).toBeNull();
   });
 
   it("uses the same open and close timing for G6 node, port, and edge movement", () => {
