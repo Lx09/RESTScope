@@ -1,6 +1,6 @@
 # Live Run Observer UI
 
-Status: IndexedDB history implementation and verification complete — Git delivery not authorized
+Status: Completed — IndexedDB history merged and verified with a bounded live GitLab run
 
 ## Objective
 
@@ -93,8 +93,7 @@ IndexedDB browser-history follow-up:
   no warnings or errors. The temporary server and QA tab were closed afterward.
 - The backend observer, GET/SSE schema, Phoenix, SQLite, testing decisions, and
   filters/canvas preferences remain unchanged. No IndexedDB history is available
-  across browser profiles, origins, or UI ports. No feature files have been
-  staged or committed.
+  across browser profiles, origins, or UI ports.
 
 Collapsed Tool summary follow-up:
 
@@ -339,3 +338,48 @@ SIGKILL escalation.
   modifier: ordinary two-finger movement runs G6 `scroll-canvas`, while pinch
   runs `zoom-canvas`. The focused component file passed 20 tests; ESLint,
   TypeScript/Vite build, Ant Design 6.5.3 lint, and `git diff --check` passed.
+
+## 2026-08-07 merged five-minute live verification
+
+The browser-history feature commit `3aea967` was merged into local `main` as
+`dd05454`. The merged code then ran against the disposable local GitLab and
+Phoenix services. The supervisor sent SIGINT at exactly 300.00 seconds; App
+cleanup finished at 320.95 seconds without SIGTERM or SIGKILL escalation.
+
+- The live UI reached 140 semantic events: 12 Agent sessions, 90 Tool calls,
+  and three Smoke Batches. The authoritative sidebar retained Worklist revision
+  3 for `GET /api/v4/projects` after the run stopped.
+- Phoenix retained 241 spans: 235 OK and six ERROR. The errors are the expected
+  interruption cascade from `LLMClient.invoke` through Failure Resolution,
+  Operation Smoke, the graph, and App. The trace contains 30 real Test Case
+  executions, three Smoke Batches, and two Operation Smoke sessions.
+- The five-minute window completed GET Projects and reached POST Projects; it
+  did not reach the three item operations. Interruption occurred before the
+  live test could write report and coverage JSON. The run-local database holds
+  two Failures, two terminal Resolution Attempts, two Generator changes, and
+  one Constraint.
+- After the backend released port 8766, only the production static frontend was
+  served again on the same origin. `/api/v1/run` returned 404, yet a page reload
+  restored the exact stopped Run, all 140 events, and Worklist revision 3 from
+  IndexedDB. The page correctly showed `本地历史` and `实时连接暂不可用` instead
+  of presenting the snapshot as live.
+- A restored Tool-result message beginning with `{` expanded to a formatted,
+  indented JSON object. A simulated ordinary two-finger wheel gesture translated
+  the canvas by exactly 500 pixels while the measured node width and height did
+  not change, confirming scroll-to-pan rather than scroll-to-zoom behavior.
+- The real canvas displayed the causal
+  `FailureResolutionAgent -> generate_parameter_patch -> ParameterPatchAgent`
+  chain and grouped parallel Tools in the same stable column. Repeated live
+  samples did not show an edge detached from its message or Tool port.
+- One readability limitation remains: very tall Agent sessions make `适应全部`
+  scale the complete graph down until labels are difficult to read. The existing
+  120px Dagre rank separation and the previously measured long-session spacing
+  were not changed by the IndexedDB feature; this live run therefore does not
+  close the separate layout-density follow-up.
+- Merged-main verification passed all 70 frontend tests, ESLint, Ant Design
+  6.5.3 lint with zero issues, the TypeScript/Vite production build, and 51
+  focused observer/UI Python tests. The first frontend command exposed only a
+  stale local `node_modules` directory; installing the already-locked
+  development dependency added no tracked diff, and the rerun passed.
+- Artifact directory:
+  `artifacts/gitlab-projects-five-live/gitlab-projects-five-20260807T020616Z-4f228edc`.
