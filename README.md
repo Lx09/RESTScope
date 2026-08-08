@@ -136,6 +136,13 @@ shares only in-memory slots, cooperative cancellation, tracing relationships,
 and weighted model budget. No Profile, task, queue, transcript, budget, or
 compacted history is persisted.
 
+A Profile may also select the paired `plan.read` and `plan.update` Tools. The
+Harness gives each selected Main Agent or Subagent a separate session-memory
+Plan containing an optional update explanation and up to 100 ordered
+`pending`, `in_progress`, or `completed` steps. At most one step may be active.
+The Plan is neither shared nor persisted and does not replace the richer
+Failure Resolution Worklist.
+
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
 

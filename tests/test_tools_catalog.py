@@ -24,6 +24,8 @@ EXPECTED_BUILTIN_TOOLS = {
     "test_case.get_failure_messages": "test_case",
     "failure_resolution.read_worklist": "worklist",
     "failure_resolution.write_worklist": "worklist",
+    "plan.read": "plan",
+    "plan.update": "plan",
     "lookup_parameter_history": "parameter",
     "generate_parameter_patch": "parameter",
     "parameter_patch.read_candidate": "parameter",

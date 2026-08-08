@@ -334,9 +334,11 @@ bounded context sources, and authorized child Profiles. `skills/` stores
 reusable loaded instructions and their required grants; a Skill executes
 nothing by itself. `tools/` owns every
 RESTScope Tool contract and execution Adapter, grouped by the thing handled:
-HTTP, OpenAPI, Resource, Test Case, Worklist, Parameter, and Subagent. Its immutable
-built-in Catalog is authoritative, while one Profile still selects the exact
-definitions made executable for an Agent.
+HTTP, OpenAPI, Resource, Test Case, Worklist, Plan, Parameter, and Subagent. Its
+immutable built-in Catalog is authoritative, while one Profile still selects
+the exact definitions made executable for an Agent. `tools/plan/` owns the
+small read/replace Interface for one Agent session's private task progress;
+`tools/worklist/` retains Failure Resolution's reference-rich domain behavior.
 
 ### `restscope/harness/`
 

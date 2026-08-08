@@ -23,6 +23,7 @@ ToolSubject = Literal[
     "resource",
     "test_case",
     "worklist",
+    "plan",
     "parameter",
     "subagent",
     "external",

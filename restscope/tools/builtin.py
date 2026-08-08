@@ -12,6 +12,7 @@ from restscope.tools.openapi import (
     openapi_list_inputs_tool_spec,
     openapi_list_response_fields_tool_spec,
 )
+from restscope.tools.plan import plan_read_tool_spec, plan_update_tool_spec
 from restscope.tools.resource import (
     resource_list_ids_tool_spec,
     resource_list_resources_tool_spec,
@@ -73,6 +74,10 @@ def builtin_tool_catalog() -> ToolCatalog:
         (
             "worklist",
             (read_worklist_tool_spec(), write_worklist_tool_spec()),
+        ),
+        (
+            "plan",
+            (plan_read_tool_spec(), plan_update_tool_spec()),
         ),
         (
             "parameter",

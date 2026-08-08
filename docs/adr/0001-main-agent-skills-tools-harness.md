@@ -41,6 +41,13 @@ Subagent accepts exactly its creation objective, has its own Profile and
 Context, and receives no parent transcript or hidden state. It may start only
 Profiles explicitly listed by its own Profile.
 
+An Agent Profile may grant both `plan.read` and `plan.update` to give that
+session one private generic task Plan. The Harness constructs this state with
+the Agent and never shares it across the Agent tree. Complete replacement keeps
+the Interface small for its single writer; the Plan has no revision, lock,
+persistence, recovery, scheduling, or Live Observer role. It remains separate
+from Failure Resolution's reference and decision Worklist.
+
 ## Asynchronous tree control
 
 The three global Subagent Tools form a fixed asynchronous protocol. Start
