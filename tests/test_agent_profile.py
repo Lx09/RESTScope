@@ -35,6 +35,27 @@ def test_agent_profile_keeps_each_access_kind_explicit() -> None:
     assert profile.context_sources == ("failure_sources",)
 
 
+def test_agent_profile_accepts_only_a_bounded_optional_description() -> None:
+    """A Profile description is metadata, while blank or oversized text fails."""
+    from restscope.agent import AgentProfile
+
+    profile = AgentProfile(
+        name="research",
+        description="Investigate one bounded question for the parent Agent.",
+        model_config_name="thinking",
+    )
+
+    assert profile.description.startswith("Investigate")
+    with pytest.raises(ValidationError):
+        AgentProfile(name="blank", description="", model_config_name="thinking")
+    with pytest.raises(ValidationError):
+        AgentProfile(
+            name="large",
+            description="X" * 2_001,
+            model_config_name="thinking",
+        )
+
+
 def test_harness_exposes_atomic_start_instead_of_shallow_profile_resolution() -> None:
     """Callers cannot resolve grants and then assemble an Agent themselves."""
     import restscope.harness as harness

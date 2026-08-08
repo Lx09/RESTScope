@@ -64,7 +64,11 @@ def _runtime(*, release: Event | None = None, max_open_agents: int = 4):
                     ),
                     subagent_profile_names=("child",),
                 ),
-                AgentProfile(name="child", model_config_name="fast"),
+                AgentProfile(
+                    name="child",
+                    description="Inspect one bounded fact for the parent.",
+                    model_config_name="fast",
+                ),
             ),
             models=(model,),
             client=client,
@@ -127,7 +131,11 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
                         tool_names=("subagent.start",),
                         subagent_profile_names=("child",),
                     ),
-                    AgentProfile(name="child", model_config_name="fast"),
+                    AgentProfile(
+                        name="child",
+                        description="Inspect one bounded fact for the parent.",
+                        model_config_name="fast",
+                    ),
                 ),
                 **definition,
             )
@@ -136,6 +144,7 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
     profiles = tuple(
         AgentProfile(
             name=f"level-{index}",
+            description=f"Run bounded level {index} work.",
             model_config_name="fast",
             tool_names=(
                 "subagent.start",

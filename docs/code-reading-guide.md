@@ -305,15 +305,16 @@ missing, null, empty-list, and empty-object values remain distinguishable. The
 Writer does not decide which domain facts matter; the owning workflow makes
 that choice before rendering. HTTP request/response evidence uses safe JSON
 blocks inside that Markdown.
-`AgentContext` keeps the system/task pair, complete tool-call groups, newest
-feedback, explicit clipping, and numeric trace metrics inside each role's
-budget. It knows no Operation Smoke, Behavior Monitor, database, or Agent
-registry concepts.
+`AgentContext` keeps stable system/developer instructions, the original task,
+complete tool-call groups, newest feedback, explicit clipping, and numeric
+trace metrics inside each role's budget. It knows no Operation Smoke, Behavior
+Monitor, database, or Agent registry concepts.
 
-For local compaction, `AgentContext` keeps the system prompt separate from its
-replaceable history. `messages_for_compaction` creates temporary `B + H + C`
-messages, while `replace_compacted_history` installs `H' = U + S` without
-changing `B`. These generic methods do not interpret Resolution state.
+For local compaction, `AgentContext` keeps stable system/developer prompts
+separate from its replaceable history. `messages_for_compaction` creates
+temporary `B + H + C` messages, while `replace_compacted_history` installs
+`H' = U + S` without changing `B`. These generic methods do not interpret
+Resolution state.
 
 Skill- and Harness-specific code remains responsible for selecting and
 interpreting domain facts. No model-facing runtime evidence is produced by
@@ -330,14 +331,20 @@ persists raw responses or general Agent memory.
 
 `agent/` defines the one generic Agent, its task/completion/result contracts,
 and the Profile that names its model configuration, ordered Tools, Skills,
-bounded context sources, and authorized child Profiles. `skills/` stores
+bounded context sources, and described authorized child Profiles. Its private
+`prompt.py` Module owns generic Profile prompt roles, changing Context
+fingerprints, Skill instruction injection, protocol reservation, and compaction
+requests without exporting a Prompt platform. `skills/` stores
 reusable loaded instructions and their required grants; a Skill executes
 nothing by itself. `tools/` owns every
 RESTScope Tool contract and execution Adapter, grouped by the thing handled:
-HTTP, OpenAPI, Resource, Test Case, Worklist, Plan, Parameter, and Subagent. Its
-immutable built-in Catalog is authoritative, while one Profile still selects
-the exact definitions made executable for an Agent. `tools/plan/` owns the
-small read/replace Interface for one Agent session's private task progress;
+HTTP, OpenAPI, Resource, Test Case, Worklist, Plan, Skill, Parameter, and
+Subagent. Its immutable built-in Catalog is authoritative, while one Profile
+still selects the exact definitions made executable for an Agent.
+`tools/plan/` owns the small read/replace Interface for one Agent session's
+private task progress;
+`tools/skill/` owns the one Harness-bound loader contract; selecting Skills
+automatically appends it after explicitly ordered Profile Tools; and
 `tools/worklist/` retains Failure Resolution's reference-rich domain behavior.
 
 ### `restscope/harness/`
@@ -351,8 +358,9 @@ Start with `harness/agent_runtime.py`: it validates the complete immutable
 Profile graph and is the only place that turns names into a live Agent. Then
 read `harness/agent_control.py` for direct-parent authorization, asynchronous
 child state, open/active slots, cooperative cancellation, and the shared
-weighted rollout budget. `agent/runtime.py` owns each independent conversation,
-the one-Tool-or-final loop, correction feedback, and 80% Tool-free compaction.
+weighted rollout budget. `agent/runtime.py` owns the model-and-Tool loop, while
+private `agent/prompt.py` owns request assembly and 80% Tool-free compaction
+around the shared `AgentContext` history implementation.
 
 ### `restscope/http_transport.py`
 

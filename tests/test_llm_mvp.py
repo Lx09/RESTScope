@@ -239,6 +239,32 @@ class _FakeOpenAIClient:
         self.chat = _FakeChat()
 
 
+def test_openai_compatible_provider_preserves_developer_role() -> None:
+    """OpenAI-compatible requests send stable developer guidance unchanged."""
+    from restscope.llm import LLMMessage, LLMRequest
+    from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
+
+    client = _FakeOpenAIClient()
+    OpenAICompatibleProvider(api_key="test-key", client=client).invoke(
+        LLMRequest(
+            provider="openai_compatible",
+            model="gpt-test",
+            messages=[
+                LLMMessage(role="system", content="Harness contract"),
+                LLMMessage(role="developer", content="Direct child descriptions"),
+                LLMMessage(role="user", content="Task"),
+            ],
+        )
+    )
+
+    assert client.chat.completions.kwargs is not None
+    assert client.chat.completions.kwargs["messages"][:3] == [
+        {"role": "system", "content": "Harness contract"},
+        {"role": "developer", "content": "Direct child descriptions"},
+        {"role": "user", "content": "Task"},
+    ]
+
+
 class _FailingCompletions:
     def __init__(self, error: Exception) -> None:
         self.error = error

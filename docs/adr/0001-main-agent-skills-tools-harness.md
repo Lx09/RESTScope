@@ -28,10 +28,12 @@ nor resumes scheduler state.
 
 `AgentProfile` is the complete authorization declaration. It names one model
 configuration, ordered Tool names, Skill names, bounded Context Source names,
-and child Profile names. Harness construction rejects unknown or duplicate
-names, disabled models, missing providers or Bindings, insufficient Skill
-grants, built-in/external Catalog collisions, child cycles, and paths deeper
-than three. The public boundary is intentionally one deep operation:
+and child Profile names. Every Profile used as a child supplies a bounded
+plain-language description for its direct parent's developer message. Harness
+construction rejects unknown or duplicate names, disabled models, missing
+providers or Bindings, insufficient Skill grants, built-in/external Catalog
+collisions, child cycles, and paths deeper than three. The public boundary is
+intentionally one deep operation:
 `HarnessRuntime.start_main_agent(profile_name)`. There is no public
 resolve-then-assemble result that could be changed or broadened by a caller.
 
@@ -40,6 +42,23 @@ Agent may accept later tasks while retaining bounded in-memory history. A
 Subagent accepts exactly its creation objective, has its own Profile and
 Context, and receives no parent transcript or hidden state. It may start only
 Profiles explicitly listed by its own Profile.
+
+Selecting one or more Skills is the sole narrow exception to exact Profile Tool
+names. The Harness automatically appends its global `skill.read` contract after
+the Profile's ordered Tools. Stable system context lists selected Skill names,
+descriptions, and optional versions but not instruction bodies. A successful
+read acknowledges one selected name, records the normal assistant/tool
+protocol, and then adds that Skill's bounded instructions as an untrusted user
+message. Profiles cannot name `skill.read` directly and caller Binding factories
+cannot replace it. Skill-required Tools and Context Sources are still checked
+before launch whether or not the model loads the body.
+
+Every Profile-started Main Agent or Subagent owns a private
+`AgentPromptSession`. It assembles the stable system/developer prefix, tasks,
+incremental Context replacements, Skill instruction messages, immutable Tool
+and output schemas, and Tool-free compaction request. Context fingerprints and
+messages are session-memory only and isolated from parents and siblings. The
+Module remains private rather than becoming a public Prompt DTO or Registry.
 
 An Agent Profile may grant both `plan.read` and `plan.update` to give that
 session one private generic task Plan. The Harness constructs this state with
@@ -67,6 +86,7 @@ is persisted.
 
 At 80% of the selected model's usable input window, the same model receives a
 Tool-free compaction request. A valid Markdown summary atomically replaces the
-dynamic history while system rules and the original task remain. Two invalid
-summaries end with `context_compaction_failed`; history is never silently
-dropped.
+dynamic history while system/developer rules and the original task remain.
+Current Context Sources are fully re-anchored, while Skill bodies remain
+reloadable rather than pinned. Two invalid summaries end with
+`context_compaction_failed`; history is never silently dropped.

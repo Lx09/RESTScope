@@ -26,6 +26,7 @@ EXPECTED_BUILTIN_TOOLS = {
     "failure_resolution.write_worklist": "worklist",
     "plan.read": "plan",
     "plan.update": "plan",
+    "skill.read": "skill",
     "lookup_parameter_history": "parameter",
     "generate_parameter_patch": "parameter",
     "parameter_patch.read_candidate": "parameter",
@@ -192,6 +193,19 @@ def test_builtin_schemas_do_not_hide_unexplained_open_values() -> None:
         )
 
     assert unexplained == []
+
+
+def test_skill_catalog_exposes_one_closed_read_contract() -> None:
+    """Skill loading is one narrow Harness-owned behavior in the Catalog."""
+    from restscope.tools import builtin_tool_catalog
+
+    definitions = builtin_tool_catalog().definitions(subject="skill")
+
+    assert [definition.name for definition in definitions] == ["skill.read"]
+    spec = definitions[0].spec
+    assert spec.input_schema["additionalProperties"] is False
+    assert spec.input_schema["required"] == ["name"]
+    assert spec.output_schema["additionalProperties"] is False
 
 
 def test_global_http_contract_covers_generic_requests_and_scoped_probes() -> None:

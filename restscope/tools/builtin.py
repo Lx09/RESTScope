@@ -17,6 +17,7 @@ from restscope.tools.resource import (
     resource_list_ids_tool_spec,
     resource_list_resources_tool_spec,
 )
+from restscope.tools.skill import skill_read_tool_spec
 from restscope.tools.subagent import (
     subagent_cancel_tool_spec,
     subagent_start_tool_spec,
@@ -79,6 +80,7 @@ def builtin_tool_catalog() -> ToolCatalog:
             "plan",
             (plan_read_tool_spec(), plan_update_tool_spec()),
         ),
+        ("skill", (skill_read_tool_spec(),)),
         (
             "parameter",
             (

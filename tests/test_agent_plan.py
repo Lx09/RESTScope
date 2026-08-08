@@ -283,6 +283,7 @@ def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
             ),
             AgentProfile(
                 name="child",
+                description="Own an isolated child Plan.",
                 model_config_name="thinking",
                 tool_names=plan_tools,
             ),

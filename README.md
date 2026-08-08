@@ -122,11 +122,13 @@ and structured output validation. `restscope.agent` defines explicit Profiles;
 runtime; `restscope.skills` owns reusable instruction metadata; and
 `restscope.harness` validates every Profile and child relationship at
 construction, then `start_main_agent(profile_name)` atomically resolves and
-binds only that Profile's model configuration, ordered Tools, loaded Skills,
-and bounded Context Sources. It does not expose a separate resolution object
-that callers could use to assemble a broader Agent. Unit tests provide their
-own local stub providers; the runtime package does not register an offline fake
-provider.
+binds only that Profile's model configuration, ordered Tools, selected Skill
+metadata, bounded Context Sources, and described direct child Profiles. A
+private Prompt Session automatically adds `skill.read` when Skills are selected
+so the model can load only an authorized instruction body on demand. It does
+not expose a separate resolution or Prompt object that callers could use to
+assemble a broader Agent. Unit tests provide their own local stub providers;
+the runtime package does not register an offline fake provider.
 
 The same generic `Agent` class runs the reusable Main Agent and task-scoped
 Subagents. A child receives its own Profile and objective, never its parent's
@@ -155,11 +157,15 @@ empty containers. Bounded HTTP request/response evidence is the sole JSON
 prompt exception and is rendered inside a safe Markdown fence so a complete
 test case stays easy to inspect.
 `AgentContext` preserves complete tool exchanges and newest validation feedback
-inside the Profile model window. The generic Agent compacts at 80% using the
-same model with Tools disabled; two invalid summaries fail safely without
-deleting history. The transitional Failure Resolution flow still uses its
-existing nested FAST Compact Agent until that named Agent is migrated. Strict
-Agent outputs and provider tool protocols remain JSON.
+inside the Profile model window. The generic Agent's private Prompt Session
+keeps stable system/developer guidance, sends only changed Context replacements
+after their first full value, and reserves the immutable Tool and output
+schemas. It compacts at 80% using the same model with Tools disabled, then
+re-anchors every current Context Source but not reloadable Skill bodies; two
+invalid summaries fail safely without deleting history. The transitional
+Failure Resolution flow still uses its existing nested FAST Compact Agent until
+that named Agent is migrated. Strict Agent outputs and provider tool protocols
+remain JSON.
 
 ## Local live run observer
 

@@ -322,6 +322,40 @@ def test_agent_context_builds_temporary_compaction_messages_from_full_history() 
     )
 
 
+def test_agent_context_preserves_stable_developer_message_through_compaction() -> None:
+    """Developer guidance stays beside system and outside replaceable history."""
+    context = AgentContext(
+        system="Harness contract",
+        developer="Direct child: research — inspect documentation.",
+        user="Current task",
+        limits=ContextLimits(
+            system_chars=200,
+            initial_user_chars=200,
+            feedback_chars=200,
+            conversation_chars=2_000,
+            required_output_tokens=128,
+        ),
+    )
+    context.append_feedback("New evidence")
+
+    before = context.messages_for_compaction("Create checkpoint")
+    context.replace_compacted_history("Compacted facts")
+    after = context.messages_for_request(_model())
+
+    assert [message.role for message in before[:3]] == [
+        "system",
+        "developer",
+        "user",
+    ]
+    assert before[1].content.startswith("Direct child")
+    assert [message.role for message in after[:3]] == [
+        "system",
+        "developer",
+        "user",
+    ]
+    assert after[1].content == before[1].content
+
+
 def test_agent_context_replaces_h_with_original_user_message_and_summary() -> None:
     """Replacing H preserves B and U while removing old assistant/tool records."""
     context = AgentContext(
