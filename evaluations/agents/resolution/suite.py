@@ -17,10 +17,15 @@ from phoenix.evals import Score, create_evaluator
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluations.models import DatasetExample, EvaluationSuite, ScenarioProvenance
-from restscope.capabilities import (
+from restscope.tools import (
     OpenAPICapability,
     ToolContext,
     operation_input_references,
+)
+from restscope.harness.testing import OperationGeneratorConfig
+from restscope.harness.testing.test_case_catalog import (
+    CatalogTestCaseDraft,
+    TestCaseCatalog,
 )
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
@@ -38,11 +43,6 @@ from restscope.operation_smoke.failure_resolution.prompts import (
 from restscope.operation_smoke.memory import ParameterHistory
 from restscope.operation_smoke.output_limit import ModelOutputLimit
 from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinatorFactory
-from restscope.operation_smoke.test_case_catalog import (
-    CatalogTestCaseDraft,
-    TestCaseCatalog,
-)
-from restscope.testing import OperationGeneratorConfig
 
 
 class ResolutionScenarioInput(BaseModel):
