@@ -831,6 +831,43 @@ def test_incomplete_finish_returns_coverage_error_to_the_same_session() -> None:
     assert len(finalizer.calls) == 1
 
 
+def test_invalid_patch_decision_is_corrected_in_the_same_session() -> None:
+    """A schema-rejected Patch choice can be rewritten without losing the session."""
+    invalid = _write_call()
+    invalid.tool_calls[0].arguments["items"][0]["decision"] = {
+        "outcome": "apply_patch",
+        "reason": "The candidate passed validation.",
+    }
+    corrected = _write_call(call_id="write-2", active_item_id=None)
+
+    outcome, client, finalizer = _run([invalid, corrected, _finish()])
+
+    assert outcome.status == "completed"
+    assert outcome.outputs_used == 3
+    assert outcome.worklist.revision == 1
+    assert len(finalizer.calls) == 1
+    rejected_feedback = [
+        message.content
+        for message in client.requests[1].messages
+        if message.role == "tool"
+        and message.name == "failure_resolution.write_worklist"
+    ]
+    assert len(rejected_feedback) == 1
+    assert "invalid_tool_arguments" in rejected_feedback[0]
+    assert "internal_tool_error" not in rejected_feedback[0]
+
+    first_request = client.requests[0]
+    system_prompt = first_request.messages[0].content
+    write_tool = next(
+        tool
+        for tool in first_request.tools
+        if tool.name == "failure_resolution.write_worklist"
+    )
+    for contract_text in (system_prompt, write_tool.description):
+        assert "selected_candidate_ref" in contract_text
+        assert "candidate_refs" in contract_text
+
+
 def test_worklist_write_cannot_share_one_model_output_with_another_tool() -> None:
     """The stateful replacement is rejected as a whole before any tool executes."""
     mixed = _write_call()

@@ -445,6 +445,106 @@ def test_worklist_tool_schema_denies_embedded_patch_before_store_mutation() -> N
     assert store.read().revision == 0
 
 
+@pytest.mark.parametrize(
+    "decision",
+    [
+        {
+            "outcome": "apply_patch",
+            "reason": "The candidate passed validation.",
+        },
+        {
+            "outcome": "apply_patch",
+            "selected_candidate_ref": None,
+            "reason": "The candidate passed validation.",
+        },
+        {
+            "outcome": "no_patch",
+            "selected_candidate_ref": "P1",
+            "reason": "No safe candidate should be applied.",
+        },
+    ],
+)
+def test_worklist_tool_schema_denies_inconsistent_patch_decisions(
+    decision: dict,
+) -> None:
+    """The tool contract rejects candidate choices that contradict the outcome."""
+    from restscope.capabilities import AgentToolbox
+    from restscope.llm import ToolCall
+    from restscope.operation_smoke.failure_resolution import (
+        WRITE_WORKLIST_TOOL_NAME,
+        register_worklist_tools,
+    )
+
+    toolbox = AgentToolbox()
+    store = _store(candidate_refs={"P1"})
+    register_worklist_tools(toolbox=toolbox, store=store)
+    item = _item(candidate_refs=["P1"]).model_dump(mode="json")
+    item["decision"] = decision
+
+    result = toolbox.execute(
+        ToolCall(
+            id="write-inconsistent-decision",
+            name=WRITE_WORKLIST_TOOL_NAME,
+            arguments={
+                "expected_revision": 0,
+                "active_item_id": None,
+                "items": [item],
+            },
+        )
+    )
+
+    assert result.status == "denied"
+    assert result.error == {
+        "code": "invalid_tool_arguments",
+        "message": "Tool arguments do not match the declared input schema.",
+    }
+    assert store.read().revision == 0
+
+
+def test_worklist_tool_returns_safe_feedback_for_unlisted_selected_candidate() -> None:
+    """A dynamic item-reference error remains correctable model feedback."""
+    from restscope.capabilities import AgentToolbox
+    from restscope.llm import ToolCall
+    from restscope.operation_smoke.failure_resolution import (
+        WRITE_WORKLIST_TOOL_NAME,
+        register_worklist_tools,
+    )
+
+    toolbox = AgentToolbox()
+    store = _store(candidate_refs={"P1"})
+    register_worklist_tools(toolbox=toolbox, store=store)
+    item = _item().model_dump(mode="json")
+    item["decision"] = {
+        "outcome": "apply_patch",
+        "selected_candidate_ref": "P1",
+        "reason": "P1 is the reviewed repair.",
+    }
+
+    result = toolbox.execute(
+        ToolCall(
+            id="write-unlisted-candidate",
+            name=WRITE_WORKLIST_TOOL_NAME,
+            arguments={
+                "expected_revision": 0,
+                "active_item_id": None,
+                "items": [item],
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error == {
+        "code": "invalid_worklist_item",
+        "message": (
+            "One or more Worklist items violate the decision or reference rules. "
+            "For apply_patch, selected_candidate_ref must also appear in "
+            "candidate_refs; use unique E*, TC*, and P* references with their "
+            "issued formats."
+        ),
+    }
+    assert store.read().revision == 0
+
+
 def test_candidate_registry_issues_real_refs_and_returns_defensive_copies() -> None:
     """Only the harness can create P refs or retrieve precise candidate objects."""
     registry, candidate = _candidate_registry()

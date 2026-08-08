@@ -14,6 +14,32 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 _WORKLIST_ITEM_ID_PATTERN = r"^WI-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})$"
+_PATCH_CANDIDATE_REF_PATTERN = r"^P[1-9][0-9]*$"
+
+# Pydantic's model validator below protects Python callers, but that validator
+# is not included automatically in the JSON Schema sent to an LLM. These two
+# branches repeat the same outcome-to-candidate rule at the model boundary so
+# an inconsistent tool call is rejected before any worklist code runs.
+_WORKLIST_DECISION_JSON_SCHEMA = {
+    "oneOf": [
+        {
+            "properties": {
+                "outcome": {"const": "apply_patch"},
+                "selected_candidate_ref": {
+                    "type": "string",
+                    "pattern": _PATCH_CANDIDATE_REF_PATTERN,
+                },
+            },
+            "required": ["selected_candidate_ref"],
+        },
+        {
+            "properties": {
+                "outcome": {"const": "no_patch"},
+                "selected_candidate_ref": {"type": "null"},
+            },
+        },
+    ]
+}
 
 
 class _Model(BaseModel):
@@ -50,10 +76,19 @@ class FailureSource(_Model):
 class WorklistDecision(_Model):
     """Store one Agent-owned proposed terminal judgment without precise objects."""
 
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra=_WORKLIST_DECISION_JSON_SCHEMA,
+    )
+
     outcome: Literal["apply_patch", "no_patch"]
     selected_candidate_ref: str | None = Field(
         default=None,
-        pattern=r"^P[1-9][0-9]*$",
+        pattern=_PATCH_CANDIDATE_REF_PATTERN,
+        description=(
+            "Required for apply_patch and omitted or null for no_patch. The "
+            "same P* reference must also appear in the item's candidate_refs."
+        ),
     )
     reason: str = Field(min_length=1, max_length=1_200)
 

@@ -39,6 +39,8 @@ Worklist protocol:
   After WI-999, continue naturally with WI-1000.
 - You may merge, split, overlap, reorder, reopen, or delete draft decisions.
 - Use only issued E*, TC*, and P* references and valid semantic Parameter handles.
+- For apply_patch, include selected_candidate_ref and list that same P* in the
+  item's candidate_refs. For no_patch, omit selected_candidate_ref or set it to null.
 - Never embed a Patch, Generator, Constraint, Test Case, request, response,
   Schema, Memory object, Attempt, database row, or tool result in the worklist.
 - A candidate remains authoritative behind P*. Use parameter_patch.read_candidate
