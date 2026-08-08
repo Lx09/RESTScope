@@ -174,6 +174,34 @@ def test_deepseek_provider_translates_reasoning_and_json_schema_request() -> Non
     assert response.parsed_json == {"ok": True}
 
 
+def test_deepseek_merges_developer_guidance_into_system_in_order() -> None:
+    """DeepSeek receives no unsupported developer role but loses no guidance."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    client = RecordingClient()
+    DeepSeekProvider(api_key="test-key", client=client).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[
+                LLMMessage(role="system", content="Harness contract"),
+                LLMMessage(role="developer", content="Child catalog"),
+                LLMMessage(role="user", content="Task"),
+            ],
+            response_format="text",
+            reasoning=LLMReasoningConfig(mode="disabled"),
+        )
+    )
+
+    kwargs = client.chat.completions.kwargs
+    assert kwargs is not None
+    assert kwargs["messages"] == [
+        {"role": "system", "content": "Harness contract\n\nChild catalog"},
+        {"role": "user", "content": "Task"},
+    ]
+
+
 def test_deepseek_json_mode_does_not_duplicate_an_existing_json_instruction() -> None:
     """Scenario: verify that deepseek json mode does not duplicate an existing json instruction."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest

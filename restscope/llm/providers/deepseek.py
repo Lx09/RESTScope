@@ -223,7 +223,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 "deepseek_tool_choice_unsupported",
                 "DeepSeek thinking mode does not support forced tool choice",
             )
-        kwargs = super()._request_kwargs(request)
+        kwargs = super()._request_kwargs(_merge_developer_messages(request))
         mode = reasoning.mode
         if mode != "default":
             kwargs["extra_body"] = {"thinking": {"type": mode}}
@@ -351,6 +351,33 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 return converted
         converted.insert(0, {"role": "system", "content": instruction})
         return converted
+
+
+def _merge_developer_messages(request: LLMRequest) -> LLMRequest:
+    """Represent developer guidance through DeepSeek's supported role set.
+
+    OpenAI-compatible requests can transmit ``developer`` directly. DeepSeek's
+    chat contract currently exposes system, user, assistant, and tool roles, so
+    each developer message is folded into the nearest preceding system message.
+    The transformation preserves message order and leaves requests without a
+    developer role byte-for-byte equivalent at the Pydantic value boundary.
+    """
+    if not any(message.role == "developer" for message in request.messages):
+        return request
+
+    messages: list[LLMMessage] = []
+    for message in request.messages:
+        if message.role != "developer":
+            messages.append(message)
+            continue
+        if messages and messages[-1].role == "system":
+            previous = messages[-1]
+            messages[-1] = previous.model_copy(
+                update={"content": f"{previous.content}\n\n{message.content}"}
+            )
+        else:
+            messages.append(LLMMessage(role="system", content=message.content))
+    return request.model_copy(update={"messages": messages})
 
 
 def _strict_unavailable_reason(exc: BaseException | None) -> str | None:

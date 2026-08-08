@@ -11,7 +11,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from restscope.agent import Agent, AgentProfile, AgentProfileRegistry
+from restscope.agent import (
+    Agent,
+    AgentCompletion,
+    AgentProfile,
+    AgentProfileRegistry,
+)
+from restscope.agent.prompt import AgentPromptSession, PromptSessionError
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.skills import SkillDefinition, SkillPolicy, SkillRegistry
 from restscope.tools import AgentToolbox, ToolBinding, ToolCatalog, builtin_tool_catalog
@@ -20,6 +26,10 @@ from restscope.tools.plan import (
     PLAN_UPDATE_TOOL_NAME,
     AgentPlanStore,
     plan_tool_bindings,
+)
+from restscope.tools.skill import (
+    SKILL_READ_TOOL_NAME,
+    skill_read_tool_binding,
 )
 from restscope.tools.subagent import (
     SUBAGENT_CANCEL_TOOL_NAME,
@@ -44,7 +54,9 @@ _PLAN_TOOL_NAMES = (
     PLAN_READ_TOOL_NAME,
     PLAN_UPDATE_TOOL_NAME,
 )
-_HARNESS_OWNED_TOOL_NAMES = frozenset((*_SUBAGENT_TOOL_NAMES, *_PLAN_TOOL_NAMES))
+_HARNESS_OWNED_TOOL_NAMES = frozenset(
+    (*_SUBAGENT_TOOL_NAMES, *_PLAN_TOOL_NAMES, SKILL_READ_TOOL_NAME)
+)
 
 
 @dataclass(frozen=True)
@@ -57,12 +69,12 @@ class ToolBindingFactory:
 
 @dataclass(frozen=True)
 class ContextSourceBinding:
-    """Read one named, bounded source already authorized by the App.
+    """Read one named, bounded Markdown source already authorized by the App.
 
-    ``read`` must return model-facing text, not a raw response or log stream.
-    The generic Agent applies a final character boundary before adding it to a
-    task, while the source owner remains responsible for domain projection and
-    secret removal.
+    The owning Adapter must select and safely render model-facing bounded
+    Markdown, not a raw response or log stream. The Harness applies redaction
+    and verifies the declared length before the Prompt Session adds its fixed
+    untrusted-data envelope without re-encoding that Markdown.
     """
 
     name: str
@@ -192,7 +204,12 @@ class AgentRuntimeResolver:
     ) -> Agent:
         """Resolve fixed grants and create one Main or Subagent instance."""
         profile = self.profiles.get(profile_name)
-        definitions = [self._tool_definition(name) for name in profile.tool_names]
+        selected_skills = self.skills.select(profile.skill_names)
+        effective_tool_names = (
+            *profile.tool_names,
+            *((SKILL_READ_TOOL_NAME,) if selected_skills else ()),
+        )
+        definitions = [self._tool_definition(name) for name in effective_tool_names]
         special_bindings = {
             binding.name: binding
             for binding in subagent_tool_bindings(
@@ -225,8 +242,11 @@ class AgentRuntimeResolver:
                     for binding in plan_tool_bindings(AgentPlanStore())
                 }
             )
+        if selected_skills:
+            skill_binding = skill_read_tool_binding(selected_skills)
+            special_bindings[skill_binding.name] = skill_binding
         bindings: list[ToolBinding] = []
-        for name in profile.tool_names:
+        for name in effective_tool_names:
             if name in special_bindings:
                 bindings.append(special_bindings[name])
             else:
@@ -238,26 +258,33 @@ class AgentRuntimeResolver:
                 bindings.append(binding)
         toolbox = AgentToolbox.from_catalog(
             catalog=ToolCatalog(definitions),
-            selected_names=profile.tool_names,
+            selected_names=effective_tool_names,
             bindings=bindings,
             tracing_runtime=self.tracing_runtime,
         )
-        return Agent._from_harness(
+        model = self.models[profile.model_config_name]
+        prompt_session = AgentPromptSession(
             profile=profile,
-            client=self.definition.client,
-            model=self.models[profile.model_config_name],
-            toolbox=toolbox,
-            skill_instructions=tuple(
-                skill.instructions for skill in self.skills.select(profile.skill_names)
+            skills=selected_skills,
+            child_profiles=tuple(
+                self.profiles.get(name) for name in profile.subagent_profile_names
             ),
             context_sources=tuple(
                 (
                     self.context_sources[name].name,
                     self._safe_context_reader(self.context_sources[name]),
-                    self.context_sources[name].max_chars,
                 )
                 for name in profile.context_sources
             ),
+            model=model,
+            tool_specs=toolbox.specs(),
+            output_schema=AgentCompletion.model_json_schema(),
+        )
+        return Agent._from_harness(
+            profile=profile,
+            client=self.definition.client,
+            toolbox=toolbox,
+            prompt_session=prompt_session,
             session_id=session_id,
             tree_control=control,
             cancel_event=cancel_event,
@@ -267,17 +294,26 @@ class AgentRuntimeResolver:
         )
 
     def _safe_context_reader(self, source: ContextSourceBinding) -> Callable[[], str]:
-        """Redact one authorized source before the Agent applies its size limit."""
+        """Redact and validate one Adapter-rendered Markdown source."""
 
         def read() -> str:
             value = source.read()
             if not isinstance(value, str):
                 raise TypeError(f"Context Source must return text: {source.name}")
             if self.tracing_runtime is None:
-                return value
-            redacted = self.tracing_runtime.redactor.redact(value)
+                redacted = value
+            else:
+                redacted = self.tracing_runtime.redactor.redact(value)
             if not isinstance(redacted, str):
                 raise TypeError(f"Context Source redaction must return text: {source.name}")
+            if len(redacted) > source.max_chars:
+                raise PromptSessionError(
+                    code="context_budget_exceeded",
+                    message=(
+                        "Context Source exceeds its bounded Markdown limit: "
+                        f"{source.name}"
+                    ),
+                )
             return redacted
 
         return read
@@ -299,6 +335,10 @@ class AgentRuntimeResolver:
                 f"{sorted(collisions)[0]}"
             )
         for binding_name in self.binding_factories:
+            if binding_name == SKILL_READ_TOOL_NAME:
+                raise ValueError(
+                    f"Skill Tool Binding is owned by Harness: {binding_name}"
+                )
             if binding_name in _PLAN_TOOL_NAMES:
                 raise ValueError(
                     f"Plan Tool Binding is owned by Harness: {binding_name}"
@@ -311,6 +351,11 @@ class AgentRuntimeResolver:
                 raise ValueError(f"Unknown Tool Binding factory: {binding_name}")
         provider_names = set(self.definition.client.registry.list_names())
         for profile in self.profiles.profiles():
+            if SKILL_READ_TOOL_NAME in profile.tool_names:
+                raise ValueError(
+                    "Agent Profiles must not declare skill.read; selecting at "
+                    "least one Skill authorizes the Harness loader automatically"
+                )
             selected_plan_tools = tuple(
                 name for name in profile.tool_names if name in _PLAN_TOOL_NAMES
             )
@@ -351,7 +396,11 @@ class AgentRuntimeResolver:
                     f"Unknown model provider in Agent Profile: {model.provider}"
                 )
             for child_name in profile.subagent_profile_names:
-                self.profiles.get(child_name)
+                child = self.profiles.get(child_name)
+                if child.description is None:
+                    raise ValueError(
+                        f"Agent child Profile requires a description: {child_name}"
+                    )
             granted_tools = set(profile.tool_names)
             granted_context = set(profile.context_sources)
             for skill_name in profile.skill_names:

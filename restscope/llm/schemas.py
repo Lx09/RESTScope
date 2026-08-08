@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-LLMRole = Literal["system", "user", "assistant", "tool"]
+LLMRole = Literal["system", "developer", "user", "assistant", "tool"]
 LLMResponseFormat = Literal["text", "json", "json_schema"]
 LLMReasoningMode = Literal["default", "enabled", "disabled"]
 LLMReasoningEffort = Literal["high", "max"]

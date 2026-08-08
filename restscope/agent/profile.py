@@ -15,6 +15,7 @@ class AgentProfile(BaseModel):
 
     Args:
         name: Stable configuration name used by the Harness and observability.
+        description: Optional plain-language purpose shown to a direct parent.
         model_config_name: Name of the exact provider/model configuration.
         tool_names: Global Tool names this Agent may invoke.
         skill_names: Reusable instruction bundles this Agent may receive.
@@ -28,6 +29,7 @@ class AgentProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=120, pattern=r"^[a-z][a-z0-9_.-]*$")
+    description: str | None = Field(default=None, min_length=1, max_length=2_000)
     model_config_name: str = Field(
         min_length=1,
         max_length=120,

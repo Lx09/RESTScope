@@ -140,6 +140,7 @@ def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch(
                 profiles=(
                     AgentProfile(
                         name="main",
+                        description="Cycle participant main.",
                         model_config_name="thinking",
                         tool_names=(
                             "subagent.start",
@@ -150,6 +151,7 @@ def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch(
                     ),
                     AgentProfile(
                         name="child",
+                        description="Cycle participant child.",
                         model_config_name="thinking",
                         tool_names=(
                             "subagent.start",
@@ -330,6 +332,36 @@ def test_agent_profile_uses_model_configuration_and_explicit_child_names() -> No
         )
 
 
+def test_child_profile_requires_description_before_any_agent_starts() -> None:
+    """A parent cannot advertise an unexplained child Profile to the model."""
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+
+    client, provider = _client()
+    with pytest.raises(ValueError, match="child Profile.*description"):
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        tool_names=(
+                            "subagent.start",
+                            "subagent.wait",
+                            "subagent.cancel",
+                        ),
+                        subagent_profile_names=("child",),
+                    ),
+                    AgentProfile(name="child", model_config_name="thinking"),
+                ),
+                models=(_model(),),
+                client=client,
+            )
+        )
+
+    assert provider.requests == []
+
+
 def test_generic_agent_rejects_construction_outside_the_harness() -> None:
     """Resolved runtime dependencies cannot be assembled through public code."""
     from restscope.agent import Agent, AgentProfile
@@ -340,7 +372,6 @@ def test_generic_agent_rejects_construction_outside_the_harness() -> None:
         Agent(
             profile=AgentProfile(name="main", model_config_name="thinking"),
             client=client,
-            model=_model(),
             toolbox=AgentToolbox(),
         )
 
@@ -437,9 +468,11 @@ def test_profile_resolves_exact_skill_context_and_tool_binding_into_agent() -> N
     assert result.status == "completed"
     assert calls == ["GET /pets"]
     assert [tool.name for tool in provider.requests[0].tools] == [
-        "openapi.list_inputs"
+        "openapi.list_inputs",
+        "skill.read",
     ]
-    assert "Use schema handles" in provider.requests[0].messages[0].content
+    assert "Inspect one operation." in provider.requests[0].messages[0].content
+    assert "Use schema handles" not in provider.requests[0].messages[0].content
     assert "GET /pets is authorized context." in provider.requests[0].messages[1].content
     assert provider.requests[1].messages[-1].role == "tool"
 

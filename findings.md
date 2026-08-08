@@ -1,5 +1,32 @@
 # Findings & Decisions
 
+## Profile Agent Prompt Session (2026-08-08)
+
+### Approved requirements
+- Add a private `AgentPromptSession` for generic Agents created from `AgentProfile`; do not migrate Failure Resolution, Patch, Review, or Compact Agents.
+- Add an optional bounded Profile description and require it for every directly referenced child Profile.
+- Preserve stable `system` and optional `developer` instructions through compaction; OpenAI-compatible providers keep `developer`, while DeepSeek folds it into `system` in order.
+- Auto-append the Harness-owned `skill.read` Tool for Profiles selecting Skills. A successful read keeps the legal assistant/tool exchange and then appends bounded Skill instructions as a user message.
+- Send Context Sources fully on first use, changed-only thereafter, explicitly represent empty changes, and re-anchor all current sources after compaction.
+- Reserve Tool and output-schema serialization size, protect the Harness contract and all Skill/child names, and return `context_budget_exceeded` before any model or Tool action when essentials cannot fit.
+
+### Pre-refactor executable baseline
+- `restscope.agent.runtime.Agent` rendered system/task text and constructed both normal and compaction requests itself.
+- `AgentContext` had only stable system plus user/history state, and its fitting algorithm could clip system content.
+- Harness Profile resolution already validated Skill-required Tools and Context Sources before building each Agent.
+- `AgentToolbox` already preserved Tool definition order and locally validated arguments and successful results.
+- DeepSeek inherited the OpenAI-compatible message conversion without special handling for a developer role.
+
+### Current executable evidence
+- The private `AgentPromptSession` owns fixed model settings, role assembly, incremental Context, Skill instruction injection, Tool/output protocol reservation, and compaction requests.
+- `Agent` owns only the model/Tool execution loop and receives no duplicate model configuration.
+- Harness Context readers own source type checking, redaction, and length validation; Prompt Session consumes their bounded Markdown results.
+- `AgentContext` preserves stable system and optional developer messages across ordinary projection and compaction.
+- OpenAI-compatible requests preserve `developer`, while DeepSeek folds it into `system` in original order.
+
+### Design decision
+`AgentPromptSession` is a deep private Module whose callers ask it to prepare tasks, build requests, record protocol groups and feedback, and replace compacted history. It reuses `AgentContext` rather than copying its history projection algorithm. Tests target the public Harness, Context, and provider seams instead of importing the private class.
+
 ## Requirements
 - The approved follow-up requires the collapsed summary and complete detail to
   occupy the same visual origin. Opening lasts 300 ms and closing lasts 200 ms;

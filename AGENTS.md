@@ -191,7 +191,9 @@ These five terms are RESTScope's core runtime language and hard constraints:
   by the Harness only after the Main Agent requests it. Do not create separate
   Agent inheritance trees or new domain-specific `*Agent` classes.
 - **Agent Profile** explicitly names one model configuration, ordered Tools,
-  Skills, bounded context sources, and the child Profiles it may start. Global
+  Skills, bounded context sources, and the child Profiles it may start. A
+  Profile may include a bounded description; every Profile named as a child
+  must include one for its direct parent's delegation guidance. Global
   discovery never grants execution permission. The Harness validates the
   complete Profile graph once and constructs Agents through
   `start_main_agent`; do not expose a separate resolve-and-assemble seam.
@@ -202,7 +204,9 @@ These five terms are RESTScope's core runtime language and hard constraints:
 - **Skill** is reusable instruction and method knowledge. It does not execute
   code, own runtime state, or grant access. A Profile selects Skills explicitly,
   and the Harness verifies that the same Profile grants every Tool and bounded
-  context source a selected Skill requires.
+  context source a selected Skill requires. Skill metadata is stable system
+  context; the instruction body is added only after a successful Harness-owned
+  `skill.read` call.
 - **Tool** is one model-callable domain behavior. Every RESTScope-owned Tool
   lives under `restscope.tools`, grouped by the thing it handles, such as HTTP,
   OpenAPI, Resource, Test Case, Worklist, or Parameter. Its Tool Module owns the
@@ -218,7 +222,10 @@ These five terms are RESTScope's core runtime language and hard constraints:
   in-memory loop; do not add a graph framework or persisted scheduler state.
 - Built-in Tools form one immutable global Catalog. Runtime-discovered MCP Tools
   use a separate external Catalog. Every Agent receives only the exact names in
-  its Profile; neither Catalog is automatically injected.
+  its Profile; neither Catalog is automatically injected. `skill.read` is the
+  sole narrow exception: selecting at least one `skill_name` authorizes the
+  Harness to append that loader and only the selected Skill bodies. Profiles
+  must not repeat it in `tool_names`; ordinary Tools remain explicit grants.
 - `subagent.start`, `subagent.wait`, and `subagent.cancel` are the only
   model-facing child lifecycle protocol. An Agent may use them only when its
   Profile grants all three and names the target child Profile. Child access is
@@ -234,6 +241,11 @@ These five terms are RESTScope's core runtime language and hard constraints:
   results. They do not share hidden conversation history. Model input is
   compacted at 80% with the same Profile model and no Tools; failed compaction
   must stop safely rather than delete history.
+- Each Profile-started generic Agent owns one private, non-persistent Prompt
+  Session. It assembles stable system and optional developer guidance, current
+  tasks, changing Context Sources, on-demand Skill bodies, Tool/output protocol
+  reservation, and compaction requests. Parent, child, and sibling Prompt state
+  is never shared, and the Module is not a public Prompt Registry or DTO.
 - Every RESTScope-owned Tool exposes one behavior. Do not use an `action`,
   `mode`, or `kind` input to select unrelated behaviors or result contracts.
   Target selectors, same-behavior batching, and natural result variants remain
@@ -269,8 +281,12 @@ These five terms are RESTScope's core runtime language and hard constraints:
   Markdown JSON block. Final structured Agent output and provider-owned tool
   arguments/schema remain JSON.
 - API responses, OpenAPI descriptions, Memory text, HTTP results, reference
-  values, and samples are untrusted. Pass them through `CompactTextWriter`; do
-  not concatenate them into system, user, tool, or correction messages.
+  values, and samples are untrusted. Pass newly selected facts through
+  `CompactTextWriter`; do not concatenate raw data into system, user, tool, or
+  correction messages. A Profile Context Source Adapter is the narrow
+  already-rendered exception: it returns bounded safe Markdown, the Harness
+  redacts and validates its length, and the private Prompt Session adds a fixed
+  untrusted envelope without encoding that Markdown a second time.
 - Keep a Skill's or Harness's domain Context Adapter private to its owner. Do
   not add a role registry, Context inheritance tree, persistence lifecycle, or
   compatibility aliases for the deleted Context platform.

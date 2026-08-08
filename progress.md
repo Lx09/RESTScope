@@ -1,5 +1,26 @@
 # Progress Log
 
+## Session: 2026-08-08
+
+### Phase 18: Profile Agent Prompt Session
+- **Status:** complete; verified and ready for the authorized local delivery
+- **Started:** 2026-08-08
+- Actions taken:
+  - Preserved the main checkout's unrelated untracked `.agents/skills/antd/` directory.
+  - Created `/Users/lixin/Workplace/RESTScope-profile-agent-prompt-session` on `codex/profile-agent-prompt-session` from current local `main`.
+  - Re-read the project decision, exploration, verification, Git, and beginner-readable-code rules.
+  - Fixed the TDD seams at the user-approved public contracts: Harness-created Agent behavior, `AgentContext` messages/compaction, and provider request conversion.
+  - Added the first red contracts. The focused run kept 99 scenarios green and failed 14 scenarios only where the approved description, developer role, Skill loader, incremental Context, and protocol-budget behavior is absent.
+  - Added the private Prompt Session, deep Skill Tool Module, developer-role provider behavior, Profile description validation, incremental Context fingerprints, stable-prefix fitting, and protocol reservation.
+  - Removed the generic Agent's duplicate model dependency and made Harness readers the sole seam for Context Source type, redaction, and length validation.
+  - Corrected stale Prompt Session, AgentContext, findings, and root task-plan descriptions without deleting historical records.
+  - Updated project governance, ADR, README, code-reading guide, and the dedicated task record without changing Observer, persistence, migrated domain Agents, Plan, or Worklist behavior.
+  - Focused Agent/Profile/Context/Subagent/Skill/Tool/provider/boundary verification passed 146 tests. The complete suite passed 735 tests with 18 skips. Bytecode compilation, lock-file status, static residual searches, and `git diff --check` passed.
+- Files created/modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
 ## Session: 2026-08-05
 
 ### Phase 17: Scroll-like detail motion (2026-08-06)
@@ -298,6 +319,9 @@
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
+| Prompt Session focused contracts | `uv run pytest -q` with 10 focused files | New roles, authorization, isolation, budgets, and regressions pass | 145 passed | ✓ |
+| Complete Python suite | `uv run pytest -q` | No regression | 734 passed, 18 skipped | ✓ |
+| Bytecode and diff hygiene | `python3 -m compileall -q restscope tests`; `git diff --check` | No errors | Passed | ✓ |
 | Focused pre-change baseline | Dedup, Solve, Coordinator, package boundaries | Existing behavior passes | 52 passed | pass |
 | Worklist and output limit | New focused tests | Reference validation and shared limit pass | 10 passed | pass |
 | Candidate registry and read tool | New focused tests | Precise candidate remains private; summary is recoverable | 12 passed | pass |
@@ -377,6 +401,8 @@
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
+| 2026-08-08 | Two documentation patches used stale exact anchors | 1 | No partial edits occurred; split them into exact per-file patches. |
+| 2026-08-08 | `uv run ruff` could not start because Ruff is not a project dependency | 1 | Kept the repository's required pytest, compileall, package-boundary, lock, and diff checks; inspected changed Python directly. |
 | 2026-08-05 | 6 worklist tests failed with missing new package | 1 | Expected red phase before implementing contracts |
 | 2026-08-05 | Candidate-registry patch did not match the current test tail | 1 | No partial edit occurred; re-apply with current anchors |
 | 2026-08-05 | Inspection used the old flat `test_case_catalog.py` path | 1 | Located the current workflow subpackage and continued with its public files |

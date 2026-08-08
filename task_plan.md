@@ -1,18 +1,21 @@
-# Task Plan: Reference-based Failure Resolution Agent
+# Task Plan: Profile Agent Prompt Session
 
 ## Goal
-Replace the separate Failure Dedup and Failure Solve Agents with one continuous, Agent-owned Resolution session whose mutable worklist stores only references and small semantic text while a minimal deterministic harness owns registries, safety, validation, and atomic persistence.
+Deepen the generic Profile-started Agent into a private Prompt Session that owns stable role assembly, on-demand Skill instructions, incremental bounded Context, Tool/output protocol budget, and compaction prompts without changing migrated domain Agents.
 
 ## Current Phase
-Phase 17 complete; implementation is verified and Git delivery remains unauthorized
-
-## Active Follow-up Goal
-Refine every inline Agent-message, Tool/HTTP, and Smoke Batch detail so the
-summary and complete content share one origin and unfold smoothly with the
-surrounding G6 nodes, ports, and edges, while preserving schema v2 and the
-read-only Worklist.
+Phase 18 complete; implementation is verified and local Git delivery is authorized
 
 ## Phases
+
+### Phase 18: Profile Agent Prompt Session
+- [x] Confirm the approved Interfaces, non-goals, and Git authorization boundary
+- [x] Create `codex/profile-agent-prompt-session` in a dedicated worktree
+- [x] Add public-seam red tests for Profile, AgentContext/provider roles, Skill loading, and Prompt Session behavior
+- [x] Implement the private Module and Harness integration in vertical slices
+- [x] Update AGENTS, ADR, task record, and code-reading guide
+- [x] Run focused, complete, compile, lock-file, boundary, and diff-hygiene verification
+- **Status:** complete; verified and ready for the authorized local delivery
 
 ### Phase 1: Discovery and executable seams
 - [x] Capture the approved behavior and project constraints
@@ -133,6 +136,9 @@ read-only Worklist.
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
+| Test through `HarnessRuntime.start_main_agent`, `AgentContext`, and provider request conversion | These are the approved stable behavior seams; the new `AgentPromptSession` remains private and can evolve without a public Prompt DTO. |
+| Auto-append `skill.read` only when a Profile selects Skills | The selected names are the narrow authorization for loading their bodies; ordinary Tools remain explicitly named. |
+| Keep one Prompt Session per Agent session | Main, child, and sibling prompt state, Context fingerprints, and loaded Skill bodies remain isolated and non-persistent. |
 | One `FailureResolutionAgent` session per failed Batch | The Agent owns semantic grouping, investigation, worklist evolution, and finish timing. |
 | Worklist contains references and bounded semantic strings only | Precise Patch/Test Case/Memory objects remain authoritative in session registries. |
 | Harness validates only types, references, coverage, tool safety, final Patch compatibility, and persistence | Semantic scheduling and completion judgments remain model-owned. |
@@ -180,7 +186,5 @@ read-only Worklist.
 | Restricted page evaluation did not expose DOM `click()` or constructible `MouseEvent` objects | 1 | Use supported locator clicks and rely on the Web Animations regression for frame-level reversal behavior. |
 
 ## Notes
-- Work occurs only in `/Users/lixin/Workplace/RESTScope-worktrees/merge-failure-agents` on `codex/merge-failure-agents`.
-- Keep changes unstaged and uncommitted; Git delivery operations require separate authorization.
-- Re-read this plan before every major design or migration decision.
-- Live observer work occurs only in `/Users/lixin/Workplace/RESTScope-worktrees/live-run-observer-ui` on `codex/live-run-observer-ui`.
+- Current work occurs only in `/Users/lixin/Workplace/RESTScope-profile-agent-prompt-session` on `codex/profile-agent-prompt-session`.
+- Local commit, merge, and worktree cleanup are authorized; push remains unauthorized.
