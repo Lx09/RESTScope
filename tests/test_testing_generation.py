@@ -8,7 +8,7 @@ import pytest
 
 
 def _snapshot(operation):
-    from restscope.testing.snapshot import build_operation_snapshot
+    from restscope.harness.testing.snapshot import build_operation_snapshot
 
     snapshot, _ = build_operation_snapshot(operation)
     return snapshot
@@ -37,8 +37,8 @@ def _snapshot(operation):
 )
 def test_builtin_scalar_generators_are_deterministic_and_typed(strategy, assertion) -> None:
     """Scenario: verify that builtin scalar generators are deterministic and typed."""
-    from restscope.testing.generation import generate_strategy_value
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.generation import generate_strategy_value
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_test",
@@ -55,7 +55,7 @@ def test_builtin_scalar_generators_are_deterministic_and_typed(strategy, asserti
 
 def test_regex_generator_accepts_empty_pattern_and_uses_bounded_defaults() -> None:
     """Scenario: an empty regex remains valid and receives safe default lengths."""
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_regex",
@@ -71,7 +71,7 @@ def test_regex_generator_accepts_empty_pattern_and_uses_bounded_defaults() -> No
 
 def test_regex_generator_accepts_declared_upper_boundaries() -> None:
     """Scenario: the documented pattern and length maxima remain usable values."""
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_regex",
@@ -121,7 +121,7 @@ def test_regex_generator_rejects_invalid_contracts(
     """Scenario: malformed or unbounded regex contracts fail before generation."""
     from pydantic import ValidationError
 
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     with pytest.raises(ValidationError, match=message):
         InputGeneratorConfig(
@@ -133,8 +133,8 @@ def test_regex_generator_rejects_invalid_contracts(
 
 def test_regex_generator_is_seeded_and_produces_matching_values() -> None:
     """Scenario: one regex and seed always produce the same matching string."""
-    from restscope.testing.generation import generate_strategy_value
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.generation import generate_strategy_value
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_regex",
@@ -164,8 +164,8 @@ def test_regex_generator_seed_is_stable_across_hash_randomization() -> None:
     import sys
 
     script = """
-from restscope.testing.generation import generate_strategy_value
-from restscope.testing.models import RegexGenerator
+from restscope.harness.testing.generation import generate_strategy_value
+from restscope.harness.testing.models import RegexGenerator
 
 strategy = RegexGenerator(
     type="regex",
@@ -205,8 +205,8 @@ def test_regex_generator_pads_short_search_matches(
     pattern: str,
 ) -> None:
     """Scenario: padding before or after a short match preserves search semantics."""
-    from restscope.testing.generation import generate_strategy_value
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.generation import generate_strategy_value
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_regex",
@@ -240,8 +240,8 @@ def test_regex_generator_fails_closed_for_unsatisfied_or_unsupported_patterns(
     max_length: int,
 ) -> None:
     """Scenario: generation errors replace invalid, unsupported, or oversized output."""
-    from restscope.testing.generation import GenerationError, generate_strategy_value
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.generation import GenerationError, generate_strategy_value
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_regex",
@@ -260,8 +260,8 @@ def test_regex_generator_fails_closed_for_unsatisfied_or_unsupported_patterns(
 
 def test_regex_generator_limits_work_for_large_empty_repetitions() -> None:
     """Scenario: empty repeated items still consume the finite generation budget."""
-    from restscope.testing.generation import GenerationError, generate_strategy_value
-    from restscope.testing.models import InputGeneratorConfig
+    from restscope.harness.testing.generation import GenerationError, generate_strategy_value
+    from restscope.harness.testing.models import InputGeneratorConfig
 
     config = InputGeneratorConfig(
         input_node_id="input_regex",
@@ -280,8 +280,8 @@ def test_regex_generator_limits_work_for_large_empty_repetitions() -> None:
 def test_patterned_text_body_uses_its_default_regex_generator() -> None:
     """Scenario: a text request body derives and executes one regex strategy."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.generation import generate_test_case
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -333,8 +333,8 @@ def test_patterned_text_body_uses_its_default_regex_generator() -> None:
 def test_enum_default_choice_generates_values_despite_conflicting_schema_constraints() -> None:
     """Scenario: verify that enum default choice generates values despite conflicting schema constraints."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.generation import generate_test_case
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -410,8 +410,8 @@ def test_container_enum_choice_bypasses_descendant_generators(
 ) -> None:
     """Scenario: verify that container enum choice bypasses descendant generators."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.generation import generate_test_case
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -449,9 +449,9 @@ def test_container_enum_choice_bypasses_descendant_generators(
 def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
     """Scenario: verify that manual scalar generator overrides the frozen schema type."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig
-    from restscope.testing.generation import generate_test_case
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing import InputGeneratorConfig
+    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -507,8 +507,8 @@ def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
 
 def _constrained_generation_config():
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing import InputGeneratorConfig
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -592,7 +592,7 @@ def _node_id(config, canonical_path: str) -> str:
 
 def test_generate_test_case_none_constraints_preserves_unconstrained_output() -> None:
     """Scenario: verify that generate test case none constraints preserves unconstrained output."""
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing.generation import generate_test_case
 
     config = _constrained_generation_config()
 
@@ -615,8 +615,8 @@ def test_generate_test_case_none_constraints_preserves_unconstrained_output() ->
 
 def test_constrained_generation_can_force_an_optional_parameter_present() -> None:
     """Scenario: verify that constrained generation can force an optional parameter present."""
-    from restscope.testing import ConstraintSet
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import ConstraintSet
+    from restscope.harness.testing.generation import generate_test_case
 
     config = _constrained_generation_config()
     mode_id = _node_id(config, "query/mode")
@@ -666,8 +666,8 @@ def test_constrained_generation_can_force_an_optional_parameter_present() -> Non
 
 def test_constrained_generation_preserves_explicit_null_override() -> None:
     """Scenario: verify that constrained generation preserves explicit null override."""
-    from restscope.testing import ConstraintSet
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import ConstraintSet
+    from restscope.harness.testing.generation import generate_test_case
 
     config = _constrained_generation_config()
     nullable_id = _node_id(config, "query/nullable")
@@ -707,8 +707,8 @@ def test_constrained_generation_preserves_explicit_null_override() -> None:
 
 def test_constrained_body_property_forces_request_body_ancestors_present() -> None:
     """Scenario: verify that constrained body property forces request body ancestors present."""
-    from restscope.testing import ConstraintSet
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import ConstraintSet
+    from restscope.harness.testing.generation import generate_test_case
 
     config = _constrained_generation_config()
     count_id = _node_id(
@@ -748,12 +748,12 @@ def test_constrained_body_property_forces_request_body_ancestors_present() -> No
 def test_body_projection_uses_the_active_media_root_for_arrays_and_scalars() -> None:
     """Scenario: verify that body projection uses the active media root for arrays and scalars."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import (
+    from restscope.harness.testing import (
         build_semantic_input_map,
         project_generated_input_value,
     )
-    from restscope.testing.generation import generate_test_case
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -838,9 +838,9 @@ def test_constrained_generation_rechecks_the_completed_case(
     monkeypatch,
 ) -> None:
     """Scenario: verify that constrained generation rechecks the completed case."""
-    from restscope.testing import ConstraintSet, InputNodeOverride
-    from restscope.testing.constraint_solver import ConstraintSolveError
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import ConstraintSet, InputNodeOverride
+    from restscope.harness.testing.constraint_solver import ConstraintSolveError
+    from restscope.harness.testing.generation import generate_test_case
 
     config = _constrained_generation_config()
     mode_id = _node_id(config, "query/mode")
@@ -860,7 +860,7 @@ def test_constrained_generation_rechecks_the_completed_case(
         }
     )
     monkeypatch.setattr(
-        "restscope.testing.constraint_solver.solve_input_overrides",
+        "restscope.harness.testing.constraint_solver.solve_input_overrides",
         lambda **_: {
             mode_id: InputNodeOverride(
                 present=True,
@@ -885,8 +885,8 @@ def test_constrained_generation_rechecks_the_completed_case(
 def test_test_case_generator_builds_configured_request_inputs_and_omits_optional_nodes() -> None:
     """Scenario: verify that test case generator builds configured request inputs and omits optional nodes."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig, OperationGeneratorConfig
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.harness.testing.generation import generate_test_case
 
     spec = {
         "openapi": "3.0.3",
@@ -996,8 +996,8 @@ def test_test_case_generator_builds_configured_request_inputs_and_omits_optional
 def test_test_case_generator_supports_weighted_variants_and_all_of_objects() -> None:
     """Scenario: verify that test case generator supports weighted variants and all of objects."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig, OperationGeneratorConfig
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.harness.testing.generation import generate_test_case
 
     operation = OpenAPIParser.parse(
         {
@@ -1099,9 +1099,9 @@ def test_test_case_generator_supports_weighted_variants_and_all_of_objects() -> 
 def test_nullable_object_can_generate_an_explicit_json_null_body() -> None:
     """Scenario: verify that nullable object can generate an explicit json null body."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig, OperationGeneratorConfig
-    from restscope.testing.generation import generate_test_case
-    from restscope.testing.serialization import serialize_test_case
+    from restscope.harness.testing import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.testing.serialization import serialize_test_case
 
     operation = OpenAPIParser.parse(
         {
@@ -1161,8 +1161,8 @@ def test_nullable_object_can_generate_an_explicit_json_null_body() -> None:
 def test_feedback_variant_generator_does_not_revalidate_one_of_membership() -> None:
     """Scenario: verify that feedback variant generator does not revalidate one of membership."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig, OperationGeneratorConfig
-    from restscope.testing.generation import generate_test_case
+    from restscope.harness.testing import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.harness.testing.generation import generate_test_case
 
     operation = OpenAPIParser.parse(
         {

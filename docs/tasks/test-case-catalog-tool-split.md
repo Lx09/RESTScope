@@ -1,5 +1,10 @@
 # Test Case Catalog Tool Split
 
+> Superseded ownership note (2026-08-08): ADR 0001 moves the five Tool
+> contracts and execution Adapters to `restscope.tools.test_case`; the run-local
+> Test Case state now belongs to `restscope.harness.testing.test_case_catalog`.
+> The five single-purpose behaviors and retention rules remain unchanged.
+
 Status: Completed
 
 > Superseded output-shape note (2026-08-03): Test Cases now retain structured

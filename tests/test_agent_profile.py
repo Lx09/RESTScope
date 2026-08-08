@@ -1,0 +1,45 @@
+"""Protect explicit Agent access instead of role-driven hidden injection."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+
+def test_agent_profile_rejects_duplicate_access_names() -> None:
+    """Scenario: repeated permissions are a construction error, not ambiguity."""
+    from restscope.agent import AgentProfile
+
+    with pytest.raises(ValidationError):
+        AgentProfile(
+            name="failure_resolution",
+            model_config_name="thinking",
+            tool_names=["openapi.list_inputs", "openapi.list_inputs"],
+        )
+
+
+def test_agent_profile_keeps_each_access_kind_explicit() -> None:
+    """Scenario: callers can inspect exactly what one independent Agent sees."""
+    from restscope.agent import AgentProfile
+
+    profile = AgentProfile(
+        name="failure_resolution",
+        model_config_name="thinking",
+        tool_names=["openapi.list_inputs"],
+        skill_names=["failure_diagnosis"],
+        context_sources=["failure_sources"],
+    )
+
+    assert profile.tool_names == ("openapi.list_inputs",)
+    assert profile.skill_names == ("failure_diagnosis",)
+    assert profile.context_sources == ("failure_sources",)
+
+
+def test_harness_exposes_atomic_start_instead_of_shallow_profile_resolution() -> None:
+    """Callers cannot resolve grants and then assemble an Agent themselves."""
+    import restscope.harness as harness
+
+    runtime = harness.build_harness()
+
+    assert not hasattr(harness, "ResolvedAgentAccess")
+    assert not hasattr(runtime, "validate_profile")

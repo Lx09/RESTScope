@@ -8,6 +8,7 @@ when that summary replaces the old history.
 
 from __future__ import annotations
 
+from restscope.agent import AgentProfile
 from restscope.context import AgentContext
 from restscope.llm import (
     LLMClient,
@@ -24,6 +25,10 @@ from .prompts import COMPACT_INSTRUCTION
 
 MODEL_ROLE = "operation_smoke_failure_resolution_compact"
 _MAX_ATTEMPTS = 2
+_PROFILE = AgentProfile(
+    name="failure_resolution_compact",
+    model_config_name="fast",
+)
 
 
 class FailureResolutionCompactError(RuntimeError):
@@ -43,6 +48,7 @@ class FailureResolutionCompactAgent:
         """Store the FAST model and trace runtime used for local compaction."""
         self.client = client
         self.model = model
+        self.profile = _PROFILE
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(

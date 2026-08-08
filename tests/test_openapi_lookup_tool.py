@@ -204,7 +204,7 @@ def _ir():
 
 def _capability():
     """Bind one global Capability to a trusted in-memory ToolContext."""
-    from restscope.capabilities import OpenAPICapability, ToolContext
+    from restscope.tools import OpenAPICapability, ToolContext
 
     context = ToolContext(ir=_ir(), baseline_schema_source={})
     return OpenAPICapability(context_provider=lambda: context)
@@ -212,7 +212,7 @@ def _capability():
 
 def _operation_candidate_capability():
     """Build GitLab-like operation names used to recover from model guesses."""
-    from restscope.capabilities import OpenAPICapability, ToolContext
+    from restscope.tools import OpenAPICapability, ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -324,7 +324,7 @@ def _grouped_observed_ir():
 
 def _toolbox():
     """Register all four tools through the same production Interface."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         openapi_get_input_schema_tool_spec,
         openapi_get_response_field_schema_tool_spec,
@@ -364,7 +364,7 @@ def _execute(name: str, arguments: dict):
 
 def test_operation_lookup_specs_explain_exact_key_format_without_limiting_keys() -> None:
     """Models see RESTScope's key syntax while every existing operation stays queryable."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         openapi_get_input_schema_tool_spec,
         openapi_get_response_field_schema_tool_spec,
         openapi_list_inputs_tool_spec,
@@ -394,7 +394,7 @@ def test_unknown_operation_returns_the_closest_real_operation_key() -> None:
     """An operationId-like guess receives a real METHOD/path recovery choice."""
     import pytest
 
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     with pytest.raises(ToolFailure) as caught:
         _operation_candidate_capability().get_input_schema(
@@ -414,7 +414,7 @@ def test_operation_candidates_normalize_common_model_guess_styles() -> None:
     """Camel, snake, and operationId-like guesses rank the same real key first."""
     import pytest
 
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     capability = _operation_candidate_capability()
     for guessed_key in (
@@ -442,7 +442,7 @@ def test_operation_candidates_are_bounded_stable_and_expose_only_real_keys() -> 
     """Large documents return ten deterministic METHOD/path choices, not aliases."""
     import pytest
 
-    from restscope.capabilities import OpenAPICapability, ToolContext, ToolFailure
+    from restscope.tools import OpenAPICapability, ToolContext, ToolFailure
     from restscope.openapi_parser import OpenAPIParser
 
     paths = {
@@ -493,7 +493,7 @@ def test_unknown_operation_keeps_plain_error_when_the_ir_has_no_operations() -> 
     """An empty document cannot offer a fabricated recovery choice."""
     import pytest
 
-    from restscope.capabilities import OpenAPICapability, ToolContext, ToolFailure
+    from restscope.tools import OpenAPICapability, ToolContext, ToolFailure
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -590,7 +590,7 @@ def test_find_observed_response_fields_returns_only_matching_current_ir_fields(
     tmp_path: Path,
 ) -> None:
     """Observed scalar evidence is intersected with the current response Schema."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         OpenAPICapability,
         ToolContext,
@@ -659,7 +659,7 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
     tmp_path: Path,
 ) -> None:
     """Field offsets stay global while repeated response metadata is grouped."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         OpenAPICapability,
         ToolContext,
@@ -755,7 +755,7 @@ def test_observed_lookup_reuses_array_and_combiner_field_references(
     tmp_path: Path,
 ) -> None:
     """Observed selectors map to the same handles as exact Schema lookup."""
-    from restscope.capabilities import OpenAPICapability, ToolContext
+    from restscope.tools import OpenAPICapability, ToolContext
 
     catalog = _observed_catalog(tmp_path)
     catalog.record_observation(
@@ -793,7 +793,7 @@ def test_observed_lookup_keeps_only_high_precision_fuzzy_matches(
     tmp_path: Path,
 ) -> None:
     """One-character omission passes 0.95 while a broad prefix does not."""
-    from restscope.capabilities import OpenAPICapability, ToolContext
+    from restscope.tools import OpenAPICapability, ToolContext
 
     catalog = _observed_catalog(tmp_path)
     catalog.record_observation(
@@ -864,7 +864,7 @@ def test_list_response_fields_matches_status_fallbacks() -> None:
 
 def test_list_response_fields_has_only_the_approved_inputs() -> None:
     """Media selection and prefix filtering stay outside this narrow Interface."""
-    from restscope.capabilities import openapi_list_response_fields_tool_spec
+    from restscope.tools import openapi_list_response_fields_tool_spec
 
     spec = openapi_list_response_fields_tool_spec()
     extra_argument = _execute(
@@ -1051,7 +1051,7 @@ def test_unknown_operation_and_old_tool_name_are_not_accepted() -> None:
 
 def test_observed_field_tool_validates_bounds_and_requires_catalog_injection() -> None:
     """The fifth OpenAPI tool stays unavailable without retained evidence."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         openapi_find_observed_response_fields_tool_spec,
     )

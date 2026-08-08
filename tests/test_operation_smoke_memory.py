@@ -181,8 +181,8 @@ def _generator_patch():
     """Replace the current path Generator with a deterministic known value."""
 
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-    from restscope.testing import InputGeneratorPatch
-    from restscope.testing.models import ConstantGenerator
+    from restscope.harness.testing import InputGeneratorPatch
+    from restscope.harness.testing.models import ConstantGenerator
 
     return GeneratorPatchDraft(
         updates=[
@@ -243,7 +243,7 @@ def test_constraint_only_patch_persists_stable_expression_identity() -> None:
         CompiledConstraintPatch,
         GeneratorPatchDraft,
     )
-    from restscope.testing import ConstraintSet, PresentPredicate
+    from restscope.harness.testing import ConstraintSet, PresentPredicate
     from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, _ = _memory_fixture(initialize_generators=True)
@@ -281,12 +281,12 @@ def test_constraint_only_patch_persists_stable_expression_identity() -> None:
 def test_patch_rejects_constraint_state_changed_after_candidate_sampling() -> None:
     """A candidate cannot silently replace Constraints it was never shown."""
 
-    from restscope.testing import (
+    from restscope.harness.testing import (
         ConstraintSet,
         OperationConstraintRecord,
         PresentPredicate,
     )
-    from restscope.testing.ports import GeneratorConfigConcurrentWrite
+    from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
     from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, factory = _memory_fixture(initialize_generators=True)
@@ -332,7 +332,7 @@ def test_transitive_constraint_overlap_replaces_old_connected_scope() -> None:
     """New {c,d} replaces connected old {a,b}/{b,c} but owns only {c,d}."""
 
     from restscope.operation_smoke.memory import replace_constraint_scope
-    from restscope.testing import (
+    from restscope.harness.testing import (
         AndConstraint,
         ConstraintSet,
         OperationConstraintRecord,
@@ -369,7 +369,7 @@ def test_patch_rejects_no_actual_change_without_an_event() -> None:
     """A content-identical candidate cannot create a misleading accepted event."""
 
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-    from restscope.testing import InputGeneratorPatch
+    from restscope.harness.testing import InputGeneratorPatch
     from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, _ = _memory_fixture(initialize_generators=True)
@@ -406,7 +406,7 @@ def test_patch_rejects_constraint_owner_outside_current_operation() -> None:
         CompiledConstraintPatch,
         GeneratorPatchDraft,
     )
-    from restscope.testing import ConstraintSet, PresentPredicate
+    from restscope.harness.testing import ConstraintSet, PresentPredicate
     from tests._operation_smoke_resolution_fixtures import smoke_config
 
     memory, application, _ = _memory_fixture(initialize_generators=True)

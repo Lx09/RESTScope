@@ -10,7 +10,7 @@ import pytest
 
 def _context(*, secret: str = "Bearer runtime-secret"):
     """Build one immutable App target context for boundary tests."""
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -35,11 +35,12 @@ def _context(*, secret: str = "Bearer runtime-secret"):
     )
 
 
-def test_capability_runtime_binds_context_once_and_exposes_exact_operations() -> None:
+def test_harness_runtime_binds_context_once_and_exposes_exact_operations() -> None:
     """The App owns context lifecycle without an executable global registry."""
-    from restscope.capabilities import ToolContextError, build_capabilities
+    from restscope.harness import build_harness
+    from restscope.tools import ToolContextError
 
-    runtime = build_capabilities()
+    runtime = build_harness()
     context = _context()
     runtime.bind_context(context)
 
@@ -58,7 +59,7 @@ def test_capability_runtime_binds_context_once_and_exposes_exact_operations() ->
     assert exc_info.value.code == "tool_context_already_initialized"
 
 
-def test_capability_runtime_injects_monitor_catalogs_without_registering_tools(
+def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
     tmp_path: Path,
 ) -> None:
     """The runtime exposes lookup implementations but owns no global toolbox."""
@@ -66,10 +67,8 @@ def test_capability_runtime_injects_monitor_catalogs_without_registering_tools(
     from restscope.api_behavior_monitor.response_value_catalog import (
         ResponseValueCatalog,
     )
-    from restscope.capabilities import (
-        ResourceIdentifierCapability,
-        build_capabilities,
-    )
+    from restscope.harness import build_harness
+    from restscope.tools import ResourceIdentifierCapability
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -92,7 +91,7 @@ def test_capability_runtime_injects_monitor_catalogs_without_registering_tools(
         response_value_tracker=SimpleNamespace(catalog=response_catalog),
     )
 
-    runtime = build_capabilities(api_behavior_monitor_coordinator=monitor)
+    runtime = build_harness(api_behavior_monitor_coordinator=monitor)
     runtime.bind_context(_context())
 
     assert isinstance(
@@ -117,7 +116,7 @@ def test_capability_runtime_injects_monitor_catalogs_without_registering_tools(
 
 def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments() -> None:
     """Only the implementation closure chooses whether it needs App context."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
 
     context = _context()
@@ -153,10 +152,11 @@ def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments
 
 def test_missing_context_is_stable_and_unknown_tool_errors_hide_headers() -> None:
     """Lifecycle errors are explicit while implementation details stay internal."""
-    from restscope.capabilities import AgentToolbox, ToolContextError, build_capabilities
+    from restscope.harness import build_harness
+    from restscope.tools import AgentToolbox, ToolContextError
     from restscope.llm import ToolCall, ToolSpec
 
-    runtime = build_capabilities()
+    runtime = build_harness()
     with pytest.raises(ToolContextError) as exc_info:
         runtime.require_context()
     assert exc_info.value.code == "tool_context_not_initialized"

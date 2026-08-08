@@ -116,6 +116,10 @@ class LLMClient:
                 for name, value in (
                     ("llm.token_count.prompt", response.prompt_tokens),
                     (
+                        "llm.token_count.prompt_cached",
+                        response.cached_input_tokens,
+                    ),
+                    (
                         "llm.token_count.completion",
                         response.completion_tokens,
                     ),

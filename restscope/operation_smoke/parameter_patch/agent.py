@@ -11,7 +11,8 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
-from restscope.capabilities import (
+from restscope.agent import AgentProfile
+from restscope.tools import (
     AgentToolbox,
     OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME,
     RESOURCE_LIST_IDS_TOOL_NAME,
@@ -19,10 +20,10 @@ from restscope.capabilities import (
     OpenAPICapability,
     ResourceIdentifierCapability,
     ToolFailure,
-    openapi_find_observed_response_fields_tool_spec,
-    resource_list_ids_tool_spec,
-    resource_list_resources_tool_spec,
+    builtin_tool_catalog,
 )
+from restscope.tools.openapi import observed_response_fields_tool_binding
+from restscope.tools.resource import resource_tool_bindings
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -43,6 +44,15 @@ from .schemas import ParameterPatchSubmission
 _MAX_ERRORS = 20
 _MAX_STRUCTURED_JSON_CHARS = 65_536
 _MAX_INSERTED_DELIMITERS = 8
+_PROFILE = AgentProfile(
+    name="parameter_patch",
+    model_config_name="fast",
+    tool_names=(
+        RESOURCE_LIST_RESOURCES_TOOL_NAME,
+        RESOURCE_LIST_IDS_TOOL_NAME,
+        OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME,
+    ),
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,6 +94,7 @@ class ParameterPatchAgent:
         self.client = client
         self.model = model
         self.output_limit = output_limit
+        self.profile = _PROFILE
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.toolbox = _build_toolbox(
@@ -303,32 +314,22 @@ def _build_toolbox(
     tracing_runtime: TracingRuntime,
 ) -> AgentToolbox:
     """Build the Patch Agent's exact three-tool, read-only permission set."""
-    toolbox = AgentToolbox(tracing_runtime=tracing_runtime)
-    toolbox.register(
-        spec=resource_list_resources_tool_spec(),
-        execute=(
-            resource_capability.list_resources
-            if resource_capability is not None
-            else _unavailable_lookup
+    bindings = [
+        *resource_tool_bindings(
+            resource_capability,
+            unavailable=_unavailable_lookup,
         ),
-    )
-    toolbox.register(
-        spec=resource_list_ids_tool_spec(),
-        execute=(
-            resource_capability.list_ids
-            if resource_capability is not None
-            else _unavailable_lookup
+        observed_response_fields_tool_binding(
+            openapi_capability,
+            unavailable=_unavailable_lookup,
         ),
+    ]
+    return AgentToolbox.from_catalog(
+        catalog=builtin_tool_catalog(),
+        selected_names=_PROFILE.tool_names,
+        bindings=bindings,
+        tracing_runtime=tracing_runtime,
     )
-    toolbox.register(
-        spec=openapi_find_observed_response_fields_tool_spec(),
-        execute=(
-            openapi_capability.find_observed_response_fields
-            if openapi_capability is not None
-            else _unavailable_lookup
-        ),
-    )
-    return toolbox
 
 
 def _unavailable_lookup(**_arguments: Any) -> dict[str, Any]:

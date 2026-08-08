@@ -31,7 +31,7 @@ def _database(*, unit_of_work_class=None):
 
 def _catalog():
     """Create one trusted failed Test Case and both operation Parameter handles."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
@@ -89,8 +89,8 @@ def _candidate(registry, *, handle, node_id, value):
     """Issue one precise constant-Generator candidate for a semantic input."""
     from restscope.operation_smoke.memory import SolveAttemptParameterWrite
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-    from restscope.testing import InputGeneratorPatch
-    from restscope.testing.models import ConstantGenerator
+    from restscope.harness.testing import InputGeneratorPatch
+    from restscope.harness.testing.models import ConstantGenerator
 
     return registry.issue(
         patch=GeneratorPatchDraft(
@@ -319,7 +319,7 @@ def test_overlapping_selected_candidates_are_rejected_before_persistence() -> No
     """Two selected P refs cannot both own the same Generator or Constraint scope."""
     from sqlalchemy import func, select
 
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
     from restscope.db.orm import SmokeFailureORM
     from restscope.operation_smoke.failure_resolution import (
         FailureResolutionFinalizer,

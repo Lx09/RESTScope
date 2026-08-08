@@ -87,8 +87,8 @@ class StubPatchCoordinator:
             GeneratorPatchDraft,
             ValidatedParameterPatch,
         )
-        from restscope.testing import InputGeneratorPatch
-        from restscope.testing.models import ConstantGenerator
+        from restscope.harness.testing import InputGeneratorPatch
+        from restscope.harness.testing.models import ConstantGenerator
 
         self.calls.append(task)
         output_limit.consume("parameter_patch_agent")
@@ -136,33 +136,14 @@ class StubProbe:
         self.executed = []
         self.case_ids = []
 
-    def tool_spec(self, _config):
-        """Expose one minimal current-operation HTTP tool contract."""
-        from restscope.llm import ToolSpec
+    def binding(self, config):
+        """Bind the canonical test Tool while execution remains intercepted."""
+        from restscope.tools import ToolBinding
 
-        return ToolSpec(
+        del config
+        return ToolBinding(
             name="restscope.http.request",
-            description="Probe the exact current operation.",
-            kind="local_function",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "method": {"type": "string"},
-                    "path": {"type": "string"},
-                },
-                "required": ["method", "path"],
-                "additionalProperties": False,
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "case_id": {"type": "string"},
-                    "status_code": {"type": "integer"},
-                    "failure": {"type": "object"},
-                },
-                "required": ["case_id", "status_code", "failure"],
-                "additionalProperties": False,
-            },
+            execute=lambda **_arguments: {},
         )
 
     def validate(self, *, config, tool_call):
@@ -177,7 +158,7 @@ class StubProbe:
     def execute(self, *, config, tool_call, catalog):
         """Record every call independently, even when its arguments repeat."""
         from restscope.llm import ToolResult
-        from restscope.operation_smoke.test_case_catalog import (
+        from restscope.harness.testing.test_case_catalog import (
             CatalogTestCaseDraft,
             HTTPFailure,
         )
@@ -236,7 +217,7 @@ def _compact_model():
 
 def _catalog():
     """Create two failed cases with one exact repeated Failure message."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
@@ -283,7 +264,7 @@ def _request():
 
 def _write_call(*, call_id="write-1", active_item_id="WI-001"):
     """Replace the worklist with one item covering both exact associations."""
-    from restscope.operation_smoke.failure_resolution import WRITE_WORKLIST_TOOL_NAME
+    from restscope.tools.worklist import WRITE_WORKLIST_TOOL_NAME
 
     return LLMResponse(
         provider="stub",
@@ -319,7 +300,7 @@ def _write_call(*, call_id="write-1", active_item_id="WI-001"):
 
 def _read_call(number):
     """Read the current worklist without changing the active item."""
-    from restscope.operation_smoke.failure_resolution import READ_WORKLIST_TOOL_NAME
+    from restscope.tools.worklist import READ_WORKLIST_TOOL_NAME
 
     return LLMResponse(
         provider="stub",
@@ -1162,7 +1143,7 @@ def test_long_exact_failure_stays_in_registry_while_prompt_is_bounded() -> None:
     from restscope.operation_smoke.failure_resolution.prompts import (
         failure_source_prompt,
     )
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,

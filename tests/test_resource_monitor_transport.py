@@ -34,7 +34,7 @@ def _testing_service(
     )
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import GeneratorConfigCatalog, OperationTestingService
+    from restscope.harness.testing import GeneratorConfigCatalog, OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -95,7 +95,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing supplies known operation and body to processor."""
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
 
     processor = CapturingProcessor()
     ir, service = _testing_service(
@@ -134,7 +134,7 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
     """Scenario: verify that processor warning does not replace raw http result."""
     import httpx
 
-    from restscope.capabilities import ToolContext, TargetHTTPRequestTool
+    from restscope.tools import ToolContext, TargetHTTPRequestTool
     from restscope.http_transport import (
         TargetHTTPTransport,
         TargetResponseProcessorWarning,
@@ -209,18 +209,15 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     del tmp_path
     import httpx
 
-    from restscope.operation_smoke.failure_resolution import CurrentOperationHTTPProbe
-    from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
-    from restscope.capabilities import (
-        ToolContext,
-        build_capabilities,
-        http_request_tool_spec,
-    )
+    from restscope.tools.http import CurrentOperationHTTPProbe
+    from restscope.harness.testing.test_case_catalog import TestCaseCatalog
+    from restscope.harness import build_harness
+    from restscope.tools import ToolContext, http_request_tool_spec
     from restscope.http_transport import TargetHTTPTransport
     from restscope.llm import ToolCall
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.snapshot import build_initial_operation_config
-    from restscope.testing import build_semantic_input_map
+    from restscope.harness.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing import build_semantic_input_map
 
     processor = CapturingProcessor()
     transport = TargetHTTPTransport(
@@ -236,7 +233,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
         ),
         response_processor=processor,
     )
-    runtime = build_capabilities(target_http_transport=transport)
+    runtime = build_harness(target_http_transport=transport)
     spec = http_request_tool_spec()
     ir = OpenAPIParser.parse(
         {
@@ -336,7 +333,7 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing truncates monitor body at one mib."""
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
     from restscope.http_transport import TargetResponseProcessorWarning
 
     processor = CapturingProcessor(
@@ -377,7 +374,7 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing buffers and monitors non successful 2xx  response once."""
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
 
     processor = CapturingProcessor()
     ir, service = _testing_service(
@@ -471,7 +468,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.capabilities import ToolContext, TargetHTTPRequestTool
+    from restscope.tools import ToolContext, TargetHTTPRequestTool
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
@@ -550,7 +547,7 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.capabilities import ToolContext, TargetHTTPRequestTool
+    from restscope.tools import ToolContext, TargetHTTPRequestTool
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
@@ -826,7 +823,7 @@ def test_default_app_uses_one_monitored_transport_without_global_model_tools(
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
     try:
-        runtime = app.capability_runtime
+        runtime = app.harness_runtime
         service = runtime.operation_testing_service
         assert service is not None
         raw_tool = runtime.target_http_tool

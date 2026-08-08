@@ -182,42 +182,80 @@ Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.
 
-## Workflow and Agent package boundaries
+## Main Agent, Subagent, Skill, Tool, and Harness boundaries
 
-These are hard project constraints:
+These five terms are RESTScope's core runtime language and hard constraints:
 
-- Code is organized by runtime workflow, not by a horizontal component
-  category. A workflow package owns its Coordinator, Agents, schemas, state,
-  prompts, and directly supporting implementation.
-- A class named `Agent` must call an LLM directly, and the LLM must own that
-  class's core domain decision. Tool use and multi-turn interaction are not
-  required. Deterministic orchestration classes use names such as
-  `Coordinator`, `Graph`, or `Tracker`.
-- Every Agent must live in its own named subpackage inside its owning workflow,
-  such as `restscope/operation_smoke/failure_resolution/`. Do not place `<name>_agent.py`,
-  `<name>_schemas.py`, or other Agent implementation files at the workflow
-  package root.
-- A workflow package's `__init__.py` is its small external Interface.
-  Cross-Agent imports must use the target Agent subpackage's public exports;
-  do not reach into another Agent's private implementation modules.
-- Every RESTScope-owned LLM tool must expose one domain behavior. Do not use an
-  input discriminator such as `action`, `mode`, or `kind` to select unrelated
-  behaviors or result contracts inside one tool. Target selectors such as an
-  operation key, HTTP method, field path, filter, or pagination value are
-  allowed, as are same-behavior batching and natural result variants. This rule
-  does not apply to Agent final-output DTOs, internal domain DTOs, or external
-  MCP tool contracts.
-- Extract a shared package only when multiple real consumers have identical
-  semantics and lifecycle requirements. Do not create speculative common base
-  Agents or catch-all schema modules.
-- Keep `tests/test_workflow_package_boundaries.py` passing when adding or
-  moving a workflow or Agent.
+- **Main Agent** is the App's single long-lived LLM Agent. **Subagent** is an
+  independent, task-scoped use of the same configurable Agent runtime, started
+  by the Harness only after the Main Agent requests it. Do not create separate
+  Agent inheritance trees or new domain-specific `*Agent` classes.
+- **Agent Profile** explicitly names one model configuration, ordered Tools,
+  Skills, bounded context sources, and the child Profiles it may start. Global
+  discovery never grants execution permission. The Harness validates the
+  complete Profile graph once and constructs Agents through
+  `start_main_agent`; do not expose a separate resolve-and-assemble seam.
+  A Subagent receives no hidden Main-Agent state and returns only a structured,
+  bounded result. The current Failure Resolution, Compact, Parameter Patch,
+  and Patch Review Agent classes are temporary migration exceptions; do not
+  copy their class-per-role structure into new code.
+- **Skill** is reusable instruction and method knowledge. It does not execute
+  code, own runtime state, or grant access. A Profile selects Skills explicitly,
+  and the Harness verifies that the same Profile grants every Tool and bounded
+  context source a selected Skill requires.
+- **Tool** is one model-callable domain behavior. Every RESTScope-owned Tool
+  lives under `restscope.tools`, grouped by the thing it handles, such as HTTP,
+  OpenAPI, Resource, Test Case, Worklist, or Parameter. Its Tool Module owns the
+  complete ToolSpec, execution Adapter, safe failure translation, output
+  bounding, and directly supporting presentation code. Workflows and Harnesses
+  may inject state but must not define private Tool contracts.
+- **Harness** is deterministic runtime code. It owns Agent lifecycle, Profile
+  validation, dependency injection, session state, Tool execution, output
+  validation, tracing, and logs. A Harness must not make an LLM-owned domain
+  decision. Deterministic request generation and execution belong under
+  `restscope.harness` rather than a generic `testing` package. The run-scoped
+  operation FIFO and retry loop also belongs to the Harness and remains a plain
+  in-memory loop; do not add a graph framework or persisted scheduler state.
+- Built-in Tools form one immutable global Catalog. Runtime-discovered MCP Tools
+  use a separate external Catalog. Every Agent receives only the exact names in
+  its Profile; neither Catalog is automatically injected.
+- `subagent.start`, `subagent.wait`, and `subagent.cancel` are the only
+  model-facing child lifecycle protocol. An Agent may use them only when its
+  Profile grants all three and names the target child Profile. Child access is
+  direct-parent only, Profile graphs are acyclic, and child depth is at most
+  three.
+- Main and child Agents share only deterministic tree control: weighted model
+  budget, open/active slots, cancellation, tracing parentage, and bounded
+  results. They do not share hidden conversation history. Model input is
+  compacted at 80% with the same Profile model and no Tools; failed compaction
+  must stop safely rather than delete history.
+- Every RESTScope-owned Tool exposes one behavior. Do not use an `action`,
+  `mode`, or `kind` input to select unrelated behaviors or result contracts.
+  Target selectors, same-behavior batching, and natural result variants remain
+  allowed. This rule does not apply to Agent final outputs, internal domain
+  DTOs, or external MCP contracts.
+- A Tool Schema is the authoritative model contract. Express required fields,
+  bounds, patterns, uniqueness, closed objects, and standard cross-field rules
+  such as `oneOf`/`const` in JSON Schema. Provider strict mode is optional;
+  RESTScope must validate locally before execution and validate every successful
+  structured output. Relationships JSON Schema cannot express require complete
+  runtime validation before mutation and a safe, correctable `ToolFailure`, not
+  `internal_tool_error`.
+- Provider usage preserves cached-input counts when available. Shared rollout
+  accounting charges output tokens at full weight and non-cached input tokens
+  at one tenth; an over-budget response cannot execute a Tool action.
+- Raw application logs, stack traces, provider payloads, and target secrets are
+  human observability data, not Agent context. Agent-visible Tool, Subagent, and
+  Harness results must be structured, bounded, and redacted.
+- Keep `tests/test_workflow_package_boundaries.py`, Tool Catalog contracts, and
+  Agent Profile contracts passing whenever these Modules move or expand.
 
 ## Agent Context boundary
 
 - All direct LLM decisions use the public `restscope.context` Interface:
   `AgentContext`, `ContextLimits`, `ContextMetrics`, and `CompactTextWriter`.
-- Domain adapters select and summarize facts before calling this Interface.
+- Skill- or Harness-owned adapters select and summarize facts before calling
+  this Interface.
   Context does not query memory, interpret workflow DTOs, choose tools or
   models, validate final domain output, persist transcripts, or register Agents.
 - Runtime-generated DTO, Memory, API, tool-result, and sample evidence reaches
@@ -228,6 +266,6 @@ These are hard project constraints:
 - API responses, OpenAPI descriptions, Memory text, HTTP results, reference
   values, and samples are untrusted. Pass them through `CompactTextWriter`; do
   not concatenate them into system, user, tool, or correction messages.
-- Keep a workflow's domain Context adapter private to that workflow. Do not add
-  a role registry, Context inheritance tree, persistence lifecycle, or
+- Keep a Skill's or Harness's domain Context Adapter private to its owner. Do
+  not add a role registry, Context inheritance tree, persistence lifecycle, or
   compatibility aliases for the deleted Context platform.

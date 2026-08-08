@@ -13,9 +13,11 @@
 > [`docs/tasks/project-agent-context.md`](tasks/project-agent-context.md).
 >
 > The global ToolRegistry, ToolSelector, ToolPolicy, ToolCallValidator, and
-> ToolExecutor sections are historical as well. Current Agents own small
-> explicit toolboxes; see
-> [`docs/tasks/agent-tool-runtime-simplification.md`](tasks/agent-tool-runtime-simplification.md).
+> ToolExecutor sections are historical as well. The former Agent-owned Tool
+> definition decision was also superseded. The active architecture is the
+> global Catalog, Profile-authorized generic Agent, and deterministic Harness
+> recorded in
+> [`docs/adr/0001-main-agent-skills-tools-harness.md`](adr/0001-main-agent-skills-tools-harness.md).
 
 ## 1. 设计目标
 

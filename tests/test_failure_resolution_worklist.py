@@ -13,8 +13,8 @@ def _candidate_registry():
     )
     from restscope.operation_smoke.memory import SolveAttemptParameterWrite
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-    from restscope.testing import InputGeneratorPatch
-    from restscope.testing.models import ConstantGenerator
+    from restscope.harness.testing import InputGeneratorPatch
+    from restscope.harness.testing.models import ConstantGenerator
 
     registry = PatchCandidateRegistry()
     candidate = registry.issue(
@@ -119,7 +119,7 @@ def test_worklist_schema_rejects_agent_authored_failure_summary() -> None:
 
 def test_worklist_write_is_revision_checked_and_atomic() -> None:
     """A stale or invalid replacement leaves the previous complete list intact."""
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     store = _store()
     first = store.write(
@@ -162,7 +162,7 @@ def test_worklist_item_id_uses_the_fixed_wi_number_format() -> None:
 
 def test_worklist_item_ids_start_at_wi_001_and_add_contiguous_numbers() -> None:
     """A session cannot skip the next never-before-issued WI number."""
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     store = _store()
 
@@ -207,7 +207,7 @@ def test_worklist_item_ids_start_at_wi_001_and_add_contiguous_numbers() -> None:
 
 def test_deleted_worklist_item_id_cannot_be_reused() -> None:
     """A removed WI identity never points at a later unrelated diagnosis."""
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     store = _store()
     first = store.write(
@@ -264,7 +264,7 @@ def test_worklist_accepts_agent_owned_overlap_split_and_reordering() -> None:
 
 def test_worklist_rejects_forged_source_parameter_and_candidate_refs() -> None:
     """Opaque references remain authoritative even though semantics are Agent-owned."""
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     cases = [
         (_item(source_failure_refs=["E9"]), "Unknown Failure source"),
@@ -304,7 +304,7 @@ def test_apply_patch_decision_can_select_only_a_listed_real_candidate() -> None:
 
 def test_final_coverage_requires_every_source_case_association_once_or_more() -> None:
     """Agent grouping may overlap, but it cannot silently lose initial evidence."""
-    from restscope.capabilities import ToolFailure
+    from restscope.tools import ToolFailure
 
     store = _store()
     store.write(
@@ -371,9 +371,9 @@ def test_exact_probe_evidence_is_valid_but_not_new_required_coverage() -> None:
 
 def test_worklist_tools_return_structured_references_and_safe_failures() -> None:
     """The toolbox exposes the store without leaking its trusted registries."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.operation_smoke.failure_resolution import (
+    from restscope.tools.worklist import (
         READ_WORKLIST_TOOL_NAME,
         WRITE_WORKLIST_TOOL_NAME,
         register_worklist_tools,
@@ -415,9 +415,9 @@ def test_worklist_tools_return_structured_references_and_safe_failures() -> None
 
 def test_worklist_tool_schema_denies_embedded_patch_before_store_mutation() -> None:
     """Provider strictness is repeated locally before a precise object can enter."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.operation_smoke.failure_resolution import (
+    from restscope.tools.worklist import (
         WRITE_WORKLIST_TOOL_NAME,
         register_worklist_tools,
     )
@@ -468,9 +468,9 @@ def test_worklist_tool_schema_denies_inconsistent_patch_decisions(
     decision: dict,
 ) -> None:
     """The tool contract rejects candidate choices that contradict the outcome."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.operation_smoke.failure_resolution import (
+    from restscope.tools.worklist import (
         WRITE_WORKLIST_TOOL_NAME,
         register_worklist_tools,
     )
@@ -503,9 +503,9 @@ def test_worklist_tool_schema_denies_inconsistent_patch_decisions(
 
 def test_worklist_tool_returns_safe_feedback_for_unlisted_selected_candidate() -> None:
     """A dynamic item-reference error remains correctable model feedback."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.operation_smoke.failure_resolution import (
+    from restscope.tools.worklist import (
         WRITE_WORKLIST_TOOL_NAME,
         register_worklist_tools,
     )
@@ -557,9 +557,9 @@ def test_candidate_registry_issues_real_refs_and_returns_defensive_copies() -> N
 
 def test_candidate_read_tool_returns_summary_without_executable_patch_dto() -> None:
     """Context recovery reveals meaning and validation, never resubmittable objects."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.operation_smoke.failure_resolution.candidates import (
+    from restscope.tools.parameter import (
         READ_CANDIDATE_TOOL_NAME,
         register_candidate_read_tool,
     )

@@ -13,7 +13,7 @@ from typing import Any
 
 from restscope.context import CompactTextWriter, ContextMetrics
 from restscope.llm import LLMModelConfig
-from restscope.testing import OperationGeneratorConfig, build_semantic_input_map
+from restscope.harness.testing import OperationGeneratorConfig, build_semantic_input_map
 
 from .schemas import CompiledConstraintPatch, ParameterPatchTask
 

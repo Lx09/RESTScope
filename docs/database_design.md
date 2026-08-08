@@ -11,7 +11,7 @@ business tables plus Alembic's `alembic_version` table.
 
 - `restscope.catalog` owns the database-independent current OpenAPI and change
   event contracts.
-- `restscope.testing` owns the App-memory operation snapshot and current
+- `restscope.harness.testing` owns the App-memory operation snapshot and current
   per-input Generator and Constraint contracts.
 - API Behavior Monitor owns bounded Resource Identifier and Response Value
   evidence.

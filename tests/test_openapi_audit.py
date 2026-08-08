@@ -56,7 +56,7 @@ def test_app_exports_full_current_document_and_filterable_change_events(
         assert set(OpenAPIParser.parse(initial).operations) == {"POST /items"}
         assert app.list_openapi_change_events() == []
 
-        tracker = app.capability_runtime.api_behavior_monitor_coordinator.contract_tracker
+        tracker = app.harness_runtime.api_behavior_monitor_coordinator.contract_tracker
         changed = tracker.observe(
             ir=context.ir,
             operation_key="POST /items",

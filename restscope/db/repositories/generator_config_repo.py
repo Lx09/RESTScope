@@ -8,9 +8,9 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from restscope.testing.models import InputGeneratorConfig
-from restscope.testing.constraints import OperationConstraintRecord
-from restscope.testing.ports import GeneratorConfigConcurrentWrite
+from restscope.harness.testing.models import InputGeneratorConfig
+from restscope.harness.testing.constraints import OperationConstraintRecord
+from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
 
 from ..orm import GeneratorChangeEventORM, InputGeneratorConfigORM, OperationConstraintORM
 

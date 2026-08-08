@@ -1,5 +1,10 @@
 # Agent Tool Runtime Simplification
 
+> Superseded architecture note (2026-08-08): ADR 0001 replaces the
+> Agent-owned-definition/no-global-Catalog decision with one immutable global
+> built-in Tool Catalog plus Profile-selected, session-bound implementations.
+> The validation, redaction, tracing, and safe-failure behavior remains active.
+
 > Superseded scope note (2026-08-01): the user replaced the operation-bound
 > OpenAPI projection with three global, exact-operation lookup tools while
 > preserving this task's Agent-owned toolbox decision. See

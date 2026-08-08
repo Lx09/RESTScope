@@ -66,7 +66,7 @@ def _catalog(tmp_path: Path):
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.testing import GeneratorConfigCatalog
+    from restscope.harness.testing import GeneratorConfigCatalog
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'generators.sqlite'}")
     Base.metadata.create_all(engine)
@@ -81,7 +81,7 @@ def _catalog(tmp_path: Path):
 
 def _apply_accepted_patch(catalog, operation_key: str, updates):
     """Apply test setup through the current-content repository boundary."""
-    from restscope.testing import prepare_accepted_generator_patch
+    from restscope.harness.testing import prepare_accepted_generator_patch
 
     current = catalog.get_operation(operation_key)
     assert current is not None
@@ -721,7 +721,7 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
     )
     assert media_config.strategy.value == {"name": "Ada"}
 
-    from restscope.testing import InputGeneratorConfig
+    from restscope.harness.testing import InputGeneratorConfig
 
     invalid = [
         InputGeneratorConfig.model_validate(
@@ -752,7 +752,7 @@ def test_read_only_required_property_is_not_frozen_as_a_request_input(
 
 def test_structural_generator_strategy_must_match_frozen_node(tmp_path: Path) -> None:
     """Scenario: verify that structural generator strategy must match frozen node."""
-    from restscope.testing import GeneratorConfigError
+    from restscope.harness.testing import GeneratorConfigError
 
     catalog, _ = _catalog(tmp_path)
     catalog.initialize_once(_ir())
@@ -778,7 +778,7 @@ def test_unsupported_operation_is_saved_disabled_without_blocking_other_operatio
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that unsupported operation is saved disabled without blocking other operations."""
-    from restscope.testing import GeneratorConfigError
+    from restscope.harness.testing import GeneratorConfigError
 
     catalog, _ = _catalog(tmp_path)
     assert catalog.initialize_once(_ir(unsupported=True)) is True
@@ -946,7 +946,7 @@ def test_object_cardinality_requires_a_generator_set_that_always_conforms(
 ) -> None:
     """Scenario: verify that object cardinality requires a generator set that always conforms."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig
+    from restscope.harness.testing import InputGeneratorConfig
 
     ir = OpenAPIParser.parse(
         {
@@ -1011,7 +1011,7 @@ def test_constant_object_patch_ignores_unused_child_inclusion_probabilities(
 ) -> None:
     """A constant-object Patch need not rewrite unused child probabilities."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig
+    from restscope.harness.testing import InputGeneratorConfig
 
     ir = OpenAPIParser.parse(
         {
@@ -1069,7 +1069,7 @@ def test_nullable_text_body_rejects_a_null_generator_before_execution(
 ) -> None:
     """Scenario: verify that nullable text body rejects a null generator before execution."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import GeneratorConfigError, InputGeneratorConfig
+    from restscope.harness.testing import GeneratorConfigError, InputGeneratorConfig
 
     ir = OpenAPIParser.parse(
         {
@@ -1129,7 +1129,7 @@ def test_manual_range_generator_can_override_a_discrete_enum(
 ) -> None:
     """Scenario: verify that manual range generator can override a discrete enum."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import InputGeneratorConfig
+    from restscope.harness.testing import InputGeneratorConfig
 
     schema_type = "integer" if strategy["type"] == "integer_range" else "number"
     ir = OpenAPIParser.parse(
@@ -1421,7 +1421,7 @@ def test_repository_compare_and_swap_rejects_stale_current_content(
 ) -> None:
     """A second writer cannot overwrite content changed after it was read."""
     from restscope.db import SqlAlchemyGeneratorConfigUnitOfWork, make_session_factory
-    from restscope.testing.ports import GeneratorConfigConcurrentWrite
+    from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
 
     catalog, engine = _catalog(tmp_path)
     catalog.initialize_once(_ir())
@@ -1433,7 +1433,7 @@ def test_repository_compare_and_swap_rejects_stale_current_content(
         SqlAlchemyGeneratorConfigUnitOfWork(session_factory) as first,
         SqlAlchemyGeneratorConfigUnitOfWork(session_factory) as second,
     ):
-        from restscope.testing import InputGeneratorPatch, prepare_accepted_generator_patch
+        from restscope.harness.testing import InputGeneratorPatch, prepare_accepted_generator_patch
 
         stale = first.generator_configs.get_inputs(created.operation_key)
         assert second.generator_configs.get_inputs(created.operation_key) == stale
@@ -1467,13 +1467,13 @@ def test_repository_compare_and_swap_rejects_stale_current_content(
 def test_explicit_leaf_presence_patch_closes_all_request_body_ancestors() -> None:
     """A leaf made mandatory by a Patch must not disappear with an optional parent."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import (
+    from restscope.harness.testing import (
         InputGeneratorConfig,
         InputGeneratorPatch,
         build_semantic_input_map,
         expand_generator_patch_presence,
     )
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -1554,7 +1554,7 @@ def test_presence_closure_deduplicates_shared_ancestors_and_rejects_conflict() -
         request_body_date_config,
     )
 
-    from restscope.testing import (
+    from restscope.harness.testing import (
         GeneratorConfigError,
         InputGeneratorConfig,
         InputGeneratorPatch,

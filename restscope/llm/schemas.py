@@ -97,6 +97,7 @@ class LLMResponse(BaseModel):
     parsed_json: Any | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     prompt_tokens: int | None = None
+    cached_input_tokens: int = Field(default=0, ge=0)
     completion_tokens: int | None = None
     total_tokens: int | None = None
     finish_reason: str | None = None

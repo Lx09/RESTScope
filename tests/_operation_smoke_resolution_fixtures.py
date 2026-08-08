@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def smoke_config():
-    from restscope.testing import (
+    from restscope.harness.testing import (
         InputGeneratorConfig,
         InputNodeSnapshot,
         OperationGeneratorConfig,
@@ -57,11 +57,11 @@ def smoke_config():
 
 def smoke_report(*, long_value: str | None = None):
     """Build one Catalog-ready failed Batch for workflow tests."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCase,
         HTTPFailure,
     )
-    from restscope.testing import BatchExecutionResult
+    from restscope.harness.testing import BatchExecutionResult
 
     value = long_value or "random-123"
     return BatchExecutionResult(
@@ -90,7 +90,7 @@ def smoke_report(*, long_value: str | None = None):
 def request_body_date_config():
     """Build nested request-body inputs used by presence-closure regressions."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {

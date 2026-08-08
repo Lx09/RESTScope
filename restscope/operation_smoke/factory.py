@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 from restscope.operation_smoke.failure_resolution import (
-    CurrentOperationHTTPProbe,
     FailureResolutionAgent,
     FailureResolutionFinalizer,
 )
+from restscope.tools.http import CurrentOperationHTTPProbe
 from restscope.operation_smoke.parameter_patch import (
     ParameterPatchCoordinatorFactory,
 )
 from restscope.operation_smoke.memory import SmokeMemory, SmokePatchApplication
-from restscope.capabilities import CapabilityRuntime
+from restscope.harness import HarnessRuntime
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
 from restscope.randomness import SeededRandom
 from restscope.restscope_config import RESTScopeConfig
-from restscope.testing import GeneratorConfigCatalog
+from restscope.harness.testing import GeneratorConfigCatalog
 from restscope.db import (
     SqlAlchemySmokeMemoryUnitOfWork,
     create_engine_from_config,
@@ -33,7 +33,7 @@ def build_operation_smoke_coordinator(
     config_catalog: GeneratorConfigCatalog,
     batch_runner: SmokeBatchRunner,
     reference_values: BehaviorMonitorReferenceValues,
-    capability_runtime: CapabilityRuntime | None = None,
+    harness_runtime: HarnessRuntime | None = None,
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> OperationSmokeCoordinator:
@@ -43,9 +43,9 @@ def build_operation_smoke_coordinator(
     receives the shared Unit of Work factory so decided Failures, Attempts,
     Generator/Constraint state, and change events commit together.
     """
-    if capability_runtime is None:
+    if harness_runtime is None:
         raise ValueError(
-            "Operation Smoke requires the App capability runtime"
+            "Operation Smoke requires the App Harness runtime"
         )
     runtime = tracing_runtime or TracingRuntime.disabled()
     client = llm_client or build_llm_client(
@@ -64,9 +64,9 @@ def build_operation_smoke_coordinator(
         client=client,
         patch_model=selector.select("parameter_patch_agent"),
         review_model=selector.select("parameter_patch_review_agent"),
-        openapi_capability=capability_runtime.openapi_capability,
+        openapi_capability=harness_runtime.openapi_capability,
         resource_capability=getattr(
-            capability_runtime,
+            harness_runtime,
             "resource_identifier_capability",
             None,
         ),
@@ -82,14 +82,14 @@ def build_operation_smoke_coordinator(
                 "operation_smoke_failure_resolution_compact"
             ),
             http_probe=CurrentOperationHTTPProbe(
-                http_tool=capability_runtime.target_http_tool,
-                context_provider=capability_runtime.require_context,
+                http_tool=harness_runtime.target_http_tool,
+                context_provider=harness_runtime.require_context,
             ),
             memory=memory,
             patch_coordinator_factory=patch_coordinator_factory,
             finalizer=FailureResolutionFinalizer(unit_of_work_factory),
             reference_values=reference_values,
-            openapi_capability=capability_runtime.openapi_capability,
+            openapi_capability=harness_runtime.openapi_capability,
             tracing_runtime=runtime,
         ),
         constraint_reader=patch_application,

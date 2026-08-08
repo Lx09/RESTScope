@@ -4,7 +4,7 @@ This opt-in test is intentionally separate from the offline suite because it
 creates real projects in the local ``gitlab-test`` container and exports traces
 to the local Phoenix service. Configured DeepSeek models are available if a
 failed Batch reaches an Agent, but the successful first-Batch path deliberately
-calls no LLM. It uses a one-operation OpenAPI document so neither the Supervisor
+calls no LLM. It uses a one-operation OpenAPI document so neither the Run Harness
 nor an Agent can schedule a different GitLab endpoint. Successful projects are
 left in the disposable container because cleanup would exercise a second API
 operation outside this test's authorization boundary.
@@ -349,7 +349,7 @@ def test_gitlab_post_projects_reaches_the_smoke_success_threshold() -> None:
     print(f"GitLab Smoke artifacts: {run_dir}")
     print(f"Phoenix project: {project_name}")
 
-    # This is stricter than the Supervisor's general passed state. A no-Patch
+    # This is stricter than the Run Harness's general passed state. A no-Patch
     # terminal result does not satisfy the live request: the latest complete
     # Batch itself must demonstrate at least 80% success.
     assert report.operations[0].method.upper() == "POST"
@@ -366,8 +366,8 @@ def test_gitlab_post_projects_reaches_the_smoke_success_threshold() -> None:
 
     names = Counter(span["name"] for span in spans)
     assert names["RESTScopeApp.run"] == 1
-    assert names["RESTScopeMainGraph.run"] == 1
-    assert names["RESTScopeMainGraph.operation_attempt"] == 1
+    assert names["RunHarness.run"] == 1
+    assert names["RunHarness.operation_attempt"] == 1
     assert names["OperationSmokeCoordinator.run"] == 1
     assert names["OperationTestingService.run_smoke_batch"] >= 1
     assert names["RESTScopeTestCase.execute"] >= 10

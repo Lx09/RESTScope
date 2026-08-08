@@ -8,6 +8,7 @@ Patch Coordinator is its only production caller.
 
 from __future__ import annotations
 
+from restscope.agent import AgentProfile
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -29,6 +30,11 @@ from .schemas import (
 
 
 _MAX_ERRORS = 20
+_MODEL_ROLE = "parameter_patch_review_agent"
+_PROFILE = AgentProfile(
+    name="parameter_patch_review",
+    model_config_name="fast",
+)
 
 
 class ParameterPatchReviewAgent:
@@ -46,6 +52,7 @@ class ParameterPatchReviewAgent:
         """Store immutable model and validation collaborators for one fresh run."""
         self.client = client
         self.model = model
+        self.profile = _PROFILE
         self.system_prompt = system_prompt
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
@@ -150,7 +157,7 @@ class ParameterPatchReviewAgent:
                 temperature=0,
                 max_tokens=self.model.max_tokens,
                 timeout_seconds=self.model.timeout_seconds,
-                metadata={"role": "parameter_patch_review_agent"},
+                metadata={"role": _MODEL_ROLE},
                 reasoning=LLMReasoningConfig(mode="disabled"),
                 response_format="json_schema",
                 json_schema=ParameterPatchReviewSubmission.model_json_schema(),

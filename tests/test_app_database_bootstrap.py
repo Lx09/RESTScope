@@ -238,8 +238,8 @@ def test_successful_app_close_preserves_database_and_second_start_rejects_it(
         _build_default_app(config)
 
 
-def test_complete_injected_capability_runtime_skips_database_validation() -> None:
-    """Scenario: verify that complete injected capability runtime skips database validation."""
+def test_complete_injected_harness_runtime_skips_database_validation() -> None:
+    """Scenario: a complete injected Harness skips default database validation."""
     runtime = SimpleNamespace()
     config = _config("postgresql://ignored.example/restscope")
 
@@ -249,13 +249,13 @@ def test_complete_injected_capability_runtime_skips_database_validation() -> Non
         # runtime is injected; every later collaborator observes that value.
         assert app.config.random.seed is not None
         assert app.config.db is config.db
-        assert app.capability_runtime is runtime
+        assert app.harness_runtime is runtime
     finally:
         app.close()
 
 
-def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
-    """Scenario: verify that falsey injected capability runtime is not replaced."""
+def test_falsey_injected_harness_runtime_is_not_replaced() -> None:
+    """Scenario: a falsey injected Harness is still the caller-owned runtime."""
     from restscope import RESTScopeApp
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
@@ -264,7 +264,7 @@ def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
             self.mcp_host = None
 
         def clear_context(self) -> None:
-            """Mirror the current CapabilityRuntime cleanup seam."""
+            """Mirror the current HarnessRuntime cleanup seam."""
 
         def __bool__(self) -> bool:
             return False
@@ -273,10 +273,10 @@ def test_falsey_injected_capability_runtime_is_not_replaced() -> None:
     app = RESTScopeApp.from_config(
         _config("postgresql://ignored.example/restscope"),
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
-        capability_runtime=runtime,
+        harness_runtime=runtime,
     )
     try:
-        assert app.capability_runtime is runtime
+        assert app.harness_runtime is runtime
     finally:
         app.close()
 
@@ -311,7 +311,7 @@ def test_falsey_injected_tracing_runtime_is_not_closed_on_factory_failure(
         ),
     )
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("runtime failed")),
     )
 
@@ -472,7 +472,7 @@ def test_default_runtime_construction_failure_removes_created_database(
     """Scenario: verify that default runtime construction failure removes created database."""
     database = tmp_path / "failed-runtime.sqlite"
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("runtime failed")),
     )
 
@@ -500,7 +500,7 @@ def test_direct_app_keyboard_interrupt_cleans_owned_database_and_tracing(
         lambda _config: trace_runtime,
     )
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
 
@@ -537,7 +537,7 @@ def test_from_config_keyboard_interrupt_cleans_owned_resources(
         lambda _config: trace_runtime,
     )
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(
@@ -718,7 +718,7 @@ def test_smoke_coordinator_construction_failure_closes_runtime_and_removes_datab
         require_context=lambda: None,
     )
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(
@@ -762,7 +762,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
         lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
     )
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **kwargs: capability_calls.append(kwargs) or runtime,
     )
     monkeypatch.setattr(
@@ -806,7 +806,7 @@ def test_app_constructor_failure_removes_created_database(
         raise RuntimeError("app failed")
 
     monkeypatch.setattr(
-        "restscope.app.build_capabilities",
+        "restscope.app.build_harness",
         lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(RESTScopeApp, "__init__", fail_constructor)
@@ -827,7 +827,7 @@ def _build_app_with_runtime(config, runtime):
     return RESTScopeApp.from_config(
         config,
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
-        capability_runtime=runtime,
+        harness_runtime=runtime,
     )
 
 

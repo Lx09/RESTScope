@@ -19,7 +19,7 @@ from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
     GeneratorPatchDraft,
 )
-from restscope.testing import (
+from restscope.harness.testing import (
     OperationConstraintRecord,
     OperationGeneratorConfig,
     classify_constraint,
@@ -27,7 +27,7 @@ from restscope.testing import (
     prepare_accepted_generator_patch,
     referenced_input_node_ids,
 )
-from restscope.testing.ports import GeneratorConfigRepository
+from restscope.harness.testing.ports import GeneratorConfigRepository
 
 from .ports import SmokeMemoryRepository
 from .schemas import SolveAttemptParameterWrite, SolveAttemptWrite

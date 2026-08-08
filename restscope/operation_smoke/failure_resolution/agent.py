@@ -14,7 +14,8 @@ from collections.abc import Callable
 import json
 from typing import Any, Protocol
 
-from restscope.capabilities import (
+from restscope.agent import AgentProfile
+from restscope.tools import (
     AgentToolbox,
     HTTP_REQUEST_TOOL_NAME,
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
@@ -23,11 +24,9 @@ from restscope.capabilities import (
     OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
     OpenAPICapability,
     ToolFailure,
-    openapi_get_input_schema_tool_spec,
-    openapi_get_response_field_schema_tool_spec,
-    openapi_list_inputs_tool_spec,
-    openapi_list_response_fields_tool_spec,
+    builtin_tool_catalog,
 )
+from restscope.tools.openapi import openapi_tool_bindings
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -55,24 +54,27 @@ from restscope.operation_smoke.parameter_patch import (
     ParameterPatchCoordinator,
     ParameterPatchTask,
 )
-from restscope.operation_smoke.test_case_catalog import (
+from restscope.harness.testing.test_case_catalog import TestCaseCatalog
+from restscope.tools.test_case import (
     TEST_CASE_TOOL_NAMES,
-    TestCaseCatalog,
-    register_test_case_tools,
+    test_case_tool_bindings,
     tool_result_json,
 )
-from restscope.testing import (
+from restscope.harness.testing import (
     OperationGeneratorConfig,
     ReferenceValueProvider,
     build_semantic_input_map,
     preview_generator_patch,
 )
 
-from .candidates import (
+from .candidates import PatchCandidateRegistry, PatchCandidateSummary
+from restscope.tools.parameter import (
+    GENERATE_PARAMETER_PATCH_TOOL_NAME,
+    PARAMETER_HISTORY_TOOL_NAME,
     READ_CANDIDATE_TOOL_NAME,
-    PatchCandidateRegistry,
-    PatchCandidateSummary,
-    register_candidate_read_tool,
+    candidate_read_tool_binding,
+    generate_parameter_patch_tool_binding,
+    parameter_history_tool_binding,
 )
 from .compact import (
     FailureResolutionCompactAgent,
@@ -87,10 +89,10 @@ from .schemas import (
     FailureWorklist,
     ResolutionCommit,
 )
-from .tools import (
+from restscope.tools.worklist import (
     READ_WORKLIST_TOOL_NAME,
     WRITE_WORKLIST_TOOL_NAME,
-    register_worklist_tools,
+    worklist_tool_bindings,
 )
 from .worklist import FailureWorklistStore
 
@@ -101,8 +103,6 @@ _COMPACT_SUMMARY_MAX_CHARS = 24_000
 _COMPACT_SUMMARY_PREFIX = """Another Failure Resolution model previously investigated this operation.
 Continue from this checkpoint, verify uncertain facts through the worklist
 and reference tools, and avoid repeating completed investigation:"""
-_MEMORY_TOOL_NAME = "lookup_parameter_history"
-_PATCH_TOOL_NAME = "generate_parameter_patch"
 _READ_ONLY_TOOL_NAMES = frozenset(
     {
         READ_WORKLIST_TOOL_NAME,
@@ -112,7 +112,7 @@ _READ_ONLY_TOOL_NAMES = frozenset(
         OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
         OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
         *TEST_CASE_TOOL_NAMES,
-        _MEMORY_TOOL_NAME,
+        PARAMETER_HISTORY_TOOL_NAME,
     }
 )
 
@@ -122,6 +122,10 @@ class HTTPProbe(Protocol):
 
     def tool_spec(self, config: OperationGeneratorConfig):
         """Return the current-operation-scoped model tool contract."""
+        ...
+
+    def binding(self, config: OperationGeneratorConfig):
+        """Return the Tool-owned scoped Binding used by this session."""
         ...
 
     def validate(self, *, config: OperationGeneratorConfig, tool_call) -> str | None:
@@ -553,50 +557,54 @@ class FailureResolutionSession:
 
     def _build_tools(self) -> AgentToolbox:
         """Bind reference state and bounded OpenAPI/Test Case lookups."""
-        toolbox = AgentToolbox(tracing_runtime=self.tracing_runtime)
-        toolbox.register(
-            spec=openapi_list_inputs_tool_spec(),
-            execute=self.openapi_capability.list_inputs,
-        )
-        toolbox.register(
-            spec=openapi_list_response_fields_tool_spec(),
-            execute=self.openapi_capability.list_response_fields,
-        )
-        toolbox.register(
-            spec=openapi_get_input_schema_tool_spec(),
-            execute=self.openapi_capability.get_input_schema,
-        )
-        toolbox.register(
-            spec=openapi_get_response_field_schema_tool_spec(),
-            execute=self.openapi_capability.get_response_field_schema,
-        )
-        register_test_case_tools(toolbox=toolbox, catalog=self.catalog)
-        register_worklist_tools(toolbox=toolbox, store=self.worklist)
-        register_candidate_read_tool(toolbox=toolbox, registry=self.candidates)
+        openapi_names = {
+            OPENAPI_LIST_INPUTS_TOOL_NAME,
+            OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
+            OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
+            OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
+        }
+        bindings = [
+            *openapi_tool_bindings(
+                self.openapi_capability,
+                names=openapi_names,
+            ),
+            *test_case_tool_bindings(self.catalog),
+            *worklist_tool_bindings(self.worklist),
+            candidate_read_tool_binding(self.candidates),
+        ]
         if self.config is not None:
             if self.memory is not None:
-                toolbox.register(
-                    spec=_parameter_memory_tool_spec(),
-                    execute=lambda *, input_handles: self._read_parameter_history(
-                        list(input_handles)
-                    ),
+                bindings.append(
+                    parameter_history_tool_binding(
+                        lambda *, input_handles: self._read_parameter_history(
+                            list(input_handles)
+                        )
+                    )
                 )
             if self.patch_coordinator_factory is not None:
-                toolbox.register(
-                    spec=_patch_tool_spec(),
-                    # The session intercepts this stateful tool so the shared
-                    # output-limit exception cannot be converted to a generic
-                    # toolbox failure.
-                    execute=lambda **_arguments: {},
+                bindings.append(
+                    generate_parameter_patch_tool_binding(
+                        # The session intercepts this stateful tool so the shared
+                        # output limit cannot become a generic toolbox failure.
+                        lambda **_arguments: {}
+                    )
                 )
             if self.http_probe is not None:
-                toolbox.register(
-                    spec=self.http_probe.tool_spec(self.config),
-                    # HTTP is likewise executed by the session so every repeat
-                    # becomes a fresh request and a fresh TC reference.
-                    execute=lambda **_arguments: {},
-                )
-        return toolbox
+                # The Tool Module owns the scoped spec and placeholder Binding;
+                # Resolution intercepts calls to create one fresh TC reference.
+                bindings.append(self.http_probe.binding(self.config))
+        profile = AgentProfile(
+            name="failure_resolution",
+            model_config_name="thinking",
+            tool_names=tuple(binding.name for binding in bindings),
+        )
+        self.profile = profile
+        return AgentToolbox.from_catalog(
+            catalog=builtin_tool_catalog(),
+            selected_names=profile.tool_names,
+            bindings=bindings,
+            tracing_runtime=self.tracing_runtime,
+        )
 
     def _tool_errors(self, response: LLMResponse) -> list[str]:
         """Reject an unsafe whole output before any stateful tool can execute."""
@@ -619,7 +627,7 @@ class FailureResolutionSession:
         if errors:
             return errors
         for call in response.tool_calls:
-            if call.name == _PATCH_TOOL_NAME:
+            if call.name == GENERATE_PARAMETER_PATCH_TOOL_NAME:
                 errors.extend(self._patch_tool_errors(call.arguments))
             elif call.name == HTTP_REQUEST_TOOL_NAME:
                 if self.config is None or self.http_probe is None:
@@ -641,7 +649,11 @@ class FailureResolutionSession:
     def _execute_tools(self, response: LLMResponse) -> None:
         """Execute a fully validated group and append one result per call."""
         self.context.append_assistant(response)
-        if len(response.tool_calls) == 1 and response.tool_calls[0].name == _PATCH_TOOL_NAME:
+        if (
+            len(response.tool_calls) == 1
+            and response.tool_calls[0].name
+            == GENERATE_PARAMETER_PATCH_TOOL_NAME
+        ):
             call = response.tool_calls[0]
             results = [
                 self._execute_direct_tool(
@@ -843,7 +855,7 @@ class FailureResolutionSession:
     ) -> None:
         """Retain successful read provenance for later Patch requirements."""
         for call, result in zip(calls, results, strict=True):
-            if call.name != _MEMORY_TOOL_NAME or result.status != "succeeded":
+            if call.name != PARAMETER_HISTORY_TOOL_NAME or result.status != "succeeded":
                 continue
             handles = call.arguments.get("input_handles")
             if not isinstance(handles, list):
@@ -1067,83 +1079,6 @@ def _tool_result_text(result: ToolResult) -> str:
     if result.content:
         writer.text("body", result.content)
     return writer.render(max_chars=8_000).text
-
-
-def _parameter_memory_tool_spec() -> ToolSpec:
-    """Describe a one-handle read without preloading operation Parameters."""
-    return ToolSpec(
-        name=_MEMORY_TOOL_NAME,
-        description=(
-            "Read prior attributed Failures, root causes, conflicts, and applied "
-            "changes for exactly one semantic Parameter handle discovered from "
-            "OpenAPI or Test Case evidence."
-        ),
-        kind="local_function",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "input_handles": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                    "minItems": 1,
-                    "maxItems": 1,
-                    "uniqueItems": True,
-                }
-            },
-            "required": ["input_handles"],
-            "additionalProperties": False,
-        },
-        output_schema={
-            "type": "object",
-            "properties": {"parameters": {"type": "array"}},
-            "required": ["parameters"],
-            "additionalProperties": False,
-        },
-        strict=True,
-    )
-
-
-def _patch_tool_spec() -> ToolSpec:
-    """Describe side-effect-free candidate construction using semantic handles."""
-    return ToolSpec(
-        name=_PATCH_TOOL_NAME,
-        description=(
-            "Build, compile, sample, and independently review one Generator or "
-            "Constraint candidate for the active worklist item. Returns only a "
-            "new P* reference and bounded summary; it does not apply the Patch."
-        ),
-        kind="local_function",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "root_cause": {"type": "string", "minLength": 1},
-                "affected_inputs": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                    "minItems": 1,
-                    "maxItems": 100,
-                    "uniqueItems": True,
-                },
-                "value_requirements": {"type": "string", "minLength": 1},
-                "acceptance_criteria": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                    "minItems": 1,
-                    "maxItems": 20,
-                    "uniqueItems": True,
-                },
-            },
-            "required": [
-                "root_cause",
-                "affected_inputs",
-                "value_requirements",
-                "acceptance_criteria",
-            ],
-            "additionalProperties": False,
-        },
-        output_schema=PatchCandidateSummary.model_json_schema(),
-        strict=True,
-    )
 
 
 def _parameter_history_text(

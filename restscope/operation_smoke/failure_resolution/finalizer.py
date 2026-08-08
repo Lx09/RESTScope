@@ -14,7 +14,7 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Protocol
 
-from restscope.capabilities import ToolFailure
+from restscope.tools import ToolFailure
 from restscope.operation_smoke.memory import (
     FailureBatchWrite,
     FailureWrite,
@@ -27,13 +27,13 @@ from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
     GeneratorPatchDraft,
 )
-from restscope.operation_smoke.test_case_catalog import HTTPFailure, TestCaseCatalog
-from restscope.testing import (
+from restscope.harness.testing.test_case_catalog import HTTPFailure, TestCaseCatalog
+from restscope.harness.testing import (
     OperationGeneratorConfig,
     build_semantic_input_map,
     referenced_input_node_ids,
 )
-from restscope.testing.ports import (
+from restscope.harness.testing.ports import (
     GeneratorConfigConcurrentWrite,
     GeneratorConfigRepository,
 )

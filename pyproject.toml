@@ -15,7 +15,6 @@ dependencies = [
     "httpx>=0.28,<1",
     "jsonschema>=4.26,<5",
     "mcp>=1.0.0",
-    "langgraph>=1.0.0",
     "rstr>=3.2.2,<4",
 ]
 

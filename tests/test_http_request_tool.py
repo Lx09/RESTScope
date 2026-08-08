@@ -15,14 +15,14 @@ def _toolbox_for_transport(
 ):
     import httpx
 
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         ToolContext,
         ToolFailure,
         TargetHTTPRequestTool,
         http_request_tool_spec,
     )
-    from restscope.capabilities.http_request import (
+    from restscope.tools.http import (
         HTTPRequestTimeoutError,
         HTTPRequestToolError,
     )
@@ -83,11 +83,11 @@ def _execute(toolbox, **arguments):
     )
 
 
-def test_capability_runtime_has_shared_http_implementation_without_global_tools() -> None:
+def test_harness_runtime_has_shared_http_implementation_without_global_tools() -> None:
     """The App reuses HTTP code without exposing an executable all-tools box."""
-    from restscope.capabilities import build_capabilities
+    from restscope.harness import build_harness
 
-    runtime = build_capabilities()
+    runtime = build_harness()
 
     assert runtime.target_http_tool is not None
     assert not hasattr(runtime, "tool_registry")

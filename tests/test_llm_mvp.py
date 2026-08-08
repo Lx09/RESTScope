@@ -209,6 +209,7 @@ class _FakeOpenAIChoice:
 
 class _FakeOpenAIUsage:
     prompt_tokens = 11
+    prompt_tokens_details = type("PromptDetails", (), {"cached_tokens": 4})()
     completion_tokens = 7
     total_tokens = 18
 
@@ -420,6 +421,7 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
     assert kwargs["tools"][0]["function"]["strict"] is True
     assert response.parsed_json == {"ok": True}
     assert response.provider_request_id == "chatcmpl_test"
+    assert response.cached_input_tokens == 4
 
 
 def test_openai_compatible_provider_serializes_assistant_tool_call_history() -> None:
@@ -730,7 +732,7 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
 def test_agent_toolbox_exposes_and_executes_only_explicit_tools(tool_context) -> None:
     """An Agent's toolbox is its complete availability decision."""
     del tool_context
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
 
     toolbox = AgentToolbox()

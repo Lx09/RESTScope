@@ -211,7 +211,7 @@ def _review_model() -> LLMModelConfig:
 
 def _sampleable_config():
     """Add request serialization metadata to the compact shared fixture."""
-    from restscope.testing import ParameterSnapshot
+    from restscope.harness.testing import ParameterSnapshot
 
     config = smoke_config()
     return config.model_copy(
@@ -291,7 +291,7 @@ def test_patch_task_separates_value_requirements_from_value_checks() -> None:
 def _updated_at_filter_config():
     """Build the three optional GitLab query inputs from the reported trace."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -442,7 +442,7 @@ def test_patch_prompt_summarizes_large_choice_generators() -> None:
     from restscope.operation_smoke.parameter_patch.prompts import (
         _generator_strategy_summary,
     )
-    from restscope.testing.models import ChoiceGenerator
+    from restscope.harness.testing.models import ChoiceGenerator
 
     values = [f"choice-{index}" for index in range(25)]
 
@@ -838,7 +838,7 @@ def test_patch_rejects_a_response_field_not_returned_by_its_lookup_session() -> 
 def _variant_config():
     """Build the GitLab-like string-or-integer project path Parameter."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing.snapshot import build_initial_operation_config
+    from restscope.harness.testing.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -2005,7 +2005,7 @@ def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> No
         ParameterPatchCoordinator,
         ValidatedParameterPatch,
     )
-    from restscope.testing import ConstraintSet, PresentPredicate
+    from restscope.harness.testing import ConstraintSet, PresentPredicate
 
     active = CompiledConstraintPatch(
         constraint_id="constraint_active_presence",

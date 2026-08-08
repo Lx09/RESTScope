@@ -14,7 +14,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from restscope.capabilities import (
+from restscope.tools import (
     OpenAPICapability,
     ResourceIdentifierCapability,
     ToolFailure,
@@ -24,7 +24,7 @@ from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.output_limit import ModelOutputLimit
 from restscope.response_fields import ResponseFieldReference
-from restscope.testing import (
+from restscope.harness.testing import (
     ConstraintSet,
     InputGeneratorPatch,
     OperationGeneratorConfig,
@@ -40,7 +40,7 @@ from restscope.testing import (
     referenced_input_node_ids,
     validate_constraint_set,
 )
-from restscope.testing.generation import generate_test_case
+from restscope.harness.testing.generation import generate_test_case
 
 from .agent import ParameterPatchAgent, ParameterPatchAttempt
 from .prompts import build_parameter_patch_prompt

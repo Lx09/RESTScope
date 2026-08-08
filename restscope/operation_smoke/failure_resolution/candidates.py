@@ -12,14 +12,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from restscope.capabilities import AgentToolbox, ToolFailure
-from restscope.context import CompactTextWriter
-from restscope.llm import ToolSpec
+from restscope.tools import ToolFailure
 from restscope.operation_smoke.memory import SolveAttemptParameterWrite
 from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-
-
-READ_CANDIDATE_TOOL_NAME = "parameter_patch.read_candidate"
 
 
 class PatchCandidate(BaseModel):
@@ -70,14 +65,6 @@ class PatchCandidateSummary(BaseModel):
     constraint_change_overview: list[str] = Field(max_length=20)
     sample_overview: CandidateSampleOverview
     model_outputs_used: int = Field(ge=1, le=1_000)
-
-
-class _ReadCandidateInput(BaseModel):
-    """Accept exactly one candidate reference and no executable fields."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    candidate_ref: str = Field(pattern=r"^P[1-9][0-9]*$")
 
 
 class PatchCandidateRegistry:
@@ -165,53 +152,6 @@ class PatchCandidateRegistry:
             ),
             model_outputs_used=candidate.outputs_used,
         )
-
-
-def read_candidate_tool_spec() -> ToolSpec:
-    """Describe bounded recovery of one issued candidate's semantic details."""
-    return ToolSpec(
-        name=READ_CANDIDATE_TOOL_NAME,
-        description=(
-            "Read a validated Patch candidate summary by P* reference. The "
-            "result never includes executable Patch DTOs or generated values."
-        ),
-        kind="local_function",
-        input_schema=_ReadCandidateInput.model_json_schema(),
-        output_schema=PatchCandidateSummary.model_json_schema(),
-        strict=True,
-    )
-
-
-def register_candidate_read_tool(
-    *,
-    toolbox: AgentToolbox,
-    registry: PatchCandidateRegistry,
-) -> None:
-    """Register the read-only candidate projection on an Agent toolbox."""
-
-    def read(candidate_ref: str) -> dict[str, Any]:
-        """Return both compact Markdown and the strict summary DTO."""
-        summary = registry.summary(candidate_ref)
-        writer = CompactTextWriter(max_value_chars=1_200)
-        writer.section(
-            f"VALIDATED PATCH CANDIDATE {summary.candidate_ref}",
-            untrusted=True,
-        )
-        writer.record(
-            "candidate",
-            root_cause=summary.root_cause,
-            affected_parameters=summary.affected_parameters,
-            generator_changes=summary.generator_change_overview,
-            constraint_changes=summary.constraint_change_overview,
-            sample_count=summary.sample_overview.sample_count,
-            sample_coverage=summary.sample_overview.covered_parameters,
-        )
-        return {
-            "content": writer.render(max_chars=8_000).text,
-            "structured": summary.model_dump(mode="json"),
-        }
-
-    toolbox.register(spec=read_candidate_tool_spec(), execute=read)
 
 
 def _sample_handles(sample: dict[str, Any]) -> set[str]:

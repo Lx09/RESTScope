@@ -43,6 +43,12 @@ Run verification after the final edit, not just before it:
 - documentation or governance change: link/path checks, content checks, and
   `git diff --check`;
 - import or packaging change: relevant import/build smoke checks;
+- Agent/Profile change: verify launch-time name resolution, exact provider Tool
+  payloads, Context/Skill exclusion, child ownership, and unchanged state after
+  rejected model or Tool input;
+- Tool contract change: validate both JSON Schemas, local argument rejection,
+  complete Pydantic cross-field rejection, successful output validation, and a
+  correctable retry in the same Agent session;
 - external integration: local contract tests where possible and a clear report
   of any live behavior that was not exercised.
 

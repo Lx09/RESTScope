@@ -12,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from restscope.capabilities import operation_input_references
-from restscope.capabilities.tool_context import ToolContext
+from restscope.tools import operation_input_references
+from restscope.tools.context import ToolContext
 from restscope.llm import ProviderUnavailableError
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.failure_resolution import (
@@ -26,8 +26,8 @@ from restscope.operation_smoke.parameter_patch import (
     GeneratorPatchDraft,
     sample_compiled_patch,
 )
-from restscope.operation_smoke.test_case_catalog import TestCaseCatalog
-from restscope.testing import (
+from restscope.harness.testing.test_case_catalog import TestCaseCatalog
+from restscope.harness.testing import (
     BatchExecutionResult,
     ConstraintSet,
     GeneratorConfigCatalog,
@@ -37,7 +37,7 @@ from restscope.testing import (
     build_semantic_input_map,
     referenced_input_node_ids,
 )
-from restscope.testing.constraints import OperationConstraintRecord
+from restscope.harness.testing.constraints import OperationConstraintRecord
 
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
@@ -383,7 +383,7 @@ def _errored_result(
     failure_kind: OperationSmokeFailureKind,
     error: Exception,
 ) -> OperationSmokeResult:
-    """Convert a technical boundary failure into a Supervisor-readable result."""
+    """Convert a technical failure into a Run-Harness-readable result."""
     return OperationSmokeResult(
         status="errored",
         operation_key=request.operation_key,

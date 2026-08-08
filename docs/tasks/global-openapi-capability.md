@@ -1,5 +1,9 @@
 # Global OpenAPI Capability
 
+> Superseded Catalog note (2026-08-08): ADR 0001 places these contracts in the
+> immutable built-in Tool Catalog. Agent Profiles still select them explicitly,
+> so global discovery does not imply automatic model access.
+
 Status: Implemented and locally verified
 
 ## Objective

@@ -1,4 +1,4 @@
-"""Protect workflow package locality and the deliberately small public facades."""
+"""Protect the Main Agent, Subagent, Skill, Tool, and Harness package seams."""
 
 from __future__ import annotations
 
@@ -19,54 +19,95 @@ CURRENT_DOCUMENTS = (
 )
 
 
-def test_workflows_replace_the_retired_agent_category_package() -> None:
-    """Scenario: runtime workflows own their code and no category package remains."""
-    retired_package = "restscope" + ".agent"
-    assert not (SOURCE_ROOT / "agent").exists()
-    assert importlib.util.find_spec(retired_package) is None
-
-    for package_name in (
-        "operation_smoke",
-        "api_behavior_monitor",
-        "supervisor",
-    ):
+def test_core_runtime_language_has_explicit_global_packages() -> None:
+    """Scenario: readers can locate each new core concept without old facades."""
+    for package_name in ("agent", "skills", "tools", "harness"):
         package = SOURCE_ROOT / package_name
-        assert package.is_dir(), f"missing workflow package: {package_name}"
+        assert package.is_dir(), f"missing core package: {package_name}"
         assert (package / "__init__.py").is_file()
+    for retired_package in ("capabilities", "supervisor", "testing"):
+        assert not (SOURCE_ROOT / retired_package).exists()
+        assert importlib.util.find_spec(f"restscope.{retired_package}") is None
 
 
-def test_operation_smoke_llm_roles_keep_independent_internal_seams() -> None:
-    """Scenario: each LLM role remains a named package inside its workflow."""
-    for package_name in (
-        "failure_resolution",
-        "parameter_patch",
-    ):
-        package = OPERATION_SMOKE_ROOT / package_name
-        assert package.is_dir(), f"missing Operation Smoke role: {package_name}"
-        assert (package / "__init__.py").is_file()
-        assert (package / "agent.py").is_file()
-        assert (package / "schemas.py").is_file()
-    review = OPERATION_SMOKE_ROOT / "parameter_patch" / "review"
-    assert review.is_dir()
-    assert (review / "agent.py").is_file()
-    assert (review / "schemas.py").is_file()
-    compact = OPERATION_SMOKE_ROOT / "failure_resolution" / "compact"
-    assert compact.is_dir()
-    assert (compact / "__init__.py").is_file()
-    assert (compact / "agent.py").is_file()
-    assert (compact / "prompts.py").is_file()
-    assert not (compact / "schemas.py").exists()
-    assert not (OPERATION_SMOKE_ROOT / "parameter_patch_review").exists()
-    assert not (OPERATION_SMOKE_ROOT / "effect").exists()
-    assert not (OPERATION_SMOKE_ROOT / "plan").exists()
-    assert not (OPERATION_SMOKE_ROOT / "prompt_context" / "__init__.py").exists()
+def test_only_the_documented_transitional_named_agents_remain() -> None:
+    """Scenario: this migration cannot accidentally add another domain Agent."""
+    found: set[str] = set()
+    for path in SOURCE_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        found.update(
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name.endswith("Agent")
+        )
+    assert found == {
+        "FailureResolutionAgent",
+        "FailureResolutionCompactAgent",
+        "ParameterPatchAgent",
+        "ParameterPatchReviewAgent",
+        "Agent",
+    }
+
+
+def test_transitional_agents_declare_explicit_profiles() -> None:
+    """Scenario: every temporary named Agent makes its current access explicit."""
+    agent_modules = (
+        OPERATION_SMOKE_ROOT / "failure_resolution" / "agent.py",
+        OPERATION_SMOKE_ROOT / "failure_resolution" / "compact" / "agent.py",
+        OPERATION_SMOKE_ROOT / "parameter_patch" / "agent.py",
+        OPERATION_SMOKE_ROOT / "parameter_patch" / "review" / "agent.py",
+    )
+
+    for path in agent_modules:
+        source = path.read_text(encoding="utf-8")
+        assert "AgentProfile(" in source, f"missing Agent Profile: {path}"
+
+
+def test_owned_tool_specs_live_only_in_global_tool_modules() -> None:
+    """Scenario: workflows and Harnesses cannot author private Tool contracts."""
+    violations: list[str] = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        if path.is_relative_to(SOURCE_ROOT / "tools") or path == SOURCE_ROOT / "llm" / "schemas.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ToolSpec"
+            ):
+                violations.append(f"{path.relative_to(REPOSITORY_ROOT)}:{node.lineno}")
+    assert violations == []
+
+
+def test_production_tool_registration_lives_only_in_global_tool_modules() -> None:
+    """Scenario: workflows and Harnesses bind Catalog Tools instead of inventing them."""
+    violations: list[str] = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        if path.is_relative_to(SOURCE_ROOT / "tools"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr == "register" and any(
+                keyword.arg == "spec" for keyword in node.keywords
+            ):
+                violations.append(f"{path.relative_to(REPOSITORY_ROOT)}:{node.lineno}")
+
+    assert violations == []
 
 
 def test_current_sources_do_not_restore_retired_agent_names_or_paths() -> None:
     """Scenario: the migration has no old imports, names, properties, or aliases."""
     retired_terms = {
-        "restscope" + ".agent",
-        "restscope" + "/agent",
+        "restscope" + ".capabilities",
+        "restscope" + "/capabilities",
+        "restscope" + ".testing",
+        "restscope" + "/testing",
+        "restscope" + ".supervisor",
+        "restscope" + "/supervisor",
+        "RESTScopeMain" + "Graph",
         "OperationSmoke" + "Agent",
         "operation_smoke_" + "agent",
         "build_operation_smoke_" + "agent",
@@ -88,6 +129,17 @@ def test_current_sources_do_not_restore_retired_agent_names_or_paths() -> None:
                 violations.append(f"{path.relative_to(REPOSITORY_ROOT)}: {retired_term}")
 
     assert violations == []
+
+
+def test_run_harness_has_no_graph_framework_dependency() -> None:
+    """Scenario: the ephemeral FIFO loop requires no graph runtime package."""
+    project = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    production = "\n".join(
+        path.read_text(encoding="utf-8") for path in SOURCE_ROOT.rglob("*.py")
+    )
+
+    assert "lang" + "graph" not in project
+    assert "lang" + "graph" not in production
 
 
 def test_workflow_facades_export_only_the_approved_interfaces() -> None:

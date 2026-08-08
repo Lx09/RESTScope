@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast
+from typing import Annotated, Any, Literal, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
@@ -20,18 +20,14 @@ from restscope.operation_smoke import (
     SmokeBatchRunner,
     build_operation_smoke_coordinator,
 )
-from restscope.supervisor import (
-    RESTScopeMainGraph,
+from restscope.harness import (
+    HarnessRuntime,
     RESTScopeRunReport,
     RESTScopeRunRequest,
-    SchemaSource,
+    RunHarness,
+    build_harness,
 )
-from restscope.capabilities import (
-    CapabilityRuntime,
-    ToolContext,
-    ToolContextError,
-    build_capabilities,
-)
+from restscope.tools import ToolContext, ToolContextError
 from restscope.http_transport import TargetHTTPTransport
 from restscope.catalog import OpenAPIChangeEventRecord
 from restscope.openapi_parser import OpenAPIParser, build_openapi_document
@@ -41,7 +37,41 @@ from restscope.randomness import SeededRandom
 from restscope.restscope_config import RESTScopeConfig
 from restscope.bootstrap import build_generator_config_catalog
 from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
-from restscope.testing import OperationTestingService
+from restscope.harness.testing import OperationTestingService
+
+
+class _SchemaSourceModel(BaseModel):
+    """Reject unknown fields in one App initialization source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class _FileSchemaSource(_SchemaSourceModel):
+    """Read an OpenAPI document from one local filesystem path."""
+
+    kind: Literal["file"]
+    path: str
+
+
+class _UrlSchemaSource(_SchemaSourceModel):
+    """Read an OpenAPI document from one explicit URL."""
+
+    kind: Literal["url"]
+    url: str
+
+
+class _InlineSchemaSource(_SchemaSourceModel):
+    """Parse an OpenAPI document supplied directly by the App caller."""
+
+    kind: Literal["inline"]
+    format: Literal["yaml", "json"] = "yaml"
+    content: str
+
+
+_SchemaSource = Annotated[
+    _FileSchemaSource | _UrlSchemaSource | _InlineSchemaSource,
+    Field(discriminator="kind"),
+]
 
 
 class RESTScopeApp:
@@ -49,8 +79,8 @@ class RESTScopeApp:
 
     Creating the app is intentionally more than constructing a data object.  It
     opens the run-local database, tracing exporter, behavior monitor, HTTP
-    transport, testing service, shared capability implementations, and the
-    top-level run graph.
+    transport, testing service, shared Tool implementations, and the
+    deterministic run Harness.
     The app also records which resources it created so :meth:`close` can release
     them if startup succeeds *or* fails part-way through.
     """
@@ -60,12 +90,12 @@ class RESTScopeApp:
         *,
         config: RESTScopeConfig,
         operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
-        capability_runtime: CapabilityRuntime | Any | None = None,
+        harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Build the dependency graph, or adopt explicitly injected test doubles.
+        """Build runtime collaborators, or adopt explicitly injected test doubles.
 
-        ``capability_runtime`` and ``operation_smoke_coordinator`` are injection
+        ``harness_runtime`` and ``operation_smoke_coordinator`` are injection
         points used by tests and embedders.  In the normal path both are
         omitted and RESTScope wires the complete production stack itself.
         """
@@ -74,7 +104,7 @@ class RESTScopeApp:
         # later constructor raises, the exception handler can close only the
         # resources opened by this method and leave injected objects untouched.
         database: _FreshSQLiteDatabase | None = None
-        built_runtime: CapabilityRuntime | Any | None = None
+        built_runtime: HarnessRuntime | Any | None = None
         built_tracing_runtime = tracing_runtime is None
         trace_runtime: TracingRuntime | None = None
         run_observer: LiveRunObserver | None = None
@@ -84,7 +114,7 @@ class RESTScopeApp:
             # A default runtime needs a private, freshly migrated SQLite file.
             # An injected runtime owns its own persistence and must not be
             # silently paired with another database.
-            if capability_runtime is None:
+            if harness_runtime is None:
                 config, database = _prepare_app_database(config)
 
             self.config = config
@@ -108,7 +138,7 @@ class RESTScopeApp:
                     redactor=self._tracing_runtime.redactor
                 )
                 self._tracing_runtime.bind_run_observer(run_observer)
-            if capability_runtime is None:
+            if harness_runtime is None:
                 # The catalog stores only current per-input Generators.  The
                 # behavior monitor supplies observed identifiers/response values to
                 # generators, while the transport sends requests and returns
@@ -133,16 +163,16 @@ class RESTScopeApp:
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
                 )
-                # The capability runtime exposes HTTP and evidence lookup tools.
+                # The Harness exposes HTTP and evidence lookup Tools.
                 # Generated Batch execution stays internal: Smoke receives the
                 # testing service through its narrow runner Protocol below.
-                built_runtime = build_capabilities(
+                built_runtime = build_harness(
                     tracing_runtime=self._tracing_runtime,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
                     api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
                 )
-                capability_runtime = built_runtime
+                harness_runtime = built_runtime
                 if smoke_coordinator is None:
                     smoke_coordinator = build_operation_smoke_coordinator(
                         config,
@@ -156,27 +186,27 @@ class RESTScopeApp:
                             operation_testing_service,
                         ),
                         reference_values=reference_values,
-                        capability_runtime=built_runtime,
+                        harness_runtime=built_runtime,
                         tracing_runtime=self._tracing_runtime,
                     )
             elif smoke_coordinator is None:
-                # Mixing a custom tool runtime with a default Smoke Coordinator would
-                # connect two unrelated dependency graphs, so require callers
+                # Mixing a custom Harness with a default Smoke Coordinator would
+                # connect unrelated runtime state, so require callers
                 # to inject the matching Coordinator explicitly.
                 raise ValueError(
-                    "A custom capability runtime requires an injected "
+                    "A custom Harness runtime requires an injected "
                     "OperationSmokeCoordinator"
                 )
             self.operation_smoke_coordinator = smoke_coordinator
-            self.capability_runtime = capability_runtime
+            self.harness_runtime = harness_runtime
             bind_tracing_runtime = getattr(
-                self.capability_runtime,
+                self.harness_runtime,
                 "bind_tracing_runtime",
                 None,
             )
             if callable(bind_tracing_runtime):
                 bind_tracing_runtime(self._tracing_runtime)
-            _bind_run_observer(self.capability_runtime, run_observer)
+            _bind_run_observer(self.harness_runtime, run_observer)
             if run_observer is not None:
                 from restscope.ui import start_ui_service
 
@@ -187,7 +217,7 @@ class RESTScopeApp:
                 if ui_service is None:
                     run_observer.close()
                     self._tracing_runtime.bind_run_observer(None)
-                    _bind_run_observer(self.capability_runtime, None)
+                    _bind_run_observer(self.harness_runtime, None)
                     run_observer = None
             self._run_observer = run_observer
             self._ui_service = ui_service
@@ -213,7 +243,7 @@ class RESTScopeApp:
         *,
         env_file: str | Path | None = None,
         operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
-        capability_runtime: CapabilityRuntime | Any | None = None,
+        harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
         """Load `.env`/environment config and build the program runtime."""
@@ -222,7 +252,7 @@ class RESTScopeApp:
         return cls.from_config(
             config,
             operation_smoke_coordinator=operation_smoke_coordinator,
-            capability_runtime=capability_runtime,
+            harness_runtime=harness_runtime,
             tracing_runtime=tracing_runtime,
         )
 
@@ -232,14 +262,14 @@ class RESTScopeApp:
         config: RESTScopeConfig,
         *,
         operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
-        capability_runtime: CapabilityRuntime | Any | None = None,
+        harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
         """Build RESTScope from an explicit config object."""
 
         database: _FreshSQLiteDatabase | None = None
         trace_runtime: TracingRuntime | None = None
-        runtime = capability_runtime
+        runtime = harness_runtime
         runtime_is_owned = False
         try:
             config = _resolve_app_random_seed(config)
@@ -280,7 +310,7 @@ class RESTScopeApp:
                 assert generator_catalog is not None
                 assert operation_testing_service is not None
                 assert api_behavior_monitor_coordinator is not None
-                runtime = build_capabilities(
+                runtime = build_harness(
                     tracing_runtime=trace_runtime,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
@@ -303,7 +333,7 @@ class RESTScopeApp:
                     or api_behavior_monitor_coordinator is None
                 ):
                     raise ValueError(
-                        "A custom capability runtime requires an injected "
+                        "A custom Harness runtime requires an injected "
                         "OperationSmokeCoordinator or testing and API behavior "
                         "monitor services"
                     )
@@ -325,14 +355,14 @@ class RESTScopeApp:
                     config_catalog=generator_catalog,
                     batch_runner=operation_testing_service,
                     reference_values=reference_values,
-                    capability_runtime=runtime,
+                    harness_runtime=runtime,
                     tracing_runtime=trace_runtime,
                 )
 
             return cls(
                 config=config,
                 operation_smoke_coordinator=smoke_coordinator,
-                capability_runtime=runtime,
+                harness_runtime=runtime,
                 tracing_runtime=trace_runtime,
             )
         except BaseException:
@@ -347,7 +377,7 @@ class RESTScopeApp:
     @property
     def tool_context(self) -> ToolContext | None:
         """Return the initialized target snapshot, or ``None`` before startup."""
-        require_context = getattr(self.capability_runtime, "require_context", None)
+        require_context = getattr(self.harness_runtime, "require_context", None)
         if not callable(require_context):
             return None
         try:
@@ -389,7 +419,7 @@ class RESTScopeApp:
                 "Tool context is already initialized",
             )
 
-        source = TypeAdapter(SchemaSource).validate_python(dict(schema_source))
+        source = TypeAdapter(_SchemaSource).validate_python(dict(schema_source))
         ir = OpenAPIParser.parse(_schema_source_value(source))
         parser_errors = [
             *ir.diagnostics.spec_errors,
@@ -409,13 +439,13 @@ class RESTScopeApp:
             headers=headers or {},
         )
         testing_service = getattr(
-            self.capability_runtime,
+            self.harness_runtime,
             "operation_testing_service",
             None,
         )
         if testing_service is not None:
             monitor = getattr(
-                self.capability_runtime,
+                self.harness_runtime,
                 "api_behavior_monitor_coordinator",
                 None,
             )
@@ -429,7 +459,7 @@ class RESTScopeApp:
                     build_openapi_document(ir, list(ir.operations))
                 )
             testing_service.config_catalog.initialize_once(ir)
-        self.capability_runtime.bind_context(context)
+        self.harness_runtime.bind_context(context)
         return context
 
     def export_current_openapi(self) -> dict[str, Any]:
@@ -442,7 +472,7 @@ class RESTScopeApp:
 
         self._ensure_open()
         monitor = getattr(
-            self.capability_runtime,
+            self.harness_runtime,
             "api_behavior_monitor_coordinator",
             None,
         )
@@ -463,7 +493,7 @@ class RESTScopeApp:
 
         self._ensure_open()
         monitor = getattr(
-            self.capability_runtime,
+            self.harness_runtime,
             "api_behavior_monitor_coordinator",
             None,
         )
@@ -477,7 +507,7 @@ class RESTScopeApp:
         return catalog.list_changes(operation_key)
 
     def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
-        """Run the global RESTScope supervisor graph.
+        """Run every current operation through one ephemeral Run Harness.
 
         ``KeyboardInterrupt`` stops this Run and is re-raised for the caller to
         acknowledge, but it does not close the App, observer, or UI server.
@@ -503,7 +533,7 @@ class RESTScopeApp:
                 input_value=request,
                 attributes=attributes,
             ) as span:
-                report = RESTScopeMainGraph(
+                report = RunHarness(
                     operation_smoke_coordinator=self.operation_smoke_coordinator,
                     tool_context=context,
                     random_seed=self.random_source.seed,
@@ -530,7 +560,10 @@ class RESTScopeApp:
 
         if self._closed:
             return
-        clear_context = getattr(self.capability_runtime, "clear_context", None)
+        close_main_agent = getattr(self.harness_runtime, "close_main_agent", None)
+        if callable(close_main_agent):
+            close_main_agent()
+        clear_context = getattr(self.harness_runtime, "clear_context", None)
         if callable(clear_context):
             clear_context()
         clear_smoke_state = getattr(
@@ -545,7 +578,7 @@ class RESTScopeApp:
                 # Resource cleanup must continue even if a custom injected
                 # Smoke Coordinator cannot release its optional in-memory state.
                 pass
-        mcp_host = getattr(self.capability_runtime, "mcp_host", None)
+        mcp_host = getattr(self.harness_runtime, "mcp_host", None)
         try:
             if mcp_host is not None:
                 mcp_host.close()
@@ -640,7 +673,7 @@ def _close_runtime_host(runtime: Any | None) -> None:
 
 
 def _bind_run_observer(runtime: Any, observer: LiveRunObserver | None) -> None:
-    """Attach HTTP observation to built-in transports behind CapabilityRuntime."""
+    """Attach HTTP observation to built-in transports behind HarnessRuntime."""
     target_tool = getattr(runtime, "target_http_tool", None)
     target_transport = getattr(target_tool, "transport", None)
     if target_transport is not None:

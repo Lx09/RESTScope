@@ -10,7 +10,7 @@ from __future__ import annotations
 
 def test_catalog_assigns_ids_and_answers_typed_bidirectional_queries() -> None:
     """One case supports Parameter and response-field lookup in both directions."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
@@ -98,7 +98,7 @@ def test_catalog_reports_whether_each_request_used_one_parameter() -> None:
     same query.  The absent result therefore uses a complete domain status and
     does not contain a meaningless value placeholder.
     """
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         TestCaseCatalog,
     )
@@ -152,7 +152,7 @@ def test_catalog_dto_rejects_a_body_without_a_4xx_or_5xx_failure() -> None:
     import pytest
     from pydantic import ValidationError
 
-    from restscope.operation_smoke.test_case_catalog import CatalogTestCaseDraft
+    from restscope.harness.testing.test_case_catalog import CatalogTestCaseDraft
 
     with pytest.raises(ValidationError, match="only for a 4xx/5xx"):
         CatalogTestCaseDraft(
@@ -164,7 +164,7 @@ def test_catalog_dto_rejects_a_body_without_a_4xx_or_5xx_failure() -> None:
 
 def test_catalog_distinguishes_response_body_and_field_absence() -> None:
     """Response lookup explains why a requested value is unavailable."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
@@ -213,7 +213,7 @@ def test_response_field_path_is_validated_when_body_was_not_retained() -> None:
     """An unretained body must not make a forged field path look valid."""
     import pytest
 
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         TestCaseCatalog,
     )
@@ -234,7 +234,7 @@ def test_response_field_path_is_validated_when_body_was_not_retained() -> None:
 
 def test_catalog_comparison_is_type_sensitive() -> None:
     """Boolean true must not match integer one during reverse lookup."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         TestCaseCatalog,
     )
@@ -278,7 +278,7 @@ def test_catalog_comparison_is_type_sensitive() -> None:
 
 def test_response_fragment_keeps_a_complete_real_array() -> None:
     """An indexed field query must not fabricate preceding array entries."""
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
@@ -310,12 +310,14 @@ def test_response_fragment_keeps_a_complete_real_array() -> None:
 
 def test_catalog_tool_returns_bounded_native_json_and_rejects_forged_refs() -> None:
     """Resolution receives four compact tools and forged references still fail."""
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
+    )
+    from restscope.tools.test_case import (
         get_failure_messages_tool_spec,
         register_test_case_tools,
         tool_result_json,

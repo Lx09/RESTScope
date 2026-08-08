@@ -37,7 +37,7 @@ class _InjectedCapabilities:
 
     def require_context(self):
         """Return the initialized context or match the production error contract."""
-        from restscope.capabilities import ToolContextError
+        from restscope.tools import ToolContextError
 
         if self.context is None:
             raise ToolContextError(
@@ -121,7 +121,7 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     app = RESTScopeApp(
         config=config,
         operation_smoke_coordinator=coordinator,
-        capability_runtime=capabilities,
+        harness_runtime=capabilities,
         tracing_runtime=tracing,
     )
 
@@ -142,7 +142,7 @@ def test_keyboard_interrupt_stops_only_the_run_and_keeps_app_ui_available(
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
     from restscope.restscope_config import RESTScopeConfig, UIConfig
-    from restscope.supervisor import RESTScopeRunRequest
+    from restscope.harness import RESTScopeRunRequest
 
     service = SimpleNamespace(url="http://127.0.0.1:9987", closed=False)
     service.close = lambda: setattr(service, "closed", True)
@@ -156,7 +156,7 @@ def test_keyboard_interrupt_stops_only_the_run_and_keeps_app_ui_available(
     app = RESTScopeApp(
         config=config,
         operation_smoke_coordinator=coordinator,
-        capability_runtime=_InjectedCapabilities(),
+        harness_runtime=_InjectedCapabilities(),
         tracing_runtime=tracing,
     )
     app.initialize(
@@ -208,7 +208,7 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     app = RESTScopeApp(
         config=config,
         operation_smoke_coordinator=_InjectedSmokeCoordinator(),
-        capability_runtime=_InjectedCapabilities(),
+        harness_runtime=_InjectedCapabilities(),
         tracing_runtime=tracing,
     )
 

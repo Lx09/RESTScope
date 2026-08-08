@@ -15,7 +15,7 @@ def _catalog(tmp_path: Path):
         make_session_factory,
     )
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import GeneratorConfigCatalog
+    from restscope.harness.testing import GeneratorConfigCatalog
 
     ir = OpenAPIParser.parse(
         {
@@ -53,7 +53,7 @@ def test_current_write_replaces_only_the_input_row(tmp_path: Path) -> None:
 
     from sqlalchemy import inspect, text
 
-    from restscope.testing import InputGeneratorPatch, prepare_accepted_generator_patch
+    from restscope.harness.testing import InputGeneratorPatch, prepare_accepted_generator_patch
 
     catalog, engine = _catalog(tmp_path)
     current = catalog.require_operation("GET /items/{itemId}")
@@ -91,8 +91,8 @@ def test_current_content_compare_rejects_a_stale_writer(tmp_path: Path) -> None:
 
     import pytest
 
-    from restscope.testing import InputGeneratorPatch, prepare_accepted_generator_patch
-    from restscope.testing.ports import GeneratorConfigConcurrentWrite
+    from restscope.harness.testing import InputGeneratorPatch, prepare_accepted_generator_patch
+    from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
 
     catalog, _ = _catalog(tmp_path)
     current = catalog.require_operation("GET /items/{itemId}")

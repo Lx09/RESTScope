@@ -189,6 +189,16 @@ class AgentContext:
             ),
         ]
 
+    def estimated_input_chars(self) -> int:
+        """Estimate the full saved input before ordinary projection truncates it.
+
+        The generic Harness uses this number to compact at a model-relative
+        waterline. It contains only a count, never the underlying prompt text.
+        """
+        return _message_chars(
+            [LLMMessage(role="system", content=self._system), *self.clone_history()]
+        )
+
     def messages_for_compaction(self, compact_instruction: str) -> list[LLMMessage]:
         """Build temporary ``B + H + C`` messages without changing saved state.
 

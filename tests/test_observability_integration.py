@@ -237,7 +237,7 @@ def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     """The Agent-owned execution boundary emits safe tool spans."""
     from opentelemetry.trace.status import StatusCode
 
-    from restscope.capabilities import AgentToolbox, ToolContext
+    from restscope.tools import AgentToolbox, ToolContext
     from restscope.llm import ToolCall, ToolSpec
     from restscope.openapi_parser import OpenAPIParser
 
@@ -334,7 +334,7 @@ def test_agent_toolbox_propagates_provider_unavailable_without_tracing_cause() -
     """A nested model outage keeps stable Tool span facts and a private cause."""
     from opentelemetry.trace.status import StatusCode
 
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import (
         ProviderUnavailableError,
         ToolCall,
@@ -389,7 +389,7 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
     """Scenario: concurrent tool spans remain children of the calling Agent."""
     import threading
 
-    from restscope.capabilities import AgentToolbox
+    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
 
     # Requiring both implementations to arrive before either returns proves
@@ -463,7 +463,7 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
 def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     """Scenario: verify that app owns one runtime and emits a CHAIN hierarchy."""
     from restscope import RESTScopeApp
-    from restscope.supervisor import RESTScopeRunRequest
+    from restscope.harness import RESTScopeRunRequest
     from restscope.restscope_config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
@@ -523,8 +523,8 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
     app_span = spans["RESTScopeApp.run"]
-    graph_span = spans["RESTScopeMainGraph.run"]
-    attempt_span = spans["RESTScopeMainGraph.operation_attempt"]
+    run_harness_span = spans["RunHarness.run"]
+    attempt_span = spans["RunHarness.operation_attempt"]
     operation_span = spans["OperationSmokeCoordinator.run"]
     rendered = json.dumps(
         [dict(span.attributes) for span in spans.values()],
@@ -532,18 +532,18 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     )
 
     assert app.tracing_runtime is runtime
-    assert app.capability_runtime.operation_testing_service.tracing_runtime is runtime
+    assert app.harness_runtime.operation_testing_service.tracing_runtime is runtime
     assert (
         app.tracing_runtime.redactor
-        is app.capability_runtime.operation_testing_service.tracing_runtime.redactor
+        is app.harness_runtime.operation_testing_service.tracing_runtime.redactor
     )
     with pytest.raises(AttributeError):
         app.tracing_runtime = runtime
-    assert graph_span.parent.span_id == app_span.context.span_id
-    assert attempt_span.parent.span_id == graph_span.context.span_id
+    assert run_harness_span.parent.span_id == app_span.context.span_id
+    assert attempt_span.parent.span_id == run_harness_span.context.span_id
     assert operation_span.parent.span_id == attempt_span.context.span_id
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert graph_span.attributes["openinference.span.kind"] == "CHAIN"
+    assert run_harness_span.attributes["openinference.span.kind"] == "CHAIN"
     assert attempt_span.attributes["openinference.span.kind"] == "CHAIN"
     assert operation_span.attributes["openinference.span.kind"] == "CHAIN"
     assert app_span.attributes["restscope.task_id"] == "trace-task"
@@ -554,7 +554,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
         "operation_count": 1,
         "attempt_count": 1,
     }
-    assert json.loads(graph_span.attributes["output.value"]) == {
+    assert json.loads(run_harness_span.attributes["output.value"]) == {
         "report_id": report.report_id,
         "status": "passed",
         "stop_reason": "completed",
@@ -568,7 +568,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
         "error": None,
     }
     assert app_span.attributes["restscope.output.truncated"] is False
-    assert graph_span.attributes["restscope.output.truncated"] is False
+    assert run_harness_span.attributes["restscope.output.truncated"] is False
     assert "header-secret" in rendered
     assert "thinking-secret" not in rendered
     assert "fast-secret" not in rendered
@@ -579,11 +579,11 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
 def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> None:
     """Scenario: verify that app rebinds every builtin capability trace consumer."""
     from restscope import RESTScopeApp
-    from restscope.capabilities import build_capabilities
+    from restscope.harness import build_harness
     from restscope.observability import TracingRuntime
     from restscope.redaction import Redactor
     from restscope.restscope_config import RESTScopeConfig
-    from restscope.testing import OperationTestingService
+    from restscope.harness.testing import OperationTestingService
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
@@ -592,7 +592,7 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
         config_catalog=object(),
         tracing_runtime=old_runtime,
     )
-    capabilities = build_capabilities(
+    capabilities = build_harness(
         tracing_runtime=old_runtime,
         operation_testing_service=testing_service,
         sources={
@@ -612,7 +612,7 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(tmp_path / ".env"),
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
-        capability_runtime=capabilities,
+        harness_runtime=capabilities,
         tracing_runtime=app_runtime,
     )
 
@@ -630,7 +630,7 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     """Scenario: verify that http request tool keeps full result while trace output is bounded."""
     import httpx
 
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         ToolContext,
         TargetHTTPRequestTool,
@@ -691,7 +691,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     """Scenario: Smoke's internal batch runner emits sanitized batch and case spans."""
     import httpx
 
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
     from restscope.db import (
         Base,
         SqlAlchemyGeneratorConfigUnitOfWork,
@@ -700,7 +700,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     )
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import (
+    from restscope.harness.testing import (
         GeneratorConfigCatalog,
         OperationTestingService,
     )
@@ -733,7 +733,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    from restscope.testing import prepare_accepted_generator_patch
+    from restscope.harness.testing import prepare_accepted_generator_patch
 
     current = catalog.require_operation(operation.operation_key)
     updated = prepare_accepted_generator_patch(

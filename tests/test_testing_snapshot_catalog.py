@@ -39,7 +39,7 @@ def _catalog(tmp_path: Path):
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.testing import GeneratorConfigCatalog
+    from restscope.harness.testing import GeneratorConfigCatalog
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'snapshot.sqlite'}")
     Base.metadata.create_all(engine)
@@ -85,7 +85,7 @@ def test_catalog_initializes_all_operation_generators_once_from_ir(
 
     changed_ir = OpenAPIParser.parse(_spec(path="/replacement", title="Changed"))
     monkeypatch.setattr(
-        "restscope.testing.catalog.build_initial_catalog",
+        "restscope.harness.testing.catalog.build_initial_catalog",
         lambda _ir: (_ for _ in ()).throw(
             AssertionError("initialized catalog must not inspect a later IR")
         ),
@@ -123,7 +123,7 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
             base_url="https://api.example.test",
         )
 
-        service = app.capability_runtime.operation_testing_service
+        service = app.harness_runtime.operation_testing_service
         assert service is not None
         assert service.config_catalog.get_operation("POST /orders/{orderId}") is not None
     finally:
@@ -175,10 +175,10 @@ def test_smoke_batch_uses_app_memory_snapshot_when_current_ir_is_different(
     """Smoke uses its App-memory snapshot even when another IR object differs."""
     import httpx
 
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import OperationTestingService
+    from restscope.harness.testing import OperationTestingService
 
     catalog = _catalog(tmp_path)
     catalog.initialize_once(OpenAPIParser.parse(_spec()))
@@ -228,11 +228,11 @@ def test_current_input_rows_rebuild_the_same_frozen_operation_snapshot(
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.testing import (
+    from restscope.harness.testing import (
         InputGeneratorPatch,
         prepare_accepted_generator_patch,
     )
-    from restscope.testing.ports import GeneratorConfigConcurrentWrite
+    from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
 
     catalog = _catalog(tmp_path)
     catalog.initialize_once(OpenAPIParser.parse(_spec()))
@@ -316,7 +316,7 @@ def test_generator_patch_requires_an_actual_change() -> None:
     import pytest
     from pydantic import ValidationError
 
-    from restscope.testing import InputGeneratorPatch
+    from restscope.harness.testing import InputGeneratorPatch
 
     with pytest.raises(ValidationError):
         InputGeneratorPatch(input_node_id="input_example")

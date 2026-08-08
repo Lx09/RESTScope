@@ -40,14 +40,14 @@ def _app(tmp_path):
 
 
 def _request():
-    from restscope.supervisor import RESTScopeRunRequest
+    from restscope.harness import RESTScopeRunRequest
 
     return RESTScopeRunRequest()
 
 
 def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app initializes once and reuses the same ir across runs."""
-    from restscope.capabilities import ToolContextError
+    from restscope.tools import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
     original_parse = OpenAPIParser.parse
@@ -77,7 +77,7 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tm
     assert first.status == second.status == "passed"
     assert len(seen) == 1
     assert app.tool_context is context
-    assert app.capability_runtime.require_context() is context
+    assert app.harness_runtime.require_context() is context
     assert context.baseline_schema_source["content"] != "changed"
     assert context.headers["Authorization"] == "Bearer runtime-secret"
     assert "runtime-secret" not in repr(context)
@@ -117,7 +117,7 @@ def test_app_validates_and_forwards_supported_schema_sources(
 
 def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app allows retry after initialization failure."""
-    from restscope.capabilities import ToolContextError
+    from restscope.tools import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -136,7 +136,7 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) ->
         app.initialize(schema_source={"kind": "inline", "content": "broken"})
     assert app.tool_context is None
     with pytest.raises(ToolContextError) as exc_info:
-        app.capability_runtime.require_context()
+        app.harness_runtime.require_context()
     assert exc_info.value.code == "tool_context_not_initialized"
 
     context = app.initialize(schema_source={"kind": "inline", "content": "valid"})
@@ -165,10 +165,10 @@ def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
 
 def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> None:
     """Scenario: verify that app requires initialization and clears context on close."""
-    from restscope.capabilities import ToolContextError
+    from restscope.tools import ToolContextError
 
     app = _app(tmp_path)
-    assert app.capability_runtime is not None
+    assert app.harness_runtime is not None
 
     with pytest.raises(ToolContextError) as exc_info:
         app.run(_request())
@@ -177,7 +177,7 @@ def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> No
     context = app.initialize(
         schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())}
     )
-    runtime = app.capability_runtime
+    runtime = app.harness_runtime
     assert runtime.require_context() is context
 
     app.close()

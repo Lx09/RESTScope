@@ -54,7 +54,7 @@ def test_resource_list_returns_one_stable_page_of_canonical_names(
     tmp_path: Path,
 ) -> None:
     """A caller can discover resources without receiving aliases or IDs."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         ResourceIdentifierCapability,
         resource_list_resources_tool_spec,
@@ -98,7 +98,7 @@ def test_resource_id_list_resolves_alias_and_preserves_scalar_type(
         DetectedResourceGroup,
         MonitoredOperation,
     )
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         ResourceIdentifierCapability,
         resource_list_ids_tool_spec,
@@ -158,7 +158,7 @@ def test_resource_tools_bound_pages_and_treat_unknown_names_as_empty(
     tmp_path: Path,
 ) -> None:
     """Discovery absence succeeds, while invalid pagination never executes."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         ResourceIdentifierCapability,
         resource_list_ids_tool_spec,

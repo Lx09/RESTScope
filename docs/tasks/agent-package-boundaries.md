@@ -1,5 +1,10 @@
 # Agent Package Boundaries
 
+> Superseded architecture note (2026-08-08): ADR 0001 replaces the
+> class-per-Agent package rule and Supervisor boundary with one configurable
+> Agent class, explicit Profiles, global Tools, and a deterministic Harness.
+> This task remains historical evidence only.
+
 Status: Completed
 
 ## Objective

@@ -90,7 +90,7 @@ Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
 delete the old run artifact before starting. RESTScope never overwrites or
 automatically deletes a successfully created database. A caller that injects a
-complete custom `CapabilityRuntime` owns its persistence and bypasses this
+complete custom `HarnessRuntime` owns its persistence and bypasses this
 default database bootstrap.
 
 Alembic now has one `0001_current_baseline` for fresh databases. Old exploratory
@@ -116,12 +116,25 @@ transaction rules are documented in `docs/database_design.md`.
 ## LLM
 
 The MVP LLM layer lives in `restscope.llm`. It provides provider-neutral request
-and response schemas, OpenAI-compatible and DeepSeek providers, model selection
-for thinking/fast roles, structured output validation, and Agent-owned toolboxes
-in `restscope.capabilities`. Each Agent registers only the tools it can actually
-use; the same toolbox validates and executes those calls. Unit tests provide
-their own local stub providers;
-the runtime package does not register an offline fake provider.
+and response schemas, OpenAI-compatible and DeepSeek providers, model selection,
+and structured output validation. `restscope.agent` defines explicit Profiles;
+`restscope.tools` owns the global subject-grouped Tool Catalog and execution
+runtime; `restscope.skills` owns reusable instruction metadata; and
+`restscope.harness` validates every Profile and child relationship at
+construction, then `start_main_agent(profile_name)` atomically resolves and
+binds only that Profile's model configuration, ordered Tools, loaded Skills,
+and bounded Context Sources. It does not expose a separate resolution object
+that callers could use to assemble a broader Agent. Unit tests provide their
+own local stub providers; the runtime package does not register an offline fake
+provider.
+
+The same generic `Agent` class runs the reusable Main Agent and task-scoped
+Subagents. A child receives its own Profile and objective, never its parent's
+conversation. The global `subagent.start`, `subagent.wait`, and
+`subagent.cancel` Tools provide asynchronous direct-child control. The tree
+shares only in-memory slots, cooperative cancellation, tracing relationships,
+and weighted model budget. No Profile, task, queue, transcript, budget, or
+compacted history is persisted.
 
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
@@ -135,12 +148,11 @@ empty containers. Bounded HTTP request/response evidence is the sole JSON
 prompt exception and is rendered inside a safe Markdown fence so a complete
 test case stays easy to inspect.
 `AgentContext` preserves complete tool exchanges and newest validation feedback
-inside the role and model windows. At 80% of configured Resolution input
-capacity, a FAST Compact call receives the same system prompt, the complete
-saved history, and one temporary summary instruction. The next Resolution turn
-retains the original Failure prompt plus the Markdown handoff; worklists and
-candidate registries are not replaced or persisted. Strict Agent outputs and
-provider tool protocols remain JSON.
+inside the Profile model window. The generic Agent compacts at 80% using the
+same model with Tools disabled; two invalid summaries fail safely without
+deleting history. The transitional Failure Resolution flow still uses its
+existing nested FAST Compact Agent until that named Agent is migrated. Strict
+Agent outputs and provider tool protocols remain JSON.
 
 ## Local live run observer
 
@@ -259,7 +271,7 @@ are also replaced wherever they appear. Provider-private tool-call context is
 not projected into traces; model-visible reasoning remains visible when it is
 part of a recorded message.
 
-Agent, tool, and chain inputs and outputs are indented JSON. App and Supervisor
+Agent, tool, and chain inputs and outputs are indented JSON. App and Run Harness
 root spans contain bounded run summaries, while operation and case details stay
 on their child spans. Manual `LLMClient.invoke` spans use OpenInference message
 attributes, so Phoenix renders system, user, and assistant messages separately;
@@ -329,29 +341,29 @@ caller can provide any compatible stdio server:
 }
 ```
 
-Build a standalone capability runtime by letting RESTScope start the MCP server,
-run `tools/list`, and place the discovered tools in an explicit external
-toolbox:
+Build a standalone Harness by letting RESTScope start the MCP server, run
+`tools/list`, and place the discovered definitions in a separate external Tool
+Catalog and toolbox:
 
 ```python
-from restscope.capabilities import build_capabilities_with_mcp_host
+from restscope.harness import build_harness_with_mcp_host
 
-runtime = build_capabilities_with_mcp_host(
+runtime = build_harness_with_mcp_host(
     config="/path/to/mcp.servers.json",
     server_names=("example",),
 )
 ```
 
-Lower-level embedding remains possible through `build_capabilities(...)` when a
+Lower-level embedding remains possible through `build_harness(...)` when a
 caller already has discovered tools and a call bridge. Explicit sources are
-registered in mapping order. The external toolbox remains isolated and is never
-automatically injected into a RESTScope Agent. Calling `build_capabilities()`
-without sources creates the shared target HTTP implementation and no
-model-visible toolbox.
+registered in mapping order. The external Catalog remains isolated and is never
+automatically injected into an Agent; an Agent Profile must select every Tool
+name explicitly. Calling `build_harness()` without sources creates the shared
+target HTTP implementation and no external model-visible toolbox.
 
 `MCPToolAdapter` preserves MCP input and optional output contracts but does not
-translate annotations into a central permission policy. The caller or owning
-Agent decides which discovered tools, if any, to include.
+translate annotations into a hidden permission policy. The Agent Profile decides
+which discovered Tools, if any, the Harness may bind.
 
 ## Operation Smoke testing
 
@@ -420,8 +432,8 @@ complete current Generator and Constraint configuration.
 The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
-The default and only Supervisor execution path is
-`Supervisor → OperationSmokeCoordinator → OperationTestingService.run_smoke_batch`.
+The default and only execution path is
+`RunHarness → OperationSmokeCoordinator → OperationTestingService.run_smoke_batch`.
 The default App does not start MCP processes.
 
 ## API Behavior Monitor Coordinator
@@ -581,12 +593,12 @@ App object.
 
 Initialization validates the file, URL, or inline schema source and parses it
 exactly once for the lifetime of the App. The resulting IR and target settings
-are bound out-of-band to trusted tool handlers; they are not copied into graph
+are bound out-of-band to trusted tool handlers; they are not copied into Harness
 state, tool schemas, or model arguments.
 
-Supervisor orders operations by stable path depth and retains every attempt.
+Run Harness orders operations by stable path depth and retains every attempt.
 Smoke receives only the target operation key. Its three normal stop reasons are
-all satisfied Supervisor outcomes, even when the measured rate remains below
+all satisfied Harness outcomes, even when the measured rate remains below
 80%. An operation-scoped technical error may be scheduled in a later round so
 other operations can add global pool evidence first; the default is at most
 three attempts. Unsupported operations are recorded without retry. Shared

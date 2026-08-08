@@ -36,11 +36,13 @@ assertion.
 | `test_testing_constraints.py`, `test_testing_constraint_solver.py` | Constraint schema, semantic validation, normalization, partial evaluation, bounded solving, and request-tree consistency. |
 | `test_testing_execution.py`, `test_failure_resolution_*` | Fail-before-send preflight, case-only Batch results, exact Failure folding, reference-only worklists, continuous investigation, and atomic finalization. |
 | `test_operation_smoke_coordinator.py`, `test_operation_smoke_*` | Complete-Batch coordination, Failure Memory, Resolution/Patch behavior, and the shared output limit. |
-| `test_workflow_package_boundaries.py` | Workflow locality, child-Agent seams, and deliberately small public facades. |
+| `test_workflow_package_boundaries.py` | Main Agent/Subagent migration guard, global Tool locality, Harness ownership, and deliberately small public facades. |
 | `test_parameter_patch_agent.py` | Proposal-only Patch Agent, deterministic trust boundary, fresh-context Review Agent, shared budget, and strict fallbacks. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |
-| `test_supervisor_operation_smoke.py` | Runtime FIFO scheduling across operations and rounds. |
-| `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, policy, operation scope, execution, and MCP adaptation. |
+| `test_harness_run.py` | Run-scoped FIFO scheduling across operations and rounds. |
+| `test_tools_catalog.py`, `test_agent_profile.py`, `test_agent_runtime.py` | Global Tool discovery, deep Schema construction, atomic Profile authorization, exact Provider payloads, correction loops, shared budget, and Context compaction. |
+| `test_subagent_runtime.py` | Asynchronous direct-child start/wait/cancel, Profile DAG/depth rules, slot release, timeout, and cooperative cancellation. |
+| `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, operation scope, execution, separate external Catalogs, and MCP adaptation. |
 | `test_observability*`, `test_phoenix_tracing_contract.py` | Redaction and trace hierarchy/attributes without changing business behavior. |
 | `test_gitlab_post_projects_smoke_live.py` | Opt-in one-operation GitLab acceptance: real project creation, 80% Smoke threshold, and Phoenix trace coverage. |
 | `test_gitlab_projects_operations_live.py` | Opt-in five-operation GitLab Projects acceptance: every collection/item operation reaches Batch without technical failure; caller enforces a ten-minute deadline. |

@@ -18,9 +18,9 @@ The core loop is:
 2. **Parse OpenAPI.** Convert paths, operations, parameters, request bodies, and
    responses into a typed in-memory representation called the **IR**.
 3. **Create runtime services.** Build the database repositories, shared HTTP
-   transport, Agent-owned toolboxes, language-model clients, tracing runtime,
-   and testing services.
-4. **Choose an operation.** The Supervisor selects one OpenAPI operation that
+   transport, Agent Profiles, selected Tool Bindings, language-model clients,
+   tracing runtime, and testing Harness.
+4. **Choose an operation.** The Run Harness selects one OpenAPI operation that
    still needs evidence.
 5. **Generate a batch.** Generator configurations produce concrete path,
    query, header, cookie, and body values.
@@ -159,8 +159,8 @@ Read these files in order:
 
 1. `README.md` — configuration and supported runtime workflows.
 2. `restscope/app.py` — builds the application and owns shared resources.
-3. `restscope/supervisor/graph.py` — the top-level dynamic operation loop.
-4. `restscope/testing/execution.py` — turns generated cases into real HTTP
+3. `restscope/harness/run.py` — the top-level dynamic operation loop.
+4. `restscope/harness/testing/execution.py` — turns generated cases into real HTTP
    results.
 5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds,
    Resolution session dispatch, and explicit stop conditions.
@@ -213,9 +213,9 @@ one complete normalized document, atomically replaces that document while
 appending real response-contract change events, and provides read-only export
 and event queries. It does not reopen an App from those records.
 
-### `restscope/testing/`
+### `restscope/harness/testing/`
 
-Owns deterministic request generation and execution.
+Owns deterministic request generation and execution inside the Harness.
 
 - `snapshot.py` freezes the operation inputs used by one Generator config.
 - `models.py` describes available value strategies and generated-case records.
@@ -244,10 +244,11 @@ observations spell it as a `$...` selector, including arrays and Schema
 combination branches. It owns no OpenAPI registry, response values, or
 persistent state.
 
-### `restscope/supervisor/`
+### `restscope/harness/run.py`
 
-Owns the dynamic top-level loop. It chooses operations from current runtime
-evidence; it does not load a persisted static plan.
+Owns the run-scoped deterministic loop. It chooses operations from current
+runtime evidence and keeps FIFO/retry state in memory only; it does not load a
+persisted static plan or require a graph framework.
 
 ### `restscope/operation_smoke/`
 
@@ -314,10 +315,10 @@ replaceable history. `messages_for_compaction` creates temporary `B + H + C`
 messages, while `replace_compacted_history` installs `H' = U + S` without
 changing `B`. These generic methods do not interpret Resolution state.
 
-Workflow-specific code remains responsible for selecting and interpreting
-domain facts. No model-facing runtime evidence is produced by dumping a DTO or
-Memory object as JSON; strict JSON remains the final Agent output and provider
-tool protocol.
+Skill- and Harness-specific code remains responsible for selecting and
+interpreting domain facts. No model-facing runtime evidence is produced by
+dumping a DTO or Memory object as JSON; strict JSON remains the final Agent
+output and provider Tool protocol.
 
 ### `restscope/api_behavior_monitor/`
 
@@ -325,16 +326,31 @@ Observes real HTTP responses. It can check response contracts and maintain the
 explicitly approved resource-identifier and response-value catalogs. It never
 persists raw responses or general Agent memory.
 
-### `restscope/capabilities/`
+### `restscope/agent/`, `restscope/skills/`, and `restscope/tools/`
 
-Defines model-callable tools and the executor that applies policies, tracing,
-redaction, and error translation. `http_request.py` contains the bounded
-open-world HTTP tool; Operation Smoke wraps it with a stricter current-operation
-scope. `openapi_lookup.py` exposes narrow current-contract queries, including
-name-based discovery restricted to response fields that were actually observed.
-`resource_lookup.py` exposes canonical resource names and typed identifiers
-already retained by the API Behavior Monitor. Constructing these Capabilities
-does not register their tools with an Agent.
+`agent/` defines the one generic Agent, its task/completion/result contracts,
+and the Profile that names its model configuration, ordered Tools, Skills,
+bounded context sources, and authorized child Profiles. `skills/` stores
+reusable loaded instructions and their required grants; a Skill executes
+nothing by itself. `tools/` owns every
+RESTScope Tool contract and execution Adapter, grouped by the thing handled:
+HTTP, OpenAPI, Resource, Test Case, Worklist, Parameter, and Subagent. Its immutable
+built-in Catalog is authoritative, while one Profile still selects the exact
+definitions made executable for an Agent.
+
+### `restscope/harness/`
+
+Owns deterministic App and Agent lifecycle, Profile validation, live dependency
+binding, session state, Tool execution, tracing, and logs. Runtime-discovered
+MCP Tools remain in a separate external Catalog. Raw logs are not Agent context;
+model-visible results are structured, bounded, and redacted.
+
+Start with `harness/agent_runtime.py`: it validates the complete immutable
+Profile graph and is the only place that turns names into a live Agent. Then
+read `harness/agent_control.py` for direct-parent authorization, asynchronous
+child state, open/active slots, cooperative cancellation, and the shared
+weighted rollout budget. `agent/runtime.py` owns each independent conversation,
+the one-Tool-or-final loop, correction feedback, and 80% Tool-free compaction.
 
 ### `restscope/http_transport.py`
 
@@ -412,7 +428,7 @@ For a normal generated Smoke case:
 
 ```text
 RESTScopeApp
-  -> RESTScopeMainGraph
+  -> RunHarness
   -> OperationSmokeCoordinator
   -> OperationTestingService
   -> generate_test_case

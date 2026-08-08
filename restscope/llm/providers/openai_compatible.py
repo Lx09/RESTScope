@@ -223,6 +223,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         content = getattr(message, "content", None)
         parsed_json = self._parse_json_content(content)
         usage = getattr(raw_response, "usage", None)
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        cached_input_tokens = getattr(prompt_details, "cached_tokens", None)
+        if cached_input_tokens is None:
+            # DeepSeek reports prompt cache hits on the usage object rather
+            # than inside OpenAI's prompt-token details structure.
+            cached_input_tokens = getattr(usage, "prompt_cache_hit_tokens", 0)
         return LLMResponse(
             provider=self.name,
             model=request.model,
@@ -230,6 +236,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             parsed_json=parsed_json,
             tool_calls=self._extract_tool_calls(message, request=request),
             prompt_tokens=getattr(usage, "prompt_tokens", None),
+            cached_input_tokens=cached_input_tokens or 0,
             completion_tokens=getattr(usage, "completion_tokens", None),
             total_tokens=getattr(usage, "total_tokens", None),
             finish_reason=getattr(choice, "finish_reason", None),

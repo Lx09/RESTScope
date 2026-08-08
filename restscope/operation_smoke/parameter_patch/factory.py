@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from restscope.capabilities import OpenAPICapability, ResourceIdentifierCapability
+from restscope.tools import OpenAPICapability, ResourceIdentifierCapability
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
 

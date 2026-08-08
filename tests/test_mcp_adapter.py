@@ -20,7 +20,7 @@ def _mcp_tool(
 
 def test_mcp_tool_adapter_preserves_contract_without_deciding_availability() -> None:
     """MCP annotations do not become a hidden central permission policy."""
-    from restscope.capabilities.mcp import MCPToolAdapter
+    from restscope.tools.external.mcp import MCPToolAdapter
 
     adapter = MCPToolAdapter()
     read_only = adapter.to_tool_spec(
@@ -78,7 +78,7 @@ def test_mcp_tool_adapter_preserves_contract_without_deciding_availability() -> 
 def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
 ) -> None:
     """Scenario: verify that register tool source uses external call bridge and summarizes results."""
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         register_tool_source,
     )
@@ -143,7 +143,7 @@ def test_register_tool_source_rejects_unsupported_source_kind() -> None:
     """Scenario: verify that register tool source rejects unsupported source kind."""
     import pytest
 
-    from restscope.capabilities import (
+    from restscope.tools import (
         AgentToolbox,
         UnsupportedToolSourceKindError,
         register_tool_source,
@@ -164,13 +164,13 @@ def test_register_tool_source_rejects_unsupported_source_kind() -> None:
         )
 
 
-def test_build_capabilities_registers_all_explicit_sources_without_presets() -> None:
+def test_build_harness_registers_all_explicit_sources_without_presets() -> None:
     """Scenario: verify that build capabilities registers all explicit sources without presets."""
     import inspect
 
-    import restscope.capabilities as capabilities
+    import restscope.harness as harness
 
-    runtime = capabilities.build_capabilities(
+    runtime = harness.build_harness(
         sources={
             "example": {
                 "kind": "mcp",
@@ -202,16 +202,16 @@ def test_build_capabilities_registers_all_explicit_sources_without_presets() -> 
         "mcp.example.inspect"
     ]
     assert "presets" not in inspect.signature(
-        capabilities.build_capabilities
+        harness.build_harness
     ).parameters
-    assert not hasattr(capabilities, "add_preset_tools")
+    assert not hasattr(harness, "add_preset_tools")
 
 
-def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
-    """Scenario: verify that build capabilities initializes tools and prompt only skills."""
-    from restscope.capabilities import SkillManifest, build_capabilities
+def test_build_harness_initializes_external_tools_without_implicit_skills() -> None:
+    """External discovery populates its Catalog but grants no prompt instructions."""
+    from restscope.harness import build_harness
 
-    runtime = build_capabilities(
+    runtime = build_harness(
         sources={
             "example": {
                 "kind": "mcp",
@@ -229,56 +229,41 @@ def test_build_capabilities_initializes_tools_and_prompt_only_skills() -> None:
                 "call_tool": lambda tool_name, arguments: {"content": "ok"},
             }
         },
-        skills=[
-            SkillManifest(
-                name="testing_strategy",
-                description="Prompt guidance only",
-                allowed_roles=["planner"],
-                required_tools=["mcp.example.inspect"],
-            )
-        ],
     )
 
-    assert runtime.skill_registry.get("testing_strategy").name == "testing_strategy"
     assert runtime.external_tools is not None
     assert [tool.name for tool in runtime.external_tools.specs()] == [
         "mcp.example.inspect"
     ]
     assert all(tool.kind != "skill" for tool in runtime.external_tools.specs())
-    assert runtime.skill_policy.is_allowed(
-        skill=runtime.skill_registry.get("testing_strategy"),
-        role="planner",
-        state={},
+    assert runtime.external_tool_catalog.get("mcp.example.inspect").name == (
+        "mcp.example.inspect"
     )
 
 
-def test_build_capabilities_defaults_to_no_model_visible_tools() -> None:
+def test_build_harness_defaults_to_no_model_visible_tools() -> None:
     """Shared implementations are not an implicit Agent toolbox."""
-    from restscope.capabilities import build_capabilities
+    from restscope.harness import build_harness
 
-    runtime = build_capabilities()
+    runtime = build_harness()
 
     assert runtime.external_tools is None
     assert runtime.target_http_tool is not None
 
 
-def test_default_tools_are_not_public_api() -> None:
-    """Scenario: verify that default tools are not public api."""
+def test_retired_capabilities_package_is_not_public_api() -> None:
+    """Scenario: Tools, Skills, and Harness have no legacy category facade."""
     import importlib
 
     import pytest
 
-    import restscope.capabilities as capabilities
-
-    assert "default_tool_specs" not in capabilities.__all__
-    assert not hasattr(capabilities, "default_tool_specs")
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("restscope.capabilities.default_tools")
+        importlib.import_module("restscope" + ".capabilities")
 
 
 def test_mcp_package_exports_generic_host_and_adapter_only() -> None:
     """Scenario: verify that mcp package exports generic host and adapter only."""
-    import restscope.capabilities.mcp as mcp
+    import restscope.tools.external.mcp as mcp
 
     assert mcp.__all__ == [
         "MCPHost",

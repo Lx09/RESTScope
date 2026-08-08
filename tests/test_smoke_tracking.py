@@ -34,13 +34,13 @@ def _recording_runtime():
     return runtime, exporter
 
 
-def _supervisor_context():
-    from restscope.capabilities import ToolContext
+def _run_harness_context():
+    from restscope.tools import ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
     spec = {
         "openapi": "3.0.3",
-        "info": {"title": "Supervisor tracking", "version": "1"},
+        "info": {"title": "Run Harness tracking", "version": "1"},
         "paths": {
             "/items": {
                 "get": {
@@ -61,9 +61,9 @@ def _supervisor_context():
     )
 
 
-def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
-    """Scenario: verify that supervisor records each smoke attempt as graph child."""
-    from restscope.supervisor import RESTScopeMainGraph, RESTScopeRunRequest
+def test_run_harness_records_each_smoke_attempt_as_a_run_child() -> None:
+    """Scenario: each operation attempt is a child of its owning Harness run."""
+    from restscope.harness import RunHarness, RESTScopeRunRequest
     from restscope.operation_smoke import OperationSmokeResult
 
     class PassingSmoke:
@@ -79,19 +79,19 @@ def test_supervisor_records_each_smoke_attempt_as_graph_child() -> None:
             )
 
     runtime, exporter = _recording_runtime()
-    report = RESTScopeMainGraph(
+    report = RunHarness(
         operation_smoke_coordinator=PassingSmoke(),
-        tool_context=_supervisor_context(),
+        tool_context=_run_harness_context(),
         tracing_runtime=runtime,
     ).run(RESTScopeRunRequest(metadata={"task_id": "tracking-task"}))
     runtime.close()
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
-    graph = spans["RESTScopeMainGraph.run"]
-    attempt = spans["RESTScopeMainGraph.operation_attempt"]
+    run = spans["RunHarness.run"]
+    attempt = spans["RunHarness.operation_attempt"]
 
     assert report.status == "passed"
-    assert attempt.parent.span_id == graph.context.span_id
+    assert attempt.parent.span_id == run.context.span_id
     assert attempt.attributes["restscope.task_id"] == "tracking-task"
     assert attempt.attributes["restscope.operation.key"] == "GET /items"
     assert attempt.attributes["restscope.operation.round"] == 1
@@ -119,7 +119,7 @@ def _smoke_runtime(tmp_path: Path):
     from restscope.http_transport import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
     from restscope.restscope_config import DBConfig, RESTScopeConfig
-    from restscope.testing import GeneratorConfigCatalog, OperationTestingService
+    from restscope.harness.testing import GeneratorConfigCatalog, OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -213,7 +213,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
 ) -> None:
     """Scenario: verify that smoke batch case and behavior tracking form one hierarchy."""
     from restscope.operation_smoke import OperationSmokeRequest
-    from restscope.capabilities import ToolContext
+    from restscope.tools import ToolContext
 
     ir, smoke, runtime, exporter = _smoke_runtime(tmp_path)
     result = smoke.run(
@@ -280,7 +280,7 @@ def test_failure_resolution_uses_its_role_in_llm_trace(
         FailureResolutionRequest,
     )
     from restscope.operation_smoke.output_limit import ModelOutputLimit
-    from restscope.operation_smoke.test_case_catalog import (
+    from restscope.harness.testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,

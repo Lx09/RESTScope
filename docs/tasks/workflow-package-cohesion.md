@@ -1,5 +1,9 @@
 # Workflow Package Cohesion
 
+> Superseded architecture note (2026-08-08): ADR 0001 replaces workflow-owned
+> Agent/Tool placement with one generic Agent, Profile-selected global Tools,
+> reusable Skills, and Harness-owned lifecycle. This record remains historical.
+
 Status: Implemented and verified; intentionally uncommitted
 
 ## Objective

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from restscope.capabilities import ToolFailure
+from restscope.tools import ToolFailure
 
 from .schemas import FailureSource, FailureWorklist, WorklistItem
 

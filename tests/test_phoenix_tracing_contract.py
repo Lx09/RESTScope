@@ -78,8 +78,9 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         pytest.skip("select -m phoenix_contract to run the local Phoenix contract")
 
     from restscope import RESTScopeApp
-    from restscope.supervisor import RESTScopeRunRequest
-    from restscope.capabilities import AgentToolbox, build_capabilities
+    from restscope.harness import RESTScopeRunRequest
+    from restscope.harness import build_harness
+    from restscope.tools import AgentToolbox
     from restscope.llm import (
         LLMClient,
         LLMMessage,
@@ -113,7 +114,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     assert runtime.enabled is True
 
-    capabilities = build_capabilities(tracing_runtime=runtime)
+    capabilities = build_harness(tracing_runtime=runtime)
     toolbox = AgentToolbox(tracing_runtime=runtime)
     toolbox.register(
         spec=ToolSpec(
@@ -139,7 +140,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(
             tracing_runtime=runtime
         ),
-        capability_runtime=capabilities,
+        harness_runtime=capabilities,
         tracing_runtime=runtime,
     )
     app.initialize(
@@ -204,8 +205,8 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
 
     expected_names = {
         "RESTScopeApp.run",
-        "RESTScopeMainGraph.run",
-        "RESTScopeMainGraph.operation_attempt",
+        "RunHarness.run",
+        "RunHarness.operation_attempt",
         "OperationSmokeCoordinator.run",
         "contract.tool",
         "LLMClient.invoke",
@@ -228,11 +229,11 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
 
     app_span = next(span for span in spans if span["name"] == "RESTScopeApp.run")
-    graph_span = next(span for span in spans if span["name"] == "RESTScopeMainGraph.run")
+    run_harness_span = next(span for span in spans if span["name"] == "RunHarness.run")
     attempt_span = next(
         span
         for span in spans
-        if span["name"] == "RESTScopeMainGraph.operation_attempt"
+        if span["name"] == "RunHarness.operation_attempt"
         and span["context"]["trace_id"] == app_span["context"]["trace_id"]
     )
     operation_span = next(
@@ -245,24 +246,24 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     llm_span = next(span for span in spans if span["name"] == "LLMClient.invoke")
     truncated_span = next(span for span in spans if span["name"] == "contract.truncated")
 
-    assert graph_span["parent_id"] == app_span["context"]["span_id"]
-    assert attempt_span["parent_id"] == graph_span["context"]["span_id"]
+    assert run_harness_span["parent_id"] == app_span["context"]["span_id"]
+    assert attempt_span["parent_id"] == run_harness_span["context"]["span_id"]
     assert operation_span["parent_id"] == attempt_span["context"]["span_id"]
-    assert graph_span["span_kind"] == "CHAIN"
+    assert run_harness_span["span_kind"] == "CHAIN"
     assert attempt_span["span_kind"] == "CHAIN"
     assert operation_span["span_kind"] == "CHAIN"
-    assert "agent.name" not in graph_span["attributes"]
+    assert "agent.name" not in run_harness_span["attributes"]
     assert "agent.name" not in operation_span["attributes"]
     assert tool_span["attributes"]["tool.name"] == "contract.tool"
     assert json.loads(app_span["attributes"]["output.value"]) == {
-        "report_id": json.loads(graph_span["attributes"]["output.value"])["report_id"],
+        "report_id": json.loads(run_harness_span["attributes"]["output.value"])["report_id"],
         "status": "passed",
         "stop_reason": "completed",
         "operation_count": 20,
         "attempt_count": 20,
     }
     assert app_span["attributes"]["restscope.output.truncated"] is False
-    assert graph_span["attributes"]["restscope.output.truncated"] is False
+    assert run_harness_span["attributes"]["restscope.output.truncated"] is False
     assert "\n  " in app_span["attributes"]["output.value"]
     assert json.loads(llm_span["attributes"]["input.value"]) == {
         "message_count": 1,

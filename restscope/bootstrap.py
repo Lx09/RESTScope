@@ -10,7 +10,7 @@ from restscope.db import (
     make_session_factory,
 )
 from restscope.restscope_config import RESTScopeConfig
-from restscope.testing import GeneratorConfigCatalog
+from restscope.harness.testing import GeneratorConfigCatalog
 
 
 def build_openapi_catalog(config: RESTScopeConfig) -> OpenAPICatalog:
