@@ -224,6 +224,11 @@ These five terms are RESTScope's core runtime language and hard constraints:
   Profile grants all three and names the target child Profile. Child access is
   direct-parent only, Profile graphs are acyclic, and child depth is at most
   three.
+- `plan.read` and `plan.update` are an optional paired Profile grant for one
+  Agent's private task Plan. The Harness creates a separate in-memory Plan for
+  every Main Agent and Subagent session. Plans are not shared between Agents,
+  persisted, exposed as scheduler state, or substituted for the domain-specific
+  Failure Resolution Worklist.
 - Main and child Agents share only deterministic tree control: weighted model
   budget, open/active slots, cancellation, tracing parentage, and bounded
   results. They do not share hidden conversation history. Model input is

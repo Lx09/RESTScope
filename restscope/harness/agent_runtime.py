@@ -15,6 +15,12 @@ from restscope.agent import Agent, AgentProfile, AgentProfileRegistry
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.skills import SkillDefinition, SkillPolicy, SkillRegistry
 from restscope.tools import AgentToolbox, ToolBinding, ToolCatalog, builtin_tool_catalog
+from restscope.tools.plan import (
+    PLAN_READ_TOOL_NAME,
+    PLAN_UPDATE_TOOL_NAME,
+    AgentPlanStore,
+    plan_tool_bindings,
+)
 from restscope.tools.subagent import (
     SUBAGENT_CANCEL_TOOL_NAME,
     SUBAGENT_START_TOOL_NAME,
@@ -34,6 +40,11 @@ _SUBAGENT_TOOL_NAMES = (
     SUBAGENT_WAIT_TOOL_NAME,
     SUBAGENT_CANCEL_TOOL_NAME,
 )
+_PLAN_TOOL_NAMES = (
+    PLAN_READ_TOOL_NAME,
+    PLAN_UPDATE_TOOL_NAME,
+)
+_HARNESS_OWNED_TOOL_NAMES = frozenset((*_SUBAGENT_TOOL_NAMES, *_PLAN_TOOL_NAMES))
 
 
 @dataclass(frozen=True)
@@ -205,6 +216,15 @@ class AgentRuntimeResolver:
                 )
             )
         }
+        # The Store is constructed here rather than by a caller-supplied
+        # factory so every Main Agent and Subagent receives a private Plan.
+        if set(_PLAN_TOOL_NAMES).issubset(profile.tool_names):
+            special_bindings.update(
+                {
+                    binding.name: binding
+                    for binding in plan_tool_bindings(AgentPlanStore())
+                }
+            )
         bindings: list[ToolBinding] = []
         for name in profile.tool_names:
             if name in special_bindings:
@@ -279,6 +299,10 @@ class AgentRuntimeResolver:
                 f"{sorted(collisions)[0]}"
             )
         for binding_name in self.binding_factories:
+            if binding_name in _PLAN_TOOL_NAMES:
+                raise ValueError(
+                    f"Plan Tool Binding is owned by Harness: {binding_name}"
+                )
             if binding_name in _SUBAGENT_TOOL_NAMES:
                 raise ValueError(
                     f"Subagent Tool Binding is owned by Harness: {binding_name}"
@@ -287,6 +311,15 @@ class AgentRuntimeResolver:
                 raise ValueError(f"Unknown Tool Binding factory: {binding_name}")
         provider_names = set(self.definition.client.registry.list_names())
         for profile in self.profiles.profiles():
+            selected_plan_tools = tuple(
+                name for name in profile.tool_names if name in _PLAN_TOOL_NAMES
+            )
+            if selected_plan_tools and set(selected_plan_tools) != set(
+                _PLAN_TOOL_NAMES
+            ):
+                raise ValueError(
+                    "Agent Profiles must grant both Plan Tools or neither"
+                )
             selected_subagent_tools = tuple(
                 name for name in profile.tool_names if name in _SUBAGENT_TOOL_NAMES
             )
@@ -351,7 +384,10 @@ class AgentRuntimeResolver:
                     )
             for tool_name in profile.tool_names:
                 self._tool_definition(tool_name)
-                if tool_name not in self.binding_factories and not tool_name.startswith("subagent."):
+                if (
+                    tool_name not in self.binding_factories
+                    and tool_name not in _HARNESS_OWNED_TOOL_NAMES
+                ):
                     raise ValueError(f"Missing Tool Binding for Agent Profile: {tool_name}")
 
     def _tool_definition(self, name: str):

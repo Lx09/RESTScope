@@ -40,7 +40,7 @@ assertion.
 | `test_parameter_patch_agent.py` | Proposal-only Patch Agent, deterministic trust boundary, fresh-context Review Agent, shared budget, and strict fallbacks. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |
 | `test_harness_run.py` | Run-scoped FIFO scheduling across operations and rounds. |
-| `test_tools_catalog.py`, `test_agent_profile.py`, `test_agent_runtime.py` | Global Tool discovery, deep Schema construction, atomic Profile authorization, exact Provider payloads, correction loops, shared budget, and Context compaction. |
+| `test_tools_catalog.py`, `test_agent_profile.py`, `test_agent_runtime.py`, `test_agent_plan.py` | Global Tool discovery, deep Schema construction, atomic Profile authorization, private Agent Plans, exact Provider payloads, correction loops, shared budget, and Context compaction. |
 | `test_subagent_runtime.py` | Asynchronous direct-child start/wait/cancel, Profile DAG/depth rules, slot release, timeout, and cooperative cancellation. |
 | `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, operation scope, execution, separate external Catalogs, and MCP adaptation. |
 | `test_observability*`, `test_phoenix_tracing_contract.py` | Redaction and trace hierarchy/attributes without changing business behavior. |
