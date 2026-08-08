@@ -31,6 +31,7 @@ import {
   toolFamily,
   visibleStatusLabel,
 } from "../presentation";
+import { compactMessagePreview, type CanvasToolResult } from "../canvasModel";
 import type { TimelineEvent } from "../types";
 import { BodyView, CodeView, HeaderTable } from "./ValueViews";
 
@@ -138,8 +139,114 @@ function MarkdownValue({ value }: { value: unknown }) {
   );
 }
 
-/** Render exactly one Agent message body and only metadata owned by that message. */
-export function AgentMessageBody({ message }: { message: UnknownRecord }) {
+function toolResultStatus(result: CanvasToolResult): string {
+  const explicit = result.message.status;
+  if (typeof explicit === "string") return explicit;
+  const content = result.message.content;
+  if (content !== null && typeof content === "object" && !Array.isArray(content)) {
+    const structured = content as UnknownRecord;
+    if (typeof structured.status === "string") return structured.status;
+  }
+  if (typeof content === "string") {
+    const structured = parseJsonContainerText(content);
+    if (structured && !Array.isArray(structured) && typeof structured.status === "string") {
+      return structured.status;
+    }
+    const match = content.match(/\bstatus\s*:\s*["']?([a-z_]+)/i);
+    if (match) return match[1].toLowerCase();
+  }
+  return "returned";
+}
+
+function toolResultStatusTag(result: CanvasToolResult): ReactNode {
+  const status = toolResultStatus(result);
+  const labels: Record<string, string> = {
+    succeeded: "成功",
+    failed: "失败",
+    warning: "警告",
+    running: "运行中",
+    returned: "已返回",
+  };
+  const colors: Record<string, string> = {
+    succeeded: "green",
+    failed: "red",
+    warning: "gold",
+    running: "blue",
+    returned: "default",
+  };
+  return (
+    <Tag color={colors[status] ?? "default"} icon={STATUS_ICONS[status]}>
+      {labels[status] ?? status}
+    </Tag>
+  );
+}
+
+const TOOL_RESULT_COLUMNS: TableColumnsType<CanvasToolResult> = [
+  {
+    title: "工具",
+    dataIndex: "name",
+    key: "name",
+    width: 190,
+    ellipsis: { showTitle: true },
+    render: (name: string) => <Text className="mono">{name}</Text>,
+  },
+  {
+    title: "Call ID",
+    dataIndex: "toolCallId",
+    key: "toolCallId",
+    width: 170,
+    ellipsis: { showTitle: true },
+    render: (toolCallId: string | null) => (
+      <Text className="mono" type="secondary">{toolCallId ?? "不可用"}</Text>
+    ),
+  },
+  {
+    title: "状态",
+    key: "status",
+    width: 90,
+    render: (_value, record) => toolResultStatusTag(record),
+  },
+  {
+    title: "结果摘要",
+    key: "summary",
+    ellipsis: { showTitle: true },
+    render: (_value, record) => compactMessagePreview(record.message.content),
+  },
+];
+
+function ToolResultsTable({ results }: { results: CanvasToolResult[] }) {
+  return (
+    <section className="agent-message-tool-results">
+      <Text type="secondary">Tool results ({results.length})</Text>
+      <Table<CanvasToolResult>
+        className="smoke-table tool-results-table"
+        columns={TOOL_RESULT_COLUMNS}
+        dataSource={results}
+        expandable={{
+          expandedRowRender: (record) => (
+            <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+              {!record.matched && <Tag color="gold">调用来源不可用</Tag>}
+              <MarkdownValue value={record.message.content} />
+            </Space>
+          ),
+        }}
+        pagination={false}
+        rowKey="id"
+        scroll={{ x: 700 }}
+        size="small"
+      />
+    </section>
+  );
+}
+
+/** Render one Agent message plus Tool results owned by that Assistant. */
+export function AgentMessageBody({
+  message,
+  toolResults = [],
+}: {
+  message: UnknownRecord;
+  toolResults?: CanvasToolResult[];
+}) {
   return (
     <Space className="agent-message-body" orientation="vertical" size="small" style={{ width: "100%" }}>
       {(message.name || message.tool_call_id) && (
@@ -155,6 +262,7 @@ export function AgentMessageBody({ message }: { message: UnknownRecord }) {
           <CodeView value={message.tool_calls} label="复制消息 Tool calls" />
         </section>
       )}
+      {toolResults.length > 0 && <ToolResultsTable results={toolResults} />}
     </Space>
   );
 }

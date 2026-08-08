@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildCanvasModel, eventDetailKey, messageDetailKey } from "../canvasModel";
+import { BRANCH_OFFSET_X, BRANCH_RADIUS, CONNECTION_OFFSET_Y } from "../canvasLayout";
 import { AgentSessionNodeView, EventCanvasNodeView } from "../components/CanvasNodes";
 import { AgentMessageBody } from "../components/EventCard";
 import {
@@ -10,10 +11,13 @@ import {
   detailGraphMotionOptions,
   graphDataForModel,
   liveFocusIds,
-  positionGraphDataByStableColumns,
   renderStructuralGraphUpdate,
 } from "../components/EventCanvas";
 import { DETAIL_CLOSE_DURATION_MS, DETAIL_OPEN_DURATION_MS } from "../components/InlineReveal";
+import {
+  renderReactNodeSynchronously,
+  unmountReactNodeSynchronously,
+} from "../components/SynchronousReactNode";
 import { EMPTY_FILTERS } from "../presentation";
 import { makeEvent } from "./fixtures";
 
@@ -65,6 +69,19 @@ function canvasFixture() {
 }
 
 describe("canvas node presentation", () => {
+  it("commits a React node before returning control to the G6 line renderer", () => {
+    const container = document.createElement("div");
+
+    renderReactNodeSynchronously(<div>Assistant card ready</div>, container);
+    expect(container).toHaveTextContent("Assistant card ready");
+
+    renderReactNodeSynchronously(<div>Tool card updated</div>, container);
+    expect(container).toHaveTextContent("Tool card updated");
+
+    unmountReactNodeSynchronously(container);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("scrolls for two-finger movement and zooms only for trackpad pinch", () => {
     const behaviors = canvasNavigationBehaviors();
     const scroll = behaviors.find((behavior) => (
@@ -191,11 +208,79 @@ describe("canvas node presentation", () => {
     const assistant = agent.messages.find((message) => message.role === "assistant");
     const agentData = data.nodes?.find((node) => node.id === agent.id);
     const ports = agentData?.style?.ports as Array<{ key: string }>;
+    const headerPort = ports.find((port) => port.key === "agent_header") as {
+      key: string;
+      placement: [number, number];
+    };
 
     expect(ports.map((port) => port.key)).toContain(assistant?.portKey);
+    expect(headerPort.placement[1] * agent.height).toBe(CONNECTION_OFFSET_Y);
     expect(data.edges?.[0].style?.sourcePort).toBe(assistant?.portKey);
     expect(data.edges?.[0].style?.targetPort).toBe("input");
     expect(liveFocusIds(model)).toEqual(["agent:agent-1", "event:tool-http"]);
+  });
+
+  it("draws one shared rounded branch and arrows only on child segments", () => {
+    const { events } = canvasFixture();
+    const assistant = (events[0].detail.output as Record<string, any>).messages[0];
+    assistant.tool_calls.push({ id: "call-second", name: "resource.list", arguments: {} });
+    const secondTool = makeEvent({
+      event_id: "tool-second",
+      order: 3,
+      kind: "tool_call",
+      name: "resource.list",
+      parent_event_id: events[0].event_id,
+      agent: events[0].agent,
+      detail: { output: { tool_call_id: "call-second", status: "succeeded" } },
+    });
+    const model = buildCanvasModel([...events, secondTool], EMPTY_FILTERS, new Set());
+    const data = graphDataForModel(model, "dark", {
+      openEvent: vi.fn(),
+      openMessage: vi.fn(),
+      toggleSession: vi.fn(),
+    });
+    const connectorEdges = data.edges ?? [];
+    const first = connectorEdges.find((edge) => edge.data?.connectorPart === "first");
+    const spine = connectorEdges.find((edge) => edge.data?.connectorPart === "spine");
+    const branch = connectorEdges.find((edge) => edge.data?.connectorPart === "branch");
+    const firstTarget = data.nodes?.find((node) => node.id === "event:tool-http");
+    const spineEnd = data.nodes?.find((node) => node.id.includes(":spine-end"));
+    const spineStart = data.nodes?.find((node) => node.id.includes(":spine-start"));
+    const firstTargetSize = firstTarget?.style?.size as [number, number];
+    const expectedBranchX = Number(spineEnd?.style?.x);
+    const expectedFirstY = Number(firstTarget?.style?.y) - firstTargetSize[1] / 2
+      + CONNECTION_OFFSET_Y;
+
+    expect(connectorEdges).toHaveLength(3);
+    expect(first?.style).toMatchObject({
+      endArrow: true,
+      lineWidth: 2,
+      radius: BRANCH_RADIUS,
+    });
+    expect(spine?.style).toMatchObject({
+      lineWidth: 2,
+      radius: BRANCH_RADIUS,
+      controlPoints: [[expectedBranchX, expectedFirstY]],
+    });
+    expect(spine?.style?.endArrow).toBeUndefined();
+    expect(branch?.style).toMatchObject({ endArrow: true, radius: BRANCH_RADIUS });
+    expect(Number(firstTarget?.style?.x) - Number(firstTargetSize[0]) / 2
+      - expectedBranchX).toBe(BRANCH_OFFSET_X);
+    expect(expectedBranchX - Number(spineStart?.style?.x)).toBe(BRANCH_RADIUS);
+  });
+
+  it("keeps a single-child call as one horizontal arrow without a branch spine", () => {
+    const { model } = canvasFixture();
+    const data = graphDataForModel(model, "light", {
+      openEvent: vi.fn(),
+      openMessage: vi.fn(),
+      toggleSession: vi.fn(),
+    });
+
+    expect(data.edges).toHaveLength(1);
+    expect(data.edges?.[0].data?.connectorPart).toBe("first");
+    expect(data.edges?.[0].style?.controlPoints).toEqual([]);
+    expect(data.nodes?.some((node) => node.data?.connectorJunction)).toBe(false);
   });
 
   it("exposes a Tool output port and labels a nested Agent edge", () => {
@@ -223,32 +308,18 @@ describe("canvas node presentation", () => {
     });
     const toolData = data.nodes?.find((node) => node.id === `event:${events[1].event_id}`);
     const ports = toolData?.style?.ports as Array<{ key: string }>;
+    const outputPort = ports.find((port) => port.key === "output") as {
+      key: string;
+      placement: [number, number];
+    };
+    const toolSize = toolData?.style?.size as [number, number];
     const nestedEdge = data.edges?.find((edge) => edge.target === "agent:agent-child");
 
     expect(ports.map((port) => port.key)).toContain("output");
+    expect(outputPort.placement[1] * Number(toolSize[1]))
+      .toBe(CONNECTION_OFFSET_Y);
     expect(nestedEdge?.style?.sourcePort).toBe("output");
     expect(nestedEdge?.style?.labelText).toBe("启动 Agent");
-  });
-
-  it("turns stable call-group layers into distinct canvas columns", async () => {
-    const data = await positionGraphDataByStableColumns({
-      nodes: [
-        { id: "agent", data: { order: 1, layer: 0 }, style: { size: [100, 100] } },
-        { id: "tool-a", data: { order: 2, layer: 1 }, style: { size: [100, 100] } },
-        { id: "tool-b", data: { order: 3, layer: 1 }, style: { size: [100, 100] } },
-        { id: "tool-later", data: { order: 4, layer: 2 }, style: { size: [100, 100] } },
-      ],
-      edges: [
-        { id: "agent-tool-a", source: "agent", target: "tool-a" },
-        { id: "agent-tool-b", source: "agent", target: "tool-b" },
-        { id: "agent-tool-later", source: "agent", target: "tool-later" },
-      ],
-    });
-    const x = (id: string) => Number(data.nodes?.find((node) => node.id === id)?.style?.x);
-
-    expect(x("tool-a")).toBe(x("tool-b"));
-    expect(x("agent")).toBeLessThan(x("tool-a"));
-    expect(x("tool-a")).toBeLessThan(x("tool-later"));
   });
 
   it.each([
@@ -299,10 +370,10 @@ describe("canvas node presentation", () => {
     const calls: string[] = [];
     const graph = {
       destroyed: false,
-      setOptions: (options: { animation?: false | { duration?: number } }) => {
-        calls.push(options.animation === false ? "static" : "motion");
+      setOptions: (options: { animation?: false | { duration?: number }; layout?: unknown }) => {
+        if ("layout" in options) calls.push("layout-off");
+        else calls.push(options.animation === false ? "static" : "motion");
       },
-      setLayout: () => calls.push("layout"),
       setData: () => calls.push("data"),
       render: async () => { calls.push("render"); },
       draw: async () => { calls.push("draw"); },
@@ -311,11 +382,10 @@ describe("canvas node presentation", () => {
     await renderStructuralGraphUpdate(
       graph as never,
       { nodes: [], edges: [] },
-      { type: "antv-dagre" },
       { expanded: true, portKeys: ["message_assistant"] },
     );
 
-    expect(calls).toEqual(["motion", "layout", "data", "render", "static", "draw"]);
+    expect(calls).toEqual(["motion", "layout-off", "data", "render", "static", "draw"]);
   });
 
   it("expands only the selected message once inside the same visual card", () => {
@@ -396,17 +466,43 @@ describe("canvas node presentation", () => {
     expect(screen.queryByText(/^Prompt/)).not.toBeInTheDocument();
   });
 
-  it("shows Tool-result metadata and only that message when it is expanded", () => {
-    const turn = makeEvent({
+  it("shows all Tool results as an expandable table in the calling Assistant", async () => {
+    const caller = makeEvent({
+      event_id: "turn-tool-caller",
+      order: 1,
+      detail: {
+        input: { messages: [{ role: "user", content: "Inspect both." }] },
+        output: {
+          messages: [{
+            role: "assistant",
+            content: "I will inspect both.",
+            tool_calls: [
+              { id: "call-schema", name: "openapi.get_input_schema", arguments: {} },
+              { id: "call-resource", name: "resource.list", arguments: {} },
+            ],
+          }],
+        },
+      },
+    });
+    const resultTurn = makeEvent({
       event_id: "turn-tool-result",
+      order: 2,
       detail: {
         input: {
-          messages: [{
-            role: "tool",
-            name: "openapi.get_input_schema",
-            tool_call_id: "call-schema",
-            content: { required: ["name"], type: "object" },
-          }],
+          messages: [
+            {
+              role: "tool",
+              name: "openapi.get_input_schema",
+              tool_call_id: "call-schema",
+              content: { status: "succeeded", required: ["name"], type: "object" },
+            },
+            {
+              role: "tool",
+              name: "resource.list",
+              tool_call_id: "call-resource",
+              content: "status: failed\nresource unavailable",
+            },
+          ],
         },
         output: {
           messages: [{ role: "assistant", content: "I can continue now.", tool_calls: [] }],
@@ -416,10 +512,10 @@ describe("canvas node presentation", () => {
       },
     });
     const model = buildCanvasModel(
-      [turn],
+      [caller, resultTurn],
       EMPTY_FILTERS,
       new Set(),
-      new Set([messageDetailKey("turn-tool-result:input:0")]),
+      new Set([messageDetailKey("turn-tool-caller:output:0")]),
     );
     const agent = model.nodes.find((node) => node.kind === "agent_session");
     expect(agent?.kind).toBe("agent_session");
@@ -434,11 +530,17 @@ describe("canvas node presentation", () => {
       />,
     );
 
-    const detail = screen.getByRole("region", { name: "第 1 轮 Tool result 完整消息" });
-    expect(within(detail).getByText("Tool · openapi.get_input_schema")).toBeVisible();
-    expect(within(detail).getByText("Call · call-schema")).toBeVisible();
-    expect(within(detail).getByText(/required/)).toBeVisible();
-    expect(within(detail).queryByText("I can continue now.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Tool result 消息详情/ })).not.toBeInTheDocument();
+    const detail = screen.getByRole("region", { name: "第 1 轮 Assistant 完整消息" });
+    expect(within(detail).getByText("Tool results (2)")).toBeVisible();
+    expect(within(detail).getByText("openapi.get_input_schema")).toBeVisible();
+    expect(within(detail).getByText("resource.list")).toBeVisible();
+    expect(within(detail).getByText("成功")).toBeVisible();
+    expect(within(detail).getByText("失败")).toBeVisible();
+    expect(screen.getByText("2 个 Tool result")).toBeVisible();
+    const expandButtons = within(detail).getAllByRole("button", { name: /Expand row/ });
+    await userEvent.click(expandButtons[0]);
+    expect(within(detail).getAllByText(/required/).at(-1)).toBeVisible();
   });
 
   it("expands complete Tool input and output vertically inside the Tool node", () => {

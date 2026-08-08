@@ -13,6 +13,12 @@ import {
   messageDetailKey,
   messagePortPlacement,
 } from "../canvasModel";
+import {
+  CALL_GROUP_GAP,
+  COLUMN_GAP,
+  CONNECTION_OFFSET_Y,
+  layoutCanvasModel,
+} from "../canvasLayout";
 import { EMPTY_FILTERS } from "../presentation";
 import { makeEvent } from "./fixtures";
 
@@ -61,7 +67,7 @@ describe("Agent-session canvas model", () => {
     expect(compactMessagePreview(null)).toBe("（空消息）");
   });
 
-  it("folds every turn in one session into ordered role message cards", () => {
+  it("folds Tool results into the calling Assistant instead of separate cards", () => {
     const first = agentTurn(
       "turn-1",
       1,
@@ -81,6 +87,11 @@ describe("Agent-session canvas model", () => {
       3,
       "session-1",
       [
+        {
+          role: "assistant",
+          content: "I need the schema.",
+          tool_calls: [{ id: "call-schema", name: "openapi.get_input_schema", arguments: {} }],
+        },
         {
           role: "tool",
           name: "openapi.get_input_schema",
@@ -102,7 +113,6 @@ describe("Agent-session canvas model", () => {
       "system",
       "user",
       "assistant",
-      "tool",
       "user",
       "assistant",
     ]);
@@ -110,16 +120,93 @@ describe("Agent-session canvas model", () => {
       "turn-1:input:0",
       "turn-1:input:1",
       "turn-1:output:0",
-      "turn-2:input:0",
-      "turn-2:input:1",
+      "turn-2:input:2",
       "turn-2:output:0",
     ]);
-    expect(agent.messages[3]).toMatchObject({
+    expect(agent.messages[2].toolResults).toEqual([{
+      id: "turn-2:input:1",
       toolCallId: "call-schema",
-      direction: "input",
+      name: "openapi.get_input_schema",
+      matched: true,
+      message: expect.objectContaining({ content: "name is required" }),
+    }]);
+    expect(agent.messages[3]).toMatchObject({
+      role: "user",
       turnEventId: "turn-2",
     });
     expect(agent.messages.every((message) => message.exactMatch === false)).toBe(true);
+  });
+
+  it("does not duplicate an Assistant tool-call message echoed in the next prompt", () => {
+    const caller = {
+      role: "assistant",
+      content: "Inspecting both sources.",
+      tool_calls: [
+        { id: "call-a", name: "openapi.get_input_schema", arguments: { input: "a" } },
+        { id: "call-b", name: "openapi.get_input_schema", arguments: { input: "b" } },
+      ],
+    };
+    const first = agentTurn(
+      "turn-echo-1",
+      1,
+      "session-echo",
+      [{ role: "user", content: "Inspect." }],
+      caller,
+    );
+    const second = agentTurn(
+      "turn-echo-2",
+      2,
+      "session-echo",
+      [
+        { ...caller },
+        { role: "tool", tool_call_id: "call-a", content: "{\"name\":\"a\"}" },
+        { role: "tool", tool_call_id: "call-b", content: "{\"name\":\"b\"}" },
+      ],
+      { role: "assistant", content: "Done.", tool_calls: [] },
+    );
+
+    const model = buildCanvasModel([first, second], EMPTY_FILTERS, new Set());
+    const agent = model.nodes.find((node) => node.kind === "agent_session");
+
+    expect(agent?.kind).toBe("agent_session");
+    if (agent?.kind !== "agent_session") return;
+    expect(agent.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
+    expect(agent.messages.find((message) => message.id === "turn-echo-1:output:0")?.toolResults)
+      .toEqual([
+        expect.objectContaining({ toolCallId: "call-a", name: "openapi.get_input_schema" }),
+        expect.objectContaining({ toolCallId: "call-b", name: "openapi.get_input_schema" }),
+      ]);
+    expect(agent.messages.some((message) => message.id === "turn-echo-2:input:0")).toBe(false);
+  });
+
+  it("keeps an unmatched Tool result on the nearest calling Assistant without a Tool card", () => {
+    const first = agentTurn(
+      "turn-unmatched-call",
+      1,
+      "session-unmatched-result",
+      [{ role: "user", content: "Inspect." }],
+      {
+        role: "assistant",
+        content: "Calling.",
+        tool_calls: [{ name: "resource.list", arguments: {} }],
+      },
+    );
+    const second = agentTurn(
+      "turn-unmatched-result",
+      2,
+      "session-unmatched-result",
+      [{ role: "tool", name: "resource.list", content: "[]" }],
+      { role: "assistant", content: "Done.", tool_calls: [] },
+    );
+
+    const model = buildCanvasModel([first, second], EMPTY_FILTERS, new Set());
+    const agent = model.nodes.find((node) => node.kind === "agent_session");
+
+    expect(agent?.kind).toBe("agent_session");
+    if (agent?.kind !== "agent_session") return;
+    expect(agent.messages.some((message) => message.role === "tool")).toBe(false);
+    expect(agent.messages.find((message) => message.role === "assistant")?.toolResults)
+      .toEqual([expect.objectContaining({ name: "resource.list", matched: false })]);
   });
 
   it("keeps same-named independent sessions as separate Agent nodes", () => {
@@ -431,12 +518,10 @@ describe("Agent-session canvas model", () => {
       edge.source === "agent:session-parent-chain"
       && edge.target === "agent:session-child-chain"
     ))).toBe(false);
-    expect(model.nodes.find((node) => node.id === "agent:session-parent-chain")?.layoutColumn)
-      .toBe(0);
-    expect(model.nodes.find((node) => node.id === "event:tool-patch-chain")?.layoutColumn)
-      .toBe(1);
-    expect(model.nodes.find((node) => node.id === "agent:session-child-chain")?.layoutColumn)
-      .toBe(2);
+    const layout = layoutCanvasModel(model);
+    expect(layout.positions.get("agent:session-parent-chain")?.column).toBe(0);
+    expect(layout.positions.get("event:tool-patch-chain")?.column).toBe(1);
+    expect(layout.positions.get("agent:session-child-chain")?.column).toBe(2);
   });
 
   it("falls back from the parent Agent header for a direct nested Agent", () => {
@@ -470,7 +555,7 @@ describe("Agent-session canvas model", () => {
       relationship: "nested_agent",
       fallback: true,
     });
-    expect(model.nodes.find((node) => node.id === "agent:session-child-direct")?.layoutColumn)
+    expect(layoutCanvasModel(model).positions.get("agent:session-child-direct")?.column)
       .toBe(1);
   });
 
@@ -538,8 +623,8 @@ describe("Agent-session canvas model", () => {
       { ...EMPTY_FILTERS, search: "test_case.get" },
       new Set(),
     );
-    const byId = new Map(unfiltered.nodes.map((node) => [node.id, node]));
-    const filteredLater = filtered.nodes.find((node) => node.id === "event:tool-group-c");
+    const unfilteredLayout = layoutCanvasModel(unfiltered);
+    const filteredLayout = layoutCanvasModel(filtered);
     const revisedLater = {
       ...laterTool,
       revision: laterTool.revision + 1,
@@ -551,12 +636,14 @@ describe("Agent-session canvas model", () => {
       new Set(),
     );
 
-    expect(byId.get("agent:session-groups")?.layoutColumn).toBe(0);
-    expect(byId.get("event:tool-group-a")?.layoutColumn).toBe(1);
-    expect(byId.get("event:tool-group-b")?.layoutColumn).toBe(1);
-    expect(byId.get("event:tool-group-c")?.layoutColumn).toBe(2);
-    expect(filteredLater?.layoutColumn).toBe(2);
-    expect(revised.nodes.find((node) => node.id === "event:tool-group-c")?.layoutColumn).toBe(2);
+    expect(unfilteredLayout.positions.get("agent:session-groups")?.column).toBe(0);
+    expect(unfilteredLayout.positions.get("event:tool-group-a")?.column).toBe(1);
+    expect(unfilteredLayout.positions.get("event:tool-group-b")?.column).toBe(1);
+    // The first parallel group still extends below the second Assistant
+    // message, so first-fit moves the complete later group one column right.
+    expect(unfilteredLayout.positions.get("event:tool-group-c")?.column).toBe(2);
+    expect(filteredLayout.positions.get("event:tool-group-c")?.column).toBe(2);
+    expect(layoutCanvasModel(revised).positions.get("event:tool-group-c")?.column).toBe(2);
   });
 
   it("keeps message IDs and order stable when an SSE revision updates content", () => {
@@ -664,5 +751,215 @@ describe("Agent-session canvas model", () => {
       .toBeGreaterThan(messagePortPlacement(collapsedAgent, 1)[1]);
     expect(messagePortPlacement(expandedAgent, 0)[1] * expandedAgent.height)
       .toBeCloseTo(messagePortPlacement(collapsedAgent, 0)[1] * collapsedAgent.height);
+  });
+});
+
+describe("message-anchored first-fit canvas layout", () => {
+  it("top-aligns one message's parallel children in one ordered call group", () => {
+    const turn = agentTurn(
+      "turn-parallel-layout",
+      1,
+      "session-parallel-layout",
+      [{ role: "user", content: "Inspect both." }],
+      {
+        role: "assistant",
+        content: "Calling both.",
+        tool_calls: [
+          { id: "call-a", name: "resource.list", arguments: {} },
+          { id: "call-b", name: "openapi.list_inputs", arguments: {} },
+        ],
+      },
+    );
+    const toolA = makeEvent({
+      event_id: "tool-layout-a",
+      order: 2,
+      kind: "tool_call",
+      name: "resource.list",
+      parent_event_id: turn.event_id,
+      agent: turn.agent,
+      detail: { output: { tool_call_id: "call-a" } },
+    });
+    const toolB = makeEvent({
+      event_id: "tool-layout-b",
+      order: 3,
+      kind: "tool_call",
+      name: "openapi.list_inputs",
+      parent_event_id: turn.event_id,
+      agent: turn.agent,
+      detail: { output: { tool_call_id: "call-b" } },
+    });
+
+    const layout = layoutCanvasModel(
+      buildCanvasModel([turn, toolA, toolB], EMPTY_FILTERS, new Set()),
+    );
+    const agent = layout.positions.get("agent:session-parallel-layout")!;
+    const first = layout.positions.get("event:tool-layout-a")!;
+    const second = layout.positions.get("event:tool-layout-b")!;
+    const group = layout.connectionGroups[0];
+
+    expect(group.targets).toEqual(["event:tool-layout-a", "event:tool-layout-b"]);
+    expect(first.column).toBe(agent.column + 1);
+    expect(second.column).toBe(first.column);
+    expect(first.top).toBe(group.sourceTop);
+    expect(second.top).toBe(first.top + first.height + CALL_GROUP_GAP);
+    expect(group.sourceY).toBe(group.sourceTop + CONNECTION_OFFSET_Y);
+    expect(first.left - (agent.left + agent.width)).toBe(COLUMN_GAP);
+  });
+
+  it("moves a blocked later group right and reuses the left column once it is clear", () => {
+    const first = agentTurn(
+      "turn-first-layout",
+      1,
+      "session-first-fit",
+      [{ role: "user", content: "First." }],
+      {
+        role: "assistant",
+        content: "First call.",
+        tool_calls: [{ id: "call-first", name: "resource.list", arguments: {} }],
+      },
+    );
+    const second = agentTurn(
+      "turn-second-layout",
+      3,
+      "session-first-fit",
+      [{ role: "tool", tool_call_id: "call-first", content: "[]" }],
+      {
+        role: "assistant",
+        content: "Second call.",
+        tool_calls: [{ id: "call-second", name: "openapi.list_inputs", arguments: {} }],
+      },
+    );
+    const third = agentTurn(
+      "turn-third-layout",
+      5,
+      "session-first-fit",
+      [
+        { role: "tool", tool_call_id: "call-second", content: "[]" },
+        { role: "user", content: "Enough vertical distance." },
+      ],
+      {
+        role: "assistant",
+        content: "Third call.",
+        tool_calls: [{ id: "call-third", name: "test_case.get", arguments: {} }],
+      },
+    );
+    const tools = [
+      makeEvent({
+        event_id: "tool-first-fit-a",
+        order: 2,
+        kind: "tool_call",
+        name: "resource.list",
+        parent_event_id: first.event_id,
+        agent: first.agent,
+        detail: { output: { tool_call_id: "call-first" } },
+      }),
+      makeEvent({
+        event_id: "tool-first-fit-a-parallel",
+        order: 2.5,
+        kind: "tool_call",
+        name: "resource.get",
+        parent_event_id: first.event_id,
+        agent: first.agent,
+        detail: { output: { tool_call_id: "call-first" } },
+      }),
+      makeEvent({
+        event_id: "tool-first-fit-b",
+        order: 4,
+        kind: "tool_call",
+        name: "openapi.list_inputs",
+        parent_event_id: second.event_id,
+        agent: second.agent,
+        detail: { output: { tool_call_id: "call-second" } },
+      }),
+      makeEvent({
+        event_id: "tool-first-fit-c",
+        order: 6,
+        kind: "tool_call",
+        name: "test_case.get",
+        parent_event_id: third.event_id,
+        agent: third.agent,
+        detail: { output: { tool_call_id: "call-third" } },
+      }),
+    ];
+
+    const layout = layoutCanvasModel(
+      buildCanvasModel(
+        [first, tools[0], tools[1], second, tools[2], third, tools[3]],
+        EMPTY_FILTERS,
+        new Set(),
+      ),
+    );
+
+    expect(layout.positions.get("event:tool-first-fit-a")?.column).toBe(1);
+    expect(layout.positions.get("event:tool-first-fit-b")?.column).toBe(2);
+    expect(layout.positions.get("event:tool-first-fit-c")?.column).toBe(1);
+  });
+
+  it("temporarily pushes a later same-column group down and restores it after collapse", () => {
+    const first = agentTurn(
+      "turn-expand-layout-a",
+      1,
+      "session-expand-layout",
+      [{ role: "user", content: "First." }],
+      {
+        role: "assistant",
+        content: "Call A.",
+        tool_calls: [{ id: "call-expand-a", name: "resource.list", arguments: {} }],
+      },
+    );
+    const second = agentTurn(
+      "turn-expand-layout-b",
+      3,
+      "session-expand-layout",
+      [
+        { role: "tool", tool_call_id: "call-expand-a", content: "[]" },
+        { role: "user", content: "Continue after enough space." },
+      ],
+      {
+        role: "assistant",
+        content: "Call B.",
+        tool_calls: [{ id: "call-expand-b", name: "openapi.list_inputs", arguments: {} }],
+      },
+    );
+    const toolA = makeEvent({
+      event_id: "tool-expand-layout-a",
+      order: 2,
+      kind: "tool_call",
+      name: "resource.list",
+      parent_event_id: first.event_id,
+      agent: first.agent,
+      detail: { output: { tool_call_id: "call-expand-a" } },
+    });
+    const toolB = makeEvent({
+      event_id: "tool-expand-layout-b",
+      order: 4,
+      kind: "tool_call",
+      name: "openapi.list_inputs",
+      parent_event_id: second.event_id,
+      agent: second.agent,
+      detail: { output: { tool_call_id: "call-expand-b" } },
+    });
+    const events = [first, toolA, second, toolB];
+    const collapsedModel = buildCanvasModel(events, EMPTY_FILTERS, new Set());
+    const expandedModel = buildCanvasModel(
+      events,
+      EMPTY_FILTERS,
+      new Set(),
+      new Set([eventDetailKey(toolA.event_id)]),
+    );
+    const collapsed = layoutCanvasModel(collapsedModel);
+    const expanded = layoutCanvasModel(expandedModel);
+    const restored = layoutCanvasModel(collapsedModel);
+    const collapsedLater = collapsed.positions.get("event:tool-expand-layout-b")!;
+    const expandedFirst = expanded.positions.get("event:tool-expand-layout-a")!;
+    const expandedLater = expanded.positions.get("event:tool-expand-layout-b")!;
+
+    expect(collapsedLater.column).toBe(1);
+    expect(expandedLater.column).toBe(collapsedLater.column);
+    expect(expandedLater.top).toBeGreaterThanOrEqual(
+      expandedFirst.top + expandedFirst.height + CALL_GROUP_GAP,
+    );
+    expect(restored.positions.get("event:tool-expand-layout-b")?.top)
+      .toBe(collapsedLater.top);
   });
 });

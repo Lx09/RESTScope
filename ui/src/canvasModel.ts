@@ -27,6 +27,15 @@ export const EVENT_COLLAPSED_CONTENT_HEIGHT = 52;
 export const INLINE_EVENT_DETAIL_HEIGHT = 520;
 export const MESSAGE_PREVIEW_LIMIT = 160;
 
+/** One Tool-role message folded into the Assistant that requested the call. */
+export interface CanvasToolResult {
+  id: string;
+  toolCallId: string | null;
+  name: string;
+  matched: boolean;
+  message: UnknownRecord;
+}
+
 export interface CanvasMessage {
   id: string;
   portKey: string;
@@ -38,6 +47,7 @@ export interface CanvasMessage {
   preview: string;
   toolCallId: string | null;
   toolCallIds: string[];
+  toolResults: CanvasToolResult[];
   exactMatch: boolean;
   connectionContext: boolean;
   expanded: boolean;
@@ -62,7 +72,6 @@ export interface AgentSessionCanvasNode {
   collapsed: boolean;
   hiddenDescendantCount: number;
   contextOnly: boolean;
-  layoutColumn: number;
   width: number;
   height: number;
 }
@@ -72,7 +81,6 @@ export interface EventCanvasNode {
   kind: "tool_call" | "smoke_batch";
   event: TimelineEvent;
   contextOnly: boolean;
-  layoutColumn: number;
   width: number;
   height: number;
   order: number;
@@ -98,6 +106,10 @@ export interface CanvasEdgeModel {
 export interface CanvasModel {
   nodes: CanvasNodeModel[];
   edges: CanvasEdgeModel[];
+  /** Complete, unfiltered and collapsed-detail geometry used for stable layout. */
+  layoutNodes: CanvasNodeModel[];
+  /** Complete relationships used to keep columns stable while the view filters. */
+  layoutEdges: CanvasEdgeModel[];
   matchCount: number;
   semanticEventCount: number;
   agentSessionCount: number;
@@ -195,6 +207,53 @@ function messageMatchesSearch(message: UnknownRecord, search: string): boolean {
   }
 }
 
+/** Find the original Assistant card when a later model prompt echoes it.
+ *
+ * LLM tool protocols place the Assistant tool-call message back into the next
+ * prompt immediately before the Tool result messages. That protocol copy is
+ * useful to the model but it is not a new user-visible message. Stable Tool
+ * call IDs are the strongest identity; exact message equality is a safe
+ * fallback for providers that omit IDs.
+ */
+function echoedAssistantOwner(
+  messages: CanvasMessage[],
+  message: UnknownRecord,
+): CanvasMessage | undefined {
+  const callIds = messageToolCallIds(message);
+  if (callIds.length) {
+    return [...messages].reverse().find((candidate) => (
+      candidate.role === "assistant"
+      && candidate.direction === "output"
+      && candidate.toolCallIds.length === callIds.length
+      && callIds.every((callId) => candidate.toolCallIds.includes(callId))
+    ));
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(message);
+  } catch {
+    return undefined;
+  }
+  return [...messages].reverse().find((candidate) => {
+    if (candidate.role !== "assistant" || candidate.direction !== "output") return false;
+    try {
+      return JSON.stringify(candidate.message) === serialized;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Recover a Tool name from the Assistant request when the result omits it. */
+function toolNameFromOwner(owner: CanvasMessage | undefined, toolCallId: string | null): string | null {
+  if (!owner || !toolCallId || !Array.isArray(owner.message.tool_calls)) return null;
+  const call = owner.message.tool_calls.find(
+    (candidate: unknown) => asRecord(candidate)?.id === toolCallId,
+  );
+  const name = asRecord(call)?.name;
+  return typeof name === "string" && name ? name : null;
+}
+
 function buildMessages(
   turns: TimelineEvent[],
   matchedEventIds: Set<string>,
@@ -203,6 +262,7 @@ function buildMessages(
 ): CanvasMessage[] {
   const search = filters.search.trim().toLocaleLowerCase();
   const messages: CanvasMessage[] = [];
+  const unmatchedToolResults: CanvasToolResult[] = [];
   turns.forEach((turn, turnIndex) => {
     const input = asRecord(turn.detail.input);
     const groups: Array<{ direction: "input" | "output"; values: UnknownRecord[] }> = [
@@ -215,6 +275,63 @@ function buildMessages(
         const role = typeof message.role === "string"
           ? message.role
           : direction === "output" ? "assistant" : "user";
+        if (direction === "input" && role === "assistant") {
+          const echoOwner = echoedAssistantOwner(messages, message);
+          if (echoOwner) {
+            if (
+              search
+              && matchedEventIds.has(turn.event_id)
+              && messageMatchesSearch(message, search)
+            ) {
+              echoOwner.exactMatch = true;
+            }
+            return;
+          }
+        }
+        if (role === "tool") {
+          const toolCallId = typeof message.tool_call_id === "string"
+            ? message.tool_call_id
+            : null;
+          const suppliedName = typeof message.name === "string" ? message.name : null;
+          const exactOwner = toolCallId
+            ? [...messages].reverse().find((candidate) => (
+                candidate.role === "assistant" && candidate.toolCallIds.includes(toolCallId)
+              ))
+            : undefined;
+          const namedOwner = !exactOwner && suppliedName
+            ? [...messages].reverse().find((candidate) => (
+                candidate.role === "assistant"
+                && Array.isArray(candidate.message.tool_calls)
+                && candidate.message.tool_calls.some(
+                  (call: unknown) => asRecord(call)?.name === suppliedName,
+                )
+              ))
+            : undefined;
+          const fallbackOwner = exactOwner ?? namedOwner ?? [...messages].reverse().find(
+            (candidate) => candidate.role === "assistant" && candidate.toolCallIds.length > 0,
+          );
+          const name = suppliedName ?? toolNameFromOwner(fallbackOwner, toolCallId) ?? "未知工具";
+          const result: CanvasToolResult = {
+            id,
+            toolCallId,
+            name,
+            matched: Boolean(exactOwner),
+            message,
+          };
+          if (fallbackOwner) {
+            fallbackOwner.toolResults.push(result);
+            if (
+              search
+              && matchedEventIds.has(turn.event_id)
+              && messageMatchesSearch(message, search)
+            ) {
+              fallbackOwner.exactMatch = true;
+            }
+          } else {
+            unmatchedToolResults.push(result);
+          }
+          return;
+        }
         messages.push({
           id,
           portKey: portKey(id),
@@ -226,6 +343,7 @@ function buildMessages(
           preview: compactMessagePreview(message.content),
           toolCallId: typeof message.tool_call_id === "string" ? message.tool_call_id : null,
           toolCallIds: messageToolCallIds(message),
+          toolResults: [],
           exactMatch: Boolean(search)
             && matchedEventIds.has(turn.event_id)
             && messageMatchesSearch(message, search),
@@ -235,6 +353,15 @@ function buildMessages(
       });
     });
   });
+  if (unmatchedToolResults.length) {
+    // A browser can open after the original calling turn has already fallen
+    // outside an incomplete snapshot. Preserve those results on the nearest
+    // visible Assistant rather than resurrecting standalone Tool-result cards.
+    const fallbackOwner = [...messages].reverse().find(
+      (candidate) => candidate.role === "assistant",
+    );
+    if (fallbackOwner) fallbackOwner.toolResults.push(...unmatchedToolResults);
+  }
   return messages;
 }
 
@@ -479,54 +606,6 @@ function buildRelationshipSeeds(
   );
 }
 
-/** Assign stable left-to-right columns to complete, unfiltered relationships. */
-function layoutColumns(
-  orderedEvents: TimelineEvent[],
-  turnsBySession: ReadonlyMap<string, TimelineEvent[]>,
-  relationships: RelationshipSeed[],
-): Map<string, number> {
-  const columns = new Map<string, number>();
-  for (const sessionId of turnsBySession.keys()) columns.set(`agent:${sessionId}`, 0);
-  for (const event of orderedEvents) {
-    if (event.kind !== "agent_turn") columns.set(`event:${event.event_id}`, 0);
-  }
-
-  const groupsBySource = new Map<string, Map<string, number>>();
-  for (const edge of relationships) {
-    const groups = groupsBySource.get(edge.source) ?? new Map<string, number>();
-    const currentOrder = groups.get(edge.callGroupKey);
-    groups.set(
-      edge.callGroupKey,
-      currentOrder === undefined ? edge.targetOrder : Math.min(currentOrder, edge.targetOrder),
-    );
-    groupsBySource.set(edge.source, groups);
-  }
-  const groupOffsets = new Map<string, number>();
-  for (const groups of groupsBySource.values()) {
-    [...groups.entries()]
-      .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
-      .forEach(([groupKey], index) => groupOffsets.set(groupKey, index + 1));
-  }
-
-  // Event order is already topological in normal runs. Repeating bounded
-  // relaxation also covers a revised event whose parent arrives one frame
-  // later without allowing a malformed cycle to loop forever.
-  for (let pass = 0; pass < Math.max(1, columns.size); pass += 1) {
-    let changed = false;
-    for (const edge of relationships) {
-      const sourceColumn = columns.get(edge.source) ?? 0;
-      const targetColumn = columns.get(edge.target) ?? 0;
-      const candidate = sourceColumn + (groupOffsets.get(edge.callGroupKey) ?? 1);
-      if (candidate > targetColumn) {
-        columns.set(edge.target, candidate);
-        changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-  return columns;
-}
-
 function descendantCount(
   sessionId: string,
   events: TimelineEvent[],
@@ -575,7 +654,6 @@ export function buildCanvasModel(
     eventsById,
     turnsBySession,
   );
-  const stableColumns = layoutColumns(orderedEvents, turnsBySession, relationshipSeeds);
   const activeFilters = filtersAreActive(filters);
   const matchedEventIds = new Set(
     orderedEvents
@@ -629,13 +707,11 @@ export function buildCanvasModel(
   }
 
   const nodes: CanvasNodeModel[] = [];
+  const layoutNodes: CanvasNodeModel[] = [];
   for (const [sessionId, turns] of turnsBySession) {
     const visibleTurns = turns.filter(
       (turn) => visibleEventIds.has(turn.event_id) && !hiddenEventIds.has(turn.event_id),
     );
-    if (!visibleTurns.length) continue;
-    const messages = buildMessages(turns, matchedEventIds, filters, expandedDetailIds);
-    const collapsed = collapsedEffective.has(sessionId);
     const first = turns[0];
     const last = turns.at(-1) ?? first;
     const startedAt = first.started_at;
@@ -643,9 +719,10 @@ export function buildCanvasModel(
     const durationMs = endedAt
       ? Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime())
       : null;
-    const node: AgentSessionCanvasNode = {
+    const baseMessages = buildMessages(turns, matchedEventIds, filters, new Set());
+    const common = {
       id: `agent:${sessionId}`,
-      kind: "agent_session",
+      kind: "agent_session" as const,
       sessionId,
       name: first.agent?.name ?? first.name,
       path: first.agent?.path ?? [first.name],
@@ -658,14 +735,29 @@ export function buildCanvasModel(
       endedAt,
       durationMs,
       turns,
+      contextOnly: !turns.some((turn) => matchedEventIds.has(turn.event_id)),
+      width: AGENT_NODE_WIDTH,
+    };
+    layoutNodes.push({
+      ...common,
+      messages: baseMessages,
+      collapsed: false,
+      hiddenDescendantCount: 0,
+      height: AGENT_HEADER_HEIGHT
+        + AGENT_NODE_PADDING * 2
+        + baseMessages.length * AGENT_MESSAGE_HEIGHT
+        + Math.max(0, baseMessages.length - 1) * AGENT_MESSAGE_GAP,
+    });
+    if (!visibleTurns.length) continue;
+    const messages = buildMessages(turns, matchedEventIds, filters, expandedDetailIds);
+    const collapsed = collapsedEffective.has(sessionId);
+    const node: AgentSessionCanvasNode = {
+      ...common,
       messages,
       collapsed,
       hiddenDescendantCount: collapsed
         ? descendantCount(sessionId, orderedEvents, eventsById, sessionParents)
         : 0,
-      contextOnly: !turns.some((turn) => matchedEventIds.has(turn.event_id)),
-      layoutColumn: stableColumns.get(`agent:${sessionId}`) ?? 0,
-      width: AGENT_NODE_WIDTH,
       height: collapsed
         ? COLLAPSED_AGENT_HEIGHT
         : AGENT_HEADER_HEIGHT
@@ -678,26 +770,34 @@ export function buildCanvasModel(
                 : 0),
             0,
           )
-          + Math.max(0, messages.length - 1) * AGENT_MESSAGE_GAP
+          + Math.max(0, messages.length - 1) * AGENT_MESSAGE_GAP,
     };
     nodes.push(node);
   }
 
   for (const event of orderedEvents) {
     if (event.kind === "agent_turn") continue;
-    if (!visibleEventIds.has(event.event_id) || hiddenEventIds.has(event.event_id)) continue;
     const collapsedContentHeight = eventCollapsedContentHeight(event);
-    nodes.push({
+    const common = {
       id: `event:${event.event_id}`,
       kind: event.kind,
       event,
-      contextOnly: !matchedEventIds.has(event.event_id),
-      layoutColumn: stableColumns.get(`event:${event.event_id}`) ?? 0,
       width: EVENT_NODE_WIDTH,
       order: event.order,
       latestOrder: event.order,
-      expanded: expandedDetailIds.has(eventDetailKey(event.event_id)),
       collapsedContentHeight,
+    };
+    layoutNodes.push({
+      ...common,
+      contextOnly: false,
+      expanded: false,
+      height: EVENT_NODE_HEIGHT - EVENT_COLLAPSED_CONTENT_HEIGHT + collapsedContentHeight,
+    });
+    if (!visibleEventIds.has(event.event_id) || hiddenEventIds.has(event.event_id)) continue;
+    nodes.push({
+      ...common,
+      contextOnly: !matchedEventIds.has(event.event_id),
+      expanded: expandedDetailIds.has(eventDetailKey(event.event_id)),
       height: EVENT_NODE_HEIGHT - EVENT_COLLAPSED_CONTENT_HEIGHT + collapsedContentHeight
         + (expandedDetailIds.has(eventDetailKey(event.event_id))
           ? INLINE_EVENT_DETAIL_HEIGHT - collapsedContentHeight
@@ -720,6 +820,17 @@ export function buildCanvasModel(
       fallback: edge.fallback,
       callGroupKey: edge.callGroupKey,
     }));
+  const layoutEdges: CanvasEdgeModel[] = relationshipSeeds.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    sourcePort: edge.sourcePort,
+    targetPort: edge.targetPort,
+    relationship: edge.relationship,
+    status: edge.status,
+    fallback: edge.fallback,
+    callGroupKey: edge.callGroupKey,
+  }));
 
   // Highlight the exact Assistant message that owns an outgoing visible edge.
   // Tool-origin and header-fallback edges intentionally have no message marker.
@@ -748,6 +859,8 @@ export function buildCanvasModel(
   return {
     nodes,
     edges,
+    layoutNodes,
+    layoutEdges,
     matchCount: matchedEventIds.size,
     semanticEventCount: orderedEvents.length,
     agentSessionCount: nodes.filter((node) => node.kind === "agent_session").length,

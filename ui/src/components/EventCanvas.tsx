@@ -13,9 +13,7 @@ import {
   PlusOutlined,
   VerticalAlignBottomOutlined,
 } from "@ant-design/icons";
-import { ReactNode } from "@antv/g6-extension-react";
 import {
-  AntVDagreLayout,
   CanvasEvent,
   ExtensionCategory,
   Graph,
@@ -36,16 +34,24 @@ import {
   type CanvasMessage,
   type CanvasModel,
 } from "../canvasModel";
+import {
+  BRANCH_OFFSET_X,
+  BRANCH_RADIUS,
+  CONNECTION_OFFSET_Y,
+  layoutCanvasModel,
+  type CanvasLayoutResult,
+} from "../canvasLayout";
 import type { ThemeMode } from "../theme";
 import type { TimelineEvent, TimelineFilters } from "../types";
 import { AgentSessionNodeView, EventCanvasNodeView } from "./CanvasNodes";
 import { detailMotionTiming } from "./InlineReveal";
+import { SynchronousReactNode } from "./SynchronousReactNode";
 
 const { Text, Title } = Typography;
 const REACT_NODE_TYPE = "restscope-react-node";
 
 if (!getExtension(ExtensionCategory.NODE, REACT_NODE_TYPE)) {
-  register(ExtensionCategory.NODE, REACT_NODE_TYPE, ReactNode);
+  register(ExtensionCategory.NODE, REACT_NODE_TYPE, SynchronousReactNode);
 }
 
 export interface EventCanvasProps {
@@ -62,12 +68,7 @@ interface GraphCallbacks {
   toggleSession: (sessionId: string, collapsed: boolean) => void;
 }
 
-const EDGE_COLORS = {
-  running: "#4096ff",
-  succeeded: "#6c8fbd",
-  warning: "#d89614",
-  failed: "#ff4d4f",
-};
+const CONNECTION_COLOR = "#6c829f";
 
 interface PendingDetailMotion {
   expanded: boolean;
@@ -109,14 +110,6 @@ export function canvasNavigationBehaviors(): CanvasBehaviorOptions {
     },
   ];
 }
-
-const STABLE_LAYOUT_OPTIONS = {
-  align: "UL",
-  controlPoints: true,
-  nodesep: 46,
-  rankdir: "LR",
-  ranksep: 120,
-} as const;
 
 /** Build the G6 motion that keeps node geometry and connected edges together. */
 export function detailGraphMotionOptions(
@@ -171,15 +164,13 @@ interface DetailGraphMotionRequest {
 export async function renderStructuralGraphUpdate(
   graph: Graph,
   graphData: GraphData,
-  layout: Parameters<Graph["setLayout"]>[0] | null,
   motion: DetailGraphMotionRequest | null,
 ): Promise<void> {
   if (motion) graph.setOptions(detailGraphMotionOptions(motion.expanded, motion.portKeys));
-  // Pre-positioned data must bypass G6's layout adapter. The adapter copies
-  // geometry but drops custom node data, including the stable `layer` that
-  // distinguishes consecutive call groups.
-  if (layout) graph.setLayout(layout);
-  else graph.setOptions({ layout: undefined });
+  // Every card and connector junction already has a deterministic position.
+  // Explicitly keep G6's layout adapter disabled so it cannot move a stable
+  // call group after a later SSE revision.
+  graph.setOptions({ layout: undefined });
   graph.setData(graphData);
   try {
     await graph.render();
@@ -189,54 +180,6 @@ export async function renderStructuralGraphUpdate(
       await graph.draw();
     }
   }
-}
-
-/** Position G6 data with AntV Dagre while preserving RESTScope's stable layer.
- *
- * G6 normally adapts its node data before invoking Dagre. That adapter omits
- * custom fields, so calling the exported layout directly is the only way to
- * let `data.layer` constrain a node to its assigned call-group column. The
- * returned data keeps the original React components and ports, adding only
- * the calculated x/y positions used by G6's normal renderer.
- */
-export async function positionGraphDataByStableColumns(
-  graphData: GraphData,
-): Promise<GraphData> {
-  const nodes = graphData.nodes ?? [];
-  const edges = graphData.edges ?? [];
-  if (!nodes.length) return graphData;
-
-  const layout = new AntVDagreLayout({
-    ...STABLE_LAYOUT_OPTIONS,
-    nodeOrder: [...nodes]
-      .sort((left, right) => Number(left.data?.order ?? 0) - Number(right.data?.order ?? 0))
-      .map((node) => node.id),
-    node: (node) => ({ id: node.id, data: node.data }),
-    edge: (edge) => ({ id: edge.id, source: edge.source, target: edge.target }),
-    nodeSize: (node) => {
-      const size = node.style?.size;
-      return Array.isArray(size) && size.length >= 2
-        ? [Number(size[0]), Number(size[1])]
-        : [10, 10];
-    },
-  });
-  const positions = new Map<string, { x: number; y: number }>();
-  try {
-    await layout.execute({ nodes, edges });
-    layout.forEachNode((node) => positions.set(String(node.id), { x: node.x, y: node.y }));
-  } finally {
-    layout.destroy();
-  }
-
-  return {
-    ...graphData,
-    nodes: nodes.map((node) => {
-      const position = positions.get(String(node.id));
-      return position
-        ? { ...node, style: { ...node.style, x: position.x, y: position.y } }
-        : node;
-    }),
-  };
 }
 
 function staticGraphMotionOptions(): GraphMotionOptions {
@@ -252,14 +195,16 @@ export function graphDataForModel(
   model: CanvasModel,
   themeMode: ThemeMode,
   callbacks: GraphCallbacks,
+  layout: CanvasLayoutResult = layoutCanvasModel(model),
 ): GraphData {
-  return {
-    nodes: model.nodes.map((node) => {
+  const cardNodes: NonNullable<GraphData["nodes"]> = model.nodes.map((node) => {
+      const position = layout.positions.get(node.id);
       if (node.kind === "agent_session") {
+        const topPortPlacement = CONNECTION_OFFSET_Y / node.height;
         const ports = [
           {
             key: "input",
-            placement: [0, 0.15] as [number, number],
+            placement: [0, topPortPlacement] as [number, number],
             r: 4,
             fill: "#4f8cff",
             stroke: "#d6e4ff",
@@ -267,7 +212,7 @@ export function graphDataForModel(
           },
           {
             key: "agent_header",
-            placement: [1, 0.15] as [number, number],
+            placement: [1, topPortPlacement] as [number, number],
             r: 4,
             fill: "#4f8cff",
             stroke: "#d6e4ff",
@@ -287,9 +232,12 @@ export function graphDataForModel(
         return {
           id: node.id,
           type: REACT_NODE_TYPE,
-          data: { order: node.order, layer: node.layoutColumn },
+          data: { order: node.order },
           style: {
-            size: [node.width, node.height],
+            x: position?.x,
+            y: position?.y,
+            size: [node.width, node.height] as [number, number],
+            zIndex: 10,
             dx: -node.width / 2,
             dy: -node.height / 2,
             ports,
@@ -307,15 +255,18 @@ export function graphDataForModel(
       return {
         id: node.id,
         type: REACT_NODE_TYPE,
-        data: { order: node.order, layer: node.layoutColumn },
+        data: { order: node.order },
         style: {
-          size: [node.width, node.height],
+          x: position?.x,
+          y: position?.y,
+          size: [node.width, node.height] as [number, number],
+          zIndex: 10,
           dx: -node.width / 2,
           dy: -node.height / 2,
           ports: [
             {
               key: "input",
-              placement: [0, 0.5] as [number, number],
+              placement: [0, CONNECTION_OFFSET_Y / node.height] as [number, number],
               r: 4,
               fill: "#4f8cff",
               stroke: "#d6e4ff",
@@ -323,7 +274,7 @@ export function graphDataForModel(
             },
             ...(node.kind === "tool_call" ? [{
               key: "output",
-              placement: [1, 0.5] as [number, number],
+              placement: [1, CONNECTION_OFFSET_Y / node.height] as [number, number],
               r: 4,
               fill: "#9254de",
               stroke: "#efdbff",
@@ -339,51 +290,132 @@ export function graphDataForModel(
           ) as any,
         },
       };
-    }),
-    edges: model.edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
+    });
+
+  const junctionNodes: NonNullable<GraphData["nodes"]> = [];
+  const connectorEdges: NonNullable<GraphData["edges"]> = [];
+  const connectionStyle = {
+    stroke: CONNECTION_COLOR,
+    lineWidth: 2,
+    zIndex: 0,
+  };
+  const labelStyle = (edge: CanvasModel["edges"][number]) => ({
+    labelText: edge.relationship === "nested_agent"
+      ? edge.fallback ? "启动 Agent · 调用消息不可用" : "启动 Agent"
+      : edge.fallback ? "调用消息不可用" : undefined,
+    labelFill: CONNECTION_COLOR,
+    labelBackground: true,
+    labelBackgroundFill: themeMode === "dark" ? "#131c2b" : "#ffffff",
+    labelPadding: [3, 5],
+  });
+  const addJunction = (id: string, x: number, y: number) => {
+    junctionNodes.push({
+      id,
+      type: "circle",
+      data: { connectorJunction: true },
+      style: { x, y, size: 1, opacity: 0, zIndex: -1 },
+    });
+  };
+
+  for (const group of layout.connectionGroups) {
+    const source = layout.positions.get(group.source);
+    const firstTarget = layout.positions.get(group.targets[0]);
+    const firstEdge = group.edges[0];
+    if (!source || !firstTarget || !firstEdge) continue;
+    const firstX = firstTarget.left;
+    const firstY = firstTarget.top + CONNECTION_OFFSET_Y;
+    const branchX = firstX - BRANCH_OFFSET_X;
+    const firstControlPoints = group.sourceY === firstY
+      ? []
+      : [[branchX, group.sourceY], [branchX, firstY]];
+    connectorEdges.push({
+      id: `connector:${group.id}:first`,
+      source: group.source,
+      target: firstEdge.target,
       type: "polyline",
-      data: { relationship: edge.relationship, fallback: edge.fallback },
+      data: { relationship: firstEdge.relationship, connectorPart: "first" },
       style: {
-        sourcePort: edge.sourcePort ?? undefined,
-        targetPort: edge.targetPort,
-        stroke: EDGE_COLORS[edge.status],
-        lineWidth: edge.status === "failed" ? 2.5 : 2,
-        lineDash: edge.status === "running"
-          ? [5, 4]
-          : edge.status === "warning" ? [9, 5] : undefined,
+        ...connectionStyle,
+        ...labelStyle(firstEdge),
+        sourcePort: group.sourcePort ?? undefined,
+        targetPort: firstEdge.targetPort,
+        controlPoints: firstControlPoints,
+        radius: BRANCH_RADIUS,
         endArrow: true,
-        radius: 10,
-        router: { type: "orth" },
-        labelText: edge.relationship === "nested_agent"
-          ? edge.fallback ? "启动 Agent · 调用消息不可用" : "启动 Agent"
-          : edge.fallback ? "调用消息不可用" : undefined,
-        labelFill: EDGE_COLORS[edge.status],
-        labelBackground: true,
-        labelBackgroundFill: themeMode === "dark" ? "#131c2b" : "#ffffff",
-        labelPadding: [3, 5],
       },
-    })),
+    });
+    if (group.targets.length === 1) continue;
+
+    const lastTarget = layout.positions.get(group.targets.at(-1)!);
+    if (!lastTarget) continue;
+    const spineStartId = `junction:${group.id}:spine-start`;
+    const spineEndId = `junction:${group.id}:spine-end`;
+    const lastY = lastTarget.top + CONNECTION_OFFSET_Y;
+    addJunction(spineStartId, branchX - BRANCH_RADIUS, firstY);
+    addJunction(spineEndId, branchX, lastY - BRANCH_RADIUS);
+    connectorEdges.push({
+      id: `connector:${group.id}:spine`,
+      source: spineStartId,
+      target: spineEndId,
+      type: "polyline",
+      data: { connectorPart: "spine" },
+      style: {
+        ...connectionStyle,
+        controlPoints: [[branchX, firstY]],
+        radius: BRANCH_RADIUS,
+      },
+    });
+
+    group.edges.slice(1).forEach((edge, index) => {
+      const target = layout.positions.get(edge.target);
+      if (!target) return;
+      const targetY = target.top + CONNECTION_OFFSET_Y;
+      const junctionId = index === group.edges.length - 2
+        ? spineEndId
+        : `junction:${group.id}:branch:${index + 1}`;
+      if (junctionId !== spineEndId) {
+        addJunction(junctionId, branchX, targetY - BRANCH_RADIUS);
+      }
+      connectorEdges.push({
+        id: `connector:${group.id}:branch:${index + 1}`,
+        source: junctionId,
+        target: edge.target,
+        type: "polyline",
+        data: { relationship: edge.relationship, connectorPart: "branch" },
+        style: {
+          ...connectionStyle,
+          ...labelStyle(edge),
+          targetPort: edge.targetPort,
+          controlPoints: [[branchX, targetY]],
+          radius: BRANCH_RADIUS,
+          endArrow: true,
+        },
+      });
+    });
+  }
+
+  return {
+    nodes: [...cardNodes, ...junctionNodes],
+    edges: connectorEdges,
   };
 }
 
-function structuralSignature(model: CanvasModel): string {
+function structuralSignature(model: CanvasModel, layout: CanvasLayoutResult): string {
   return JSON.stringify({
     nodes: model.nodes.map((node) => [
       node.id,
       node.width,
       node.height,
       node.order,
-      node.layoutColumn,
+      layout.positions.get(node.id)?.column,
+      layout.positions.get(node.id)?.top,
     ]),
-    edges: model.edges.map((edge) => [
-      edge.id,
-      edge.source,
-      edge.target,
-      edge.sourcePort,
-      edge.targetPort,
+    groups: layout.connectionGroups.map((group) => [
+      group.id,
+      group.source,
+      group.sourcePort,
+      group.sourceTop,
+      ...group.targets,
     ]),
   });
 }
@@ -540,11 +572,12 @@ export function EventCanvas({
     () => buildCanvasModel(events, filters, collapsedSessions, expandedDetailIds),
     [collapsedSessions, events, expandedDetailIds, filters],
   );
+  const layout = useMemo(() => layoutCanvasModel(model), [model]);
   const graphData = useMemo(
-    () => graphDataForModel(model, themeMode, callbacks),
-    [callbacks, model, themeMode],
+    () => graphDataForModel(model, themeMode, callbacks, layout),
+    [callbacks, layout, model, themeMode],
   );
-  const signature = useMemo(() => structuralSignature(model), [model]);
+  const signature = useMemo(() => structuralSignature(model, layout), [layout, model]);
 
   useEffect(() => {
     followingRef.current = true;
@@ -628,15 +661,12 @@ export function EventCanvas({
           setGraphError(null);
           if (structureChanged) {
             const animateDetail = requestedMotion !== null && !reducedMotion();
-            const positionedGraphData = await positionGraphDataByStableColumns(graphData);
-            if (graph.destroyed || generation !== generationRef.current) return;
             const portKeys = model.nodes.flatMap((node) => node.kind === "agent_session"
               ? ["input", "agent_header", ...node.messages.map((message) => message.portKey)]
               : node.kind === "tool_call" ? ["input", "output"] : ["input"]);
             await renderStructuralGraphUpdate(
               graph,
-              positionedGraphData,
-              null,
+              graphData,
               animateDetail && requestedMotion
                 ? { expanded: requestedMotion.expanded, portKeys }
                 : null,

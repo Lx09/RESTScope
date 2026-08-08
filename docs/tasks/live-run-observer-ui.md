@@ -383,3 +383,107 @@ cleanup finished at 320.95 seconds without SIGTERM or SIGKILL escalation.
   development dependency added no tracked diff, and the rerun passed.
 - Artifact directory:
   `artifacts/gitlab-projects-five-live/gitlab-projects-five-20260807T020616Z-4f228edc`.
+
+## 2026-08-07 message-anchored first-fit layout follow-up
+
+- The user approved replacing asynchronous Dagre placement with a synchronous,
+  deterministic layout. The true source anchor is now the concrete Assistant
+  message card or Tool card; Agent nodes remain message containers rather than
+  connection centers.
+- The complete unfiltered event graph supplies permanent base positions.
+  Children from one source card form an indivisible call group, align to that
+  card's top, and stack by event order with 16px gaps. Each group takes the
+  first column to the right whose previous group ends at least 16px above the
+  source card; otherwise the whole group moves right. Columns use their widest
+  card plus a 64px gap, while roots remain in column zero with 48px gaps.
+- Visible filtering and ordinary event revisions reuse that complete layout
+  skeleton. Expanding a message or event keeps every base column and top
+  anchor; only later colliding groups and their descendants move downward.
+  Closing the detail removes that temporary displacement and restores the exact
+  base coordinates with the existing 200ms motion.
+- Every connection port is fixed 16px below its card top. A call group renders
+  one neutral 2px connector: the first child receives the horizontal trunk,
+  later children share one downward spine 20px left of the first child, and
+  each final child segment has the only arrow. Spine and child turns use the
+  same 10px radius. Cards retain the higher visual layer, so a long straight
+  trunk may pass behind an intervening card without crossing its text.
+- Focused layout and component coverage verifies first-fit reuse, whole-group
+  rightward placement, expansion-only downward displacement, exact collapse
+  restoration, fixed ports, single-child lines, shared spines, neutral styling,
+  rounded turns, and child-only arrows. All 74 frontend tests, ESLint, the Ant
+  Design 6.5.3 checker, TypeScript/Vite production build, 51 focused observer
+  tests, and the complete 696-test Python suite (6 skipped) passed. Compileall
+  and `git diff --check` passed; two consecutive builds emitted the same five
+  asset names and sizes.
+- The saved five-minute GitLab snapshot restored all 140 semantic events from
+  IndexedDB in the new build: 12 Agent sessions, 90 Tools, three Batches, and
+  105 rendered cards. Worklist revision 3 / active `WI-002` remained accurate.
+  Dark and light 1440×900 checks had no console errors, and an expanded Tool
+  pushed its later same-column siblings while retaining their x coordinate.
+  The corrected shared-spine control point was also locked to a strict 90°
+  turn by an exact geometry test. The new static frontend remains available on
+  8766 with the dark theme restored. No Git operations have been authorized
+  for this worktree yet.
+
+## 2026-08-07 Assistant-owned Tool-result presentation
+
+- Tool-role messages are no longer rendered as independent cards inside an
+  Agent session. The frontend folds each result into the earlier Assistant
+  message whose Tool call has the same `tool_call_id`; a missing ID falls back
+  to the nearest matching Tool name or nearest calling Assistant and is marked
+  “调用来源不可用”. The observer schema, saved IndexedDB payload, Tool execution
+  nodes, and causal edges remain unchanged.
+- The next model prompt normally echoes the preceding Assistant tool-call
+  message before its Tool results. The canvas now recognizes that protocol
+  echo by stable call IDs (or exact message equality when IDs are unavailable)
+  and reuses the original Assistant card instead of drawing a duplicate. In
+  the saved GitLab history, the 14-turn Failure Resolution session therefore
+  changed from 29 cards to the expected 16: one System message, one User
+  message, and 14 real Assistant responses.
+- A collapsed Assistant card shows Tool-call and Tool-result counts. Expanding
+  it keeps the Assistant body and Tool-call request, then presents every result
+  in an Ant Design small Table modeled on the Smoke Batch Test Case table. Rows
+  show Tool name, Call ID, derived status, and result summary; each row expands
+  in place to the complete Markdown, formatted JSON object, or formatted JSON
+  array that the Agent received.
+- Canvas-model and component tests cover exact and fallback ownership, removal
+  of Tool-result cards, echoed-Assistant suppression, parallel results, status
+  display, and full row detail. All 76 frontend tests, ESLint, Ant Design 6.5.3
+  lint, TypeScript/Vite production build, the complete 696-test Python suite
+  (6 skipped), compileall, and `git diff --check` passed. The restored 140-event
+  GitLab history showed no Tool-role cards or duplicate Assistant cards; an
+  expanded two-result Assistant displayed both rows and formatted the complete
+  JSON object in-place, while its independent Tool nodes and causal edges
+  remained visible. Browser console inspection reported no errors. No Git
+  operation is included in this presentation change.
+
+## 2026-08-07 Chrome line/Card commit synchronization
+
+- A user-authorized GitLab run supplied a fresh Chrome-only reproduction after
+  browser-scoped IndexedDB correctly started empty. The supervisor interrupted
+  the destructive live acceptance after 141.81 seconds. Chrome retained 81
+  semantic events: four Agent sessions, 50 Tools, and three Smoke Batches. The
+  live backend closed, and the production static frontend resumed on port 8766.
+- The reproducible failure was not a missing semantic relationship or stable
+  connector calculation. On three reloads, the page already exposed the saved
+  81-event state while visible React cards lagged the G6 canvas by 75–100ms;
+  one captured frame showed ports and connector lines without their cards.
+  Stable frames restored the same parents, ports, branch geometry, and cards.
+- `@antv/g6-extension-react` calls React 19 `root.render()` and returns without
+  waiting for its DOM commit. RESTScope's G6 queue could therefore draw ports,
+  edges, and the next viewport transform before the separate Ant Design card
+  roots finished mounting or updating.
+- RESTScope now registers a local synchronous React-node variant. It preserves
+  the AntV HTML node lifecycle and event forwarding but wraps render, update,
+  and unmount in React `flushSync`, so G6 cannot continue the structural render
+  until the corresponding Card DOM is committed. No observer event, layout,
+  IndexedDB, Worklist, Phoenix, or backend behavior changed.
+- The focused regression asserts that the synchronous renderer has committed
+  initial content, an update, and unmount before each function returns. With
+  the production build in Chrome, the same three-reload loop reached visible
+  cards in the first restored-data sample in two runs and after the initial
+  empty loading frame in the third; the earlier line-without-card frame did not
+  recur. All 77 frontend tests, ESLint, Ant Design 6.5.3 lint, TypeScript/Vite
+  build, the complete 696-test Python suite (6 skipped), compileall, and
+  `git diff --check` passed. The pre-existing Vite large-chunk warning and
+  jsdom pseudo-element notices remain informational.

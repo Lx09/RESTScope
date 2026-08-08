@@ -143,7 +143,12 @@ function MessageCard({
       <InlineReveal
         ariaLabel={`第 ${message.turnNumber} 轮 ${ROLE_LABELS[message.role] ?? message.role} 完整消息`}
         collapsedHeight={AGENT_MESSAGE_COLLAPSED_CONTENT_HEIGHT}
-        detail={<AgentMessageBody message={message.message} />}
+        detail={(
+          <AgentMessageBody
+            message={message.message}
+            toolResults={message.toolResults}
+          />
+        )}
         detailClassName="canvas-message-detail"
         expanded={message.expanded}
         expandedHeight={INLINE_AGENT_DETAIL_HEIGHT}
@@ -152,6 +157,9 @@ function MessageCard({
       <Flex className="canvas-message-foot" align="center" gap={6}>
         <span aria-hidden className="canvas-message-foot-spacer" />
         {toolCount > 0 && <Tag color="gold">{toolCount} 个 Tool call</Tag>}
+        {message.toolResults.length > 0 && (
+          <Tag color="cyan">{message.toolResults.length} 个 Tool result</Tag>
+        )}
         {message.toolCallId && <Tag className="mono">Call · {message.toolCallId}</Tag>}
         {message.connectionContext && <Tag color="blue">连线来源</Tag>}
       </Flex>

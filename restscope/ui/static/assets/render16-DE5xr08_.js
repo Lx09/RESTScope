@@ -1,0 +1,1 @@
+import{i as e,r as t}from"./index-Df51D5PA.js";var{render:n,unmountComponentAtNode:r}=e(t());function i(e,t){n(e,t)}function a(e){r(e)}export{i as render,a as unmount};
