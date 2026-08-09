@@ -41,6 +41,11 @@ evaluation = [
 include = ["restscope*"]
 
 [tool.setuptools.package-data]
+"restscope.builtin_skills" = [
+    "*/SKILL.md",
+    "*/restscope.yaml",
+    "*/references/*.md",
+]
 "restscope.ui" = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]

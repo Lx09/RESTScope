@@ -19,8 +19,17 @@ from restscope.agent import (
 )
 from restscope.agent.prompt import AgentPromptSession, PromptSessionError
 from restscope.llm import LLMClient, LLMModelConfig
-from restscope.skills import SkillDefinition, SkillPolicy, SkillRegistry
+from restscope.skills import (
+    SkillDefinition,
+    SkillPolicy,
+    SkillRegistry,
+    builtin_skill_catalog,
+)
 from restscope.tools import AgentToolbox, ToolBinding, ToolCatalog, builtin_tool_catalog
+from restscope.tools.file import (
+    FILE_READ_TOOL_NAME,
+    file_read_tool_binding,
+)
 from restscope.tools.plan import (
     PLAN_READ_TOOL_NAME,
     PLAN_UPDATE_TOOL_NAME,
@@ -55,7 +64,12 @@ _PLAN_TOOL_NAMES = (
     PLAN_UPDATE_TOOL_NAME,
 )
 _HARNESS_OWNED_TOOL_NAMES = frozenset(
-    (*_SUBAGENT_TOOL_NAMES, *_PLAN_TOOL_NAMES, SKILL_READ_TOOL_NAME)
+    (
+        *_SUBAGENT_TOOL_NAMES,
+        *_PLAN_TOOL_NAMES,
+        SKILL_READ_TOOL_NAME,
+        FILE_READ_TOOL_NAME,
+    )
 )
 
 
@@ -96,8 +110,10 @@ class AgentRuntimeDefinition:
     """Provide all runtime objects needed to launch configured generic Agents.
 
     Concrete business Profiles are intentionally supplied by the application,
-    never created by this Module. Binding factories carry implementations only;
-    the global Catalog remains the sole source of Tool contracts.
+    never created by this Module. ``skills`` contains additional already-loaded
+    caller definitions; installed built-ins are discovered automatically and
+    cannot be replaced. Binding factories carry implementations only, while the
+    global Catalog remains the sole source of Tool contracts.
     """
 
     profiles: tuple[AgentProfile, ...]
@@ -141,7 +157,11 @@ class AgentRuntimeResolver:
         self.binding_factories = _unique_binding_factories(
             definition.tool_binding_factories
         )
-        self.skills = SkillRegistry(definition.skills)
+        # Standard package Skills are always discoverable, but Profile names
+        # and dependency grants remain the only authorization mechanism.
+        self.skills = SkillRegistry(
+            (*builtin_skill_catalog().definitions(), *definition.skills)
+        )
         self.skill_policy = SkillPolicy()
         self.context_sources = _unique_context_sources(definition.context_sources)
         self._validate()
@@ -245,6 +265,12 @@ class AgentRuntimeResolver:
         if selected_skills:
             skill_binding = skill_read_tool_binding(selected_skills)
             special_bindings[skill_binding.name] = skill_binding
+        # Unlike skill.read, file.read is an ordinary explicit Profile grant.
+        # Its Binding still belongs to the Harness because only the Harness has
+        # the final set of selected, policy-checked Skill definitions.
+        if FILE_READ_TOOL_NAME in profile.tool_names:
+            file_binding = file_read_tool_binding(selected_skills)
+            special_bindings[file_binding.name] = file_binding
         bindings: list[ToolBinding] = []
         for name in effective_tool_names:
             if name in special_bindings:
@@ -347,6 +373,10 @@ class AgentRuntimeResolver:
                 raise ValueError(
                     f"Subagent Tool Binding is owned by Harness: {binding_name}"
                 )
+            if binding_name == FILE_READ_TOOL_NAME:
+                raise ValueError(
+                    f"Skill file Tool Binding is owned by Harness: {binding_name}"
+                )
             if binding_name not in built_in_names | external_names:
                 raise ValueError(f"Unknown Tool Binding factory: {binding_name}")
         provider_names = set(self.definition.client.registry.list_names())
@@ -355,6 +385,10 @@ class AgentRuntimeResolver:
                 raise ValueError(
                     "Agent Profiles must not declare skill.read; selecting at "
                     "least one Skill authorizes the Harness loader automatically"
+                )
+            if FILE_READ_TOOL_NAME in profile.tool_names and not profile.skill_names:
+                raise ValueError(
+                    "Agent Profiles may grant file.read only with selected Skills"
                 )
             selected_plan_tools = tuple(
                 name for name in profile.tool_names if name in _PLAN_TOOL_NAMES

@@ -25,6 +25,7 @@ ToolSubject = Literal[
     "worklist",
     "plan",
     "skill",
+    "file",
     "parameter",
     "subagent",
     "external",

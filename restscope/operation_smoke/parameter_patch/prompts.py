@@ -14,14 +14,17 @@ from typing import Any
 from restscope.context import CompactTextWriter, ContextMetrics
 from restscope.llm import LLMModelConfig
 from restscope.harness.testing import OperationGeneratorConfig, build_semantic_input_map
-from restscope.skills import PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
+from restscope.skills import builtin_skill_catalog
 
 from .schemas import CompiledConstraintPatch, ParameterPatchTask
 
 
-# Preserve the old symbol for evaluation callers while the maintained method
-# now lives in the project-native Skill Module.
-EXPERT_SYSTEM_PROMPT = PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
+# The temporary specialized Agent consumes one standard Reference directly
+# through the generic in-memory Catalog. It does not receive file.read because
+# its deterministic prompt builder—not the model—selects this fixed protocol.
+EXPERT_SYSTEM_PROMPT = builtin_skill_catalog().get("parameter-patch").reference(
+    "references/proposal-protocol.md"
+).content
 
 
 @dataclass(slots=True, frozen=True)

@@ -27,6 +27,7 @@ EXPECTED_BUILTIN_TOOLS = {
     "plan.read": "plan",
     "plan.update": "plan",
     "skill.read": "skill",
+    "file.read": "file",
     "lookup_parameter_history": "parameter",
     "generate_parameter_patch": "parameter",
     "parameter_patch.read_candidate": "parameter",
