@@ -4,20 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .contract_tracker import ContractCheckResult
-from .resource_schemas import ResourceMonitorResult
-from .response_value import ResponseValueObservationResult
+from .response_contracts import ContractCheckResult
+from .resource_identifiers.schemas import ResourceMonitorResult
+from .response_values.tracker import ResponseValueObservationResult
 
 
 @dataclass(frozen=True, slots=True)
 class APIBehaviorWarning:
-    """
-    Coordinate apibehavior warning behavior for API response monitoring and its narrowly
-    approved evidence catalog.
-
-    Read the public methods as the supported lifecycle and treat underscore-prefixed
-    helpers as internal implementation details.
-    """
+    """Expose one bounded monitor warning with a stable code, message, and optional issue list."""
     code: str
     message: str
     issues: tuple[str, ...] = ()
@@ -25,13 +19,7 @@ class APIBehaviorWarning:
 
 @dataclass(frozen=True, slots=True)
 class APIBehaviorMonitorResult:
-    """
-    Carry validated apibehavior monitor result data across API response monitoring and
-    its narrowly approved evidence catalog.
-
-    The annotated fields form the contract; validation rejects missing, extra, or
-    incorrectly typed values at the boundary.
-    """
+    """Summarize contract, resource-identifier, and response-value observations for one target response."""
     contract: ContractCheckResult
     resource_identifier: ResourceMonitorResult | None = None
     response_values: ResponseValueObservationResult | None = None

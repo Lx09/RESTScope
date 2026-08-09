@@ -10,7 +10,7 @@ import pytest
 
 def _context(*, secret: str = "Bearer runtime-secret"):
     """Build one immutable App target context for boundary tests."""
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(
@@ -38,7 +38,7 @@ def _context(*, secret: str = "Bearer runtime-secret"):
 def test_harness_runtime_binds_context_once_and_exposes_exact_operations() -> None:
     """The App owns context lifecycle without an executable global registry."""
     from restscope.harness import build_harness
-    from restscope.tools import ToolContextError
+    from restscope.tools.context import ToolContextError
 
     runtime = build_harness()
     context = _context()
@@ -46,7 +46,7 @@ def test_harness_runtime_binds_context_once_and_exposes_exact_operations() -> No
 
     assert runtime.require_context() is context
     assert runtime.require_operation("GET /pets").operation_key == "GET /pets"
-    assert runtime.openapi_capability.list_inputs(
+    assert runtime.openapi_backend.list_inputs(
         operation_key="GET /pets"
     )["structured"] == {
         "operation_key": "GET /pets",
@@ -63,12 +63,12 @@ def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
     tmp_path: Path,
 ) -> None:
     """The runtime exposes lookup implementations but owns no global toolbox."""
-    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueCatalog,
     )
     from restscope.harness import build_harness
-    from restscope.tools import ResourceIdentifierCapability
+    from restscope.tools.resource import ResourceToolBackend
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -86,24 +86,25 @@ def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
     response_catalog = ResponseValueCatalog(
         lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
     )
-    monitor = SimpleNamespace(
-        resource_identifier_tracker=SimpleNamespace(catalog=resource_catalog),
-        response_value_tracker=SimpleNamespace(catalog=response_catalog),
+    resource_backend = ResourceToolBackend(catalog=resource_catalog)
+    runtime = build_harness(
+        observed_response_fields_provider=(
+            response_catalog.list_observed_response_fields
+        ),
+        resource_tool_backend=resource_backend,
     )
-
-    runtime = build_harness(api_behavior_monitor_coordinator=monitor)
     runtime.bind_context(_context())
 
     assert isinstance(
-        runtime.resource_identifier_capability,
-        ResourceIdentifierCapability,
+        runtime.resource_tool_backend,
+        ResourceToolBackend,
     )
-    assert runtime.resource_identifier_capability.list_resources()["structured"] == {
+    assert runtime.resource_tool_backend.list_resources()["structured"] == {
         "resources": [],
         "total": 0,
         "offset": 0,
     }
-    assert runtime.openapi_capability.find_observed_response_fields(
+    assert runtime.openapi_backend.find_observed_response_fields(
         name="pet_id"
     )["structured"] == {
         "requested_name": "pet_id",
@@ -153,7 +154,8 @@ def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments
 def test_missing_context_is_stable_and_unknown_tool_errors_hide_headers() -> None:
     """Lifecycle errors are explicit while implementation details stay internal."""
     from restscope.harness import build_harness
-    from restscope.tools import AgentToolbox, ToolContextError
+    from restscope.tools import AgentToolbox
+    from restscope.tools.context import ToolContextError
     from restscope.llm import ToolCall, ToolSpec
 
     runtime = build_harness()

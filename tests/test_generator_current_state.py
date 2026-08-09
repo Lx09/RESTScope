@@ -15,7 +15,7 @@ def _catalog(tmp_path: Path):
         make_session_factory,
     )
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import GeneratorConfigCatalog
+    from restscope.request_generation import RequestGenerationConfigStore
 
     ir = OpenAPIParser.parse(
         {
@@ -41,7 +41,7 @@ def _catalog(tmp_path: Path):
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'current.sqlite'}")
     Base.metadata.create_all(engine)
     session_factory = make_session_factory(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(session_factory)
     )
     assert catalog.initialize_once(ir) is True
@@ -53,7 +53,7 @@ def test_current_write_replaces_only_the_input_row(tmp_path: Path) -> None:
 
     from sqlalchemy import inspect, text
 
-    from restscope.harness.testing import InputGeneratorPatch, prepare_accepted_generator_patch
+    from restscope.request_generation import InputGeneratorPatch, prepare_accepted_generator_patch
 
     catalog, engine = _catalog(tmp_path)
     current = catalog.require_operation("GET /items/{itemId}")
@@ -91,8 +91,8 @@ def test_current_content_compare_rejects_a_stale_writer(tmp_path: Path) -> None:
 
     import pytest
 
-    from restscope.harness.testing import InputGeneratorPatch, prepare_accepted_generator_patch
-    from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
+    from restscope.request_generation import InputGeneratorPatch, prepare_accepted_generator_patch
+    from restscope.request_generation.ports import GeneratorConfigConcurrentWrite
 
     catalog, _ = _catalog(tmp_path)
     current = catalog.require_operation("GET /items/{itemId}")

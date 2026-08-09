@@ -19,7 +19,7 @@ def test_random_config_loads_one_optional_environment_seed(tmp_path) -> None:
 
 def test_seeded_random_repeats_common_values_without_shared_call_state() -> None:
     """Scenario: the same root seed and scope repeat regardless of call order."""
-    from restscope.randomness import SeededRandom
+    from restscope.request_generation import SeededRandom
 
     first = SeededRandom(731)
     second = SeededRandom(731)
@@ -37,7 +37,7 @@ def test_seeded_random_repeats_common_values_without_shared_call_state() -> None
 
 def test_seeded_random_does_not_replace_unique_runtime_ids() -> None:
     """Scenario: replaying test values does not make UUID identities repeat."""
-    from restscope.randomness import SeededRandom
+    from restscope.request_generation import SeededRandom
 
     source = SeededRandom(731)
     first_value = source.integer(0, 10, scope="value")

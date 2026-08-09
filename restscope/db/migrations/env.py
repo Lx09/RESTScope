@@ -25,11 +25,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """
-    Run migrations offline for the repository and database persistence boundary.
-
-    The annotated arguments and return type define the data boundary used by callers.
-    """
+    """Render migration SQL from the configured URL without opening a database connection."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
@@ -37,11 +33,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """
-    Run migrations online for the repository and database persistence boundary.
-
-    The annotated arguments and return type define the data boundary used by callers.
-    """
+    """Run migrations through a live SQLAlchemy connection and transaction."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

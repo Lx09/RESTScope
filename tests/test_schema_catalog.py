@@ -1,4 +1,4 @@
-"""Protect the one-shot OpenAPI audit catalog and final database topology."""
+"""Protect the one-shot OpenAPI Audit and final database topology."""
 
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ def _document(title: str = "Pets") -> dict:
 def _catalog(tmp_path: Path):
     """Create an isolated current OpenAPI catalog without running App startup."""
 
-    from restscope.catalog import OpenAPICatalog
+    from restscope.openapi_audit import OpenAPIAudit
     from restscope.db import (
         Base,
         SqlAlchemyOpenAPIUnitOfWork,
@@ -159,10 +159,10 @@ def _catalog(tmp_path: Path):
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'catalog.sqlite'}")
     Base.metadata.create_all(engine)
     factory = make_session_factory(engine)
-    return OpenAPICatalog(lambda: SqlAlchemyOpenAPIUnitOfWork(factory)), engine
+    return OpenAPIAudit(lambda: SqlAlchemyOpenAPIUnitOfWork(factory)), engine
 
 
-def test_openapi_catalog_initializes_once_and_returns_isolated_copies(
+def test_openapi_audit_initializes_once_and_returns_isolated_copies(
     tmp_path: Path,
 ) -> None:
     """The audit catalog owns one current document and never exposes mutable JSON."""
@@ -185,7 +185,7 @@ def test_openapi_change_updates_current_and_appends_filterable_event(
 ) -> None:
     """One response change commits the replacement document and audit row together."""
 
-    from restscope.catalog import OpenAPIChangeEventWrite
+    from restscope.openapi_audit import OpenAPIChangeEventWrite
 
     catalog, _ = _catalog(tmp_path)
     catalog.initialize(_document())
@@ -390,7 +390,7 @@ def test_alembic_baseline_upgrades_and_downgrades_exact_final_schema(
 def test_catalog_package_has_no_database_or_sqlalchemy_imports() -> None:
     """The catalog contracts remain independent from their SQLAlchemy adapter."""
 
-    import restscope.catalog as catalog_package
+    import restscope.openapi_audit as catalog_package
 
     catalog_root = Path(catalog_package.__file__).parent
     violations: list[str] = []
@@ -412,18 +412,9 @@ def test_catalog_package_has_no_database_or_sqlalchemy_imports() -> None:
     assert violations == []
 
 
-def test_public_builder_wires_the_configured_openapi_catalog(tmp_path: Path) -> None:
-    """The composition helper returns a working database-backed audit catalog."""
+def test_app_root_does_not_export_openapi_audit_composition_helpers() -> None:
+    """Only the App composition root may wire audit persistence adapters."""
 
-    from restscope import RESTScopeConfig, build_openapi_catalog
-    from restscope.db import Base, create_engine_from_config
-    from restscope.restscope_config import DBConfig
+    import restscope
 
-    config = RESTScopeConfig.from_environment()
-    config = replace(config, db=DBConfig(url=f"sqlite:///{tmp_path / 'builder.sqlite'}"))
-    Base.metadata.create_all(create_engine_from_config(config.db))
-
-    catalog = build_openapi_catalog(config)
-    catalog.initialize(_document("Builder"))
-
-    assert catalog.current_document()["info"]["title"] == "Builder"
+    assert not hasattr(restscope, "build_openapi_audit")

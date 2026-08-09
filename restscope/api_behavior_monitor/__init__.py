@@ -29,9 +29,9 @@ _PUBLIC_MODULE_BY_NAME = {
     "APIBehaviorMonitorResult": ".schemas",
     "APIBehaviorResponseProcessor": ".response_processor",
     "APIBehaviorWarning": ".schemas",
-    "ResponseValueSource": ".response_value_catalog",
-    "ResourceLookupRequest": ".resource_schemas",
-    "ResourceLookupResult": ".resource_schemas",
+    "ResponseValueSource": ".response_values.catalog",
+    "ResourceLookupRequest": ".resource_identifiers.schemas",
+    "ResourceLookupResult": ".resource_identifiers.schemas",
     "build_api_behavior_monitor_coordinator": ".factory",
 }
 

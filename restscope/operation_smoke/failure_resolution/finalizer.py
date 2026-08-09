@@ -27,13 +27,13 @@ from restscope.operation_smoke.parameter_patch import (
     CompiledConstraintPatch,
     GeneratorPatchDraft,
 )
-from restscope.harness.testing.test_case_catalog import HTTPFailure, TestCaseCatalog
-from restscope.harness.testing import (
+from restscope.harness.operation_testing.test_case_catalog import HTTPFailure, TestCaseCatalog
+from restscope.request_generation import (
     OperationGeneratorConfig,
     build_semantic_input_map,
     referenced_input_node_ids,
 )
-from restscope.harness.testing.ports import (
+from restscope.request_generation.ports import (
     GeneratorConfigConcurrentWrite,
     GeneratorConfigRepository,
 )

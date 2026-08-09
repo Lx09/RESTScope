@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from restscope.http_transport import (
+from restscope.target_http import (
     TargetResponseObservation,
     TargetResponseOperationContext,
     TargetResponseProcessorResult,
@@ -15,13 +15,7 @@ from .coordinator import APIBehaviorMonitorCoordinator, APIBehaviorMonitorError
 
 
 class APIBehaviorResponseProcessor:
-    """
-    Coordinate apibehavior response processor behavior for API response monitoring and
-    its narrowly approved evidence catalog.
-
-    Read the public methods as the supported lifecycle and treat underscore-prefixed
-    helpers as internal implementation details.
-    """
+    """Adapt completed target responses to the three API Behavior Monitor subjects without owning their state."""
     def __init__(self, coordinator: APIBehaviorMonitorCoordinator) -> None:
         """Store the workflow coordinator that receives each target response."""
         self.coordinator = coordinator
@@ -31,13 +25,7 @@ class APIBehaviorResponseProcessor:
         observation: TargetResponseObservation,
         context: TargetResponseOperationContext,
     ) -> TargetResponseProcessorResult:
-        """
-        Process one input at the boundary of API response monitoring and its narrowly
-        approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Pass one response observation to the Coordinator and return bounded validation status and warnings to target HTTP."""
         try:
             result = self.coordinator.observe_response(observation, context)
         except APIBehaviorMonitorError as exc:
@@ -81,13 +69,7 @@ class APIBehaviorResponseProcessor:
 
 
 def _result_details(result) -> dict:
-    """
-    Handle result details as part of API response monitoring and its narrowly approved
-    evidence catalog.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Convert monitor warnings and errors into bounded response-observation details."""
     resource = result.resource_identifier
     response_values = result.response_values
     return {

@@ -87,8 +87,8 @@ class StubPatchCoordinator:
             GeneratorPatchDraft,
             ValidatedParameterPatch,
         )
-        from restscope.harness.testing import InputGeneratorPatch
-        from restscope.harness.testing.models import ConstantGenerator
+        from restscope.request_generation import InputGeneratorPatch
+        from restscope.request_generation.models import ConstantGenerator
 
         self.calls.append(task)
         output_limit.consume("parameter_patch_agent")
@@ -134,7 +134,6 @@ class StubProbe:
     def __init__(self):
         """Start with no target attempts or issued probe case references."""
         self.executed = []
-        self.case_ids = []
 
     def binding(self, config):
         """Bind the canonical test Tool while execution remains intercepted."""
@@ -155,40 +154,20 @@ class StubProbe:
             return "HTTP probe is outside the current operation"
         return None
 
-    def execute(self, *, config, tool_call, catalog):
-        """Record every call independently, even when its arguments repeat."""
+    def execute(self, *, config, tool_call):
+        """Return each raw HTTP result; the Harness records its Test Case."""
         from restscope.llm import ToolResult
-        from restscope.harness.testing.test_case_catalog import (
-            CatalogTestCaseDraft,
-            HTTPFailure,
-        )
 
         self.executed.append(dict(tool_call.arguments))
-        failure = HTTPFailure(
-            status_code=400,
-            messages=["HTTP 400: name is invalid"],
-        )
-        case = catalog.record(
-            CatalogTestCaseDraft(
-                request={
-                    "path": {"projectId": "random-project"},
-                    "query": {},
-                    "header": {},
-                    "cookie": {},
-                },
-                response_body={"message": "name is invalid"},
-                failure=failure,
-            )
-        )
-        self.case_ids.append(case.case_id)
         return ToolResult(
             tool_call_id=tool_call.id,
             name=tool_call.name,
             status="succeeded",
             structured={
-                "case_id": case.case_id,
                 "status_code": 400,
-                "failure": failure.model_dump(mode="json"),
+                "reason_phrase": "Bad Request",
+                "headers": {"content-type": "application/json"},
+                "body": {"message": "name is invalid"},
             },
         )
 
@@ -217,12 +196,12 @@ def _compact_model():
 
 def _catalog():
     """Create two failed cases with one exact repeated Failure message."""
-    from restscope.harness.testing.test_case_catalog import (
+    from restscope.harness.operation_testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
     )
-    from restscope.request_inputs import RequestInputReference
+    from restscope.operation_references import RequestInputReference
 
     catalog = TestCaseCatalog(
         input_references=[
@@ -324,7 +303,7 @@ def _finish(reason="The worklist records the supported conclusions."):
     )
 
 
-def _run(responses, *, output_limit=None, openapi_capability=None):
+def _run(responses, *, output_limit=None, openapi_backend=None):
     """Create and advance one Resolution session with offline collaborators."""
     from restscope.operation_smoke.failure_resolution import FailureResolutionAgent
     from restscope.operation_smoke.output_limit import ModelOutputLimit
@@ -335,7 +314,7 @@ def _run(responses, *, output_limit=None, openapi_capability=None):
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=openapi_capability or StubOpenAPI(),
+        openapi_backend=openapi_backend or StubOpenAPI(),
         finalizer=finalizer,
     )
     outcome = agent.start(
@@ -418,7 +397,7 @@ def test_resolution_compacts_b_plus_h_into_b_plus_h_prime_at_eighty_percent() ->
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=finalizer,
     )
 
@@ -504,7 +483,7 @@ def test_resolution_clips_only_the_compact_summary_and_keeps_handoff_prefix() ->
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=StubFinalizer(),
     )
 
@@ -548,7 +527,7 @@ def test_resolution_uses_full_request_bytes_when_prompt_usage_is_missing() -> No
         client=client,
         model=small_resolution_model,
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=StubFinalizer(),
     )
 
@@ -598,7 +577,7 @@ def test_second_compact_absorbs_the_old_summary_without_preserving_it_as_u() -> 
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=StubFinalizer(),
     )
 
@@ -649,7 +628,7 @@ def test_resolution_keeps_h_and_disables_compact_after_two_provider_failures() -
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=finalizer,
     )
 
@@ -699,7 +678,7 @@ def test_compact_retry_respects_the_shared_operation_output_limit() -> None:
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=finalizer,
     )
 
@@ -775,7 +754,7 @@ def test_unclear_failure_can_follow_schema_fields_to_exact_case_values() -> None
 
     outcome, client, _finalizer = _run(
         [list_fields, get_value, _write_call(), _finish()],
-        openapi_capability=openapi,
+        openapi_backend=openapi,
     )
 
     assert outcome.status == "completed"
@@ -966,7 +945,7 @@ def test_patch_tool_returns_only_p_ref_while_registry_keeps_exact_candidate() ->
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=finalizer,
         memory=StubMemory(),
         patch_coordinator_factory=patch_factory,
@@ -1043,7 +1022,7 @@ def test_identical_http_probes_execute_twice_and_issue_fresh_case_refs() -> None
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=finalizer,
         http_probe=probe,
     )
@@ -1063,7 +1042,8 @@ def test_identical_http_probes_execute_twice_and_issue_fresh_case_refs() -> None
     assert outcome.status == "completed"
     assert len(probe.executed) == 2
     assert probe.executed[0] == probe.executed[1]
-    assert probe.case_ids == ["TC3", "TC4"]
+    assert catalog.get_case("TC3").case_id == "TC3"
+    assert catalog.get_case("TC4").case_id == "TC4"
     assert finalizer.calls[0]["sources"][0].test_case_refs == [
         "TC1",
         "TC2",
@@ -1111,7 +1091,7 @@ def test_http_probe_requires_an_active_worklist_item() -> None:
         client=client,
         model=_model(),
         compact_model=_compact_model(),
-        openapi_capability=StubOpenAPI(),
+        openapi_backend=StubOpenAPI(),
         finalizer=StubFinalizer(),
         http_probe=probe,
     )
@@ -1143,12 +1123,12 @@ def test_long_exact_failure_stays_in_registry_while_prompt_is_bounded() -> None:
     from restscope.operation_smoke.failure_resolution.prompts import (
         failure_source_prompt,
     )
-    from restscope.harness.testing.test_case_catalog import (
+    from restscope.harness.operation_testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
     )
-    from restscope.request_inputs import RequestInputReference
+    from restscope.operation_references import RequestInputReference
 
     exact_message = "HTTP 400: " + ("invalid field; " * 300) + "END"
     catalog = TestCaseCatalog(

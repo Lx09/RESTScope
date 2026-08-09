@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 
 class StubLLMClient:
@@ -33,7 +34,7 @@ def _selection(identifier_candidate_id: str | None) -> dict:
 
 
 def _catalog(tmp_path: Path):
-    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -50,7 +51,7 @@ def _catalog(tmp_path: Path):
 
 
 def _tracker(tmp_path: Path, client: StubLLMClient):
-    from restscope.api_behavior_monitor.resource_identifier import ResourceIdentifierTracker
+    from restscope.api_behavior_monitor.resource_identifiers.tracker import ResourceIdentifierTracker
     from restscope.llm import LLMModelConfig
 
     catalog = _catalog(tmp_path)
@@ -73,7 +74,7 @@ def _observation(
     path: str = "/users",
     body,
 ):
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         MonitoredOperation,
         ResourceObservation,
     )
@@ -91,7 +92,7 @@ def _observation(
 
 
 def _record_user_resource(catalog, *, aliases: list[str] | None = None) -> None:
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -369,7 +370,7 @@ def test_two_invalid_model_outputs_do_not_persist_partial_rules(
     """Scenario: verify that two invalid model outputs do not persist partial rules."""
     import pytest
 
-    from restscope.api_behavior_monitor.resource_identifier import ResourceIdentifierOutputError
+    from restscope.api_behavior_monitor.resource_identifiers.tracker import ResourceIdentifierOutputError
     from restscope.api_behavior_monitor import ResourceLookupRequest
 
     client = StubLLMClient(_selection("forged"), _selection("forged"))
@@ -810,7 +811,7 @@ def test_legacy_negative_rule_is_replaced_by_positive_evidence(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that legacy negative rule is replaced by positive evidence."""
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -852,7 +853,7 @@ def test_legacy_negative_rule_is_replaced_by_positive_evidence(
 def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
     """Scenario: verify that builder selects configured fast model."""
     from restscope.api_behavior_monitor import build_api_behavior_monitor_coordinator
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -869,6 +870,9 @@ def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
 
     coordinator = build_api_behavior_monitor_coordinator(
         RESTScopeConfig.from_environment(env_file),
+        resource_catalog=SimpleNamespace(),
+        response_value_catalog=SimpleNamespace(),
+        openapi_audit=SimpleNamespace(),
         llm_client=client,
     )
 
@@ -881,7 +885,7 @@ def test_resource_lookup_capability_remains_without_model_tool_wrapper(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that resource lookup tool returns complete structured result."""
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -951,11 +955,11 @@ def test_existing_resource_context_limits_fail_closed() -> None:
     """Scenario: verify that existing resource context limits fail closed."""
     import pytest
 
-    from restscope.api_behavior_monitor.resource_identifier import (
+    from restscope.api_behavior_monitor.resource_identifiers.tracker import (
         _EvidenceLimitExceeded,
         _resource_prompt_context,
     )
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         ResourceNameSummary,
     )
 

@@ -3,13 +3,13 @@
 from .builtin import builtin_skill_catalog
 from .manifest import SkillDefinition, SkillManifest, SkillReference
 from .policy import SkillPolicy
-from .registry import SkillRegistry
+from .catalog import SkillCatalog
 
 __all__ = [
     "SkillDefinition",
     "SkillManifest",
     "SkillReference",
     "SkillPolicy",
-    "SkillRegistry",
+    "SkillCatalog",
     "builtin_skill_catalog",
 ]

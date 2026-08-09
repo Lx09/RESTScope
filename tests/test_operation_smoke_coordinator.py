@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from restscope.tools import ToolContext
+from restscope.tools.context import ToolContext
 from restscope.openapi_parser import OpenAPIParser
 from restscope.operation_smoke import OperationSmokeCoordinator, OperationSmokeRequest
 from restscope.operation_smoke.failure_resolution import (
@@ -20,7 +20,7 @@ from tests._operation_smoke_resolution_fixtures import smoke_config, smoke_repor
 
 def _report(run_id: str, *, status_code: int):
     """Build one complete single-case Batch result."""
-    from restscope.harness.testing.test_case_catalog import HTTPFailure
+    from restscope.harness.operation_testing.test_case_catalog import HTTPFailure
 
     base = smoke_report()
     failure = (
@@ -118,9 +118,9 @@ class StubResolutionAgent:
                     result.commit is not None
                     and result.commit.applied_candidate_refs
                 ):
-                    from restscope.harness.testing import preview_generator_patch
-                    from restscope.harness.testing import InputGeneratorPatch
-                    from restscope.harness.testing.models import ConstantGenerator
+                    from restscope.request_generation import preview_generator_patch
+                    from restscope.request_generation import InputGeneratorPatch
+                    from restscope.request_generation.models import ConstantGenerator
 
                     owner.catalog.current = preview_generator_patch(
                         owner.catalog.current,
@@ -263,7 +263,7 @@ def _coordinator(*, reports, outcomes, events):
     agent = StubResolutionAgent(outcomes, events, catalog)
     return (
         OperationSmokeCoordinator(
-            config_catalog=catalog,
+            config_store=catalog,
             batch_runner=StubRunner(reports, events),
             failure_resolution_agent=agent,
             constraint_reader=EmptyConstraintReader(),

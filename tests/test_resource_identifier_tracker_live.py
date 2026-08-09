@@ -29,14 +29,14 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
     """Classify two resources and reject summary metadata in one observation."""
 
     try:
-        from restscope.api_behavior_monitor.resource_schemas import (
+        from restscope.api_behavior_monitor.resource_identifiers.schemas import (
             DetectedResourceGroup,
             MonitoredOperation,
             ResourceObservation,
         )
-        from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
+        from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
         from restscope.api_behavior_monitor import ResourceLookupRequest
-        from restscope.api_behavior_monitor.resource_identifier import ResourceIdentifierTracker
+        from restscope.api_behavior_monitor.resource_identifiers.tracker import ResourceIdentifierTracker
         from restscope.db import (
             Base,
             SqlAlchemyResourceCatalogUnitOfWork,
@@ -45,8 +45,8 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
         )
         from restscope.llm import ModelSelector, build_llm_client
         from restscope.observability import TracingRuntime
-        from restscope.redaction import Redactor
-        from restscope.restscope_config import RESTScopeConfig
+        from restscope.observability import Redactor
+        from restscope.config import RESTScopeConfig
     except Exception:
         pytest.fail(
             "Could not import Resource Identifier Tracker live runtime components.",

@@ -209,12 +209,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         return self._beta_client
 
     def _request_kwargs(self, request: LLMRequest) -> dict[str, Any]:
-        """
-        Handle request kwargs as part of provider-independent language-model invocation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Build DeepSeek request options while omitting unsupported or unset fields."""
         reasoning = self._effective_reasoning(request)
         self._validate_reasoning_history(request, reasoning=reasoning)
         thinking_enabled = reasoning.mode != "disabled"
@@ -265,12 +260,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         raw_response: Any,
         latency_ms: int,
     ) -> LLMResponse:
-        """
-        Normalize response for provider-independent language-model invocation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Translate one DeepSeek response into the shared LLMResponse contract, preserving usage and tool calls."""
         response = super()._normalize_response(request, raw_response, latency_ms)
         message = raw_response.choices[0].message
         reasoning_content = getattr(message, "reasoning_content", None)

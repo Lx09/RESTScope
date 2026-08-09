@@ -7,7 +7,7 @@ from .bootstrap import (
     UnsupportedDatabaseURLError,
 )
 from .session import create_engine_from_config, create_engine_from_url, make_session_factory
-from .unit_of_work import (
+from .adapters import (
     SqlAlchemyGeneratorConfigUnitOfWork,
     SqlAlchemyResourceCatalogUnitOfWork,
     SqlAlchemyResponseValueCatalogUnitOfWork,

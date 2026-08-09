@@ -639,7 +639,7 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
 def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
     """Scenario: verify that model selector uses thinking and fast configs."""
     from restscope.llm import ModelSelector
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -669,7 +669,7 @@ def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
 
 def test_deepseek_profiles_accept_one_m_context_and_384k_output(tmp_path: Path) -> None:
     """The approved local DeepSeek capacities remain valid for both model slots."""
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -700,7 +700,7 @@ def test_model_config_exposes_separate_context_and_output_limits(
     tmp_path: Path,
 ) -> None:
     """Scenario: context capacity and completion capacity remain distinct."""
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -727,7 +727,7 @@ def test_model_config_rejects_output_limit_that_fills_context(
     tmp_path: Path,
 ) -> None:
     """Scenario: a model must retain room for prompt evidence."""
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -754,7 +754,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
     """Scenario: verify that deepseek config defaults reasoning by model slot and registers provider."""
     from restscope.llm import ModelSelector, build_llm_registry
     from restscope.llm.providers.deepseek import DeepSeekProvider
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -782,7 +782,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
 def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> None:
     """Scenario: verify that deepseek config parses explicit reasoning effort."""
     from restscope.llm import ModelSelector
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -887,7 +887,7 @@ def test_agent_toolbox_exposes_and_executes_only_explicit_tools(tool_context) ->
 
 def test_redactor_only_removes_registered_secret_values() -> None:
     """Scenario: verify that redactor only removes registered secret values."""
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     text = "Authorization: Bearer abc.def.ghi api_key=secret123 access_token: token-value"
     redacted = Redactor(["secret123"]).redact_text(text)

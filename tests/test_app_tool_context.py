@@ -31,7 +31,7 @@ def _app(tmp_path):
     from restscope.harness import AgentRuntimeDefinition, build_harness
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     class Provider:
@@ -83,7 +83,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
     from restscope.llm import LLMClient, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.observability import TracingRuntime
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     class Provider:
         """Record the one production-shaped Main request without network I/O."""
@@ -140,7 +140,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
 
 def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp_path) -> None:
     """One parsed target feeds the only taskless Main loop in this App."""
-    from restscope.tools import ToolContextError
+    from restscope.tools.context import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
     original_parse = OpenAPIParser.parse
@@ -210,7 +210,7 @@ def test_app_validates_and_forwards_supported_schema_sources(
 
 def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app allows retry after initialization failure."""
-    from restscope.tools import ToolContextError
+    from restscope.tools.context import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -258,7 +258,7 @@ def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
 
 def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> None:
     """Scenario: verify that app requires initialization and clears context on close."""
-    from restscope.tools import ToolContextError
+    from restscope.tools.context import ToolContextError
 
     app = _app(tmp_path)
     assert app.harness_runtime is not None

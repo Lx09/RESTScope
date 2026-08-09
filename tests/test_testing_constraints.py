@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 
 def _operation_snapshot():
-    from restscope.harness.testing import (
+    from restscope.request_generation import (
         InputNodeSnapshot,
         OperationTestSnapshot,
         SchemaSnapshot,
@@ -99,7 +99,7 @@ def _operation_snapshot():
 
 def test_constraint_contracts_parse_recursive_expressions() -> None:
     """Scenario: verify that constraint contracts parse recursive expressions."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         ComparePredicate,
         ConstraintSet,
         ImplicationConstraint,
@@ -139,7 +139,7 @@ def test_constraint_contracts_parse_recursive_expressions() -> None:
 
 def test_constraint_contracts_are_frozen_and_forbid_extra_fields() -> None:
     """Scenario: verify that constraint contracts are frozen and forbid extra fields."""
-    from restscope.harness.testing.constraints import PresentPredicate
+    from restscope.request_generation.constraints import PresentPredicate
 
     predicate = PresentPredicate(
         type="present",
@@ -161,7 +161,7 @@ def test_constraint_contracts_are_frozen_and_forbid_extra_fields() -> None:
 
 def test_assignment_distinguishes_omission_explicit_null_and_structural_presence() -> None:
     """Scenario: verify that assignment distinguishes omission explicit null and structural presence."""
-    from restscope.harness.testing.constraints import InputAssignment, InputNodeOverride
+    from restscope.request_generation.constraints import InputAssignment, InputNodeOverride
 
     omitted = InputAssignment(present=False)
     explicit_null = InputAssignment(
@@ -190,7 +190,7 @@ def test_assignment_distinguishes_omission_explicit_null_and_structural_presence
 )
 def test_assignment_rejects_inconsistent_value_state(payload: dict) -> None:
     """Scenario: verify that assignment rejects inconsistent value state."""
-    from restscope.harness.testing.constraints import InputAssignment
+    from restscope.request_generation.constraints import InputAssignment
 
     with pytest.raises(ValidationError):
         InputAssignment.model_validate(payload)
@@ -198,7 +198,7 @@ def test_assignment_rejects_inconsistent_value_state(payload: dict) -> None:
 
 def test_constraint_set_rejects_an_empty_expression_list() -> None:
     """Scenario: verify that constraint set rejects an empty expression list."""
-    from restscope.harness.testing.constraints import ConstraintSet
+    from restscope.request_generation.constraints import ConstraintSet
 
     with pytest.raises(ValidationError):
         ConstraintSet(constraints=[])
@@ -206,7 +206,7 @@ def test_constraint_set_rejects_an_empty_expression_list() -> None:
 
 def test_constraint_validation_accepts_supported_fixed_scalar_inputs() -> None:
     """Scenario: verify that constraint validation accepts supported fixed scalar inputs."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         ComparePredicate,
         ConstraintSet,
         InputValue,
@@ -297,7 +297,7 @@ def test_constraint_validation_rejects_invalid_references_and_types(
     error_code: str,
 ) -> None:
     """Scenario: verify that constraint validation rejects invalid references and types."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         ConstraintSet,
         ConstraintValidationError,
         validate_constraint_set,
@@ -313,7 +313,7 @@ def test_constraint_validation_rejects_invalid_references_and_types(
 
 def test_constraint_validation_rejects_inverted_cardinality_bounds() -> None:
     """Scenario: verify that constraint validation rejects inverted cardinality bounds."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         CardinalityConstraint,
         ConstraintSet,
         ConstraintValidationError,
@@ -345,7 +345,7 @@ def test_constraint_validation_rejects_inverted_cardinality_bounds() -> None:
 
 def test_evaluation_distinguishes_absent_input_from_explicit_null() -> None:
     """Scenario: verify that evaluation distinguishes absent input from explicit null."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         ComparePredicate,
         ConstraintSet,
         InputAssignment,
@@ -392,7 +392,7 @@ def test_evaluation_distinguishes_absent_input_from_explicit_null() -> None:
 
 def test_evaluation_supports_nested_logic_cardinality_and_implication() -> None:
     """Scenario: verify that evaluation supports nested logic cardinality and implication."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         AndConstraint,
         CardinalityConstraint,
         ConstraintSet,
@@ -446,7 +446,7 @@ def test_evaluation_supports_nested_logic_cardinality_and_implication() -> None:
 
 def test_evaluation_handles_arithmetic_matching_and_total_failures() -> None:
     """Scenario: verify that evaluation handles arithmetic matching and total failures."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         ArithmeticValue,
         ComparePredicate,
         ConstraintSet,
@@ -630,7 +630,7 @@ def test_classification_is_derived_from_ast_shape(
     expected: str,
 ) -> None:
     """Scenario: verify that classification is derived from ast shape."""
-    from restscope.harness.testing.constraints import (
+    from restscope.request_generation.constraints import (
         ConstraintSet,
         classify_constraint,
     )
@@ -642,7 +642,7 @@ def test_classification_is_derived_from_ast_shape(
 
 def test_normalization_orders_commutative_children() -> None:
     """Scenario: verify that normalization orders commutative children."""
-    from restscope.harness.testing.constraints import ConstraintSet, normalize_constraint_set
+    from restscope.request_generation.constraints import ConstraintSet, normalize_constraint_set
 
     first = ConstraintSet.model_validate(
         {
@@ -676,7 +676,7 @@ def test_normalization_orders_commutative_children() -> None:
 
 def test_constraint_services_are_exported_from_testing_package() -> None:
     """Scenario: verify that constraint services are exported from testing package."""
-    from restscope.harness.testing import (
+    from restscope.request_generation import (
         ConstraintValidationError,
         classify_constraint,
         evaluate_constraint_set,

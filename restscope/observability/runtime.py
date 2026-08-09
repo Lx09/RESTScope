@@ -11,7 +11,7 @@ from typing import Any
 
 from restscope.observability.content import PreparedContent, TraceContentEncoder
 from restscope.observability.openinference import prepare_message_attributes
-from restscope.redaction import Redactor
+from .redaction import Redactor
 
 
 LOGGER = logging.getLogger(__name__)
@@ -33,12 +33,7 @@ class TraceSpan:
         self._has_error = False
 
     def set_output(self, value: Any) -> None:
-        """
-        Handle set output as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Attach a bounded, redacted output value to both trace and live-observer spans."""
         self._set_content("output", value)
 
     def set_llm_input_messages(self, messages: Any) -> None:
@@ -81,12 +76,7 @@ class TraceSpan:
         )
 
     def set_attribute(self, name: str, value: Any) -> None:
-        """
-        Handle set attribute as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Attach one safe scalar attribute without allowing telemetry failure to affect the tested workflow."""
         if self._live_span is not None:
             try:
                 self._live_span.set_attribute(name, value)
@@ -103,12 +93,7 @@ class TraceSpan:
             return
 
     def set_input(self, value: Any) -> None:
-        """
-        Handle set input as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Attach a bounded, redacted input value to both trace and live-observer spans."""
         self._set_content("input", value)
 
     def set_live_detail(self, name: str, value: Any) -> None:
@@ -164,12 +149,7 @@ class TraceSpan:
             return
 
     def mark_error(self, message: str) -> None:
-        """
-        Handle mark error as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Mark the span failed and record the bounded exception description."""
         if self._live_span is not None:
             try:
                 self._live_span.mark_error(message)
@@ -184,12 +164,7 @@ class TraceSpan:
             return
 
     def mark_ok(self) -> None:
-        """
-        Handle mark ok as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Mark the span successful unless an earlier error already owns its terminal status."""
         if self._live_span is not None and not self._has_error:
             try:
                 self._live_span.mark_ok()
@@ -236,12 +211,7 @@ class TraceSpan:
         *,
         summary: Any,
     ) -> None:
-        """
-        Handle set llm messages as part of bounded, redacted tracing and telemetry.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Encode provider-independent chat messages into OpenInference span attributes."""
         if self._live_span is not None:
             try:
                 self._live_span.set_messages(prefix, messages, summary=summary)
@@ -498,12 +468,7 @@ class TracingRuntime:
                     pass
 
     def close(self) -> None:
-        """
-        Release resources owned by bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Flush tracing once, close the live observer binding, and make later close calls harmless."""
         if self._closed:
             return
         self._closed = True

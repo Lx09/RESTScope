@@ -39,12 +39,12 @@ def _catalog(tmp_path: Path):
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.harness.testing import GeneratorConfigCatalog
+    from restscope.request_generation import RequestGenerationConfigStore
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'snapshot.sqlite'}")
     Base.metadata.create_all(engine)
     session_factory = make_session_factory(engine)
-    return GeneratorConfigCatalog(
+    return RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(session_factory)
     )
 
@@ -85,7 +85,7 @@ def test_catalog_initializes_all_operation_generators_once_from_ir(
 
     changed_ir = OpenAPIParser.parse(_spec(path="/replacement", title="Changed"))
     monkeypatch.setattr(
-        "restscope.harness.testing.catalog.build_initial_catalog",
+        "restscope.request_generation.store.build_initial_catalog",
         lambda _ir: (_ for _ in ()).throw(
             AssertionError("initialized catalog must not inspect a later IR")
         ),
@@ -100,7 +100,7 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
     import json
 
     from restscope import RESTScopeApp
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     database = tmp_path / "app.sqlite"
@@ -123,9 +123,9 @@ def test_app_initialize_creates_catalog_before_binding_context(tmp_path: Path) -
             base_url="https://api.example.test",
         )
 
-        service = app.harness_runtime.operation_testing_service
+        service = app.operation_testing_service
         assert service is not None
-        assert service.config_catalog.get_operation("POST /orders/{orderId}") is not None
+        assert service.config_store.get_operation("POST /orders/{orderId}") is not None
     finally:
         app.close()
 
@@ -140,7 +140,7 @@ def test_second_app_start_is_rejected_after_first_catalog_is_initialized(
 
     from restscope import RESTScopeApp
     from restscope.db import DatabaseAlreadyExistsError
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     database = tmp_path / "shared-app.sqlite"
@@ -175,10 +175,10 @@ def test_smoke_batch_uses_app_memory_snapshot_when_current_ir_is_different(
     """Smoke uses its App-memory snapshot even when another IR object differs."""
     import httpx
 
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import OperationTestingService
+    from restscope.harness.operation_testing import OperationTestingService
 
     catalog = _catalog(tmp_path)
     catalog.initialize_once(OpenAPIParser.parse(_spec()))
@@ -189,7 +189,7 @@ def test_smoke_batch_uses_app_memory_snapshot_when_current_ir_is_different(
         return httpx.Response(204)
 
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(handler),
@@ -228,11 +228,11 @@ def test_current_input_rows_rebuild_the_same_frozen_operation_snapshot(
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import (
+    from restscope.request_generation import (
         InputGeneratorPatch,
         prepare_accepted_generator_patch,
     )
-    from restscope.harness.testing.ports import GeneratorConfigConcurrentWrite
+    from restscope.request_generation.ports import GeneratorConfigConcurrentWrite
 
     catalog = _catalog(tmp_path)
     catalog.initialize_once(OpenAPIParser.parse(_spec()))
@@ -316,7 +316,7 @@ def test_generator_patch_requires_an_actual_change() -> None:
     import pytest
     from pydantic import ValidationError
 
-    from restscope.harness.testing import InputGeneratorPatch
+    from restscope.request_generation import InputGeneratorPatch
 
     with pytest.raises(ValidationError):
         InputGeneratorPatch(input_node_id="input_example")

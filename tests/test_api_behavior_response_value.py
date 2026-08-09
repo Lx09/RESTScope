@@ -8,7 +8,7 @@ from restscope.openapi_parser import OpenAPIParser
 
 
 def _catalog():
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueCatalog,
     )
     from restscope.db import (
@@ -91,7 +91,7 @@ def _response_value_ir():
 
 def test_catalog_lists_distinct_observed_response_field_identities() -> None:
     """Lookup receives metadata only once even when a scalar repeats over time."""
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ObservedResponseField,
     )
 
@@ -128,7 +128,7 @@ def test_catalog_lists_distinct_observed_response_field_identities() -> None:
 
 def test_registers_ir_source_extracts_values_and_deduplicates_them() -> None:
     """Scenario: verify that registers ir source extracts values and deduplicates them."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
 
@@ -216,8 +216,8 @@ def test_registers_ir_source_extracts_values_and_deduplicates_them() -> None:
 
 def test_selected_default_response_source_backfills_and_tracks_success_values() -> None:
     """A lookup-matched default contract can supply concrete successful statuses."""
-    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.tracker import ResponseValueTracker
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueSource,
     )
 
@@ -256,10 +256,10 @@ def test_selected_default_response_source_backfills_and_tracks_success_values() 
 
 def test_observation_history_flattens_all_scalars_and_keeps_latest_100() -> None:
     """Scenario: verify that observation history flattens all scalars and keeps latest 100."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueSource,
     )
 
@@ -308,7 +308,7 @@ def test_observation_history_flattens_all_scalars_and_keeps_latest_100() -> None
 def test_response_value_pool_keeps_only_100_most_recent_typed_values() -> None:
     """A pool deterministically removes its oldest active value at capacity 101."""
 
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueCatalogRegistration,
     )
 
@@ -336,8 +336,8 @@ def test_response_value_pool_keeps_only_100_most_recent_typed_values() -> None:
 def test_1001_scalars_skip_the_whole_response_and_every_pool_update() -> None:
     """Exactly 1000 scalars persist; 1001 returns a warning with no partial evidence."""
 
-    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.tracker import ResponseValueTracker
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueCatalogRegistration,
         ResponseValueSource,
     )
@@ -401,12 +401,14 @@ def test_response_observation_and_pool_updates_roll_back_as_one_transaction(
 
     import pytest
 
-    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.tracker import ResponseValueTracker
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueCatalogRegistration,
         ResponseValueSource,
     )
-    from restscope.db.repositories import SqlAlchemyResponseValueCatalogRepository
+    from restscope.db.adapters.response_values import (
+        SqlAlchemyResponseValueCatalogRepository,
+    )
 
     catalog = _catalog()
     tracker = ResponseValueTracker(catalog=catalog)
@@ -451,10 +453,10 @@ def test_response_observation_and_pool_updates_roll_back_as_one_transaction(
 
 def test_observation_history_ignores_non_2xx_and_non_json() -> None:
     """Scenario: verify that observation history ignores non successful 2xx  and non json."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueSource,
     )
 
@@ -492,7 +494,7 @@ def test_registration_rejects_sources_without_observed_values() -> None:
     """Scenario: verify that registration rejects sources without observed values."""
     import pytest
 
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueUnavailableError,
         ResponseValueTracker,
     )
@@ -519,7 +521,7 @@ def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
     """Scenario: verify that empty backfill rolls back monitor and source atomically."""
     import pytest
 
-    from restscope.api_behavior_monitor.response_value_catalog import ResponseValueCatalogRegistration
+    from restscope.api_behavior_monitor.response_values.catalog import ResponseValueCatalogRegistration
     from restscope.api_behavior_monitor import ResponseValueSource
 
     catalog = _catalog()
@@ -549,7 +551,7 @@ def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
 
 def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> None:
     """Scenario: verify that preview rejects observed values incompatible with consumer type."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
 
@@ -573,7 +575,7 @@ def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> No
 
 def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
     """Scenario: verify that response values are typed and boolean is not an integer."""
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueCatalogRegistration,
         ResponseValueSource,
     )
@@ -610,7 +612,7 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
 
 def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     """Scenario: verify that semantic source selection uses bounded ir metadata only."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
     from restscope.llm import LLMModelConfig, LLMResponse
@@ -733,7 +735,7 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
 
 def test_available_source_options_prefer_backed_exact_name_fields() -> None:
     """Scenario: verify that available source options prefer backed exact name fields."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
 
@@ -809,11 +811,11 @@ def test_available_source_options_prefer_backed_exact_name_fields() -> None:
 
 def test_semantic_source_selection_fails_closed_without_repair() -> None:
     """Scenario: verify that semantic source selection fails closed without repair."""
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
         _SourceCandidate,
     )
-    from restscope.api_behavior_monitor.response_value_catalog import (
+    from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueSource,
     )
     from restscope.llm import LLMModelConfig, LLMResponse
@@ -866,8 +868,8 @@ def test_semantic_source_selection_fails_closed_without_repair() -> None:
 
 def test_newly_materialized_success_schema_supports_late_registration() -> None:
     """Scenario: verify that newly materialized success schema supports late registration."""
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_value import (
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
 

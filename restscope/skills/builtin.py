@@ -11,11 +11,11 @@ from functools import lru_cache
 from importlib.resources import files
 
 from .loader import discover_skill_definitions
-from .registry import SkillRegistry
+from .catalog import SkillCatalog
 
 
 @lru_cache(maxsize=1)
-def builtin_skill_catalog() -> SkillRegistry:
+def builtin_skill_catalog() -> SkillCatalog:
     """Return standard Skills packaged below ``restscope.builtin_skills``."""
     root = files("restscope.builtin_skills")
-    return SkillRegistry(discover_skill_definitions(root))
+    return SkillCatalog(discover_skill_definitions(root))

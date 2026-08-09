@@ -829,9 +829,10 @@ def test_raw_example_reference_failures_are_explicit(ref_path: str) -> None:
         build_openapi_document(ir, ["POST /raw"])
 
 
-def test_public_facades_export_document_builder() -> None:
-    """Scenario: verify that public facades export document builder."""
+def test_document_builder_is_owned_by_openapi_parser_not_root_facade() -> None:
+    """The narrow App facade does not re-export parser implementation helpers."""
     import restscope
     from restscope.openapi_parser import build_openapi_document
 
-    assert restscope.build_openapi_document is build_openapi_document
+    assert callable(build_openapi_document)
+    assert not hasattr(restscope, "build_openapi_document")

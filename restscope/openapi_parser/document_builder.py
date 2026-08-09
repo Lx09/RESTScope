@@ -244,12 +244,7 @@ class _DocumentBuilder:
         return result
 
     def _serialize_operation(self, operation: OperationIR) -> dict[str, Any]:
-        """
-        Serialize operation for OpenAPI parsing and normalized in-memory representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Convert one normalized Operation IR into its OpenAPI Path Item operation object."""
         if not operation.responses.by_status:
             raise OperationDocumentGenerationError(
                 f"Operation {operation.operation_key} has no responses"
@@ -291,12 +286,7 @@ class _DocumentBuilder:
         return result
 
     def _serialize_parameter(self, parameter: ParameterIR) -> dict[str, Any]:
-        """
-        Serialize parameter for OpenAPI parsing and normalized in-memory representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Convert one normalized Parameter IR into an OpenAPI parameter object."""
         result = _raw_extras(
             parameter.raw,
             allowed=_PARAMETER_ALLOWED_KEYS,
@@ -373,12 +363,7 @@ class _DocumentBuilder:
         return result
 
     def _serialize_header(self, header: HeaderIR) -> dict[str, Any]:
-        """
-        Serialize header for OpenAPI parsing and normalized in-memory representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Convert one normalized response Header IR into an OpenAPI header object."""
         result = _raw_extras(
             header.raw,
             allowed=_HEADER_ALLOWED_KEYS,
@@ -488,13 +473,7 @@ class _DocumentBuilder:
 
     @staticmethod
     def _serialize_security_scheme(scheme: SecuritySchemeIR) -> dict[str, Any]:
-        """
-        Serialize security scheme for OpenAPI parsing and normalized in-memory
-        representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Convert one normalized security scheme into its OpenAPI component form."""
         result = _raw_extras(
             scheme.raw,
             allowed=_SECURITY_SCHEME_ALLOWED_KEYS,
@@ -536,12 +515,7 @@ class _DocumentBuilder:
         *,
         active: set[int] | None = None,
     ) -> dict[str, Any] | bool:
-        """
-        Serialize schema for OpenAPI parsing and normalized in-memory representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Recursively convert one normalized Schema IR node into OpenAPI Schema keywords."""
         if schema.ref_path:
             name = self._component_name_from_ref(schema.ref_path)
             self._ensure_schema_component(name)
@@ -661,13 +635,7 @@ class _DocumentBuilder:
         return result
 
     def _normalize_schema_keyword(self, key: str, value: Any) -> Any:
-        """
-        Normalize schema keyword for OpenAPI parsing and normalized in-memory
-        representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Bound and copy extension, example, default, enum, and const values into document-safe JSON."""
         if key in _SCHEMA_SINGLE_KEYS:
             return self._normalize_raw_schema(value)
         if key in _SCHEMA_ARRAY_KEYS:
@@ -795,12 +763,7 @@ class _DocumentBuilder:
         return result
 
     def _resolve_example_ref(self, ref_path: str) -> dict[str, Any]:
-        """
-        Resolve example ref for OpenAPI parsing and normalized in-memory representation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Resolve a local example reference from the normalized component map without following external URLs."""
         prefix = "#/components/examples/"
         if not ref_path.startswith(prefix):
             raise OperationDocumentGenerationError(

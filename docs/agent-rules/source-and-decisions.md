@@ -74,6 +74,11 @@ as the active project direction.
   loop; the former FIFO Run Harness and its request/report DTOs are retired.
   The initial Main Profile intentionally has only its private Plan Tools until
   separate testing Skills and Tools are approved and connected.
+- Request Generation owns Generator and Constraint semantics, compilation,
+  solving, schema snapshots, serialization, and current generation
+  configuration. The Harness owns deterministic operation execution,
+  run-local Test Cases, Probe evidence, and mechanical Tool bindings; neither
+  one owns semantic test selection or retry decisions.
 - Test plans, inferred operation relationships, scheduler state, and Agent
   intermediate decisions are ephemeral and are not database records or durable
   artifacts.

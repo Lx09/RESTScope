@@ -126,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_registry()
         return 0
 
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
 
     config = RESTScopeConfig.from_environment()
     phoenix_client = _client(config)

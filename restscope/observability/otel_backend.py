@@ -21,12 +21,7 @@ class OpenTelemetryBackend:
         self._closed = False
 
     def start_as_current_span(self, name: str):
-        """
-        Handle start as current span as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Open an OpenTelemetry span with the requested name, kind, attributes, and parent context."""
         return self.tracer.start_as_current_span(
             name,
             record_exception=False,
@@ -34,12 +29,7 @@ class OpenTelemetryBackend:
         )
 
     def close(self) -> None:
-        """
-        Release resources owned by bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Flush and shut down the owned OpenTelemetry provider, if one was created."""
         if self._closed:
             return
         self._closed = True

@@ -12,13 +12,7 @@ class OpenAPI32Adapter(SpecificationAdapter):
 
     @property
     def spec_format(self) -> str:
-        """
-        Handle spec format as part of OpenAPI parsing and normalized in-memory
-        representation.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Return the OpenAPI 3.2 format identifier handled by this adapter."""
         return SPEC_FORMAT_OAS32
 
     def get_base_path(self, raw_schema: dict) -> str | None:

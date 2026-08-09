@@ -19,12 +19,7 @@ class MCPSourceBuilder:
         *,
         server_names: Iterable[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """
-        Build sources for the policy-controlled model tool boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Discover the selected MCP servers and expose each as an isolated external Tool source."""
         discovered = self.host.discover_tools(server_names=server_names)
         return {
             server_name: {

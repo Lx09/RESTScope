@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from restscope.http_transport import (
+from restscope.target_http import (
     TargetResponseObservation,
     TargetResponseOperationContext,
 )
@@ -15,34 +15,34 @@ from restscope.openapi_parser import (
     match_operation,
 )
 from restscope.openapi_parser.ir import OperationIR, SchemaIR
-from restscope.response_fields import ResponseFieldReference
+from restscope.operation_references import ResponseFieldReference
 from restscope.observability import TracingRuntime
 
-from .contract_tracker import (
+from .response_contracts import (
     ContractCheckResult,
     ResponseContractError,
     ResponseContractTracker,
     normalize_media_type,
 )
-from .resource_identifier import (
+from .resource_identifiers import (
     ResourceIdentifierOutputError,
     ResourceIdentifierTracker,
 )
-from .resource_schemas import (
+from .resource_identifiers.schemas import (
     MonitoredOperation,
     ResourceLookupRequest,
     ResourceLookupResult,
     ResourceMonitorResult,
     ResourceObservation,
 )
-from .response_value import (
+from .response_values.tracker import (
     ResponseValueObservationResult,
     ResponseValuePreview,
     ResponseValueRegistrationResult,
     ResponseValueSourceOption,
     ResponseValueTracker,
 )
-from .response_value_catalog import ResponseValueSource
+from .response_values import ResponseValueSource
 from .schemas import APIBehaviorMonitorResult, APIBehaviorWarning
 
 
@@ -305,9 +305,6 @@ class APIBehaviorMonitorCoordinator:
         """
         Look up bounded evidence used by API response monitoring and its narrowly
         approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
         """
         return self.resource_identifier_tracker.lookup(request)
 
@@ -320,13 +317,7 @@ class APIBehaviorMonitorCoordinator:
         parameter_name: str,
         expected_type: str | None,
     ) -> ResponseValueRegistrationResult:
-        """
-        Handle register response value as part of API response monitoring and its
-        narrowly approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Register one response-field monitor and return whether it was newly created."""
         return self.response_value_tracker.register(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -336,13 +327,7 @@ class APIBehaviorMonitorCoordinator:
         )
 
     def response_values_for(self, value_name: str) -> list[object]:
-        """
-        Handle response values for as part of API response monitoring and its narrowly
-        approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Return the bounded typed values retained for one registered response source."""
         return self.response_value_tracker.catalog.values_for(value_name)
 
     def available_response_value_sources(
@@ -354,13 +339,7 @@ class APIBehaviorMonitorCoordinator:
         parameter_name: str,
         expected_type: str | None,
     ) -> list[ResponseValueSourceOption]:
-        """
-        Handle available response value sources as part of API response monitoring and
-        its narrowly approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """List response-field producers that can safely supply values to request generation."""
         return self.response_value_tracker.available_source_options(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -400,13 +379,7 @@ class APIBehaviorMonitorCoordinator:
         expected_type: str | None,
         sources: list[ResponseValueSource],
     ) -> ResponseValueRegistrationResult:
-        """
-        Handle register response value sources as part of API response monitoring and
-        its narrowly approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Register selected response sources and backfill already retained observations."""
         return self.response_value_tracker.register_selected_sources(
             consumer_operation_key=consumer_operation_key,
             consumer_input_node_id=consumer_input_node_id,
@@ -424,13 +397,7 @@ class APIBehaviorMonitorCoordinator:
         parameter_name: str,
         expected_type: str | None,
     ) -> ResponseValuePreview | None:
-        """
-        Handle preview response value as part of API response monitoring and its
-        narrowly approved evidence catalog.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Return one deterministic preview value from a registered response source."""
         return self.response_value_tracker.preview(
             ir=ir,
             consumer_operation_key=consumer_operation_key,
@@ -446,13 +413,7 @@ def _resolve_operation(
     context: TargetResponseOperationContext,
     ir: OpenAPISpecIR,
 ) -> tuple[MonitoredOperation, OperationIR]:
-    """
-    Resolve operation for API response monitoring and its narrowly approved evidence
-    catalog.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Return the exact monitored operation or raise when the response identity no longer matches current IR."""
     if context.operation_key is not None:
         operation_ir = ir.operations.get(context.operation_key)
         if operation_ir is None:
@@ -524,13 +485,7 @@ def _schema_fields(
     resource_name: str | None = None,
     visited: set[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Handle schema fields as part of API response monitoring and its narrowly approved
-    evidence catalog.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Collect scalar response-field candidates from one observed Schema tree."""
     reference = reference or ResponseFieldReference.body()
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
@@ -609,13 +564,7 @@ def _is_json_media_type(media_type: str | None) -> bool:
 def _monitor_trace_summary(
     result: APIBehaviorMonitorResult,
 ) -> dict[str, Any]:
-    """
-    Handle monitor trace summary as part of API response monitoring and its narrowly
-    approved evidence catalog.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Project a bounded status summary for the response-monitor trace span."""
     resource = result.resource_identifier
     response_values = result.response_values
     return {

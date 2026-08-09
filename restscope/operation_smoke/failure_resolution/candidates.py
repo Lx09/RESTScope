@@ -8,11 +8,15 @@ sample evidence, and Parameter attribution again.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from restscope.tools import ToolFailure
+from restscope.tools.parameter.contracts import (
+    CandidateSampleOverview,
+    PatchCandidateSummary,
+)
 from restscope.operation_smoke.memory import SolveAttemptParameterWrite
 from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
 
@@ -41,30 +45,6 @@ class PatchCandidate(BaseModel):
     after_generators: dict[str, Any]
     samples: list[dict[str, Any]] = Field(min_length=1, max_length=20)
     outputs_used: int = Field(ge=1, le=1_000)
-
-
-class CandidateSampleOverview(BaseModel):
-    """Summarize sample coverage without returning generated sample values."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    sample_count: int = Field(ge=1, le=20)
-    covered_parameters: list[str] = Field(max_length=100)
-
-
-class PatchCandidateSummary(BaseModel):
-    """Expose only the bounded facts needed to recover Agent context."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    candidate_ref: str = Field(pattern=r"^P[1-9][0-9]*$")
-    validation_status: Literal["validated"] = "validated"
-    root_cause: str = Field(min_length=1, max_length=1_200)
-    affected_parameters: list[str] = Field(min_length=1, max_length=100)
-    generator_change_overview: list[str] = Field(max_length=100)
-    constraint_change_overview: list[str] = Field(max_length=20)
-    sample_overview: CandidateSampleOverview
-    model_outputs_used: int = Field(ge=1, le=1_000)
 
 
 class PatchCandidateRegistry:

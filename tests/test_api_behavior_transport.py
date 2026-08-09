@@ -110,7 +110,7 @@ def _ir():
 
 
 def _observation(status_code: int, body: bytes):
-    from restscope.http_transport import TargetResponseObservation
+    from restscope.target_http import TargetResponseObservation
 
     return TargetResponseObservation(
         method="POST",
@@ -127,8 +127,8 @@ def _observation(status_code: int, body: bytes):
 def test_coordinator_updates_ir_before_success_trackers_receive_evidence() -> None:
     """Scenario: verify that coordinator updates ir before success trackers receive evidence."""
     from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.http_transport import TargetResponseOperationContext
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.target_http import TargetResponseOperationContext
 
     ir = _ir()
     resource_tracker = _CapturingResourceTracker()
@@ -170,8 +170,8 @@ def test_coordinator_updates_ir_before_success_trackers_receive_evidence() -> No
 def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> None:
     """Scenario: verify that behavior monitor trace uses supplied operation key consistently."""
     from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.http_transport import TargetResponseOperationContext
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.target_http import TargetResponseOperationContext
 
     tracing = _RecordingTracing()
     coordinator = APIBehaviorMonitorCoordinator(
@@ -203,8 +203,8 @@ def test_response_processor_keeps_private_monitor_summary() -> None:
         APIBehaviorMonitorCoordinator,
         APIBehaviorResponseProcessor,
     )
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.http_transport import TargetResponseOperationContext
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.target_http import TargetResponseOperationContext
 
     ir = _ir()
     coordinator = APIBehaviorMonitorCoordinator(
@@ -250,8 +250,8 @@ def test_response_processor_keeps_private_monitor_summary() -> None:
 def test_non_success_response_only_updates_contract() -> None:
     """Scenario: verify that non success response only updates contract."""
     from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.http_transport import TargetResponseOperationContext
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.target_http import TargetResponseOperationContext
 
     ir = _ir()
     resource_tracker = _CapturingResourceTracker()
@@ -279,8 +279,8 @@ def test_unknown_context_operation_preserves_stable_warning_code() -> None:
         APIBehaviorMonitorCoordinator,
         APIBehaviorResponseProcessor,
     )
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.http_transport import TargetResponseOperationContext
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.target_http import TargetResponseOperationContext
 
     coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(),

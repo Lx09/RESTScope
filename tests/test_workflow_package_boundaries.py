@@ -5,7 +5,10 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "restscope"
@@ -17,6 +20,167 @@ CURRENT_DOCUMENTS = (
     REPOSITORY_ROOT / "docs" / "code-reading-guide.md",
     REPOSITORY_ROOT / "tests" / "README.md",
 )
+
+
+def test_root_contains_only_the_app_facade_composition_and_config() -> None:
+    """Scenario: unrelated domains cannot drift back into the package root."""
+    assert {path.name for path in SOURCE_ROOT.glob("*.py")} == {
+        "__init__.py",
+        "app.py",
+        "config.py",
+    }
+
+
+def test_root_facade_is_exact_and_import_has_no_process_side_effects(
+    tmp_path: Path,
+) -> None:
+    """Scenario: a clean package import neither configures logging nor writes files."""
+    probe = """
+import json
+import logging
+from pathlib import Path
+before = tuple(id(handler) for handler in logging.getLogger().handlers)
+import restscope
+after = tuple(id(handler) for handler in logging.getLogger().handlers)
+print(json.dumps({
+    "exports": restscope.__all__,
+    "handlers_unchanged": before == after,
+    "files": sorted(str(path.relative_to(Path.cwd())) for path in Path.cwd().rglob("*")),
+}))
+"""
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(REPOSITORY_ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    import json
+
+    observed = json.loads(completed.stdout)
+    assert observed == {
+        "exports": ["RESTScopeApp", "RESTScopeConfig"],
+        "handlers_unchanged": True,
+        "files": [],
+    }
+
+
+def test_retired_root_and_broad_owner_modules_are_absent() -> None:
+    """Scenario: direct replacements have no compatibility module or alias."""
+    retired = (
+        "bootstrap.py",
+        "http_transport.py",
+        "logging_config.py",
+        "operations.py",
+        "randomness.py",
+        "redaction.py",
+        "request_inputs.py",
+        "response_fields.py",
+        "restscope_config.py",
+    )
+    assert all(not (SOURCE_ROOT / name).exists() for name in retired)
+    assert not (SOURCE_ROOT / "catalog").exists()
+    assert not (SOURCE_ROOT / "harness" / "testing").exists()
+    assert not (SOURCE_ROOT / "skills" / "registry.py").exists()
+    assert not (SOURCE_ROOT / "api_behavior_monitor" / "prompts.py").exists()
+    assert not (SOURCE_ROOT / "tools" / "openapi" / "lookup.py").exists()
+    assert not (SOURCE_ROOT / "tools" / "test_case" / "runtime.py").exists()
+    assert not (SOURCE_ROOT / "tools" / "test_case" / "specs.py").exists()
+    assert not (SOURCE_ROOT / "tools" / "test_case" / "bindings.py").exists()
+
+    for expected in (
+        SOURCE_ROOT / "tools" / "openapi" / "input_queries.py",
+        SOURCE_ROOT / "tools" / "openapi" / "response_queries.py",
+        SOURCE_ROOT / "tools" / "openapi" / "observed_queries.py",
+        SOURCE_ROOT / "tools" / "test_case" / "parameter_queries.py",
+        SOURCE_ROOT / "tools" / "test_case" / "response_queries.py",
+        SOURCE_ROOT / "tools" / "test_case" / "failure_query.py",
+        SOURCE_ROOT
+        / "api_behavior_monitor"
+        / "resource_identifiers"
+        / "prompts.py",
+        SOURCE_ROOT / "api_behavior_monitor" / "response_values" / "prompts.py",
+    ):
+        assert expected.is_file(), f"missing focused owner: {expected}"
+
+
+def test_top_level_production_dependencies_are_acyclic() -> None:
+    """Scenario: ownership moves cannot recreate a mutually dependent package set."""
+    graph: dict[str, set[str]] = {}
+
+    for path in SOURCE_ROOT.rglob("*.py"):
+        relative = path.relative_to(SOURCE_ROOT)
+        source = relative.parts[0] if len(relative.parts) > 1 else "<root>"
+        graph.setdefault(source, set())
+        package_parts = list(relative.parts[:-1])
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            target: str | None = None
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    if parts[0] == "restscope" and len(parts) > 1:
+                        graph[source].add(parts[1])
+                continue
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.level:
+                retained = package_parts[: len(package_parts) - node.level + 1]
+                parts = [*retained, *(node.module or "").split(".")]
+                parts = [part for part in parts if part]
+                target = parts[0] if parts else source
+            elif node.module and node.module.startswith("restscope."):
+                target = node.module.split(".")[1]
+            if target and target != source:
+                graph[source].add(target)
+
+    def reaches(start: str, target: str) -> bool:
+        """Return whether package edges lead from start back to target."""
+        pending = [start]
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current == target:
+                return True
+            if current in seen:
+                continue
+            seen.add(current)
+            pending.extend(graph.get(current, ()))
+        return False
+
+    cyclic_edges = sorted(
+        (source, target)
+        for source, targets in graph.items()
+        for target in targets
+        if reaches(target, source)
+    )
+    assert cyclic_edges == []
+
+
+def test_production_docstrings_do_not_use_audited_generated_templates() -> None:
+    """Scenario: empty generated prose cannot replace domain documentation."""
+    templates = (
+        "The annotated arguments and return type",
+        "The class owns any required collaborators",
+        "Read the public methods as the supported lifecycle",
+        "Carry validated ",
+        "Define the collaborator contract",
+        "This private helper keeps one transformation or policy decision explicit",
+        " as part of deterministic request generation",
+        " as part of API response monitoring",
+        " as part of bounded, redacted tracing",
+    )
+    violations = [
+        f"{path.relative_to(REPOSITORY_ROOT)}: {template}"
+        for path in SOURCE_ROOT.rglob("*.py")
+        for template in templates
+        if template in path.read_text(encoding="utf-8")
+    ]
+    assert violations == []
 
 
 def test_core_runtime_language_has_explicit_global_packages() -> None:
@@ -205,6 +369,27 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
         "build_operation_smoke_coordinator",
     }
     assert all(not hasattr(restscope, name) for name in internal_names)
+
+
+def test_new_subject_facades_expose_only_the_approved_shared_interfaces() -> None:
+    """Scenario: broad root modules are replaced by precise package doorways."""
+    import restscope.operation_references as references
+    import restscope.tools as tools
+
+    assert set(references.__all__) == {
+        "RequestInputLocation",
+        "RequestInputReference",
+        "ResponseFieldReference",
+    }
+    assert set(tools.__all__) == {
+        "AgentToolbox",
+        "ToolBinding",
+        "ToolCatalog",
+        "ToolDefinition",
+        "ToolFailure",
+        "ToolSubject",
+        "builtin_tool_catalog",
+    }
 
 
 def test_cross_role_imports_use_the_target_role_facade() -> None:

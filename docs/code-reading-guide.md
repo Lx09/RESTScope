@@ -26,9 +26,13 @@ The core loop is:
    only its private Plan; unfinished testing Skills and Tools are absent.
 6. **Finish safely.** Main returns its internal `AgentCompletion`, normally to
    report that testing cannot proceed until those capabilities are connected.
-8. **Index Test Cases.** One run-local Catalog retains every sent request's
+
+The remaining focused Operation Smoke flow is a temporary migration path, not
+something the production Main Profile can currently start:
+
+7. **Index Test Cases.** One run-local Catalog retains every sent request's
    structured input JSON and only failed response bodies.
-9. **Resolve the failed Batch.** Runtime collapses exact duplicate messages into
+8. **Resolve the failed Batch.** Runtime collapses exact duplicate messages into
    `E*` sources, then one continuous Failure Resolution Agent owns semantic
    grouping, investigation order, and a revisioned reference-only worklist. It
    queries OpenAPI, `TC*` cases, Parameter history, or the operation-scoped HTTP
@@ -37,13 +41,13 @@ The core loop is:
    conversation and one temporary checkpoint instruction. Runtime replaces old
    assistant/tool exchanges with the original Failure prompt plus the Markdown
    handoff; worklist and registries stay untouched.
-10. **Build, select, and finalize Patches.** Resolution calls the Parameter Patch
+9. **Build, select, and finalize Patches.** Resolution calls the Parameter Patch
     Coordinator as an internal tool. Each reviewed candidate remains in a
     session registry behind `P*`. When the Agent finishes, deterministic code
     validates decided items and atomically commits compatible candidates plus
     their Failures and Attempts before the next complete Batch.
 
-Most backend state used in steps 4–10 is deliberately temporary. RESTScope does
+Most backend state used in steps 4–9 is deliberately temporary. RESTScope does
 not persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases,
 or Patch samples in its database. The local observer page is a narrow testing
 exception: it may cache the latest five complete, already-redacted UI
@@ -158,21 +162,24 @@ Read these files in order:
 
 1. `README.md` — configuration and supported runtime workflows.
 2. `restscope/app.py` — builds the application and owns shared resources.
-3. `restscope/harness/run.py` — the top-level dynamic operation loop.
-4. `restscope/harness/testing/execution.py` — turns generated cases into real HTTP
-   results.
-5. `restscope/operation_smoke/coordinator.py` — complete-Batch rounds,
+3. `restscope/harness/agent_runtime.py` — validates Profiles and constructs the
+   generic Main Agent or authorized Subagents.
+4. `restscope/request_generation/` — builds values and enforces cross-input
+   Constraints without sending network requests.
+5. `restscope/harness/operation_testing/service.py` — turns generated cases
+   into real target HTTP results and run-local Test Cases.
+6. `restscope/operation_smoke/coordinator.py` — temporary complete-Batch rounds,
    Resolution session dispatch, and explicit stop conditions.
-6. `restscope/operation_smoke/failure_resolution/agent.py`, `worklist.py`, and
+7. `restscope/operation_smoke/failure_resolution/agent.py` and
    `finalizer.py` — one continuous Agent session, reference-only draft state,
    registry checks, and atomic finalization.
-7. `restscope/operation_smoke/parameter_patch/agent.py`,
+8. `restscope/operation_smoke/parameter_patch/agent.py`,
    `restscope/operation_smoke/parameter_patch/coordinator.py`,
    `restscope/operation_smoke/parameter_patch/review/agent.py`, and
    `restscope/operation_smoke/memory/patch_application.py` — strict proposal,
    executable construction, fresh-context semantic review, and atomic
    persistence.
-8. `restscope/api_behavior_monitor/coordinator.py` — response observation and
+9. `restscope/api_behavior_monitor/coordinator.py` — response observation and
    the narrow persistent evidence catalog.
 
 When a file imports a name from a package, open that package's `__init__.py`
@@ -186,7 +193,7 @@ The composition root. It creates and connects the parser, repositories, HTTP
 transport, tools, language models, Agents, testing service, and tracing
 runtime. It also guarantees that owned resources are closed.
 
-### `restscope/restscope_config.py`
+### `restscope/config.py`
 
 Loads settings from environment variables. It translates text values into
 typed database, model, logging, and tracing configuration while applying
@@ -205,16 +212,17 @@ Converts OpenAPI dictionaries into the IR.
 - `document_builder.py` converts the evolved in-memory IR back to an OpenAPI
   document when a caller explicitly needs one.
 
-### `restscope/catalog/`
+### `restscope/openapi_audit/`
 
 Owns the database-independent current OpenAPI audit boundary. It initializes
 one complete normalized document, atomically replaces that document while
 appending real response-contract change events, and provides read-only export
 and event queries. It does not reopen an App from those records.
 
-### `restscope/harness/testing/`
+### `restscope/request_generation/` and `restscope/harness/operation_testing/`
 
-Owns deterministic request generation and execution inside the Harness.
+Request Generation owns deterministic values, Generator configuration, Schema
+snapshots, Constraint evaluation, solving, and request serialization:
 
 - `snapshot.py` freezes the operation inputs used by one Generator config.
 - `models.py` describes available value strategies and generated-case records.
@@ -223,20 +231,22 @@ Owns deterministic request generation and execution inside the Harness.
 - `constraints.py` defines the expression language.
 - `constraint_solver.py` finds assignments that satisfy those expressions.
 - `serialization.py` turns generated values into an HTTP-shaped request.
-- `execution.py` sends batches and returns Catalog-ready Test Cases.
-- `catalog.py` combines App-memory operation snapshots with current persisted
+- `store.py` combines App-memory operation snapshots with current persisted
   per-input Generator rows. It does not store operation snapshots or revisions.
 
-### `restscope/request_inputs.py`
+Operation Testing owns the deterministic network lifecycle. `service.py` sends
+Batches and returns Catalog-ready Test Cases; `test_case_catalog/` retains
+run-local `TC*` evidence; and `probe_evidence.py` records scoped Resolution
+Probes without moving diagnostic decisions into the Harness.
 
-Owns the pure in-memory `RequestInputReference` Interface shared by OpenAPI
+### `restscope/operation_references/`
+
+`request.py` owns the pure in-memory `RequestInputReference` Interface shared by OpenAPI
 lookup, Testing, and the Test Case Catalog. It constructs semantic handles such
 as `query.sort`, reads the corresponding direct-name request JSON, and projects
 bounded evidence fragments. It owns no operation registry or persistent state.
 
-### `restscope/response_fields.py`
-
-Owns the pure in-memory `ResponseFieldReference` Interface shared by OpenAPI
+`response.py` owns the pure in-memory `ResponseFieldReference` Interface shared by OpenAPI
 lookup and API Behavior Monitor response-value handling. It gives one response
 field the same identity when OpenAPI spells it as a `body...` handle and stored
 observations spell it as a `$...` selector, including arrays and Schema
@@ -257,7 +267,8 @@ Memory, public round summaries, and reference adaptation.
 Important files:
 
 - `coordinator.py`: complete-Batch and continuous Resolution orchestration.
-- `test_case_catalog/`: `TC*` identity, bounded response retention, exact
+- `restscope/harness/operation_testing/test_case_catalog/`: `TC*` identity,
+  bounded response retention, exact
   structured-JSON queries, and four single-purpose tools registered for
   Resolution. The unregistered Failure-message query remains available to
   trusted Catalog callers.
@@ -383,11 +394,12 @@ weighted rollout budget. `agent/runtime.py` owns the model-and-Tool loop, while
 private `agent/prompt.py` owns request assembly and 80% Tool-free compaction
 around the shared `AgentContext` history implementation.
 
-### `restscope/http_transport.py`
+### `restscope/target_http/`
 
-The shared low-level HTTP boundary. It validates target paths, merges headers,
-limits response bodies, translates transport errors, and synchronously offers
-responses to the Behavior Monitor.
+The shared low-level target HTTP boundary. `request.py` validates target paths
+and prepares headers, `transport.py` sends requests and bounds responses, and
+`observation.py` offers completed exchanges to the Behavior Monitor without
+making testing decisions.
 
 ### `restscope/llm/`
 
@@ -401,18 +413,19 @@ Provider-independent language-model contracts and clients.
 
 ### `restscope/db/`
 
-Owns database setup, ORM records, migrations, and repositories. Repositories
-are narrow storage APIs; callers should not manipulate ORM rows directly. The
+Owns database setup, ORM records, migrations, and domain-adjacent SQLAlchemy
+Adapters under `db/adapters/`. Repositories are narrow storage APIs; callers
+should not manipulate ORM rows directly. The
 single baseline creates 19 business tables. Every SQLite connection enables
 foreign keys, and the default App always rejects existing database paths.
 
 ### `restscope/observability/`
 
-Creates Phoenix/OpenTelemetry spans and the independent current-run live event
-narrative while applying the shared exact-value Redactor. `runtime.py` is the
-business-code tracing seam; `live.py` owns current-run event ordering, updates,
-Agent-turn message deltas, Tool input/output, complete Smoke Batch Test Cases,
-and the current Main Agent Plan-to-Todo projection. Phoenix retains its lower-level spans;
+Creates Phoenix/OpenTelemetry spans, explicit logging, redaction, and the
+independent current-run live event narrative. `runtime.py` is the business-code
+tracing seam; `observer.py` owns current-run state and event ordering;
+`span.py`, `http_exchange.py`, and `projection.py` own their focused adapters
+and projections. Phoenix retains its lower-level spans;
 the browser schema exposes only `agent_turn`, `tool_call`, and `smoke_batch`.
 Both outputs are optional and fail-open.
 

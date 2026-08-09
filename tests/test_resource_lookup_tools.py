@@ -7,7 +7,7 @@ from pathlib import Path
 
 def _catalog(tmp_path: Path):
     """Create the real SQLite-backed catalog used by the public Capability."""
-    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -25,7 +25,7 @@ def _catalog(tmp_path: Path):
 
 def _record_resource(catalog, *, name: str, identifier: str | int) -> None:
     """Record one real resource observation without reaching into SQL state."""
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
@@ -54,9 +54,9 @@ def test_resource_list_returns_one_stable_page_of_canonical_names(
     tmp_path: Path,
 ) -> None:
     """A caller can discover resources without receiving aliases or IDs."""
-    from restscope.tools import (
-        AgentToolbox,
-        ResourceIdentifierCapability,
+    from restscope.tools import AgentToolbox
+    from restscope.tools.resource import (
+        ResourceToolBackend,
         resource_list_resources_tool_spec,
     )
     from restscope.llm import ToolCall
@@ -64,7 +64,7 @@ def test_resource_list_returns_one_stable_page_of_canonical_names(
     catalog = _catalog(tmp_path)
     _record_resource(catalog, name="zebra", identifier=9)
     _record_resource(catalog, name="alpha", identifier=1)
-    capability = ResourceIdentifierCapability(catalog=catalog)
+    capability = ResourceToolBackend(catalog=catalog)
     toolbox = AgentToolbox()
     toolbox.register(
         spec=resource_list_resources_tool_spec(),
@@ -94,13 +94,13 @@ def test_resource_id_list_resolves_alias_and_preserves_scalar_type(
     tmp_path: Path,
 ) -> None:
     """A caller receives a bounded typed-ID page without Monitor internals."""
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         DetectedResourceGroup,
         MonitoredOperation,
     )
-    from restscope.tools import (
-        AgentToolbox,
-        ResourceIdentifierCapability,
+    from restscope.tools import AgentToolbox
+    from restscope.tools.resource import (
+        ResourceToolBackend,
         resource_list_ids_tool_spec,
     )
     from restscope.llm import ToolCall
@@ -124,7 +124,7 @@ def test_resource_id_list_resolves_alias_and_preserves_scalar_type(
             )
         ],
     )
-    capability = ResourceIdentifierCapability(catalog=catalog)
+    capability = ResourceToolBackend(catalog=catalog)
     toolbox = AgentToolbox()
     toolbox.register(
         spec=resource_list_ids_tool_spec(),
@@ -158,15 +158,15 @@ def test_resource_tools_bound_pages_and_treat_unknown_names_as_empty(
     tmp_path: Path,
 ) -> None:
     """Discovery absence succeeds, while invalid pagination never executes."""
-    from restscope.tools import (
-        AgentToolbox,
-        ResourceIdentifierCapability,
+    from restscope.tools import AgentToolbox
+    from restscope.tools.resource import (
+        ResourceToolBackend,
         resource_list_ids_tool_spec,
         resource_list_resources_tool_spec,
     )
     from restscope.llm import ToolCall
 
-    capability = ResourceIdentifierCapability(catalog=_catalog(tmp_path))
+    capability = ResourceToolBackend(catalog=_catalog(tmp_path))
     toolbox = AgentToolbox()
     toolbox.register(
         spec=resource_list_resources_tool_spec(),

@@ -7,11 +7,11 @@ from restscope.api_behavior_monitor import (
     ResourceLookupRequest,
     ResponseValueSource,
 )
-from restscope.api_behavior_monitor.contract_tracker import normalize_media_type
+from restscope.api_behavior_monitor.response_contracts import normalize_media_type
 from restscope.operation_smoke.parameter_patch import SelectedReferenceProvenance
 from restscope.openapi_parser import OpenAPISpecIR
-from restscope.response_fields import ResponseFieldReference
-from restscope.harness.testing import (
+from restscope.operation_references import ResponseFieldReference
+from restscope.request_generation import (
     InputGeneratorPatch,
     InputNodeSnapshot,
     OperationGeneratorConfig,

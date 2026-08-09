@@ -36,11 +36,11 @@ class _RecordingTracingRuntime:
 
 def _configured_catalog(tmp_path: Path, ir):
     from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
-    from restscope.harness.testing import GeneratorConfigCatalog
+    from restscope.request_generation import RequestGenerationConfigStore
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'execution.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
@@ -49,7 +49,7 @@ def _configured_catalog(tmp_path: Path, ir):
 
 def _accept_patch(catalog, operation_key: str, updates):
     """Write test setup through the repository's current-content compare seam."""
-    from restscope.harness.testing import prepare_accepted_generator_patch
+    from restscope.request_generation import prepare_accepted_generator_patch
 
     current = catalog.require_operation(operation_key)
     updated = prepare_accepted_generator_patch(current, updates)
@@ -66,10 +66,10 @@ def _accept_patch(catalog, operation_key: str, updates):
 def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
     import httpx
 
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import OperationTestingService
+    from restscope.harness.operation_testing import OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -99,7 +99,7 @@ def _constrained_execution_setup(tmp_path: Path, *, tracing_runtime=None):
     catalog = _configured_catalog(tmp_path, ir)
     requests: list[httpx.Request] = []
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(
@@ -169,10 +169,10 @@ def test_operation_testing_returns_catalog_cases_and_only_keeps_failure_body(
     """Scenario: Batch returns Catalog-ready cases without a parallel report."""
     import httpx
 
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing.execution import (
+    from restscope.harness.operation_testing.service import (
         OperationTestingService,
         SMOKE_FAILURE_RESPONSE_BYTES,
     )
@@ -233,7 +233,7 @@ def test_operation_testing_returns_catalog_cases_and_only_keeps_failure_body(
             **kwargs,
         )
     )
-    service = OperationTestingService(config_catalog=catalog, transport=transport)
+    service = OperationTestingService(config_store=catalog, transport=transport)
     context = ToolContext(
         ir=ir,
         baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
@@ -289,10 +289,10 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
     """Scenario: verify that operation testing executes feedback generator outside the frozen schema."""
     import httpx
 
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing.execution import OperationTestingService
+    from restscope.harness.operation_testing.service import OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -345,7 +345,7 @@ def test_operation_testing_executes_feedback_generator_outside_the_frozen_schema
         return httpx.Response(200)
 
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(respond),
@@ -375,7 +375,7 @@ def test_smoke_execution_applies_constraints_and_traces_only_the_count(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that smoke execution applies constraints and traces only the count."""
-    from restscope.harness.testing import ConstraintSet
+    from restscope.request_generation import ConstraintSet
 
     tracing = _RecordingTracingRuntime()
     operation, catalog, service, context, requests = _constrained_execution_setup(
@@ -430,9 +430,10 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
     """Scenario: verify that constrained smoke preflight failure on later case sends no requests."""
     import pytest
 
-    from restscope.harness.testing import ConstraintSet, TestingExecutionError
-    from restscope.harness.testing.constraint_solver import ConstraintSolveError
-    from restscope.harness.testing.generation import generate_test_case as real_generate
+    from restscope.request_generation import ConstraintSet
+    from restscope.harness.operation_testing import TestingExecutionError
+    from restscope.request_generation.constraint_solver import ConstraintSolveError
+    from restscope.request_generation.generation import generate_test_case as real_generate
 
     operation, catalog, service, context, requests = _constrained_execution_setup(
         tmp_path
@@ -457,7 +458,7 @@ def test_constrained_smoke_preflight_failure_on_later_case_sends_no_requests(
         return real_generate(*args, **kwargs)
 
     monkeypatch.setattr(
-        "restscope.harness.testing.execution.generate_test_case",
+        "restscope.harness.operation_testing.service.generate_test_case",
         fail_second_case,
     )
 
@@ -479,11 +480,12 @@ def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -
     import httpx
     import pytest
 
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import GeneratorConfigCatalog, OperationTestingService
-    from restscope.harness.testing.serialization import SerializationError
+    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.request_generation.serialization import SerializationError
     from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
 
     ir = OpenAPIParser.parse(
@@ -517,7 +519,7 @@ def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -
     operation = ir.operations["GET /items"]
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'preflight.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
@@ -546,7 +548,7 @@ def test_operation_testing_preflight_failure_sends_no_requests(tmp_path: Path) -
         return httpx.Response(200)
 
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(unexpected_request),
@@ -579,10 +581,10 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
     """Scenario: verify that operation testing isolates cookies and reports partial transport errors."""
     import httpx
 
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import OperationTestingService
+    from restscope.harness.operation_testing import OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -617,7 +619,7 @@ def test_operation_testing_isolates_cookies_and_reports_partial_transport_errors
         raise httpx.ConnectError("not returned", request=request)
 
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(respond),
@@ -651,7 +653,7 @@ def test_testing_transport_overrides_ordinary_context_headers_but_not_context_co
     """Scenario: verify that testing transport overrides ordinary context headers but not context cookie."""
     import httpx
 
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTransport
 
     seen: list[httpx.Request] = []
     transport = TargetHTTPTransport(
@@ -691,15 +693,15 @@ def test_batch_preserves_sensitive_named_values_only_as_catalog_parameters(tmp_p
     """A sent path value remains queryable without reviving request reports."""
     import httpx
 
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
     from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import (
-        GeneratorConfigCatalog,
+    from restscope.request_generation import (
+        RequestGenerationConfigStore,
         InputGeneratorConfig,
-        OperationTestingService,
     )
+    from restscope.harness.operation_testing import OperationTestingService
 
     secret = "ordinary-looking-path-secret"
     ir = OpenAPIParser.parse(
@@ -727,7 +729,7 @@ def test_batch_preserves_sensitive_named_values_only_as_catalog_parameters(tmp_p
     node = next(iter(operation.input_nodes.values()))
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'redacted-path.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
@@ -743,7 +745,7 @@ def test_batch_preserves_sensitive_named_values_only_as_catalog_parameters(tmp_p
     )
     sent_paths = []
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(
@@ -775,17 +777,17 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
     import httpx
     import pytest
 
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
     from restscope.db import Base, SqlAlchemyGeneratorConfigUnitOfWork, create_engine_from_url, make_session_factory
-    from restscope.http_transport import TargetHTTPTransport, TargetHTTPTransportError
+    from restscope.target_http import TargetHTTPTransport, TargetHTTPTransportError
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import (
-        GeneratorConfigCatalog,
+    from restscope.request_generation import (
+        RequestGenerationConfigStore,
         InputGeneratorConfig,
         OperationGeneratorConfig,
-        OperationTestingService,
     )
-    from restscope.harness.testing.generation import generate_test_case
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.request_generation.generation import generate_test_case
 
     ir = OpenAPIParser.parse(
         {
@@ -815,7 +817,7 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
         inclusion_probability=1,
         strategy={"type": "choice", "values": ["safe", ".."]},
     )
-    from restscope.harness.testing.snapshot import build_operation_snapshot
+    from restscope.request_generation.snapshot import build_operation_snapshot
 
     snapshot, _ = build_operation_snapshot(operation)
     config = OperationGeneratorConfig(
@@ -835,7 +837,7 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
     )
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'target-preflight.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
@@ -852,7 +854,7 @@ def test_transport_preflight_validates_every_case_before_the_first_request(tmp_p
     )
     requests = []
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(

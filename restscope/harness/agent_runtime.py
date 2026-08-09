@@ -22,7 +22,7 @@ from restscope.llm import LLMClient, LLMModelConfig
 from restscope.skills import (
     SkillDefinition,
     SkillPolicy,
-    SkillRegistry,
+    SkillCatalog,
     builtin_skill_catalog,
 )
 from restscope.tools import AgentToolbox, ToolBinding, ToolCatalog, builtin_tool_catalog
@@ -159,7 +159,7 @@ class AgentRuntimeResolver:
         )
         # Standard package Skills are always discoverable, but Profile names
         # and dependency grants remain the only authorization mechanism.
-        self.skills = SkillRegistry(
+        self.skills = SkillCatalog(
             (*builtin_skill_catalog().definitions(), *definition.skills)
         )
         self.skill_policy = SkillPolicy()

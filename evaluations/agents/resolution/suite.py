@@ -17,13 +17,7 @@ from phoenix.evals import Score, create_evaluator
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluations.models import DatasetExample, EvaluationSuite, ScenarioProvenance
-from restscope.tools import (
-    OpenAPICapability,
-    ToolContext,
-    operation_input_references,
-)
-from restscope.harness.testing import OperationGeneratorConfig
-from restscope.harness.testing.test_case_catalog import (
+from restscope.harness.operation_testing import (
     CatalogTestCaseDraft,
     TestCaseCatalog,
 )
@@ -43,6 +37,9 @@ from restscope.operation_smoke.failure_resolution.prompts import (
 from restscope.operation_smoke.memory import ParameterHistory
 from restscope.operation_smoke.output_limit import ModelOutputLimit
 from restscope.operation_smoke.parameter_patch import ParameterPatchCoordinatorFactory
+from restscope.request_generation import OperationGeneratorConfig
+from restscope.tools.context import ToolContext
+from restscope.tools.openapi import OpenAPIToolBackend, operation_input_references
 
 
 class ResolutionScenarioInput(BaseModel):
@@ -217,7 +214,7 @@ def build_task(
         ir = OpenAPIParser.parse(scenario.openapi)
         operation = ir.operations[scenario.request.operation_key]
         context = ToolContext(ir=ir, baseline_schema_source=scenario.openapi)
-        openapi_capability = OpenAPICapability(context_provider=lambda: context)
+        openapi_backend = OpenAPIToolBackend(context_provider=lambda: context)
         catalog = TestCaseCatalog(
             input_references=operation_input_references(operation)
         )
@@ -244,7 +241,7 @@ def build_task(
                     client=client,
                     patch_model=patch_model,
                     review_model=review_model,
-                    openapi_capability=openapi_capability,
+                    openapi_backend=openapi_backend,
                     tracing_runtime=tracing_runtime,
                 )
                 if scenario.config is not None
@@ -262,7 +259,7 @@ def build_task(
                     client=client,
                     model=model,
                     compact_model=compact_model,
-                    openapi_capability=openapi_capability,
+                    openapi_backend=openapi_backend,
                     finalizer=_EvaluationFinalizer(),
                     memory=_EvaluationMemory(),
                     patch_coordinator_factory=patch_factory,

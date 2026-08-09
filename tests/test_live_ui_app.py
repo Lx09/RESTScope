@@ -38,7 +38,7 @@ class _InjectedCapabilities:
 
     def require_context(self):
         """Return the initialized context or match the production error contract."""
-        from restscope.tools import ToolContextError
+        from restscope.tools.context import ToolContextError
 
         if self.context is None:
             raise ToolContextError(
@@ -91,7 +91,7 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     """Scenario: enabled hosting exposes only the actual started loopback URL."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
-    from restscope.restscope_config import RESTScopeConfig, UIConfig
+    from restscope.config import RESTScopeConfig, UIConfig
 
     service = SimpleNamespace(url="http://127.0.0.1:9988", closed=False)
 
@@ -131,7 +131,7 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     """Ctrl-C preserves the stopped snapshot until the App is closed."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
-    from restscope.restscope_config import RESTScopeConfig, UIConfig
+    from restscope.config import RESTScopeConfig, UIConfig
 
     class InterruptingMain:
         """Represent a blocking Main loop interrupted by its local caller."""
@@ -186,7 +186,7 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     """Scenario: an optional server failure disables UI but not App construction."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
-    from restscope.restscope_config import RESTScopeConfig, UIConfig
+    from restscope.config import RESTScopeConfig, UIConfig
 
     monkeypatch.setattr("restscope.ui.start_ui_service", lambda **_kwargs: None)
     config = replace(

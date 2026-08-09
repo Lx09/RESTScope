@@ -26,12 +26,7 @@ class StdioMCPClientSession:
         self._session: Any | None = None
 
     def start(self) -> None:
-        """
-        Handle start as part of the policy-controlled model tool boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Start every configured MCP server once and cache its live session."""
         if self._thread is not None:
             return
 
@@ -51,31 +46,18 @@ class StdioMCPClientSession:
             raise
 
     def list_tools(self) -> list[dict[str, Any]]:
-        """
-        Return tools for the policy-controlled model tool boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """List the current tool definitions reported by each started MCP server."""
         result = self._request("list_tools")
         return [_to_plain_data(tool) for tool in result.tools]
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle call tool as part of the policy-controlled model tool boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Call one named tool on an already-started MCP server and return the provider result."""
         result = self._request("call_tool", tool_name, arguments)
         return _to_plain_data(result)
 
     def close(self) -> None:
         """
         Release resources owned by the policy-controlled model tool boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
         """
         thread = self._thread
         if thread is None:
@@ -104,12 +86,7 @@ class StdioMCPClientSession:
                 ready.set_exception(exc)
 
     async def _serve(self, ready: Future[None]) -> None:
-        """
-        Handle serve as part of the policy-controlled model tool boundary.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Run the asynchronous MCP host loop, reporting startup or execution failures to the synchronous owner."""
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 

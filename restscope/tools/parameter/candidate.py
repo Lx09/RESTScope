@@ -7,17 +7,21 @@ remain unavailable to the model.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from restscope.context import CompactTextWriter
 from restscope.llm import ToolSpec
-from restscope.operation_smoke.failure_resolution.candidates import (
-    PatchCandidateRegistry,
-    PatchCandidateSummary,
-)
 from restscope.tools.runtime import AgentToolbox, ToolBinding
+from .contracts import PatchCandidateSummary
+
+
+class CandidateSummaryBackend(Protocol):
+    """Read one issued candidate without exposing the registry implementation."""
+
+    def summary(self, candidate_ref: str) -> PatchCandidateSummary:
+        """Return the bounded summary for an exact session-local reference."""
 
 
 READ_CANDIDATE_TOOL_NAME = "parameter_patch.read_candidate"
@@ -52,7 +56,7 @@ def read_candidate_tool_spec() -> ToolSpec:
 def register_candidate_read_tool(
     *,
     toolbox: AgentToolbox,
-    registry: PatchCandidateRegistry,
+    registry: CandidateSummaryBackend,
 ) -> None:
     """Bind the candidate read Tool to one Resolution session Registry."""
 
@@ -61,7 +65,7 @@ def register_candidate_read_tool(
 
 
 def candidate_read_tool_binding(
-    registry: PatchCandidateRegistry,
+    registry: CandidateSummaryBackend,
 ) -> ToolBinding:
     """Bind the bounded candidate projection to one session Registry."""
 

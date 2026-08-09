@@ -409,7 +409,7 @@ def test_agent_toolbox_redacts_every_model_visible_success_value() -> None:
     from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
     from restscope.observability import TracingRuntime
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     secret = "tool-secret"
     toolbox = AgentToolbox(

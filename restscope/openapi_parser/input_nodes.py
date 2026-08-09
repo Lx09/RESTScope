@@ -77,13 +77,7 @@ def _add_schema_children(
     parent: InputNodeIR,
     path: str,
 ) -> None:
-    """
-    Handle add schema children as part of OpenAPI parsing and normalized in-memory
-    representation.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Recursively add property, item, and variant input nodes beneath one Schema location."""
     for property_name, child_schema in sorted(schema.properties.items()):
         if child_schema.read_only:
             continue

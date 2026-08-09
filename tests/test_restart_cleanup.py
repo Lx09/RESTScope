@@ -6,12 +6,14 @@ import importlib
 from pathlib import Path
 
 
-def test_top_level_package_exports_parser_only_runtime() -> None:
-    """Scenario: verify that top level package exports parser only runtime."""
+def test_top_level_package_exports_only_app_facing_types() -> None:
+    """The package root stays a side-effect-free App-facing facade."""
     restscope = importlib.import_module("restscope")
 
-    assert hasattr(restscope, "OpenAPIParser")
-    assert hasattr(restscope, "OpenAPISpecIR")
+    assert set(restscope.__all__) == {"RESTScopeApp", "RESTScopeConfig"}
+    assert hasattr(restscope, "RESTScopeApp")
+    assert hasattr(restscope, "RESTScopeConfig")
+    assert not hasattr(restscope, "OpenAPIParser")
     assert not hasattr(restscope, "ToolContext")
     assert not hasattr(restscope, "set_workflow_context")
 
@@ -23,7 +25,7 @@ def test_flat_environment_names_configure_logging(monkeypatch) -> None:
     monkeypatch.delenv("RESTSCOPE_LOGGING__LEVEL", raising=False)
     monkeypatch.delenv("RESTSCOPE_PATHS__DATA_DIR", raising=False)
 
-    config_module = importlib.import_module("restscope.restscope_config")
+    config_module = importlib.import_module("restscope.config")
     config = config_module.RESTScopeConfig.from_environment()
 
     assert config.logging.level == "DEBUG"
@@ -42,7 +44,7 @@ def test_short_environment_names_configure_dual_llm_models(monkeypatch, tmp_path
     monkeypatch.delenv("FAST_API_KEY", raising=False)
     monkeypatch.delenv("FAST_BASE_URL", raising=False)
 
-    config_module = importlib.import_module("restscope.restscope_config")
+    config_module = importlib.import_module("restscope.config")
     config = config_module.RESTScopeConfig.from_environment(tmp_path / ".env")
 
     assert config.llm.thinking.model == "glm-4.5-air"
@@ -61,7 +63,7 @@ def test_short_environment_name_configures_mcp_servers_file(monkeypatch, tmp_pat
     servers_file = tmp_path / "mcp.servers.json"
     monkeypatch.setenv("MCP_SERVERS_FILE", str(servers_file))
 
-    config_module = importlib.import_module("restscope.restscope_config")
+    config_module = importlib.import_module("restscope.config")
     config = config_module.RESTScopeConfig.from_environment()
 
     assert config.mcp.servers_file == servers_file

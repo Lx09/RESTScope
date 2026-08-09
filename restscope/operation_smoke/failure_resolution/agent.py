@@ -17,16 +17,18 @@ from typing import Any, Protocol
 from restscope.agent import AgentProfile
 from restscope.tools import (
     AgentToolbox,
-    HTTP_REQUEST_TOOL_NAME,
+    ToolFailure,
+    builtin_tool_catalog,
+)
+from restscope.tools.http import HTTP_REQUEST_TOOL_NAME
+from restscope.tools.openapi import (
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
     OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
     OPENAPI_LIST_INPUTS_TOOL_NAME,
     OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
-    OpenAPICapability,
-    ToolFailure,
-    builtin_tool_catalog,
+    OpenAPIToolBackend,
+    openapi_tool_bindings,
 )
-from restscope.tools.openapi import openapi_tool_bindings
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -54,13 +56,14 @@ from restscope.operation_smoke.parameter_patch import (
     ParameterPatchCoordinator,
     ParameterPatchTask,
 )
-from restscope.harness.testing.test_case_catalog import TestCaseCatalog
+from restscope.harness.operation_testing.test_case_catalog import TestCaseCatalog
+from restscope.harness.operation_testing import record_probe_result
 from restscope.tools.test_case import (
     TEST_CASE_TOOL_NAMES,
     test_case_tool_bindings,
     tool_result_json,
 )
-from restscope.harness.testing import (
+from restscope.request_generation import (
     OperationGeneratorConfig,
     ReferenceValueProvider,
     build_semantic_input_map,
@@ -187,7 +190,7 @@ class FailureResolutionAgent:
         client: LLMClient,
         model: LLMModelConfig,
         compact_model: LLMModelConfig,
-        openapi_capability: OpenAPICapability,
+        openapi_backend: OpenAPIToolBackend,
         finalizer: ResolutionFinalizer,
         http_probe: HTTPProbe | None = None,
         memory: ResolutionMemory | None = None,
@@ -205,7 +208,7 @@ class FailureResolutionAgent:
             model=compact_model,
             tracing_runtime=tracing_runtime,
         )
-        self.openapi_capability = openapi_capability
+        self.openapi_backend = openapi_backend
         self.finalizer = finalizer
         self.http_probe = http_probe
         self.memory = memory
@@ -238,7 +241,7 @@ class FailureResolutionAgent:
             client=self.client,
             model=self.model,
             compact_agent=self.compact_agent,
-            openapi_capability=self.openapi_capability,
+            openapi_backend=self.openapi_backend,
             finalizer=self.finalizer,
             http_probe=self.http_probe,
             memory=self.memory,
@@ -269,7 +272,7 @@ class FailureResolutionSession:
         client: LLMClient,
         model: LLMModelConfig,
         compact_agent: FailureResolutionCompactAgent,
-        openapi_capability: OpenAPICapability,
+        openapi_backend: OpenAPIToolBackend,
         finalizer: ResolutionFinalizer,
         http_probe: HTTPProbe | None,
         memory: ResolutionMemory | None,
@@ -293,7 +296,7 @@ class FailureResolutionSession:
         self.client = client
         self.model = model
         self.compact_agent = compact_agent
-        self.openapi_capability = openapi_capability
+        self.openapi_backend = openapi_backend
         self.finalizer = finalizer
         self.http_probe = http_probe
         self.memory = memory
@@ -565,7 +568,7 @@ class FailureResolutionSession:
         }
         bindings = [
             *openapi_tool_bindings(
-                self.openapi_capability,
+                self.openapi_backend,
                 names=openapi_names,
             ),
             *test_case_tool_bindings(self.catalog),
@@ -667,13 +670,18 @@ class FailureResolutionSession:
         ):
             assert self.config is not None and self.http_probe is not None
             call = response.tool_calls[0]
-            result = self._execute_direct_tool(
+            raw_result = self._execute_direct_tool(
                 call,
                 lambda: self.http_probe.execute(
                     config=self.config,
                     tool_call=call,
-                    catalog=self.catalog,
                 ),
+            )
+            result = record_probe_result(
+                catalog=self.catalog,
+                config=self.config,
+                tool_call=call,
+                result=raw_result,
             )
             self._associate_probe_case(result)
             results = [result]

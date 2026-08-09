@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from restscope.restscope_config import DBConfig
+from restscope.config import DBConfig
 
 
 def create_engine_from_url(url: str, *, echo: bool = False, **kwargs) -> Engine:

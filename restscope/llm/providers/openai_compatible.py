@@ -245,13 +245,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         )
 
     def _extract_tool_calls(self, message: Any, *, request: LLMRequest) -> list[ToolCall]:
-        """
-        Handle extract tool calls as part of provider-independent language-model
-        invocation.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Translate provider tool-call payloads into provider-independent ToolCall records."""
         raw_tool_calls = getattr(message, "tool_calls", None) or []
         internal_names = {
             _provider_tool_name(tool.name): tool.name

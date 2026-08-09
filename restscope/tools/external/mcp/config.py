@@ -26,12 +26,7 @@ class MCPServerConfig:
 
     @classmethod
     def from_mapping(cls, name: str, values: Mapping[str, Any]) -> "MCPServerConfig":
-        """
-        Handle from mapping as part of the policy-controlled model tool boundary.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Validate one MCP server mapping, including its command, arguments, environment, and startup timeout."""
         return cls(
             name=name,
             command=str(values["command"]),

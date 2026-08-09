@@ -93,8 +93,8 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     from restscope.llm.providers.base import BaseLLMProvider
     from restscope.observability import build_tracing_runtime
-    from restscope.redaction import Redactor
-    from restscope.restscope_config import RESTScopeConfig, TracingConfig
+    from restscope.observability import Redactor
+    from restscope.config import RESTScopeConfig, TracingConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     _wait_for_phoenix()

@@ -18,7 +18,7 @@ def _recording_runtime(*, secret_values=()):
 
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -238,7 +238,8 @@ def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     """The Agent-owned execution boundary emits safe tool spans."""
     from opentelemetry.trace.status import StatusCode
 
-    from restscope.tools import AgentToolbox, ToolContext
+    from restscope.tools import AgentToolbox
+    from restscope.tools.context import ToolContext
     from restscope.llm import ToolCall, ToolSpec
     from restscope.openapi_parser import OpenAPIParser
 
@@ -468,7 +469,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     from restscope.harness import AgentRuntimeDefinition, build_harness
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     class Provider:
@@ -578,25 +579,19 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     assert not hasattr(context, "tracing_runtime")
 
 
-def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> None:
-    """Scenario: verify that app rebinds every builtin capability trace consumer."""
+def test_app_rebinds_only_harness_owned_trace_consumers(tmp_path: Path) -> None:
+    """Injected domain services are no longer reached through HarnessRuntime."""
     from restscope import RESTScopeApp
     from restscope.harness import build_harness
     from restscope.observability import TracingRuntime
-    from restscope.redaction import Redactor
-    from restscope.restscope_config import RESTScopeConfig
-    from restscope.harness.testing import OperationTestingService
+    from restscope.observability import Redactor
+    from restscope.config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
     app_runtime = TracingRuntime.disabled(redactor=Redactor(["app-key"]))
-    testing_service = OperationTestingService(
-        config_catalog=object(),
-        tracing_runtime=old_runtime,
-    )
     capabilities = build_harness(
         tracing_runtime=old_runtime,
-        operation_testing_service=testing_service,
         sources={
             "example": {
                 "kind": "mcp",
@@ -620,9 +615,7 @@ def test_app_rebinds_every_builtin_capability_trace_consumer(tmp_path: Path) -> 
 
     assert capabilities.external_tools is not None
     assert capabilities.external_tools.tracing_runtime is app_runtime
-    assert capabilities.operation_testing_service is testing_service
-    assert testing_service.tracing_runtime is app_runtime
-    assert testing_service.tracing_runtime.redactor is app_runtime.redactor
+    assert not hasattr(capabilities, "operation_testing_service")
 
     app.close()
     old_runtime.close()
@@ -632,9 +625,9 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     """Scenario: verify that http request tool keeps full result while trace output is bounded."""
     import httpx
 
-    from restscope.tools import (
-        AgentToolbox,
-        ToolContext,
+    from restscope.tools import AgentToolbox
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import (
         TargetHTTPRequestTool,
         http_request_tool_spec,
     )
@@ -693,19 +686,19 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     """Scenario: Smoke's internal batch runner emits sanitized batch and case spans."""
     import httpx
 
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
     from restscope.db import (
         Base,
         SqlAlchemyGeneratorConfigUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import (
-        GeneratorConfigCatalog,
-        OperationTestingService,
+    from restscope.request_generation import (
+        RequestGenerationConfigStore,
     )
+    from restscope.harness.operation_testing import OperationTestingService
 
     class UnreadableBody(httpx.SyncByteStream):
         def __iter__(self):
@@ -731,11 +724,11 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     node = next(iter(operation.input_nodes.values()))
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'trace-testing.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
-    from restscope.harness.testing import prepare_accepted_generator_patch
+    from restscope.request_generation import prepare_accepted_generator_patch
 
     current = catalog.require_operation(operation.operation_key)
     updated = prepare_accepted_generator_patch(
@@ -757,7 +750,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
         uow.commit()
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         tracing_runtime=runtime,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(

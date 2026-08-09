@@ -4,6 +4,38 @@ RESTScope explores an API through generated requests, classifies observed
 failures, and evolves input generators from evidence gathered during one App
 lifetime.
 
+## Architecture vocabulary
+
+**OpenAPI Audit**:
+The current normalized OpenAPI document plus append-only response-contract
+change events used for audit and export. It does not restore an App or own live
+response monitoring.
+
+**Operation Reference**:
+A stable semantic path to one request input or response field inside a single
+OpenAPI Operation. It translates between OpenAPI structure, model-facing
+handles, and bounded runtime evidence without owning those facts.
+
+**Catalog**:
+A collection whose main job is discovering or looking up definitions or facts
+by stable identity. Catalog membership does not imply Tool authorization.
+
+**Store**:
+Mutable current state that can be replaced or revised during its approved
+lifetime. A Store name must identify which domain owns that state.
+
+**Registry**:
+A runtime mapping for names, short references, or lifecycle objects. A Registry
+is not the durable source of domain facts.
+
+**Backend**:
+A trusted implementation that supplies data access or execution behind a Tool
+Interface. The model sees the Tool contract, never the Backend object.
+
+**Coordinator**:
+An object that sequences several independently meaningful Modules. Do not use
+this name for a wrapper around one collaborator or one pass-through call.
+
 ## Agent Context
 
 Agent Context is the short-lived, model-facing message view for one LLM
@@ -33,7 +65,7 @@ the database.
 _Avoid_: Batch report, persistent test history
 
 **Current-operation HTTP Probe**:
-A Failure Resolution request through the global HTTP capability, restricted to
+A Failure Resolution request through the global HTTP Tool, restricted to
 the exact operation method and path template. It is available
 for read and write operations; every attempt enters the Test Case Catalog, and
 write effects are not rolled back.

@@ -225,11 +225,13 @@ These five terms are RESTScope's core runtime language and hard constraints:
 - **Harness** is deterministic runtime code. It owns Agent lifecycle, Profile
   validation, dependency injection, session state, Tool execution, output
   validation, tracing, and logs. A Harness must not make an LLM-owned domain
-  decision. Deterministic request generation and execution belong under
-  `restscope.harness` rather than a generic `testing` package. The retired
-  run-scoped FIFO and retry scheduler must not be restored; the blocking Main
-  loop owns any future semantic scheduling through explicitly granted Skills
-  and Tools.
+  decision. The Generator and Constraint language, compilation, solving,
+  schema snapshots, serialization, and mutable generation configuration belong
+  to `restscope.request_generation`. The Harness owns deterministic operation
+  execution, run-local Test Cases, Probe evidence, and the mechanical injection
+  of those capabilities into authorized Tools. The retired run-scoped FIFO and
+  retry scheduler must not be restored; the blocking Main loop owns any future
+  semantic scheduling through explicitly granted Skills and Tools.
 - Built-in Tools form one immutable global Catalog. Runtime-discovered MCP Tools
   use a separate external Catalog. Every Agent receives only the exact names in
   its Profile; neither Catalog is automatically injected. `skill.read` is the

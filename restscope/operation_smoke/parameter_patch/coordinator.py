@@ -14,17 +14,15 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from restscope.tools import (
-    OpenAPICapability,
-    ResourceIdentifierCapability,
-    ToolFailure,
-)
+from restscope.tools import ToolFailure
+from restscope.tools.openapi import OpenAPIToolBackend
+from restscope.tools.resource import ResourceToolBackend
 from restscope.context import CompactTextWriter
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.observability import TracingRuntime
 from restscope.operation_smoke.output_limit import ModelOutputLimit
-from restscope.response_fields import ResponseFieldReference
-from restscope.harness.testing import (
+from restscope.operation_references import ResponseFieldReference
+from restscope.request_generation import (
     ConstraintSet,
     InputGeneratorPatch,
     OperationGeneratorConfig,
@@ -40,7 +38,7 @@ from restscope.harness.testing import (
     referenced_input_node_ids,
     validate_constraint_set,
 )
-from restscope.harness.testing.generation import generate_test_case
+from restscope.request_generation.generation import generate_test_case
 
 from .agent import ParameterPatchAgent, ParameterPatchAttempt
 from .prompts import build_parameter_patch_prompt
@@ -101,8 +99,8 @@ class ParameterPatchCoordinator:
         review_model: LLMModelConfig,
         patch_system_prompt: str | None = None,
         review_system_prompt: str | None = None,
-        openapi_capability: OpenAPICapability | None = None,
-        resource_capability: ResourceIdentifierCapability | None = None,
+        openapi_backend: OpenAPIToolBackend | None = None,
+        resource_backend: ResourceToolBackend | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Store collaborators for one short-lived Patch coordination run."""
@@ -111,8 +109,8 @@ class ParameterPatchCoordinator:
         self.review_model = review_model
         self.patch_system_prompt = patch_system_prompt
         self.review_system_prompt = review_system_prompt
-        self.openapi_capability = openapi_capability
-        self.resource_capability = resource_capability
+        self.openapi_backend = openapi_backend
+        self.resource_backend = resource_backend
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def run(
@@ -148,8 +146,8 @@ class ParameterPatchCoordinator:
             client=self.client,
             model=self.patch_model,
             prompt=prompt,
-            openapi_capability=self.openapi_capability,
-            resource_capability=self.resource_capability,
+            openapi_backend=self.openapi_backend,
+            resource_backend=self.resource_backend,
             output_limit=output_limit,
             tracing_runtime=self.tracing_runtime,
         )
@@ -198,7 +196,7 @@ class ParameterPatchCoordinator:
                                 patch_agent.queried_response_fields
                             ),
                             reference_values=reference_values,
-                            openapi_capability=self.openapi_capability,
+                            openapi_backend=self.openapi_backend,
                         )
                         samples = _sample_patch(
                             task=task,
@@ -452,7 +450,7 @@ def _compile_patch(
     queried_resources: Mapping[str, tuple[frozenset[str], int]],
     queried_response_fields: set[tuple[str, str, str, str]],
     reference_values: ReferenceValueProvider | None,
-    openapi_capability: OpenAPICapability | None,
+    openapi_backend: OpenAPIToolBackend | None,
 ) -> tuple[GeneratorPatchDraft, dict[str, list[object]]]:
     """Translate semantic output after revalidating any selected evidence."""
     semantic = build_semantic_input_map(config)
@@ -529,7 +527,7 @@ def _compile_patch(
                     "The response_value source must be copied exactly from "
                     "openapi.find_observed_response_fields in this Patch session"
                 )
-            if not _response_source_is_current(openapi_capability, identity):
+            if not _response_source_is_current(openapi_backend, identity):
                 raise ValueError(
                     "The selected response_value source is no longer available"
                 )
@@ -596,7 +594,7 @@ def _compile_patch(
 
 
 def _response_source_is_current(
-    capability: OpenAPICapability | None,
+    capability: OpenAPIToolBackend | None,
     identity: tuple[str, str, str, str],
 ) -> bool:
     """Re-run current-IR observation lookup and require one exact source identity."""

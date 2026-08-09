@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from restscope.redaction import Redactor
+from .redaction import Redactor
 
 
 @dataclass(frozen=True)
@@ -27,12 +27,7 @@ class TraceContentEncoder:
     max_content_bytes: int = 65536
 
     def prepare(self, value: Any) -> PreparedContent:
-        """
-        Handle prepare as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Redact and bound one tracing value before it reaches an exporter or live observer."""
         normalized = self.redactor.redact(value)
         original_size = len(_compact_json(normalized).encode("utf-8"))
         formatted = _formatted_json(normalized)
@@ -49,12 +44,7 @@ class TraceContentEncoder:
         )
 
     def _truncated_value(self, value: Any) -> str:
-        """
-        Handle truncated value as part of bounded, redacted tracing and telemetry.
-
-        This private helper keeps one transformation or policy decision explicit so the
-        surrounding orchestration remains readable.
-        """
+        """Return a head-and-tail text preview with an explicit omitted-character marker."""
         string_limit = max(16, self.max_content_bytes // 2)
         for item_limit in (20, 10, 5, 2, 1, 0):
             current_string_limit = string_limit
@@ -107,12 +97,7 @@ def _structured_preview(
     string_limit: int,
     depth_limit: int,
 ) -> Any:
-    """
-    Handle structured preview as part of bounded, redacted tracing and telemetry.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Recursively bound a mapping or sequence while preserving JSON-safe scalar types."""
     if isinstance(value, str):
         return _utf8_prefix(value, string_limit)
     if depth_limit <= 0:

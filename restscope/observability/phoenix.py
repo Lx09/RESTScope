@@ -27,12 +27,7 @@ class _ProxyEnvironment:
     previous: dict[str, str | None] = field(repr=False)
 
     def restore(self) -> None:
-        """
-        Handle restore as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Restore the process environment values temporarily changed for Phoenix setup."""
         for name, value in self.previous.items():
             if value is None:
                 os.environ.pop(name, None)
@@ -48,21 +43,11 @@ class _BackendLease:
         self._closed = False
 
     def start_as_current_span(self, name: str):
-        """
-        Handle start as current span as part of bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Open a Phoenix-backed span through the configured OpenTelemetry tracer."""
         return self._shared.backend.start_as_current_span(name)
 
     def close(self) -> None:
-        """
-        Release resources owned by bounded, redacted tracing and telemetry.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Shut down the Phoenix tracing backend and restore environment variables changed at startup."""
         global _ACTIVE_BACKEND
 
         if self._closed:

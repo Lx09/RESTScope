@@ -23,7 +23,7 @@ class _TrackingTracingRuntime:
 
 
 def _config(database_url: str):
-    from restscope.restscope_config import DBConfig, RESTScopeConfig
+    from restscope.config import DBConfig, RESTScopeConfig
 
     return replace(
         RESTScopeConfig.from_environment(),
@@ -38,6 +38,20 @@ def _build_default_app(config):
     return RESTScopeApp.from_config(
         config,
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
+    )
+
+
+def _monitor_stub():
+    """Provide only the narrow Monitor readers consumed by App composition."""
+
+    return SimpleNamespace(
+        resource_identifier_tracker=SimpleNamespace(catalog=SimpleNamespace()),
+        response_value_tracker=SimpleNamespace(
+            catalog=SimpleNamespace(
+                list_observed_response_fields=lambda **_kwargs: ([], 0)
+            )
+        ),
+        contract_tracker=SimpleNamespace(audit=SimpleNamespace()),
     )
 
 
@@ -514,7 +528,7 @@ def test_direct_app_keyboard_interrupt_cleans_owned_database_and_tracing(
     assert not database.exists()
 
 
-def test_from_config_keyboard_interrupt_cleans_owned_resources(
+def test_from_config_does_not_prebuild_resources_before_constructor(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -528,7 +542,7 @@ def test_from_config_keyboard_interrupt_cleans_owned_resources(
     runtime = SimpleNamespace(
         mcp_host=host,
         target_http_tool=object(),
-        openapi_capability=object(),
+        openapi_backend=object(),
         require_operation=lambda _key: None,
         require_context=lambda: None,
     )
@@ -551,8 +565,8 @@ def test_from_config_keyboard_interrupt_cleans_owned_resources(
             _config(f"sqlite:///{database}"),
         )
 
-    assert host.closed is True
-    assert trace_runtime.closed is True
+    assert host.closed is False
+    assert trace_runtime.closed is False
     assert not database.exists()
 
 
@@ -713,7 +727,7 @@ def test_smoke_coordinator_construction_failure_closes_runtime_and_removes_datab
     runtime = SimpleNamespace(
         mcp_host=host,
         target_http_tool=object(),
-        openapi_capability=object(),
+        openapi_backend=object(),
         require_operation=lambda _key: None,
         require_context=lambda: None,
     )
@@ -723,7 +737,7 @@ def test_smoke_coordinator_construction_failure_closes_runtime_and_removes_datab
     )
     monkeypatch.setattr(
         "restscope.app.build_api_behavior_monitor_coordinator",
-        lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
+        lambda *_args, **_kwargs: _monitor_stub(),
     )
     monkeypatch.setattr(
         "restscope.app.build_operation_smoke_coordinator",
@@ -753,13 +767,15 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
     smoke_coordinator = SimpleNamespace(run=lambda *_args, **_kwargs: None)
     runtime = SimpleNamespace(
         clear_context=lambda: None,
-        operation_testing_service=None,
+        target_http_tool=object(),
+        openapi_backend=object(),
+        require_context=lambda: None,
     )
     capability_calls = []
 
     monkeypatch.setattr(
         "restscope.app.build_api_behavior_monitor_coordinator",
-        lambda *_args, **_kwargs: SimpleNamespace(catalog=SimpleNamespace()),
+        lambda *_args, **_kwargs: _monitor_stub(),
     )
     monkeypatch.setattr(
         "restscope.app.build_harness",
@@ -783,7 +799,7 @@ def test_from_config_defaults_to_local_operation_smoke_without_mcp_host(
         app.close()
 
 
-def test_app_constructor_failure_removes_created_database(
+def test_from_config_constructor_failure_creates_no_resources(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -796,7 +812,7 @@ def test_app_constructor_failure_removes_created_database(
     runtime = SimpleNamespace(
         mcp_host=host,
         target_http_tool=object(),
-        openapi_capability=object(),
+        openapi_backend=object(),
         require_operation=lambda _key: None,
         require_context=lambda: None,
     )
@@ -816,7 +832,7 @@ def test_app_constructor_failure_removes_created_database(
             _config(f"sqlite:///{database}"),
         )
 
-    assert host.closed is True
+    assert host.closed is False
     assert not database.exists()
 
 

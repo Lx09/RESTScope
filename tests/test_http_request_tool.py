@@ -15,10 +15,9 @@ def _toolbox_for_transport(
 ):
     import httpx
 
-    from restscope.tools import (
-        AgentToolbox,
-        ToolContext,
-        ToolFailure,
+    from restscope.tools import AgentToolbox, ToolFailure
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import (
         TargetHTTPRequestTool,
         http_request_tool_spec,
     )
@@ -28,7 +27,7 @@ def _toolbox_for_transport(
     )
     from restscope.observability import TracingRuntime
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     http_tool = TargetHTTPRequestTool(
         client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),

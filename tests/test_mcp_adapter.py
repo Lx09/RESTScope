@@ -78,10 +78,8 @@ def test_mcp_tool_adapter_preserves_contract_without_deciding_availability() -> 
 def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
 ) -> None:
     """Scenario: verify that register tool source uses external call bridge and summarizes results."""
-    from restscope.tools import (
-        AgentToolbox,
-        register_tool_source,
-    )
+    from restscope.tools import AgentToolbox
+    from restscope.tools.external import register_tool_source
     from restscope.llm import ToolCall
 
     calls: list[tuple[str, dict]] = []
@@ -143,8 +141,8 @@ def test_register_tool_source_rejects_unsupported_source_kind() -> None:
     """Scenario: verify that register tool source rejects unsupported source kind."""
     import pytest
 
-    from restscope.tools import (
-        AgentToolbox,
+    from restscope.tools import AgentToolbox
+    from restscope.tools.external import (
         UnsupportedToolSourceKindError,
         register_tool_source,
     )

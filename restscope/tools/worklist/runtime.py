@@ -8,18 +8,34 @@ Constraint, or persistence DTOs; precise objects remain in trusted registries.
 from __future__ import annotations
 
 from functools import partial
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from restscope.tools import AgentToolbox, ToolBinding, ToolFailure
+from restscope.tools.runtime import AgentToolbox, ToolBinding, ToolFailure
 from restscope.llm import ToolSpec
 
-from restscope.operation_smoke.failure_resolution.schemas import (
+from .contracts import (
     FailureWorklist,
+    WORKLIST_ITEM_ID_PATTERN,
     WorklistItem,
-    _WORKLIST_ITEM_ID_PATTERN,
 )
-from restscope.operation_smoke.failure_resolution.worklist import FailureWorklistStore
+
+
+class WorklistStoreBackend(Protocol):
+    """Expose the session-local reads and atomic replacement used by the Tools."""
+
+    def read(self) -> FailureWorklist:
+        """Return a defensive snapshot of current Worklist state."""
+
+    def write(
+        self,
+        *,
+        expected_revision: int,
+        active_item_id: str | None,
+        items: list[WorklistItem],
+    ) -> FailureWorklist:
+        """Validate and atomically replace the complete Worklist."""
 
 
 READ_WORKLIST_TOOL_NAME = "failure_resolution.read_worklist"
@@ -42,7 +58,7 @@ class _WriteInput(BaseModel):
         default=None,
         min_length=6,
         max_length=120,
-        pattern=_WORKLIST_ITEM_ID_PATTERN,
+        pattern=WORKLIST_ITEM_ID_PATTERN,
     )
     items: list[WorklistItem]
 
@@ -84,7 +100,7 @@ def write_worklist_tool_spec() -> ToolSpec:
 def register_worklist_tools(
     *,
     toolbox: AgentToolbox,
-    store: FailureWorklistStore,
+    store: WorklistStoreBackend,
 ) -> None:
     """Register the only two model-visible operations over mutable worklist state."""
     specs = {
@@ -96,7 +112,7 @@ def register_worklist_tools(
 
 
 def worklist_tool_bindings(
-    store: FailureWorklistStore,
+    store: WorklistStoreBackend,
 ) -> tuple[ToolBinding, ...]:
     """Bind read and atomic replacement Tools to one session-local Worklist."""
     return (
@@ -115,7 +131,7 @@ def worklist_tool_bindings(
 
 def _write_worklist(
     *,
-    store: FailureWorklistStore,
+    store: WorklistStoreBackend,
     expected_revision: int,
     items: list[object],
     active_item_id: str | None = None,

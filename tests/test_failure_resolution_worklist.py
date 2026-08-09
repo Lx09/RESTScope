@@ -13,8 +13,8 @@ def _candidate_registry():
     )
     from restscope.operation_smoke.memory import SolveAttemptParameterWrite
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-    from restscope.harness.testing import InputGeneratorPatch
-    from restscope.harness.testing.models import ConstantGenerator
+    from restscope.request_generation import InputGeneratorPatch
+    from restscope.request_generation.models import ConstantGenerator
 
     registry = PatchCandidateRegistry()
     candidate = registry.issue(

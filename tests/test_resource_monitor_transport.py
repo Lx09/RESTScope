@@ -32,9 +32,10 @@ def _testing_service(
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing import GeneratorConfigCatalog, OperationTestingService
+    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.harness.operation_testing import OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -71,7 +72,7 @@ def _testing_service(
     )
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'transport.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
     )
     assert catalog.initialize_once(ir) is True
@@ -88,14 +89,14 @@ def _testing_service(
         ),
         response_processor=processor,
     )
-    return ir, OperationTestingService(config_catalog=catalog, transport=transport)
+    return ir, OperationTestingService(config_store=catalog, transport=transport)
 
 
 def test_operation_testing_supplies_known_operation_and_body_to_processor(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing supplies known operation and body to processor."""
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
 
     processor = CapturingProcessor()
     ir, service = _testing_service(
@@ -134,8 +135,9 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
     """Scenario: verify that processor warning does not replace raw http result."""
     import httpx
 
-    from restscope.tools import ToolContext, TargetHTTPRequestTool
-    from restscope.http_transport import (
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import TargetHTTPRequestTool
+    from restscope.target_http import (
         TargetHTTPTransport,
         TargetResponseProcessorWarning,
     )
@@ -210,14 +212,15 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
     import httpx
 
     from restscope.tools.http import CurrentOperationHTTPProbe
-    from restscope.harness.testing.test_case_catalog import TestCaseCatalog
+    from restscope.harness.operation_testing.test_case_catalog import TestCaseCatalog
     from restscope.harness import build_harness
-    from restscope.tools import ToolContext, http_request_tool_spec
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import http_request_tool_spec
+    from restscope.target_http import TargetHTTPTransport
     from restscope.llm import ToolCall
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing.snapshot import build_initial_operation_config
-    from restscope.harness.testing import build_semantic_input_map
+    from restscope.request_generation.snapshot import build_initial_operation_config
+    from restscope.request_generation import build_semantic_input_map
 
     processor = CapturingProcessor()
     transport = TargetHTTPTransport(
@@ -285,11 +288,6 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
             name="restscope.http.request",
             arguments={"method": "GET", "path": "/users/me"},
         ),
-        catalog=TestCaseCatalog(
-            input_references=build_semantic_input_map(
-                config
-            ).reference_by_handle.values()
-        ),
     )
     unscoped = runtime.target_http_tool.execute(
         runtime.require_context(),
@@ -309,7 +307,7 @@ def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
 
 def test_target_operation_scope_resets_after_exception() -> None:
     """Scenario: verify that target operation scope resets after exception."""
-    from restscope.http_transport import (
+    from restscope.target_http import (
         TargetOperationIdentity,
         current_target_operation_identity,
         target_operation_scope,
@@ -333,8 +331,8 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing truncates monitor body at one mib."""
-    from restscope.tools import ToolContext
-    from restscope.http_transport import TargetResponseProcessorWarning
+    from restscope.tools.context import ToolContext
+    from restscope.target_http import TargetResponseProcessorWarning
 
     processor = CapturingProcessor(
         warning=TargetResponseProcessorWarning(
@@ -374,7 +372,7 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that operation testing buffers and monitors non successful 2xx  response once."""
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
 
     processor = CapturingProcessor()
     ir, service = _testing_service(
@@ -410,11 +408,11 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
 
 def _resource_monitor(tmp_path: Path):
     from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
-    from restscope.api_behavior_monitor.resource_identifier import ResourceIdentifierTracker
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_value_catalog import ResponseValueCatalog
-    from restscope.api_behavior_monitor.response_value import ResponseValueTracker
+    from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_identifiers.tracker import ResourceIdentifierTracker
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_values.catalog import ResponseValueCatalog
+    from restscope.api_behavior_monitor.response_values.tracker import ResponseValueTracker
     from restscope.db import (
         Base,
         SqlAlchemyResourceCatalogUnitOfWork,
@@ -468,8 +466,9 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.tools import ToolContext, TargetHTTPRequestTool
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import TargetHTTPRequestTool
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
     coordinator, catalog = _resource_monitor(tmp_path)
@@ -547,8 +546,9 @@ def test_raw_http_ambiguous_operation_match_warns_without_catalog_write(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.tools import ToolContext, TargetHTTPRequestTool
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import TargetHTTPRequestTool
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
 
     coordinator, catalog = _resource_monitor(tmp_path)
@@ -606,7 +606,7 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that resolved operation monitor error is persisted and later cleared."""
-    from restscope.api_behavior_monitor.resource_schemas import (
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         MonitoredOperation,
         ResourceObservation,
     )
@@ -614,7 +614,7 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.http_transport import (
+    from restscope.target_http import (
         TargetResponseObservation,
         TargetResponseOperationContext,
     )
@@ -689,7 +689,7 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
-    from restscope.http_transport import (
+    from restscope.target_http import (
         TargetResponseObservation,
         TargetResponseOperationContext,
     )
@@ -810,7 +810,7 @@ def test_default_app_uses_one_monitored_transport_without_global_model_tools(
 ) -> None:
     """The App shares transport code but creates no global model tool box."""
     from restscope import RESTScopeApp
-    from restscope.restscope_config import RESTScopeConfig
+    from restscope.config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     env_file = tmp_path / ".env"
@@ -824,15 +824,15 @@ def test_default_app_uses_one_monitored_transport_without_global_model_tools(
     )
     try:
         runtime = app.harness_runtime
-        service = runtime.operation_testing_service
+        service = app.operation_testing_service
         assert service is not None
         raw_tool = runtime.target_http_tool
 
-        assert runtime.api_behavior_monitor_coordinator is not None
-        assert not hasattr(runtime.api_behavior_monitor_coordinator, "initialize")
+        assert app.api_behavior_monitor_coordinator is not None
+        assert not hasattr(app.api_behavior_monitor_coordinator, "initialize")
         assert service.transport is raw_tool.transport
         assert service.transport.response_processor.coordinator is (
-            runtime.api_behavior_monitor_coordinator
+            app.api_behavior_monitor_coordinator
         )
         assert runtime.external_tools is None
     finally:

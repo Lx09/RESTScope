@@ -31,12 +31,12 @@ def _database(*, unit_of_work_class=None):
 
 def _catalog():
     """Create one trusted failed Test Case and both operation Parameter handles."""
-    from restscope.harness.testing.test_case_catalog import (
+    from restscope.harness.operation_testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
     )
-    from restscope.request_inputs import RequestInputReference
+    from restscope.operation_references import RequestInputReference
 
     catalog = TestCaseCatalog(
         input_references=[
@@ -89,8 +89,8 @@ def _candidate(registry, *, handle, node_id, value):
     """Issue one precise constant-Generator candidate for a semantic input."""
     from restscope.operation_smoke.memory import SolveAttemptParameterWrite
     from restscope.operation_smoke.parameter_patch import GeneratorPatchDraft
-    from restscope.harness.testing import InputGeneratorPatch
-    from restscope.harness.testing.models import ConstantGenerator
+    from restscope.request_generation import InputGeneratorPatch
+    from restscope.request_generation.models import ConstantGenerator
 
     return registry.issue(
         patch=GeneratorPatchDraft(

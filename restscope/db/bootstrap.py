@@ -14,7 +14,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from restscope.db.migrations import MIGRATIONS_DIR
-from restscope.restscope_config import DBConfig
+from restscope.config import DBConfig
 
 
 class DatabaseBootstrapError(RuntimeError):
@@ -210,12 +210,7 @@ def _verify_sqlite_database(database_path: Path) -> None:
 
 
 def _normalize_sqlite_config(config: DBConfig) -> tuple[DBConfig, Path]:
-    """
-    Normalize sqlite config for the repository and database persistence boundary.
-
-    This private helper keeps one transformation or policy decision explicit so the
-    surrounding orchestration remains readable.
-    """
+    """Resolve the claimed SQLite file to an absolute URL while preserving other database settings."""
     try:
         url = make_url(config.url)
     except (ArgumentError, TypeError, ValueError) as exc:

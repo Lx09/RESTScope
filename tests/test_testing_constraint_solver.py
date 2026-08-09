@@ -16,7 +16,7 @@ class _ReferenceValues:
 
 
 def _solver_config():
-    from restscope.harness.testing import (
+    from restscope.request_generation import (
         InputGeneratorConfig,
         InputNodeSnapshot,
         OperationGeneratorConfig,
@@ -154,7 +154,7 @@ def _solver_config():
 
 
 def _baseline():
-    from restscope.harness.testing import GeneratedNodeValue, GeneratedTestCase
+    from restscope.request_generation import GeneratedNodeValue, GeneratedTestCase
 
     values = {
         "query/fixed": 1,
@@ -194,14 +194,14 @@ def _baseline():
 
 
 def _constraint_set(*expressions: dict):
-    from restscope.harness.testing import ConstraintSet
+    from restscope.request_generation import ConstraintSet
 
     return ConstraintSet.model_validate({"constraints": list(expressions)})
 
 
 def test_candidate_domains_follow_generators_and_put_baseline_first() -> None:
     """Scenario: verify that candidate domains follow generators and put baseline first."""
-    from restscope.harness.testing.constraint_solver import build_candidate_domains
+    from restscope.request_generation.constraint_solver import build_candidate_domains
 
     config = _solver_config()
     constraints = _constraint_set(
@@ -280,8 +280,8 @@ def test_candidate_domains_follow_generators_and_put_baseline_first() -> None:
 
 def test_candidate_domain_samples_regex_generator_values() -> None:
     """Scenario: constraints can choose deterministic values from a regex domain."""
-    from restscope.harness.testing import InputGeneratorConfig
-    from restscope.harness.testing.constraint_solver import build_candidate_domains
+    from restscope.request_generation import InputGeneratorConfig
+    from restscope.request_generation.constraint_solver import build_candidate_domains
 
     config = _solver_config()
     configs = [
@@ -330,7 +330,7 @@ def test_candidate_domain_samples_regex_generator_values() -> None:
 
 def test_solver_satisfies_implication_and_is_deterministic() -> None:
     """Scenario: verify that solver satisfies implication and is deterministic."""
-    from restscope.harness.testing.constraint_solver import solve_input_overrides
+    from restscope.request_generation.constraint_solver import solve_input_overrides
 
     config = _solver_config()
     constraints = _constraint_set(
@@ -363,7 +363,7 @@ def test_solver_satisfies_implication_and_is_deterministic() -> None:
 
 def test_solver_satisfies_arithmetic_relations() -> None:
     """Scenario: verify that solver satisfies arithmetic relations."""
-    from restscope.harness.testing.constraint_solver import solve_input_overrides
+    from restscope.request_generation.constraint_solver import solve_input_overrides
 
     config = _solver_config()
     constraints = _constraint_set(
@@ -390,7 +390,7 @@ def test_solver_satisfies_arithmetic_relations() -> None:
 
 def test_solver_forces_structural_ancestors_present() -> None:
     """Scenario: verify that solver forces structural ancestors present."""
-    from restscope.harness.testing.constraint_solver import solve_input_overrides
+    from restscope.request_generation.constraint_solver import solve_input_overrides
 
     config = _solver_config()
     constraints = _constraint_set(
@@ -419,7 +419,7 @@ def test_solver_forces_structural_ancestors_present() -> None:
 
 def test_solver_reports_unsatisfiable_constraints() -> None:
     """Scenario: verify that solver reports unsatisfiable constraints."""
-    from restscope.harness.testing.constraint_solver import (
+    from restscope.request_generation.constraint_solver import (
         ConstraintSolveError,
         solve_input_overrides,
     )
@@ -450,7 +450,7 @@ def test_solver_reports_unsatisfiable_constraints() -> None:
 
 def test_solver_reports_search_budget_exhaustion_before_later_solution() -> None:
     """Scenario: verify that solver reports search budget exhaustion before later solution."""
-    from restscope.harness.testing.constraint_solver import (
+    from restscope.request_generation.constraint_solver import (
         ConstraintSolveError,
         solve_input_overrides,
     )
@@ -492,7 +492,7 @@ def test_solver_reports_search_budget_exhaustion_before_later_solution() -> None
 
 def test_solver_prunes_definitively_false_partial_assignments() -> None:
     """Scenario: verify that solver prunes definitively false partial assignments."""
-    from restscope.harness.testing.constraint_solver import solve_input_overrides
+    from restscope.request_generation.constraint_solver import solve_input_overrides
 
     config = _solver_config()
     constraints = _constraint_set(
@@ -517,7 +517,7 @@ def test_solver_prunes_definitively_false_partial_assignments() -> None:
 
 def test_candidate_domain_reports_an_empty_required_reference_pool() -> None:
     """Scenario: verify that candidate domain reports an empty required reference pool."""
-    from restscope.harness.testing.constraint_solver import (
+    from restscope.request_generation.constraint_solver import (
         ConstraintSolveError,
         build_candidate_domains,
     )
@@ -566,7 +566,7 @@ def test_candidate_domain_reports_an_empty_required_reference_pool() -> None:
 
 def test_solver_contracts_are_exported_from_testing_package() -> None:
     """Scenario: verify that solver contracts are exported from testing package."""
-    from restscope.harness.testing import ConstraintSolveError, solve_input_overrides
+    from restscope.request_generation import ConstraintSolveError, solve_input_overrides
 
     assert issubclass(ConstraintSolveError, ValueError)
     assert callable(solve_input_overrides)
@@ -574,14 +574,14 @@ def test_solver_contracts_are_exported_from_testing_package() -> None:
 
 def test_generated_case_assignments_recover_container_presence() -> None:
     """Scenario: verify that generated case assignments recover container presence."""
-    from restscope.harness.testing import (
+    from restscope.request_generation import (
         GeneratedTestCase,
         InputNodeSnapshot,
         OperationTestSnapshot,
         ParameterSnapshot,
         SchemaSnapshot,
     )
-    from restscope.harness.testing.constraint_solver import assignments_from_generated_case
+    from restscope.request_generation.constraint_solver import assignments_from_generated_case
 
     operation = OperationTestSnapshot(
         operation_key="POST /containers",

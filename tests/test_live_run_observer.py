@@ -28,7 +28,7 @@ class _Response:
 def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -> None:
     """Scenario: the UI remains semantic and complete with Phoenix disabled."""
     from restscope.observability import LiveRunObserver, TracingRuntime
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     observer = LiveRunObserver(redactor=Redactor(["model-secret"]))
     observer.begin_run({"metadata": {"key": "model-secret"}})
@@ -171,7 +171,7 @@ def test_main_agent_plan_update_projects_the_generic_todo() -> None:
 def test_generic_agent_task_exposes_identity_reasoning_and_validated_final_phase() -> None:
     """Only a completed generic Agent task promotes its last turn to Final Answer."""
     from restscope.observability import LiveRunObserver, TracingRuntime
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     observer = LiveRunObserver(redactor=Redactor(["private-token"]))
     observer.begin_run({})
@@ -283,7 +283,7 @@ def test_llm_client_routes_reasoning_only_to_the_redacted_live_observer() -> Non
     )
     from restscope.llm.providers.base import BaseLLMProvider
     from restscope.observability import LiveRunObserver, TracingRuntime
-    from restscope.redaction import Redactor
+    from restscope.observability import Redactor
 
     class ReasoningProvider(BaseLLMProvider):
         """Return one raw reasoning value without changing request messages."""
@@ -848,7 +848,7 @@ def test_target_transport_keeps_binary_probe_evidence_inside_the_tool() -> None:
     """Scenario: final headers/query and truncated binary bytes enrich one HTTP tool."""
     import httpx
 
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTransport
     from restscope.observability import LiveRunObserver, TracingRuntime
 
     observer = LiveRunObserver()
@@ -922,7 +922,7 @@ def test_target_transport_marks_timeout_without_replacing_the_public_error() -> 
     import httpx
     import pytest
 
-    from restscope.http_transport import TargetHTTPTimeout, TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTimeout, TargetHTTPTransport
     from restscope.observability import LiveRunObserver, TracingRuntime
 
     observer = LiveRunObserver()

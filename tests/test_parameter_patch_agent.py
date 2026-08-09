@@ -88,7 +88,7 @@ class StubPatchResourceCapability:
         }
 
 
-class StubPatchOpenAPICapability:
+class StubPatchOpenAPIToolBackend:
     """Keep the observed-field tool present while this scenario uses resources."""
 
     def find_observed_response_fields(self, **_arguments):
@@ -211,7 +211,7 @@ def _review_model() -> LLMModelConfig:
 
 def _sampleable_config():
     """Add request serialization metadata to the compact shared fixture."""
-    from restscope.harness.testing import ParameterSnapshot
+    from restscope.request_generation import ParameterSnapshot
 
     config = smoke_config()
     return config.model_copy(
@@ -291,7 +291,7 @@ def test_patch_task_separates_value_requirements_from_value_checks() -> None:
 def _updated_at_filter_config():
     """Build the three optional GitLab query inputs from the reported trace."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing.snapshot import build_initial_operation_config
+    from restscope.request_generation.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -475,7 +475,7 @@ def test_patch_prompt_summarizes_large_choice_generators() -> None:
     from restscope.operation_smoke.parameter_patch.prompts import (
         _generator_strategy_summary,
     )
-    from restscope.harness.testing.models import ChoiceGenerator
+    from restscope.request_generation.models import ChoiceGenerator
 
     values = [f"choice-{index}" for index in range(25)]
 
@@ -698,8 +698,8 @@ def test_patch_agent_queries_resource_ids_before_compiling_a_resource_generator(
         client=client,
         patch_model=_model(),
         review_model=_review_model(),
-        openapi_capability=StubPatchOpenAPICapability(),
-        resource_capability=StubPatchResourceCapability(),
+        openapi_backend=StubPatchOpenAPIToolBackend(),
+        resource_backend=StubPatchResourceCapability(),
     ).run(
         task=_task(),
         config=_sampleable_config(),
@@ -795,7 +795,7 @@ def test_patch_samples_a_queried_response_field_without_registering_a_pool() -> 
         client=client,
         patch_model=_model(),
         review_model=_review_model(),
-        openapi_capability=StubObservedFieldCapability(),
+        openapi_backend=StubObservedFieldCapability(),
     ).run(
         task=_task(),
         config=_sampleable_config(),
@@ -855,7 +855,7 @@ def test_patch_rejects_a_response_field_not_returned_by_its_lookup_session() -> 
             client=client,
             patch_model=_model(),
             review_model=_review_model(),
-            openapi_capability=StubObservedFieldCapability(),
+            openapi_backend=StubObservedFieldCapability(),
         ).run(
             task=_task(),
             config=_sampleable_config(),
@@ -871,7 +871,7 @@ def test_patch_rejects_a_response_field_not_returned_by_its_lookup_session() -> 
 def _variant_config():
     """Build the GitLab-like string-or-integer project path Parameter."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.harness.testing.snapshot import build_initial_operation_config
+    from restscope.request_generation.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
         {
@@ -2038,7 +2038,7 @@ def test_patch_replaces_an_overlapping_active_constraint_before_sampling() -> No
         ParameterPatchCoordinator,
         ValidatedParameterPatch,
     )
-    from restscope.harness.testing import ConstraintSet, PresentPredicate
+    from restscope.request_generation import ConstraintSet, PresentPredicate
 
     active = CompiledConstraintPatch(
         constraint_id="constraint_active_presence",

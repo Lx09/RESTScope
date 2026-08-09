@@ -1,10 +1,8 @@
-"""Expose RESTScope's small App-facing Interface without eager bootstrapping.
+"""Expose the App and its configuration without performing runtime work.
 
-Importing a focused module such as ``restscope.llm`` should not construct the
-App dependency graph or import every workflow.  The facade therefore initializes
-logging once and resolves approved public entries only when callers request
-them.  Internal Coordinators, Agents, factories, and Patch DTOs remain owned by
-their workflow packages and are intentionally absent here.
+Importing this package does not read environment configuration, create files,
+configure logging, open a database, or construct an Agent. Domain Interfaces
+remain available from their explicit owning packages.
 """
 
 from __future__ import annotations
@@ -12,46 +10,15 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from .logging_config import get_logger, setup_logging
-
-
-# Preserve the existing library behavior: importing RESTScope installs its
-# logging defaults, while no database, LLM, or workflow object is constructed.
-setup_logging()
-
 __all__ = [
-    "CONFIG",
-    "OpenAPIParser",
-    "OpenAPISpecIR",
-    "OperationDocumentGenerationError",
-    "OperationReference",
     "RESTScopeApp",
     "RESTScopeConfig",
-    "OpenAPICatalog",
-    "OpenAPIChangeEventRecord",
-    "OpenAPIChangeEventWrite",
-    "build_generator_config_catalog",
-    "build_openapi_document",
-    "build_openapi_catalog",
-    "get_logger",
-    "setup_logging",
 ]
 
 
 _PUBLIC_MODULE_BY_NAME = {
-    "CONFIG": ".restscope_config",
-    "OpenAPIParser": ".openapi_parser",
-    "OpenAPISpecIR": ".openapi_parser",
-    "OperationDocumentGenerationError": ".openapi_parser",
-    "OperationReference": ".operations",
     "RESTScopeApp": ".app",
-    "RESTScopeConfig": ".restscope_config",
-    "OpenAPICatalog": ".catalog",
-    "OpenAPIChangeEventRecord": ".catalog",
-    "OpenAPIChangeEventWrite": ".catalog",
-    "build_generator_config_catalog": ".bootstrap",
-    "build_openapi_document": ".openapi_parser",
-    "build_openapi_catalog": ".bootstrap",
+    "RESTScopeConfig": ".config",
 }
 
 

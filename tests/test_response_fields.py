@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def test_response_reference_converts_one_path_between_all_shared_grammars() -> None:
     """One Reference owns semantic, observed, and concrete-array spellings."""
-    from restscope.response_fields import ResponseFieldReference
+    from restscope.operation_references import ResponseFieldReference
 
     reference = (
         ResponseFieldReference.body()
@@ -28,7 +28,7 @@ def test_response_reference_converts_one_path_between_all_shared_grammars() -> N
 
 def test_response_reference_keeps_schema_branch_identity_out_of_json_selector() -> None:
     """Combiner branches are unique Schema handles but not runtime JSON keys."""
-    from restscope.response_fields import ResponseFieldReference
+    from restscope.operation_references import ResponseFieldReference
 
     reference = (
         ResponseFieldReference.body()

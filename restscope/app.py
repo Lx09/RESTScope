@@ -16,12 +16,15 @@ from types import TracebackType
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from sqlalchemy import Engine
 
 from restscope.agent import Agent, AgentProfile
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
 )
+from restscope.api_behavior_monitor.resource_identifiers import ResourceCatalog
+from restscope.api_behavior_monitor.response_values import ResponseValueCatalog
 from restscope.operation_smoke import (
     BehaviorMonitorReferenceValues,
     OperationSmokeCoordinator,
@@ -34,17 +37,32 @@ from restscope.harness import (
     build_harness,
 )
 from restscope.llm import ModelSelector, build_llm_client
-from restscope.tools import ToolContext, ToolContextError
-from restscope.http_transport import TargetHTTPTransport
-from restscope.catalog import OpenAPIChangeEventRecord
+from restscope.tools.context import ToolContext, ToolContextError
+from restscope.tools.resource import ResourceToolBackend
+from restscope.target_http import TargetHTTPTransport
+from restscope.openapi_audit import OpenAPIAudit, OpenAPIChangeEventRecord
 from restscope.openapi_parser import OpenAPIParser, build_openapi_document
-from restscope.observability import LiveRunObserver, TracingRuntime, build_tracing_runtime
-from restscope.redaction import Redactor
-from restscope.randomness import SeededRandom
-from restscope.restscope_config import RESTScopeConfig
-from restscope.bootstrap import build_generator_config_catalog
+from restscope.observability import (
+    LiveRunObserver,
+    Redactor,
+    TracingRuntime,
+    build_tracing_runtime,
+    configure_logging,
+)
+from restscope.request_generation import SeededRandom
+from restscope.config import RESTScopeConfig
+from restscope.db import (
+    SqlAlchemyGeneratorConfigUnitOfWork,
+    SqlAlchemyOpenAPIUnitOfWork,
+    SqlAlchemyResourceCatalogUnitOfWork,
+    SqlAlchemyResponseValueCatalogUnitOfWork,
+    SqlAlchemySmokeMemoryUnitOfWork,
+    create_engine_from_config,
+    make_session_factory,
+)
 from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
-from restscope.harness.testing import OperationTestingService
+from restscope.request_generation import RequestGenerationConfigStore
+from restscope.harness.operation_testing import OperationTestingService
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
 
 
@@ -146,6 +164,11 @@ class RESTScopeApp:
         trace_runtime: TracingRuntime | None = None
         run_observer: LiveRunObserver | None = None
         ui_service: Any | None = None
+        operation_testing_service: OperationTestingService | None = None
+        api_behavior_monitor_coordinator = None
+        target_transport: TargetHTTPTransport | None = None
+        openapi_audit: OpenAPIAudit | None = None
+        database_engine: Engine | None = None
         try:
             config = _resolve_app_random_seed(config)
             # A default runtime needs a private, freshly migrated SQLite file.
@@ -155,6 +178,7 @@ class RESTScopeApp:
                 config, database = _prepare_app_database(config)
 
             self.config = config
+            configure_logging(config.logging, log_file=config.log_file)
             self.random_source = SeededRandom(config.random.seed)
             smoke_coordinator = operation_smoke_coordinator
             trace_runtime = (
@@ -176,17 +200,41 @@ class RESTScopeApp:
                 )
                 self._tracing_runtime.bind_run_observer(run_observer)
             if harness_runtime is None:
-                # The catalog stores only current per-input Generators.  The
+                # The Store holds only current per-input Generators. The
                 # behavior monitor supplies observed identifiers/response values to
                 # generators, while the transport sends requests and returns
                 # every response to that monitor.
-                generator_catalog = build_generator_config_catalog(config)
+                database_engine = create_engine_from_config(config.db)
+                session_factory = make_session_factory(database_engine)
+                request_generation_store = RequestGenerationConfigStore(
+                    lambda: SqlAlchemyGeneratorConfigUnitOfWork(session_factory)
+                )
+                resource_catalog = ResourceCatalog(
+                    lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
+                )
+                response_value_catalog = ResponseValueCatalog(
+                    lambda: SqlAlchemyResponseValueCatalogUnitOfWork(
+                        session_factory
+                    )
+                )
+                openapi_audit = OpenAPIAudit(
+                    lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
+                )
                 api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
                     config,
+                    resource_catalog=resource_catalog,
+                    response_value_catalog=response_value_catalog,
+                    openapi_audit=openapi_audit,
                     tracing_runtime=self._tracing_runtime,
                 )
                 reference_values = BehaviorMonitorReferenceValues(
                     api_behavior_monitor_coordinator
+                )
+                resource_backend = ResourceToolBackend(
+                    catalog=resource_catalog
+                )
+                observed_response_fields_provider = (
+                    response_value_catalog.list_observed_response_fields
                 )
                 target_transport = TargetHTTPTransport(
                     response_processor=APIBehaviorResponseProcessor(
@@ -195,7 +243,7 @@ class RESTScopeApp:
                     run_observer=run_observer,
                 )
                 operation_testing_service = OperationTestingService(
-                    config_catalog=generator_catalog,
+                    config_store=request_generation_store,
                     transport=target_transport,
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
@@ -209,16 +257,18 @@ class RESTScopeApp:
                 )
                 built_runtime = build_harness(
                     tracing_runtime=self._tracing_runtime,
-                    operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
-                    api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
+                    observed_response_fields_provider=(
+                        observed_response_fields_provider
+                    ),
+                    resource_tool_backend=resource_backend,
                     agent_runtime=main_runtime,
                 )
                 harness_runtime = built_runtime
                 if smoke_coordinator is None:
                     smoke_coordinator = build_operation_smoke_coordinator(
                         config,
-                        config_catalog=generator_catalog,
+                        config_store=request_generation_store,
                         # OperationTestingService implements this structural
                         # Protocol. The cast records that composition-root
                         # binding without making the testing layer import its
@@ -228,7 +278,15 @@ class RESTScopeApp:
                             operation_testing_service,
                         ),
                         reference_values=reference_values,
-                        harness_runtime=built_runtime,
+                        http_tool=built_runtime.target_http_tool,
+                        context_provider=built_runtime.require_context,
+                        openapi_backend=built_runtime.openapi_backend,
+                        resource_backend=resource_backend,
+                        unit_of_work_factory=(
+                            lambda: SqlAlchemySmokeMemoryUnitOfWork(
+                                session_factory
+                            )
+                        ),
                         llm_client=(main_runtime.client if main_runtime else None),
                         tracing_runtime=self._tracing_runtime,
                     )
@@ -242,6 +300,23 @@ class RESTScopeApp:
                 )
             self.operation_smoke_coordinator = smoke_coordinator
             self.harness_runtime = harness_runtime
+            self.operation_testing_service = (
+                operation_testing_service if harness_runtime is built_runtime else None
+            )
+            self.api_behavior_monitor_coordinator = (
+                api_behavior_monitor_coordinator
+                if harness_runtime is built_runtime
+                else None
+            )
+            self.target_http_transport = (
+                target_transport if harness_runtime is built_runtime else None
+            )
+            self.openapi_audit: OpenAPIAudit | None = (
+                openapi_audit if harness_runtime is built_runtime else None
+            )
+            self._database_engine = (
+                database_engine if harness_runtime is built_runtime else None
+            )
             bind_tracing_runtime = getattr(
                 self.harness_runtime,
                 "bind_tracing_runtime",
@@ -249,7 +324,11 @@ class RESTScopeApp:
             )
             if callable(bind_tracing_runtime):
                 bind_tracing_runtime(self._tracing_runtime)
-            _bind_run_observer(self.harness_runtime, run_observer)
+            _bind_run_observer(
+                target_transport=self.target_http_transport,
+                testing_service=self.operation_testing_service,
+                observer=run_observer,
+            )
             if run_observer is not None:
                 from restscope.ui import start_ui_service
 
@@ -260,7 +339,11 @@ class RESTScopeApp:
                 if ui_service is None:
                     run_observer.close()
                     self._tracing_runtime.bind_run_observer(None)
-                    _bind_run_observer(self.harness_runtime, None)
+                    _bind_run_observer(
+                        target_transport=self.target_http_transport,
+                        testing_service=self.operation_testing_service,
+                        observer=None,
+                    )
                     run_observer = None
             self._run_observer = run_observer
             self._ui_service = ui_service
@@ -278,6 +361,8 @@ class RESTScopeApp:
                 run_observer.close()
             if built_tracing_runtime and trace_runtime is not None:
                 trace_runtime.close()
+            if database_engine is not None:
+                database_engine.dispose()
             if database is not None:
                 database.cleanup()
             raise
@@ -310,122 +395,14 @@ class RESTScopeApp:
         harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
-        """Build RESTScope from an explicit config object."""
+        """Build RESTScope through the same composition path as direct use."""
 
-        database: _FreshSQLiteDatabase | None = None
-        trace_runtime: TracingRuntime | None = None
-        runtime = harness_runtime
-        runtime_is_owned = False
-        try:
-            config = _resolve_app_random_seed(config)
-            if runtime is None:
-                config, database = _prepare_app_database(config)
-
-            trace_runtime = (
-                _build_app_tracing_runtime(config)
-                if tracing_runtime is None
-                else tracing_runtime
-            )
-            smoke_coordinator = operation_smoke_coordinator
-            generator_catalog = None
-            operation_testing_service = None
-            api_behavior_monitor_coordinator = None
-            target_transport = None
-            reference_values = None
-            if runtime is None:
-                generator_catalog = build_generator_config_catalog(config)
-                api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
-                    config,
-                    tracing_runtime=trace_runtime,
-                )
-                reference_values = BehaviorMonitorReferenceValues(
-                    api_behavior_monitor_coordinator
-                )
-                target_transport = TargetHTTPTransport(
-                    response_processor=APIBehaviorResponseProcessor(
-                        api_behavior_monitor_coordinator
-                    )
-                )
-                operation_testing_service = OperationTestingService(
-                    config_catalog=generator_catalog,
-                    transport=target_transport,
-                    tracing_runtime=trace_runtime,
-                    reference_values=reference_values,
-                )
-                assert generator_catalog is not None
-                assert operation_testing_service is not None
-                assert api_behavior_monitor_coordinator is not None
-                main_runtime = _build_main_agent_runtime_definition(
-                    config,
-                    tracing_runtime=trace_runtime,
-                )
-                runtime = build_harness(
-                    tracing_runtime=trace_runtime,
-                    operation_testing_service=operation_testing_service,
-                    target_http_transport=target_transport,
-                    api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
-                    agent_runtime=main_runtime,
-                )
-                runtime_is_owned = True
-            else:
-                main_runtime = None
-                if smoke_coordinator is None:
-                    operation_testing_service = getattr(
-                        runtime,
-                        "operation_testing_service",
-                        None,
-                    )
-                    api_behavior_monitor_coordinator = getattr(
-                        runtime,
-                        "api_behavior_monitor_coordinator",
-                        None,
-                    )
-                    if (
-                        operation_testing_service is None
-                        or api_behavior_monitor_coordinator is None
-                    ):
-                        raise ValueError(
-                            "A custom Harness runtime requires an injected "
-                            "OperationSmokeCoordinator or testing and API behavior "
-                            "monitor services"
-                        )
-                    generator_catalog = operation_testing_service.config_catalog
-                    reference_values = (
-                        operation_testing_service.reference_values
-                        or BehaviorMonitorReferenceValues(
-                            api_behavior_monitor_coordinator
-                        )
-                    )
-                    operation_testing_service.reference_values = reference_values
-
-            if smoke_coordinator is None:
-                assert generator_catalog is not None
-                assert operation_testing_service is not None
-                assert reference_values is not None
-                smoke_coordinator = build_operation_smoke_coordinator(
-                    config,
-                    config_catalog=generator_catalog,
-                    batch_runner=operation_testing_service,
-                    reference_values=reference_values,
-                    harness_runtime=runtime,
-                    llm_client=(main_runtime.client if main_runtime else None),
-                    tracing_runtime=trace_runtime,
-                )
-
-            return cls(
-                config=config,
-                operation_smoke_coordinator=smoke_coordinator,
-                harness_runtime=runtime,
-                tracing_runtime=trace_runtime,
-            )
-        except BaseException:
-            if runtime_is_owned:
-                _close_runtime_host(runtime)
-            if tracing_runtime is None and trace_runtime is not None:
-                trace_runtime.close()
-            if database is not None:
-                database.cleanup()
-            raise
+        return cls(
+            config=config,
+            operation_smoke_coordinator=operation_smoke_coordinator,
+            harness_runtime=harness_runtime,
+            tracing_runtime=tracing_runtime,
+        )
 
     @property
     def tool_context(self) -> ToolContext | None:
@@ -442,12 +419,7 @@ class RESTScopeApp:
 
     @property
     def tracing_runtime(self) -> TracingRuntime:
-        """
-        Handle tracing runtime as part of the RESTScope application runtime.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Return the App-owned tracing runtime until the App is closed."""
         return self._tracing_runtime
 
     @property
@@ -491,27 +463,13 @@ class RESTScopeApp:
             base_url=base_url,
             headers=headers or {},
         )
-        testing_service = getattr(
-            self.harness_runtime,
-            "operation_testing_service",
-            None,
-        )
+        testing_service = self.operation_testing_service
         if testing_service is not None:
-            monitor = getattr(
-                self.harness_runtime,
-                "api_behavior_monitor_coordinator",
-                None,
-            )
-            openapi_catalog = (
-                getattr(monitor.contract_tracker, "catalog", None)
-                if monitor is not None
-                else None
-            )
-            if openapi_catalog is not None:
-                openapi_catalog.initialize(
+            if self.openapi_audit is not None:
+                self.openapi_audit.initialize(
                     build_openapi_document(ir, list(ir.operations))
                 )
-            testing_service.config_catalog.initialize_once(ir)
+            testing_service.config_store.initialize_once(ir)
         self.harness_runtime.bind_context(context)
         return context
 
@@ -524,19 +482,9 @@ class RESTScopeApp:
         """
 
         self._ensure_open()
-        monitor = getattr(
-            self.harness_runtime,
-            "api_behavior_monitor_coordinator",
-            None,
-        )
-        catalog = (
-            getattr(monitor.contract_tracker, "catalog", None)
-            if monitor is not None
-            else None
-        )
-        if catalog is None:
-            raise RuntimeError("The current runtime has no OpenAPI audit catalog")
-        return catalog.current_document()
+        if self.openapi_audit is None:
+            raise RuntimeError("The current runtime has no OpenAPI Audit")
+        return self.openapi_audit.current_document()
 
     def list_openapi_change_events(
         self,
@@ -545,19 +493,9 @@ class RESTScopeApp:
         """Return chronological persisted response changes for inspection."""
 
         self._ensure_open()
-        monitor = getattr(
-            self.harness_runtime,
-            "api_behavior_monitor_coordinator",
-            None,
-        )
-        catalog = (
-            getattr(monitor.contract_tracker, "catalog", None)
-            if monitor is not None
-            else None
-        )
-        if catalog is None:
-            raise RuntimeError("The current runtime has no OpenAPI audit catalog")
-        return catalog.list_changes(operation_key)
+        if self.openapi_audit is None:
+            raise RuntimeError("The current runtime has no OpenAPI Audit")
+        return self.openapi_audit.list_changes(operation_key)
 
     def start(self) -> None:
         """Start the Main Agent once and block until its model loop finishes.
@@ -637,8 +575,12 @@ class RESTScopeApp:
                 if self._run_observer is not None:
                     self._run_observer.close()
             finally:
-                self.tracing_runtime.close()
-                self._closed = True
+                try:
+                    if self._database_engine is not None:
+                        self._database_engine.dispose()
+                finally:
+                    self.tracing_runtime.close()
+                    self._closed = True
 
     def __enter__(self) -> "RESTScopeApp":
         self._ensure_open()
@@ -741,13 +683,14 @@ def _close_runtime_host(runtime: Any | None) -> None:
             pass
 
 
-def _bind_run_observer(runtime: Any, observer: LiveRunObserver | None) -> None:
-    """Attach HTTP observation to built-in transports behind HarnessRuntime."""
-    target_tool = getattr(runtime, "target_http_tool", None)
-    target_transport = getattr(target_tool, "transport", None)
+def _bind_run_observer(
+    *,
+    target_transport: TargetHTTPTransport | None,
+    testing_service: OperationTestingService | None,
+    observer: LiveRunObserver | None,
+) -> None:
+    """Attach live observation to the App-owned target transports."""
     if target_transport is not None:
         target_transport.run_observer = observer
-    testing_service = getattr(runtime, "operation_testing_service", None)
-    testing_transport = getattr(testing_service, "transport", None)
-    if testing_transport is not None:
-        testing_transport.run_observer = observer
+    if testing_service is not None:
+        testing_service.transport.run_observer = observer

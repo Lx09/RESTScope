@@ -13,31 +13,16 @@ class LLMProviderRegistry:
         self._providers: dict[str, BaseLLMProvider] = {}
 
     def register(self, provider: BaseLLMProvider) -> None:
-        """
-        Handle register as part of provider-independent language-model invocation.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Register one provider factory under a unique provider name."""
         self._providers[provider.name] = provider
 
     def get(self, name: str) -> BaseLLMProvider:
-        """
-        Handle get as part of provider-independent language-model invocation.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """Return the registered provider factory or raise for an unknown name."""
         try:
             return self._providers[name]
         except KeyError as exc:
             raise UnknownProviderError(f"Unknown LLM provider: {name}") from exc
 
     def list_names(self) -> list[str]:
-        """
-        Return names for provider-independent language-model invocation.
-
-        The class owns any required collaborators or state; arguments supply only the
-        data needed for this call.
-        """
+        """List registered provider names in deterministic order."""
         return sorted(self._providers)

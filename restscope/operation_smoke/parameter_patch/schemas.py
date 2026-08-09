@@ -12,8 +12,8 @@ from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from restscope.harness.testing import ConstraintSet, InputGeneratorPatch
-from restscope.harness.testing.models import (
+from restscope.request_generation import ConstraintSet, InputGeneratorPatch
+from restscope.request_generation.models import (
     ArrayGenerator,
     BooleanGenerator,
     ChoiceGenerator,

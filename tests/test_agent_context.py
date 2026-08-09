@@ -538,8 +538,8 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
     callers = (
         root / "restscope/operation_smoke/failure_resolution/agent.py",
         root / "restscope/operation_smoke/parameter_patch/agent.py",
-        root / "restscope/api_behavior_monitor/resource_identifier.py",
-        root / "restscope/api_behavior_monitor/response_value.py",
+        root / "restscope/api_behavior_monitor/resource_identifiers/tracker.py",
+        root / "restscope/api_behavior_monitor/response_values/tracker.py",
     )
 
     for caller in callers:
@@ -559,7 +559,7 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
 
 def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:
     """OpenAPI descriptions stay encoded inside one explicitly untrusted section."""
-    from restscope.api_behavior_monitor.prompts import (
+    from restscope.api_behavior_monitor.resource_identifiers.prompts import (
         IdentifierCandidateView,
         build_identifier_prompt,
     )
@@ -599,7 +599,7 @@ def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:
 
 def test_response_source_prompt_labels_all_runtime_facts_as_untrusted() -> None:
     """Consumer and producer metadata remain data, not model instructions."""
-    from restscope.api_behavior_monitor.prompts import (
+    from restscope.api_behavior_monitor.response_values.prompts import (
         ResponseSourceView,
         build_response_source_prompt,
     )

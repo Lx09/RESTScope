@@ -8,7 +8,7 @@ import pytest
 @pytest.fixture
 def tool_context():
     """Fixture: provide tool context for isolated scenarios."""
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
     from restscope.openapi_parser import OpenAPIParser
 
     ir = OpenAPIParser.parse(

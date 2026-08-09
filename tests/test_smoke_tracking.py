@@ -41,6 +41,9 @@ def _smoke_runtime(tmp_path: Path):
         APIBehaviorResponseProcessor,
         build_api_behavior_monitor_coordinator,
     )
+    from restscope.api_behavior_monitor.resource_identifiers import ResourceCatalog
+    from restscope.api_behavior_monitor.response_values import ResponseValueCatalog
+    from restscope.openapi_audit import OpenAPIAudit
     from restscope.operation_smoke import (
         BehaviorMonitorReferenceValues,
         OperationSmokeCoordinator,
@@ -48,13 +51,17 @@ def _smoke_runtime(tmp_path: Path):
     from restscope.db import (
         Base,
         SqlAlchemyGeneratorConfigUnitOfWork,
+        SqlAlchemyOpenAPIUnitOfWork,
+        SqlAlchemyResourceCatalogUnitOfWork,
+        SqlAlchemyResponseValueCatalogUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.http_transport import TargetHTTPTransport
+    from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.restscope_config import DBConfig, RESTScopeConfig
-    from restscope.harness.testing import GeneratorConfigCatalog, OperationTestingService
+    from restscope.config import DBConfig, RESTScopeConfig
+    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.harness.operation_testing import OperationTestingService
 
     ir = OpenAPIParser.parse(
         {
@@ -83,7 +90,7 @@ def _smoke_runtime(tmp_path: Path):
     engine = create_engine_from_url(f"sqlite:///{database}")
     Base.metadata.create_all(engine)
     session_factory = make_session_factory(engine)
-    catalog = GeneratorConfigCatalog(
+    catalog = RequestGenerationConfigStore(
         lambda: SqlAlchemyGeneratorConfigUnitOfWork(session_factory)
     )
     assert catalog.initialize_once(ir) is True
@@ -94,6 +101,15 @@ def _smoke_runtime(tmp_path: Path):
     )
     monitor = build_api_behavior_monitor_coordinator(
         config,
+        resource_catalog=ResourceCatalog(
+            lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
+        ),
+        response_value_catalog=ResponseValueCatalog(
+            lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
+        ),
+        openapi_audit=OpenAPIAudit(
+            lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
+        ),
         tracing_runtime=runtime,
     )
     references = BehaviorMonitorReferenceValues(monitor)
@@ -111,7 +127,7 @@ def _smoke_runtime(tmp_path: Path):
         response_processor=APIBehaviorResponseProcessor(monitor),
     )
     testing = OperationTestingService(
-        config_catalog=catalog,
+        config_store=catalog,
         transport=transport,
         tracing_runtime=runtime,
         reference_values=references,
@@ -133,7 +149,7 @@ def _smoke_runtime(tmp_path: Path):
             return []
 
     smoke = OperationSmokeCoordinator(
-        config_catalog=catalog,
+        config_store=catalog,
         batch_runner=testing,
         failure_resolution_agent=UnexpectedResolutionAgent(),
         constraint_reader=EmptyConstraintReader(),
@@ -148,7 +164,7 @@ def test_smoke_batch_case_and_behavior_tracking_form_one_hierarchy(
 ) -> None:
     """Scenario: verify that smoke batch case and behavior tracking form one hierarchy."""
     from restscope.operation_smoke import OperationSmokeRequest
-    from restscope.tools import ToolContext
+    from restscope.tools.context import ToolContext
 
     ir, smoke, runtime, exporter = _smoke_runtime(tmp_path)
     result = smoke.run(
@@ -215,7 +231,7 @@ def test_failure_resolution_uses_its_role_in_llm_trace(
         FailureResolutionRequest,
     )
     from restscope.operation_smoke.output_limit import ModelOutputLimit
-    from restscope.harness.testing.test_case_catalog import (
+    from restscope.harness.operation_testing.test_case_catalog import (
         CatalogTestCaseDraft,
         HTTPFailure,
         TestCaseCatalog,
@@ -243,7 +259,7 @@ def test_failure_resolution_uses_its_role_in_llm_trace(
     registry.register(ResolutionProvider())
     runtime, exporter = _recording_runtime()
 
-    from restscope.request_inputs import RequestInputReference
+    from restscope.operation_references import RequestInputReference
 
     catalog = TestCaseCatalog(
         input_references=[
@@ -296,7 +312,7 @@ def test_failure_resolution_uses_its_role_in_llm_trace(
             model="fast",
             enabled=True,
         ),
-        openapi_capability=EmptyOpenAPI(),
+        openapi_backend=EmptyOpenAPI(),
         finalizer=UnexpectedFinalizer(),
         tracing_runtime=runtime,
     )

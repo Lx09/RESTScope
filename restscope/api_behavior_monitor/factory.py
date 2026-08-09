@@ -2,37 +2,31 @@
 
 from __future__ import annotations
 
-from restscope.db import (
-    SqlAlchemyOpenAPIUnitOfWork,
-    SqlAlchemyResourceCatalogUnitOfWork,
-    SqlAlchemyResponseValueCatalogUnitOfWork,
-    create_engine_from_config,
-    make_session_factory,
-)
-from restscope.catalog import OpenAPICatalog
+from restscope.openapi_audit import OpenAPIAudit
 from restscope.llm import LLMClient, ModelSelector, build_llm_client
 from restscope.observability import TracingRuntime
-from restscope.restscope_config import RESTScopeConfig
+from restscope.config import RESTScopeConfig
 
 from .coordinator import APIBehaviorMonitorCoordinator
-from .contract_tracker import ResponseContractTracker
-from .resource_catalog import ResourceCatalog
-from .resource_identifier import ResourceIdentifierTracker
-from .response_value import ResponseValueTracker
-from .response_value_catalog import ResponseValueCatalog
+from .response_contracts import ResponseContractTracker
+from .resource_identifiers import ResourceCatalog, ResourceIdentifierTracker
+from .response_values import ResponseValueCatalog, ResponseValueTracker
 
 
 def build_api_behavior_monitor_coordinator(
     config: RESTScopeConfig,
     *,
+    resource_catalog: ResourceCatalog,
+    response_value_catalog: ResponseValueCatalog,
+    openapi_audit: OpenAPIAudit,
     llm_client: LLMClient | None = None,
     tracing_runtime: TracingRuntime | None = None,
 ) -> APIBehaviorMonitorCoordinator:
-    """
-    Build api behavior monitor coordinator for API response monitoring and its narrowly
-    approved evidence catalog.
+    """Connect contract, identifier, and response-value monitoring modules.
 
-    The annotated arguments and return type define the data boundary used by callers.
+    The supplied Catalogs and OpenAPI Audit share the App's database session
+    factory but retain separate domain Interfaces. The optional client and
+    tracing runtime let tests inject deterministic collaborators.
     """
     runtime = tracing_runtime
     if runtime is None and llm_client is not None:
@@ -49,17 +43,6 @@ def build_api_behavior_monitor_coordinator(
         tracing_runtime=runtime,
     )
     client.tracing_runtime = runtime
-    engine = create_engine_from_config(config.db)
-    session_factory = make_session_factory(engine)
-    resource_catalog = ResourceCatalog(
-        lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
-    )
-    response_value_catalog = ResponseValueCatalog(
-        lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
-    )
-    openapi_catalog = OpenAPICatalog(
-        lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
-    )
     model = ModelSelector.from_config(config.llm).select(
         "api_behavior_monitor"
     )
@@ -70,7 +53,7 @@ def build_api_behavior_monitor_coordinator(
         tracing_runtime=runtime,
     )
     return APIBehaviorMonitorCoordinator(
-        contract_tracker=ResponseContractTracker(openapi_catalog),
+        contract_tracker=ResponseContractTracker(openapi_audit),
         resource_identifier_tracker=resource_tracker,
         response_value_tracker=ResponseValueTracker(
             catalog=response_value_catalog,

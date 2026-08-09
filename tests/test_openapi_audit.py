@@ -33,7 +33,7 @@ def test_app_exports_full_current_document_and_filterable_change_events(
 
     from restscope import RESTScopeApp
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.restscope_config import DBConfig, RESTScopeConfig
+    from restscope.config import DBConfig, RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     config = replace(
@@ -56,7 +56,7 @@ def test_app_exports_full_current_document_and_filterable_change_events(
         assert set(OpenAPIParser.parse(initial).operations) == {"POST /items"}
         assert app.list_openapi_change_events() == []
 
-        tracker = app.harness_runtime.api_behavior_monitor_coordinator.contract_tracker
+        tracker = app.api_behavior_monitor_coordinator.contract_tracker
         changed = tracker.observe(
             ir=context.ir,
             operation_key="POST /items",
@@ -92,18 +92,18 @@ def test_catalog_rolls_back_current_document_when_event_write_fails(
 ) -> None:
     """A transaction failure cannot leave current OpenAPI without its audit event."""
 
-    from restscope.catalog import OpenAPIChangeEventWrite, OpenAPICatalog
+    from restscope.openapi_audit import OpenAPIChangeEventWrite, OpenAPIAudit
     from restscope.db import (
         Base,
         SqlAlchemyOpenAPIUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.db.repositories import SqlAlchemyOpenAPIRepository
+    from restscope.db.adapters.openapi_audit import SqlAlchemyOpenAPIRepository
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'rollback.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = OpenAPICatalog(
+    catalog = OpenAPIAudit(
         lambda: SqlAlchemyOpenAPIUnitOfWork(make_session_factory(engine))
     )
     catalog.initialize(_spec())
@@ -139,7 +139,7 @@ def test_catalog_rolls_back_current_document_when_event_write_fails(
 def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
     """A failed durable update leaves the in-memory Response exactly retryable."""
 
-    from restscope.api_behavior_monitor.contract_tracker import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     class FailingCatalog:
@@ -160,7 +160,7 @@ def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
         )
 
     assert build_openapi_document(ir, list(ir.operations)) == before
-    tracker.catalog = None
+    tracker.audit = None
     retried = tracker.observe(
         ir=ir,
         operation_key="POST /items",

@@ -1,7 +1,7 @@
 """Expose bounded, read-only Resource Identifier catalog queries as tools.
 
 The API Behavior Monitor learns canonical resource names, aliases, and typed
-identifiers from successful target responses. ``ResourceIdentifierCapability``
+identifiers from successful target responses. ``ResourceToolBackend``
 projects only the small discovery results a caller requests. It neither records
 new evidence nor exposes operation usage, Monitor errors, or database keys.
 """
@@ -15,7 +15,7 @@ from restscope.llm import ToolSpec
 from restscope.tools.runtime import ToolBinding
 
 if TYPE_CHECKING:
-    from restscope.api_behavior_monitor.resource_catalog import ResourceCatalog
+    from restscope.api_behavior_monitor.resource_identifiers import ResourceCatalog
 
 
 RESOURCE_LIST_RESOURCES_TOOL_NAME = "resource.list_resources"
@@ -26,7 +26,7 @@ _MAX_LIST_LIMIT = 200
 
 
 def resource_tool_bindings(
-    capability: "ResourceIdentifierCapability | None",
+    backend: "ResourceToolBackend | None",
     *,
     unavailable: Callable[..., dict[str, Any]],
 ) -> tuple[ToolBinding, ...]:
@@ -34,11 +34,11 @@ def resource_tool_bindings(
     return (
         ToolBinding(
             name=RESOURCE_LIST_RESOURCES_TOOL_NAME,
-            execute=(capability.list_resources if capability is not None else unavailable),
+            execute=(backend.list_resources if backend is not None else unavailable),
         ),
         ToolBinding(
             name=RESOURCE_LIST_IDS_TOOL_NAME,
-            execute=(capability.list_ids if capability is not None else unavailable),
+            execute=(backend.list_ids if backend is not None else unavailable),
         ),
     )
 
@@ -134,7 +134,7 @@ def resource_list_ids_tool_spec() -> ToolSpec:
     )
 
 
-class ResourceIdentifierCapability:
+class ResourceToolBackend:
     """Answer compact queries against the current Resource Identifier Catalog.
 
     Args:
@@ -143,7 +143,7 @@ class ResourceIdentifierCapability:
 
     Methods return tool-shaped structured payloads and never change Catalog
     state. A workflow may explicitly register either method in its own toolbox;
-    constructing this Capability alone does not expose a tool to an Agent.
+    constructing this Backend alone does not expose a tool to an Agent.
     """
 
     def __init__(self, *, catalog: ResourceCatalog) -> None:

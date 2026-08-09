@@ -9,15 +9,17 @@ business tables plus Alembic's `alembic_version` table.
 
 ## Boundary
 
-- `restscope.catalog` owns the database-independent current OpenAPI and change
-  event contracts.
-- `restscope.harness.testing` owns the App-memory operation snapshot and current
-  per-input Generator and Constraint contracts.
+- `restscope.openapi_audit` owns the database-independent current OpenAPI and
+  change-event contracts.
+- `restscope.request_generation` owns the App-memory operation snapshot and
+  current per-input Generator and Constraint contracts.
+- `restscope.harness.operation_testing` owns deterministic Batch execution and
+  run-local Test Case evidence; neither is persisted.
 - API Behavior Monitor owns bounded Resource Identifier and Response Value
   evidence.
 - Operation Smoke owns stable Failures and append-only terminal Resolution Attempts.
-- `restscope.db` owns SQLAlchemy mappings, repositories, transactions, foreign
-  key setup, and the one baseline migration.
+- `restscope.db` owns SQLAlchemy mappings, domain-adjacent persistence Adapters,
+  transactions, foreign-key setup, and the one baseline migration.
 - Raw responses, Test Cases, Batches, model messages, Patch samples, plans,
   queues, and scheduler state never enter the database.
 

@@ -14,16 +14,20 @@ from typing import Any
 from restscope.agent import AgentProfile
 from restscope.tools import (
     AgentToolbox,
-    OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME,
-    RESOURCE_LIST_IDS_TOOL_NAME,
-    RESOURCE_LIST_RESOURCES_TOOL_NAME,
-    OpenAPICapability,
-    ResourceIdentifierCapability,
     ToolFailure,
     builtin_tool_catalog,
 )
-from restscope.tools.openapi import observed_response_fields_tool_binding
-from restscope.tools.resource import resource_tool_bindings
+from restscope.tools.openapi import (
+    OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME,
+    OpenAPIToolBackend,
+    observed_response_fields_tool_binding,
+)
+from restscope.tools.resource import (
+    RESOURCE_LIST_IDS_TOOL_NAME,
+    RESOURCE_LIST_RESOURCES_TOOL_NAME,
+    ResourceToolBackend,
+    resource_tool_bindings,
+)
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import (
     LLMClient,
@@ -75,8 +79,8 @@ class ParameterPatchAgent:
         model: LLMModelConfig,
         prompt: ParameterPatchPrompt,
         output_limit: ModelOutputLimit,
-        openapi_capability: OpenAPICapability | None = None,
-        resource_capability: ResourceIdentifierCapability | None = None,
+        openapi_backend: OpenAPIToolBackend | None = None,
+        resource_backend: ResourceToolBackend | None = None,
         validator: OutputValidator | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
@@ -86,8 +90,8 @@ class ParameterPatchAgent:
             client: Provider-neutral model client.
             model: FAST model selected for Patch proposals.
             prompt: Initial Resolution requirement and Generator evidence.
-            openapi_capability: Current-IR observed response field lookup.
-            resource_capability: Current Resource Identifier Catalog lookup.
+            openapi_backend: Current-IR observed response field lookup.
+            resource_backend: Current Resource Identifier Catalog lookup.
             validator: Optional structured-output validator used by tests.
             tracing_runtime: Trace sink; sensitive prompt and reasoning stay out.
         """
@@ -98,8 +102,8 @@ class ParameterPatchAgent:
         self.validator = validator or OutputValidator()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.toolbox = _build_toolbox(
-            openapi_capability=openapi_capability,
-            resource_capability=resource_capability,
+            openapi_backend=openapi_backend,
+            resource_backend=resource_backend,
             tracing_runtime=self.tracing_runtime,
         )
         # These sets contain only successful tool evidence from this short-lived
@@ -309,18 +313,18 @@ class ParameterPatchAgent:
 
 def _build_toolbox(
     *,
-    openapi_capability: OpenAPICapability | None,
-    resource_capability: ResourceIdentifierCapability | None,
+    openapi_backend: OpenAPIToolBackend | None,
+    resource_backend: ResourceToolBackend | None,
     tracing_runtime: TracingRuntime,
 ) -> AgentToolbox:
     """Build the Patch Agent's exact three-tool, read-only permission set."""
     bindings = [
         *resource_tool_bindings(
-            resource_capability,
+            resource_backend,
             unavailable=_unavailable_lookup,
         ),
         observed_response_fields_tool_binding(
-            openapi_capability,
+            openapi_backend,
             unavailable=_unavailable_lookup,
         ),
     ]

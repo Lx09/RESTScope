@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from restscope.tools import operation_input_references
+from restscope.tools.openapi import operation_input_references
 from restscope.tools.context import ToolContext
 from restscope.llm import ProviderUnavailableError
 from restscope.observability import TracingRuntime
@@ -26,18 +26,18 @@ from restscope.operation_smoke.parameter_patch import (
     GeneratorPatchDraft,
     sample_compiled_patch,
 )
-from restscope.harness.testing.test_case_catalog import TestCaseCatalog
-from restscope.harness.testing import (
-    BatchExecutionResult,
+from restscope.harness.operation_testing.test_case_catalog import TestCaseCatalog
+from restscope.harness.operation_testing import BatchExecutionResult
+from restscope.request_generation import (
     ConstraintSet,
-    GeneratorConfigCatalog,
+    RequestGenerationConfigStore,
     OperationGeneratorConfig,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
     build_semantic_input_map,
     referenced_input_node_ids,
 )
-from restscope.harness.testing.constraints import OperationConstraintRecord
+from restscope.request_generation.constraints import OperationConstraintRecord
 
 from .references import BehaviorMonitorReferenceValues
 from .schemas import (
@@ -85,7 +85,7 @@ class OperationSmokeCoordinator:
     def __init__(
         self,
         *,
-        config_catalog: GeneratorConfigCatalog,
+        config_store: RequestGenerationConfigStore,
         batch_runner: SmokeBatchRunner,
         failure_resolution_agent: FailureResolutionAgent,
         constraint_reader: CurrentConstraintReader,
@@ -94,7 +94,7 @@ class OperationSmokeCoordinator:
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Store workflow collaborators; sessions retain all mutable Agent state."""
-        self.config_catalog = config_catalog
+        self.config_store = config_store
         self.batch_runner = batch_runner
         self.failure_resolution_agent = failure_resolution_agent
         self.constraint_reader = constraint_reader
@@ -146,7 +146,7 @@ class OperationSmokeCoordinator:
         request: OperationSmokeRequest,
     ) -> OperationSmokeResult:
         """Execute complete rounds and catch technical errors at the workflow edge."""
-        current = self.config_catalog.get_operation(request.operation_key)
+        current = self.config_store.get_operation(request.operation_key)
         if current is None:
             return _errored_result(
                 request=request,
@@ -333,7 +333,7 @@ class OperationSmokeCoordinator:
                 # Finalization committed all selected candidates atomically.
                 # Reload durable state before the next complete Batch rather
                 # than treating session objects as current configuration.
-                current = self.config_catalog.require_operation(
+                current = self.config_store.require_operation(
                     request.operation_key
                 )
         except Exception as exc:

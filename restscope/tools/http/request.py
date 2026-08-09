@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from restscope.tools.context import ToolContext
 from restscope.llm.schemas import ToolSpec
-from restscope.http_transport import (
+from restscope.target_http import (
     BufferedTargetResponse,
     TargetHTTPTimeout,
     TargetHTTPTransport,

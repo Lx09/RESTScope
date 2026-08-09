@@ -8,9 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from restscope.llm import ToolSpec
-from restscope.operation_smoke.failure_resolution.candidates import (
-    PatchCandidateSummary,
-)
+from .contracts import PatchCandidateSummary
 from restscope.tools.runtime import ToolBinding
 
 

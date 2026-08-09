@@ -8,8 +8,8 @@ def test_response_source_preview_is_read_only_until_apply_registers_it() -> None
     """Candidate sampling reads history; Apply performs the first pool write."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.operation_smoke import BehaviorMonitorReferenceValues
-    from restscope.harness.testing import InputGeneratorPatch, ResponseValueGenerator
-    from restscope.harness.testing.snapshot import build_initial_operation_config
+    from restscope.request_generation import InputGeneratorPatch, ResponseValueGenerator
+    from restscope.request_generation.snapshot import build_initial_operation_config
 
     ir = OpenAPIParser.parse(
         {

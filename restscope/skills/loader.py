@@ -66,7 +66,7 @@ class _RuntimeManifest(BaseModel):
 
 @dataclass(frozen=True)
 class _RuntimeSettings:
-    """Carry validated runtime fields, including defaults for no manifest."""
+    """Hold validated RESTScope manifest fields and no-manifest defaults."""
 
     version: str | None
     risk_level: Literal["low", "medium", "high"]

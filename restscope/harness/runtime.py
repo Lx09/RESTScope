@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,8 +17,8 @@ from restscope.tools.external.mcp import (
 )
 from restscope.tools.runtime import AgentToolbox
 from restscope.tools.http import TargetHTTPRequestTool
-from restscope.tools.openapi import OpenAPICapability
-from restscope.tools.resource import ResourceIdentifierCapability
+from restscope.tools.openapi import OpenAPIToolBackend
+from restscope.tools.resource import ResourceToolBackend
 from restscope.tools.context import ToolContext, ToolContextError
 from restscope.tools.external import register_tool_source
 from restscope.tools import (
@@ -26,13 +26,9 @@ from restscope.tools import (
     ToolDefinition,
     builtin_tool_catalog,
 )
-from restscope.http_transport import TargetHTTPTransport
+from restscope.target_http import TargetHTTPTransport
 from restscope.observability import TracingRuntime
 from restscope.openapi_parser.ir import OperationIR
-
-if TYPE_CHECKING:
-    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
-    from restscope.harness.testing.execution import OperationTestingService
 
 from .agent_runtime import AgentRuntimeDefinition, AgentRuntimeResolver
 
@@ -57,13 +53,13 @@ class HarnessRuntime:
     external_tool_catalog: ToolCatalog = field(default_factory=ToolCatalog)
     external_tools: AgentToolbox | None = None
     mcp_host: MCPHost | None = None
-    operation_testing_service: OperationTestingService | None = None
-    api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None
     agent_runtime: AgentRuntimeResolver | None = None
-    openapi_capability: OpenAPICapability = field(init=False)
-    resource_identifier_capability: ResourceIdentifierCapability | None = field(
-        init=False
+    observed_response_fields_provider: Callable[..., Any] | None = field(
+        default=None,
+        repr=False,
     )
+    resource_tool_backend: ResourceToolBackend | None = None
+    openapi_backend: OpenAPIToolBackend = field(init=False)
     _tool_context: ToolContext | None = field(
         default=None,
         init=False,
@@ -72,30 +68,10 @@ class HarnessRuntime:
     _main_agent: Agent | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Bind shared lookup Modules to App context and Monitor Catalogs."""
-        monitor = self.api_behavior_monitor_coordinator
-        resource_catalog = (
-            monitor.resource_identifier_tracker.catalog
-            if monitor is not None
-            else None
-        )
-        response_catalog = (
-            monitor.response_value_tracker.catalog
-            if monitor is not None
-            else None
-        )
-        self.openapi_capability = OpenAPICapability(
+        """Bind the OpenAPI Tool backend to this Harness's target context."""
+        self.openapi_backend = OpenAPIToolBackend(
             context_provider=self.require_context,
-            observed_response_fields_provider=(
-                response_catalog.list_observed_response_fields
-                if response_catalog is not None
-                else None
-            ),
-        )
-        self.resource_identifier_capability = (
-            ResourceIdentifierCapability(catalog=resource_catalog)
-            if resource_catalog is not None
-            else None
+            observed_response_fields_provider=self.observed_response_fields_provider,
         )
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
@@ -103,12 +79,6 @@ class HarnessRuntime:
 
         if self.external_tools is not None:
             self.external_tools.tracing_runtime = tracing_runtime
-        if self.operation_testing_service is not None:
-            self.operation_testing_service.tracing_runtime = tracing_runtime
-        if self.api_behavior_monitor_coordinator is not None:
-            self.api_behavior_monitor_coordinator.tracing_runtime = tracing_runtime
-            tracker = self.api_behavior_monitor_coordinator.resource_identifier_tracker
-            tracker.client.tracing_runtime = tracing_runtime
 
     def bind_context(self, context: ToolContext) -> None:
         """Bind target and OpenAPI state once after successful App parsing."""
@@ -162,16 +132,17 @@ def build_harness(
     *,
     sources: Mapping[str, Mapping[str, Any]] | None = None,
     tracing_runtime: TracingRuntime | None = None,
-    operation_testing_service: OperationTestingService | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None,
+    observed_response_fields_provider: Callable[..., Any] | None = None,
+    resource_tool_backend: ResourceToolBackend | None = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Build shared App implementations and optional explicit integrations.
 
     Local OpenAPI and HTTP code is reusable but is not automatically
     model-visible here. ``sources`` creates an isolated caller-owned toolbox,
-    Optional testing and monitor services retain their existing App lifecycles.
+    Domain services remain App-owned; only their narrow Tool-facing readers may
+    enter the Harness.
     """
 
     runtime_tracing = tracing_runtime or TracingRuntime.disabled()
@@ -199,8 +170,8 @@ def build_harness(
         built_in_tool_catalog=builtin_tool_catalog(),
         external_tool_catalog=ToolCatalog(external_definitions),
         external_tools=external_tools,
-        operation_testing_service=operation_testing_service,
-        api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
+        observed_response_fields_provider=observed_response_fields_provider,
+        resource_tool_backend=resource_tool_backend,
     )
     if agent_runtime is not None:
         runtime.agent_runtime = AgentRuntimeResolver(
@@ -218,9 +189,9 @@ def build_harness_with_mcp_host(
     mcp_host: MCPHost | None = None,
     server_names: Iterable[str] | None = None,
     tracing_runtime: TracingRuntime | None = None,
-    operation_testing_service: OperationTestingService | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    api_behavior_monitor_coordinator: APIBehaviorMonitorCoordinator | None = None,
+    observed_response_fields_provider: Callable[..., Any] | None = None,
+    resource_tool_backend: ResourceToolBackend | None = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Discover selected MCP servers into the isolated external toolbox.
@@ -242,21 +213,13 @@ def build_harness_with_mcp_host(
         runtime = build_harness(
             sources=sources,
             tracing_runtime=tracing_runtime,
-            operation_testing_service=operation_testing_service,
             target_http_transport=target_http_transport,
-            api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
+            observed_response_fields_provider=observed_response_fields_provider,
+            resource_tool_backend=resource_tool_backend,
             agent_runtime=agent_runtime,
         )
-        return HarnessRuntime(
-            target_http_tool=runtime.target_http_tool,
-            built_in_tool_catalog=runtime.built_in_tool_catalog,
-            external_tool_catalog=runtime.external_tool_catalog,
-            external_tools=runtime.external_tools,
-            mcp_host=host,
-            operation_testing_service=runtime.operation_testing_service,
-            api_behavior_monitor_coordinator=runtime.api_behavior_monitor_coordinator,
-            agent_runtime=runtime.agent_runtime,
-        )
+        runtime.mcp_host = host
+        return runtime
     except BaseException:
         if owns_host:
             try:

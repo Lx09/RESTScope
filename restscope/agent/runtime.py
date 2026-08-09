@@ -11,18 +11,14 @@ task-scoped callers and Subagents continue to use the bounded task protocol.
 from __future__ import annotations
 
 from threading import Event
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from restscope.llm import LLMClient, OutputValidator
-from restscope.tools import AgentToolbox
 
 from .contracts import AgentCompletion, AgentError, AgentResult, AgentTask, AgentUsage
+from .ports import AgentToolExecutor, AgentTreeControlPort
 from .profile import AgentProfile
 from .prompt import AgentPromptSession, PromptSessionError
-
-if TYPE_CHECKING:
-    from restscope.harness.agent_control import AgentTreeControl
 
 
 _HARNESS_CONSTRUCTION_TOKEN = object()
@@ -36,10 +32,10 @@ class Agent:
         *,
         profile: AgentProfile,
         client: LLMClient,
-        toolbox: AgentToolbox,
+        toolbox: AgentToolExecutor,
         prompt_session: AgentPromptSession | None = None,
         session_id: str | None = None,
-        tree_control: "AgentTreeControl | None" = None,
+        tree_control: AgentTreeControlPort | None = None,
         cancel_event: Event | None = None,
         is_subagent: bool = False,
         depth: int = 0,
