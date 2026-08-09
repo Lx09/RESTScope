@@ -273,6 +273,14 @@ all Failures in a failed Batch. `worklist.py` validates only revisions and real
 references; `candidates.py` hides precise reviewed objects behind `P*`;
 `agent.py` owns semantic grouping, investigation, and finish timing; and
 `finalizer.py` performs mechanical compatibility checks and one atomic commit.
+The future generic method is recorded separately in the standard
+`resolve-operation-failures` Skill under
+`restscope/builtin_skills/resolve-operation-failures/`. Its core routes to
+progressively disclosed diagnosis, Worklist, Tool/Probe, Patch-Subagent,
+decision, and completion References. It delegates confirmed Parameter repair
+to an authorized child Profile that selects `build-parameter-patch`; it does
+not call the specialized Patch-generation Tool. No production Profile selects
+this Skill yet, so it does not change the current specialized runtime.
 
 ### `restscope/operation_smoke/parameter_patch/`
 
@@ -281,8 +289,8 @@ testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and coordinates a separate semantic Reviewer.
 `agent.py` owns one continuing proposal/revision conversation;
 `coordinator.py` owns deterministic checks, shared output budget, and feedback.
-The standard project-native `parameter-patch` Skill lives under
-`restscope/builtin_skills/parameter-patch/`. Its `SKILL.md` and focused
+The standard project-native `build-parameter-patch` Skill lives under
+`restscope/builtin_skills/build-parameter-patch/`. Its `SKILL.md` and focused
 references own evidence authority, Generator construction, Constraint solving,
 compilation/sampling semantics, proposal correction, and semantic Review. The
 generic built-in Skill loader validates and caches those package files before

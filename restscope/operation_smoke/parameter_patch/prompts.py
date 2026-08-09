@@ -22,7 +22,7 @@ from .schemas import CompiledConstraintPatch, ParameterPatchTask
 # The temporary specialized Agent consumes one standard Reference directly
 # through the generic in-memory Catalog. It does not receive file.read because
 # its deterministic prompt builder—not the model—selects this fixed protocol.
-EXPERT_SYSTEM_PROMPT = builtin_skill_catalog().get("parameter-patch").reference(
+EXPERT_SYSTEM_PROMPT = builtin_skill_catalog().get("build-parameter-patch").reference(
     "references/proposal-protocol.md"
 ).content
 

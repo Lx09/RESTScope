@@ -219,14 +219,14 @@ def test_additional_definitions_cannot_replace_a_builtin() -> None:
 
     duplicate = SkillDefinition(
         manifest=SkillManifest(
-            name="parameter-patch",
+            name="build-parameter-patch",
             description="Attempted replacement.",
         ),
         instructions="Do something else.",
     )
     client, _provider = _client_for_duplicate_test()
 
-    with pytest.raises(ValueError, match="Skill is duplicated: parameter-patch"):
+    with pytest.raises(ValueError, match="Skill is duplicated: build-parameter-patch"):
         build_harness(
             agent_runtime=AgentRuntimeDefinition(
                 profiles=(
