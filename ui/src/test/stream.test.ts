@@ -35,7 +35,7 @@ it("hydrates a snapshot and lets EventSource resume named cursor events", async 
       schema_version: 2,
       run: null,
       events: [],
-      worklist: null,
+      todo: null,
       latest_cursor: 7,
     }),
   }));
@@ -73,7 +73,7 @@ it("rejects an obsolete observer schema instead of guessing compatibility", asyn
       schema_version: 1,
       run: null,
       events: [],
-      worklist: null,
+      todo: null,
       latest_cursor: 0,
     }),
   }));
@@ -111,7 +111,7 @@ it("does not hydrate or open SSE after the initial snapshot is cancelled", async
       schema_version: 2,
       run: null,
       events: [],
-      worklist: null,
+      todo: null,
       latest_cursor: 9,
     }),
   });

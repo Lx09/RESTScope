@@ -110,13 +110,218 @@ def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -
     assert turn["detail"]["output"]["content"] == "Create one work item"
     assert tool["detail"]["input"] == {"arguments": {"expected_revision": 0}}
     assert tool["detail"]["output"]["status"] == "succeeded"
-    assert snapshot["worklist"]["snapshot"]["active_item_id"] == "WI-001"
-    assert snapshot["worklist"]["operation_key"] == "GET /projects"
-    assert snapshot["worklist"]["failure_messages"] == {
-        "E1": "HTTP 400: name already exists",
-    }
-    assert snapshot["worklist"]["percent"] == 0
+    # Resolution's private Worklist remains a normal collapsed Tool event. It
+    # is no longer promoted into the page-level floating state.
+    assert snapshot["todo"] is None
     assert "model-secret" not in str(snapshot)
+
+
+def test_main_agent_plan_update_projects_the_generic_todo() -> None:
+    """A successful Main Agent plan.update is the only floating Todo source."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+
+    observer = LiveRunObserver()
+    observer.begin_run({})
+    runtime = TracingRuntime(run_observer=observer)
+
+    with runtime.span(
+        "Agent.run",
+        kind="CHAIN",
+        input_value={"objective": "Inspect the API"},
+        attributes={
+            "restscope.agent.session_id": "main-1",
+            "restscope.agent.profile": "main_profile",
+            "restscope.agent.lifecycle": "main",
+        },
+    ):
+        with runtime.span("plan.update", kind="TOOL") as tool_span:
+            tool_span.set_output(
+                {
+                    "status": "succeeded",
+                    "structured": {
+                        "explanation": "Follow the evidence in order.",
+                        "plan": [
+                            {"step": "Read the schema", "status": "completed"},
+                            {"step": "Probe the endpoint", "status": "in_progress"},
+                            {"step": "Report findings", "status": "pending"},
+                        ],
+                    },
+                }
+            )
+
+    snapshot = observer.snapshot()
+
+    assert snapshot["todo"] == {
+        "revision": 1,
+        "agent": snapshot["events"][0]["agent"],
+        "explanation": "Follow the evidence in order.",
+        "items": [
+            {"step": "Read the schema", "status": "completed"},
+            {"step": "Probe the endpoint", "status": "in_progress"},
+            {"step": "Report findings", "status": "pending"},
+        ],
+        "completed_count": 1,
+        "total_count": 3,
+        "active_step": "Probe the endpoint",
+        "percent": 33,
+    }
+    assert observer.wait_after(0)[-1]["type"] == "todo.replace"
+
+
+def test_generic_agent_task_exposes_identity_reasoning_and_validated_final_phase() -> None:
+    """Only a completed generic Agent task promotes its last turn to Final Answer."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+    from restscope.redaction import Redactor
+
+    observer = LiveRunObserver(redactor=Redactor(["private-token"]))
+    observer.begin_run({})
+    runtime = TracingRuntime(
+        redactor=Redactor(["private-token"]),
+        run_observer=observer,
+    )
+
+    with runtime.span(
+        "Agent.run",
+        kind="CHAIN",
+        input_value={"objective": "Inspect private-token safely"},
+        attributes={
+            "restscope.agent.session_id": "main-1",
+            "restscope.agent.profile": "main_profile",
+            "restscope.agent.depth": 0,
+            "restscope.agent.lifecycle": "main",
+        },
+    ) as task_span:
+        with runtime.span("LLMClient.invoke", kind="LLM") as model_span:
+            model_span.set_llm_input_messages(
+                [{"role": "user", "content": "Inspect private-token safely"}]
+            )
+            model_span.set_live_detail(
+                "reasoning",
+                "private-token requires a careful lookup",
+            )
+            model_span.set_llm_output_messages(
+                [{"role": "assistant", "content": '{"summary":"done"}'}],
+                summary={"parsed_json": {"summary": "done"}, "finish_reason": "stop"},
+            )
+        task_span.set_output(
+            {
+                "session_id": "main-1",
+                "profile_name": "main_profile",
+                "status": "completed",
+                "completion": {"summary": "done"},
+            }
+        )
+
+    event = observer.snapshot()["events"][0]
+
+    assert event["agent"] == {
+        "session_id": "main-1",
+        "parent_session_id": None,
+        "name": "main_profile",
+        "profile_name": "main_profile",
+        "lifecycle": "main",
+        "task_id": event["agent"]["task_id"],
+        "path": ["main_profile"],
+    }
+    assert event["detail"]["task"]["objective"] == (
+        "Inspect ***REDACTED*** safely"
+    )
+    assert event["detail"]["reasoning"] == (
+        "***REDACTED*** requires a careful lookup"
+    )
+    assert event["detail"]["phase"] == "final_answer"
+    assert event["detail"]["task_result"]["status"] == "completed"
+
+
+def test_failed_generic_agent_task_never_marks_a_final_answer() -> None:
+    """A candidate rejected by Agent validation remains ordinary commentary."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+
+    observer = LiveRunObserver()
+    observer.begin_run({})
+    runtime = TracingRuntime(run_observer=observer)
+
+    with runtime.span(
+        "Agent.run",
+        kind="CHAIN",
+        input_value={"objective": "Return a result"},
+        attributes={
+            "restscope.agent.session_id": "child-1",
+            "restscope.agent.parent_session_id": "main-1",
+            "restscope.agent.profile": "child_profile",
+            "restscope.agent.lifecycle": "subagent",
+        },
+    ) as task_span:
+        with runtime.span("LLMClient.invoke", kind="LLM") as model_span:
+            model_span.set_llm_output_messages(
+                [{"role": "assistant", "content": "invalid"}],
+                summary={"finish_reason": "stop"},
+            )
+        task_span.set_output(
+            {
+                "session_id": "child-1",
+                "profile_name": "child_profile",
+                "status": "failed",
+                "error": {"code": "invalid", "message": "invalid"},
+            }
+        )
+
+    event = observer.snapshot()["events"][0]
+    assert event["agent"]["lifecycle"] == "subagent"
+    assert event["agent"]["parent_session_id"] == "main-1"
+    assert event["detail"]["phase"] == "commentary"
+
+
+def test_llm_client_routes_reasoning_only_to_the_redacted_live_observer() -> None:
+    """The shared client emits Reasoning through observer detail, not prompt data."""
+    from restscope.llm import (
+        LLMClient,
+        LLMMessage,
+        LLMProviderRegistry,
+        LLMRequest,
+        LLMResponse,
+    )
+    from restscope.llm.providers.base import BaseLLMProvider
+    from restscope.observability import LiveRunObserver, TracingRuntime
+    from restscope.redaction import Redactor
+
+    class ReasoningProvider(BaseLLMProvider):
+        """Return one raw reasoning value without changing request messages."""
+
+        name = "reasoning_stub"
+
+        def invoke(self, request: LLMRequest) -> LLMResponse:
+            return LLMResponse(
+                provider=self.name,
+                model=request.model,
+                content="done",
+                reasoning_content="secret-thought then inspect schema",
+                finish_reason="stop",
+            )
+
+    observer = LiveRunObserver(redactor=Redactor(["secret-thought"]))
+    observer.begin_run({})
+    runtime = TracingRuntime(
+        redactor=Redactor(["secret-thought"]),
+        run_observer=observer,
+    )
+    registry = LLMProviderRegistry()
+    registry.register(ReasoningProvider())
+    client = LLMClient(registry, tracing_runtime=runtime)
+
+    with runtime.span("LegacyAgent.run", kind="AGENT"):
+        client.invoke(
+            LLMRequest(
+                provider="reasoning_stub",
+                model="reasoning-model",
+                messages=[LLMMessage(role="user", content="Inspect the schema")],
+            )
+        )
+
+    detail = observer.snapshot()["events"][0]["detail"]
+    assert detail["reasoning"] == "***REDACTED*** then inspect schema"
+    assert detail["input"]["messages"][0]["content"] == "Inspect the schema"
+    assert "reasoning" not in detail["input"]["messages"][0]
 
 
 def test_agent_session_produces_incremental_turn_cards_with_exact_outputs() -> None:

@@ -2,6 +2,12 @@
 
 Status: Completed — IndexedDB history merged and verified with a bounded live GitLab run
 
+> Superseded UI note (2026-08-09): the G6 canvas, fixed Worklist sidebar, and
+> canvas-era IndexedDB records described below are retained as historical
+> evidence only. `main-agent-conversation-observer-ui.md` replaces them with an
+> prompt/response conversation, named Subagent Drawer, floating Todo, and
+> storage v2.
+
 ## Objective
 
 Add a loopback-only, read-only, real-time RESTScope observer that displays key

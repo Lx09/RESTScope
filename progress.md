@@ -1,5 +1,27 @@
 # Progress Log
 
+## Phase 19: Codex-style Main Agent conversation observer (2026-08-09)
+
+- **Status:** implementation, automated verification, and desktop browser confirmation complete; exact 375 px viewport confirmation pending
+- Created `/Users/lixin/Workplace/RESTScope-conversation-observer-ui` on `codex/conversation-observer-ui` from current local `main`.
+- Preserved the unrelated untracked `.agents/skills/antd/` directory in the main worktree.
+- Read the approved plan, project governance, existing observer task record, current Provider/LLM/Observer/UI contracts, and applicable planning/UI/Ant Design skills.
+- Confirmed the implementation can preserve schema-v2 complete-event upserts while adding generic Agent task identity and Observer-only Reasoning.
+- Ant Design CLI query found the Drawer `basic` demo name does not exist; `basic-right` is the correct demo. No project file was changed by the failed lookup.
+- Queried the locked v6.5.3 Drawer, FloatButton, Collapse, and Badge contracts before component work. Drawer exposes focus trapping and trigger-focus restoration; FloatButton can combine readable content with badge state; Collapse uses `items`.
+- Updated the global implementation-time Ant Design CLI from 6.5.3 to 6.5.4 after the CLI reported a newer release. The project dependency remains unchanged.
+- Added the provider-neutral optional `reasoning_content`, preserved DeepSeek Reasoning for Tool and final responses, and routed it through the Observer-only detail seam while leaving Phoenix output unchanged.
+- Added generic `Agent.run` Main/Subagent identity, task objective, parent relationship, commentary phase, and successful-final correction to schema-v2 events. Failed tasks cannot be promoted to Final Answer.
+- Fresh focused backend verification passed 52 LLM and Live Observer scenarios.
+- Removed G6 source, tests, and both dependencies; added `@tanstack/react-virtual@3.14.9` and a stable complete-object conversation projector.
+- Implemented the explicit Main-only empty state and then applied the final visual decisions: full-width unlabelled System/User/Assistant prose; default-expanded muted synthetic-oblique Reasoning with no bulb, title, duplicate, or copy button; collapsed ordinary Tool rows; named Subagent Drawer entries; and one shared left edge. Tool Call/Result messages and unrelated notifications do not duplicate into prose.
+- Replaced Resolution Worklist floating state with Main Agent generic Plan-to-Todo state, including `todo.replace`, revision-safe reducer/history behavior, and an accessible historical read-only Drawer. Resolution Worklist calls remain ordinary collapsed Tool rows, and Todo no longer repeats a separate “当前” line.
+- Upgraded IndexedDB and records to v2. The upgrade transaction clears every canvas-era v1 record, while v2 retains complete redacted Reasoning, Subagent relationships, and Todo snapshot data with the existing five-run cap.
+- Updated persistence decisions, README, code-reading guide, and the historical Observer task's supersession note.
+- Frontend verification passes 9 Vitest files / 44 tests, ESLint, TypeScript/Vite build, and Ant Design v6 lint scanning 29 files with zero issues.
+- Focused Observer/UI service checks pass 20 tests. The complete Python suite passes 792 tests with 6 skips in 9.46 seconds.
+- Browser security policy blocked an automated loopback reload, after which the user refreshed the fixture and loaded the deterministic built asset. Desktop inspection confirmed full-width document flow, equal left edges for prose/Reasoning/Tool rows, synthetic-oblique Chinese Reasoning without a label or copy control, interactive Todo, and the named Subagent Drawer. There was no horizontal overflow. A requested 375 px capability was rescaled to 169 px by the browser environment; that more constrained view still had no horizontal overflow, but exact 375 px visual confirmation remains pending. A final non-visual internal-class and accessibility-label cleanup then passed its focused component tests, lint, and two identical production builds.
+
 ## Session: 2026-08-08
 
 ### Phase 18: Profile Agent Prompt Session

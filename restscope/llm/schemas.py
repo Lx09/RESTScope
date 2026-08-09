@@ -89,11 +89,18 @@ class LLMRequest(BaseModel):
 
 
 class LLMResponse(BaseModel):
-    """Provider-neutral response returned by LLMClient."""
+    """Provider-neutral response returned by LLMClient.
+
+    ``reasoning_content`` carries optional raw reasoning returned by a
+    Provider. It is human-observability evidence: Agent prompt continuation
+    still uses each Tool Call's private ``provider_context``, and callers must
+    not append this field to model-visible history on its own.
+    """
 
     provider: str
     model: str
     content: str | None = None
+    reasoning_content: str | None = Field(default=None, repr=False)
     parsed_json: Any | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     prompt_tokens: int | None = None

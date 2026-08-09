@@ -1,5 +1,64 @@
 # Findings & Decisions
 
+## Final conversation and Todo decisions (2026-08-09)
+
+- The conversation is not a general run timeline. It contains incremental LLM
+  prompt prose, Provider Reasoning, ordinary model responses, and collapsed
+  Tool/Subagent calls only. Smoke Batch and unrelated notifications stay in the
+  complete schema-v2 snapshot but outside the document.
+- System, Developer, User, and ordinary Assistant content is rendered without
+  message-type annotations. Assistant Tool Call messages and Tool Result
+  messages are removed from prose because the matching Tool event owns the
+  exact input/output detail.
+- Reasoning is expanded by default, muted, synthetic-oblique for Chinese text,
+  complete, and toggled directly from its content. It has no title, bulb,
+  chevron, duplicated copy block, or copy button. Ordinary Tool rows are
+  collapsed by default; Subagent lifecycle events aggregate into one named
+  child entry that opens the child conversation Drawer. All content shares one
+  left edge.
+- The page-level floating state is Todo. Only successful `plan.update` output
+  owned by the explicit Main Agent can replace it. Failure Resolution's private
+  Worklist remains ordinary Tool evidence and cannot overwrite Todo. Todo does
+  not repeat its in-progress item in a separate “当前” line.
+- The profile/Main Agent/linear-conversation heading was removed and the
+  conversation surface uses the full page content width.
+- Browser-control policy blocked automatic reload of the loopback fixture at
+  `127.0.0.1:4174`, but the user refreshed it and the built asset then
+  passed desktop browser inspection. The conversation, Reasoning, Tool, Todo,
+  and Subagent surfaces have no horizontal overflow and share the intended
+  alignment. The browser capability rescaled a requested 375 px viewport to an
+  effective 169 px viewport, so an exact 375 px visual confirmation remains
+  outstanding even though the more constrained view had no horizontal
+  overflow.
+
+## Codex-style conversation observer (2026-08-09)
+
+> The requirements below record the initial approved plan. The later user
+> decisions in “Final conversation and Todo decisions” above supersede its
+> default-collapsed Reasoning, Subagent Drawer, and floating Worklist details.
+
+### Approved requirements
+- Remove the G6 canvas entirely and render only the explicit generic Main Agent as a linear conversation.
+- Show Provider-returned raw Reasoning as an independent, default-collapsed item. Browser IndexedDB may retain this already-redacted human-observability evidence; Phoenix and Agent Context must not gain it.
+- Show Subagents as stable activity items and open their independent conversations in an accessible right Drawer.
+- Move the latest Worklist into a floating progress entry and right Drawer rather than the conversation or a fixed sidebar.
+- Keep schema-v2's complete-event snapshot/SSE reducer and add only the identity, task, phase, and Reasoning facts needed by the new renderer.
+- Delete existing canvas-era IndexedDB history during the storage-version upgrade and retain at most five new conversation snapshots.
+
+### Executable evidence
+- Generic `Agent.run` already traces stable `session_id`, `profile`, `depth`, `lifecycle`, and optional `parent_session_id`, but the current observer recognizes only legacy `kind="AGENT"` scopes.
+- DeepSeek currently preserves `reasoning_content` only inside ToolCall `provider_context`; final-response Reasoning is discarded by normalization and LLM tracing deliberately removes Provider context.
+- The current browser reducer already receives full authoritative `timeline.upsert` replacements keyed by `event_id` and ordered by the observer cursor, so a second delta protocol is unnecessary.
+- IndexedDB currently uses database/record version 1 and stores complete schema-v2 snapshots in the `runs` store.
+- The existing Main App does not yet launch the generic Main Agent. The approved UI must show an explicit empty state rather than reinterpret legacy Agents.
+- The existing Observer-only detail outlet can carry complete redacted Reasoning without adding it to Phoenix span attributes. Generic `Agent.run` output arrives after final schema validation, so it is the correct authority for promoting only the last successful task turn to `final_answer`.
+
+### UI constraints
+- Use Ant Design semantic tokens, visible keyboard focus, 44px interaction targets, reduced-motion behavior, and no color-only status.
+- Use `@tanstack/react-virtual` for dynamic-height conversation virtualization and remove both G6 dependencies.
+- The project remains locked to Ant Design v6.5.3. Its Drawer supports `focusable={{ trap, focusTriggerAfterClose }}`, FloatButton supports content plus Badge state, and Collapse uses the current `items` API.
+- The implementation-time Ant Design CLI was updated from 6.5.3 to 6.5.4 after its own update notice; this does not change the project's locked runtime dependency.
+
 ## Profile Agent Prompt Session (2026-08-08)
 
 ### Approved requirements

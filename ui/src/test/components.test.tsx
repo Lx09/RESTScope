@@ -1,11 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readThemePreference } from "../App";
 import { EventCard } from "../components/EventCard";
 import { CodeView } from "../components/ValueViews";
-import { WorklistPanel } from "../components/WorklistPanel";
+import { TodoPanel } from "../components/TodoPanel";
 import { makeEvent } from "./fixtures";
 
 async function openCard(): Promise<void> {
@@ -153,7 +153,7 @@ describe("semantic event cards", () => {
   });
 });
 
-describe("copy, follow, theme, and Worklist reading", () => {
+describe("copy, follow, theme, and Todo reading", () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
@@ -175,55 +175,34 @@ describe("copy, follow, theme, and Worklist reading", () => {
     expect(readThemePreference()).toBe("light");
   });
 
-  it("shows Failure evidence and every reference in separate readable sections", () => {
-    const failureMessage = "HTTP 400: the expiration policy conflicts with the selected template";
-    const longParameter = "request.body.template.configuration.expiration_policy.retention_period_in_days";
+  it("shows every generic Plan step and its text status", () => {
     render(
-      <WorklistPanel
-        worklist={{
-          operation_key: "POST /api/v4/projects",
-          snapshot: {
-            revision: 4,
-            active_item_id: "WI-002",
-            items: [
-              {
-                item_id: "WI-002",
-                source_failure_refs: ["E2", "E3"],
-                test_case_refs: ["TC7", "TC8"],
-                suspected_parameters: [longParameter],
-                candidate_refs: ["P3", "P4"],
-                progress: "Verified with a resolution probe",
-                root_cause: "Enum value drifted",
-                decision: { selected: "P3" },
-              },
-            ],
-          },
-          failure_messages: { E2: failureMessage },
-          decided_count: 1,
-          total_count: 1,
-          percent: 100,
+      <TodoPanel
+        todo={{
+          revision: 4,
+          agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" },
+          explanation: "Follow the evidence in order.",
+          items: [
+            { step: "Read the schema", status: "completed" },
+            { step: "Probe the endpoint", status: "in_progress" },
+            { step: "Report findings", status: "pending" },
+          ],
+          completed_count: 1,
+          total_count: 3,
+          active_step: "Probe the endpoint",
+          percent: 33,
         }}
       />,
     );
 
     expect(screen.getByText("Revision 4")).toBeVisible();
-    expect(screen.getByText("POST /api/v4/projects")).toBeVisible();
-    expect(screen.getByText(/Active item/)).toHaveTextContent("WI-002");
-    expect(screen.getByText("Failure")).toBeVisible();
-    expect(screen.getByText(failureMessage)).toBeVisible();
-    expect(screen.getByText("E2")).toBeVisible();
-    expect(screen.getByText("E3")).toBeVisible();
-    expect(screen.getByText("Failure detail unavailable")).toBeVisible();
-    expect(screen.getByText("Test cases")).toBeVisible();
-    expect(screen.getByText("TC7")).toBeVisible();
-    expect(screen.getByText("TC8")).toBeVisible();
-    expect(screen.getByText("Suspected parameters")).toBeVisible();
-    expect(screen.getByText(longParameter)).toBeVisible();
-    expect(screen.getByText("Patch candidates")).toBeVisible();
-    expect(screen.getByText("P3")).toBeVisible();
-    expect(screen.getByText("P4")).toBeVisible();
-    expect(screen.getByText("Enum value drifted")).toBeVisible();
-    expect(screen.getByText("Decision")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "复制 decision" }));
+    expect(screen.getByText("Follow the evidence in order.")).toBeVisible();
+    expect(screen.queryByText("当前：Probe the endpoint")).not.toBeInTheDocument();
+    expect(screen.getByText("Read the schema")).toBeVisible();
+    expect(screen.getByText("Probe the endpoint")).toBeVisible();
+    expect(screen.getByText("Report findings")).toBeVisible();
+    expect(screen.getByText("已完成")).toBeVisible();
+    expect(screen.getByText("进行中")).toBeVisible();
+    expect(screen.getByText("待处理")).toBeVisible();
   });
 });

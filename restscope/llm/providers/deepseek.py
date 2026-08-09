@@ -272,11 +272,14 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         surrounding orchestration remains readable.
         """
         response = super()._normalize_response(request, raw_response, latency_ms)
+        message = raw_response.choices[0].message
+        reasoning_content = getattr(message, "reasoning_content", None)
+        response = response.model_copy(
+            update={"reasoning_content": reasoning_content or None}
+        )
         if not response.tool_calls:
             return response
 
-        message = raw_response.choices[0].message
-        reasoning_content = getattr(message, "reasoning_content", None)
         if self._effective_reasoning(request).mode != "disabled" and not reasoning_content:
             raise DeepSeekCompatibilityError(
                 "deepseek_reasoning_content_missing",

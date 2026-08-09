@@ -122,6 +122,91 @@ def test_reasoning_config_and_tool_provider_context_round_trip() -> None:
     }
 
 
+@pytest.mark.parametrize("with_tool_call", [False, True])
+def test_deepseek_preserves_raw_reasoning_on_every_response(
+    with_tool_call: bool,
+) -> None:
+    """DeepSeek exposes raw reasoning for both Tool calls and final answers."""
+    from restscope.llm import LLMMessage, LLMRequest, ToolSpec
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    tool_calls = (
+        [
+            SimpleNamespace(
+                id="call-1",
+                function=SimpleNamespace(
+                    name="catalog_lookup",
+                    arguments='{"query":"projects"}',
+                ),
+            )
+        ]
+        if with_tool_call
+        else []
+    )
+    message = SimpleNamespace(
+        content=None if with_tool_call else '{"summary":"done"}',
+        reasoning_content="Inspect the available evidence.",
+        tool_calls=tool_calls,
+    )
+    response = SimpleNamespace(
+        id="response-1",
+        choices=[
+            SimpleNamespace(
+                message=message,
+                finish_reason="tool_calls" if with_tool_call else "stop",
+            )
+        ],
+        usage=None,
+    )
+
+    class Completions:
+        def create(self, **kwargs: Any) -> Any:
+            del kwargs
+            return response
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=Completions())
+        ),
+    )
+    request = LLMRequest(
+        provider="deepseek",
+        model="deepseek-reasoner",
+        messages=[LLMMessage(role="user", content="Investigate")],
+        tools=(
+            [
+                ToolSpec(
+                    name="catalog.lookup",
+                    description="Look up one catalog entry",
+                    kind="local_function",
+                    input_schema={"type": "object"},
+                )
+            ]
+            if with_tool_call
+            else []
+        ),
+        tool_choice="auto" if with_tool_call else "none",
+    )
+
+    normalized = provider.invoke(request)
+
+    assert normalized.reasoning_content == "Inspect the available evidence."
+    if with_tool_call:
+        assert normalized.tool_calls[0].provider_context == {
+            "reasoning_content": "Inspect the available evidence."
+        }
+
+
+def test_provider_without_reasoning_returns_no_reasoning_item_value() -> None:
+    """Providers that do not support raw reasoning retain the null default."""
+    from restscope.llm import LLMResponse
+
+    response = LLMResponse(provider="stub", model="plain", content="done")
+
+    assert response.reasoning_content is None
+
+
 def test_llm_client_invokes_provider_once_and_propagates_failure() -> None:
     """Scenario: verify that llm client invokes provider once and propagates failure."""
     from restscope.llm import LLMClient, LLMMessage, LLMRequest, ProviderInvokeError

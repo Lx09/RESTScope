@@ -1,10 +1,11 @@
 """Build the schema-v2 semantic narrative for the current RESTScope run.
 
 The :class:`LiveRunObserver` receives the App's existing trace and target HTTP
-activity. It folds that lower-level evidence into only three browser concepts:
-one card per Agent model turn, one per executed tool, and one per complete Smoke
-Batch. Browser adapters read JSON-safe snapshots and cursor-addressed changes;
-workflow code never depends on UI DTOs.
+activity. It folds that lower-level evidence into model turns, executed tools,
+and complete Smoke Batches. Generic ``Agent.run`` scopes add the stable Main or
+Subagent identity, task objective, and authoritative final-response phase used
+by the conversation projector. Browser adapters read JSON-safe snapshots and
+cursor-addressed changes; workflow code never depends on UI DTOs.
 
 The observer never persists data and never raises into testing code. It keeps
 every detail until the next run or App shutdown, as explicitly approved, so a
@@ -35,7 +36,7 @@ EventKind = Literal["agent_turn", "tool_call", "smoke_batch"]
 
 _SMOKE_BATCH_SPAN = "OperationTestingService.run_smoke_batch"
 _IGNORED_TOOL_SPANS = {"RESTScopeTestCase.execute"}
-_WORKLIST_WRITE_TOOL = "failure_resolution.write_worklist"
+_PLAN_UPDATE_TOOL = "plan.update"
 _HTTP_TOOL = "restscope.http.request"
 
 
@@ -84,7 +85,8 @@ class LiveRunObserver:
     Callers begin and end a run, while tracing and HTTP Modules open short-lived
     handles. Browser adapters call :meth:`snapshot` and :meth:`wait_after`.
     Locking, cursor management, semantic aggregation, redaction, Agent nesting,
-    message de-duplication, and Worklist projection stay private here.
+    message de-duplication, and Main Agent Plan-to-Todo projection stay private
+    here.
     """
 
     def __init__(self, *, redactor: Redactor | None = None) -> None:
@@ -98,11 +100,13 @@ class LiveRunObserver:
         self._cursor = 0
         self._next_order = 0
         self._run: dict[str, Any] | None = None
-        self._worklist: dict[str, Any] | None = None
+        self._todo: dict[str, Any] | None = None
+        self._todo_revision = 0
         self._seen_message_counts: dict[str, Counter[str]] = {}
         self._latest_agent_turn: dict[str, str] = {}
+        self._latest_agent_turn_by_task: dict[str, str] = {}
         self._agent_sessions: dict[tuple[Any, ...], str] = {}
-        self._failure_messages_by_agent_session: dict[str, dict[str, str]] = {}
+        self._generic_agent_identities: dict[str, dict[str, Any]] = {}
         self._closed = False
 
     @property
@@ -128,11 +132,13 @@ class LiveRunObserver:
                 return run_id
             self._events.clear()
             self._event_order.clear()
-            self._worklist = None
+            self._todo = None
+            self._todo_revision = 0
             self._seen_message_counts.clear()
             self._latest_agent_turn.clear()
+            self._latest_agent_turn_by_task.clear()
             self._agent_sessions.clear()
-            self._failure_messages_by_agent_session.clear()
+            self._generic_agent_identities.clear()
             self._next_order = 0
             self._run = {
                 "run_id": run_id,
@@ -256,7 +262,14 @@ class LiveRunObserver:
             agent = parent.agent
             visible_parent_id = parent.event_id
 
-            if kind == "AGENT":
+            if name == "Agent.run" and kind == "CHAIN":
+                agent, scope = self._generic_agent_task(
+                    parent=parent,
+                    attributes=safe_attributes,
+                    scope=scope,
+                    input_value=input_value,
+                )
+            elif kind == "AGENT":
                 agent = self._agent_identity(
                     name=name,
                     parent=parent,
@@ -278,9 +291,22 @@ class LiveRunObserver:
                 event["detail"] = {
                     "input": {"messages": []},
                     "output": None,
+                    "phase": "commentary",
+                    **(
+                        {
+                            "task": {
+                                "task_id": scope["task_id"],
+                                "objective": scope.get("task_objective"),
+                            }
+                        }
+                        if scope.get("task_id") is not None
+                        else {}
+                    ),
                 }
                 self._upsert(event)
                 self._latest_agent_turn[str(agent["session_id"])] = event_id
+                if scope.get("task_id") is not None:
+                    self._latest_agent_turn_by_task[str(scope["task_id"])] = event_id
                 visible_parent_id = event_id
             elif kind == "TOOL" and name not in _IGNORED_TOOL_SPANS:
                 event_id = f"event_{uuid4().hex}"
@@ -336,11 +362,12 @@ class LiveRunObserver:
                 event_id=event["event_id"] if event is not None else None,
                 context_token=token,
                 span_name=name,
-                agent_session_id=(
-                    str(agent["session_id"])
-                    if isinstance(agent, dict) and agent.get("session_id") is not None
+                task_id=(
+                    str(scope["task_id"])
+                    if scope.get("task_id") is not None
                     else None
                 ),
+                is_agent_run=name == "Agent.run" and kind == "CHAIN",
             )
         except Exception:
             return None
@@ -442,7 +469,7 @@ class LiveRunObserver:
                     for event_id in self._event_order
                     if event_id in self._events
                 ],
-                "worklist": deepcopy(self._worklist),
+                "todo": deepcopy(self._todo),
                 "latest_cursor": self._cursor,
             }
 
@@ -469,11 +496,13 @@ class LiveRunObserver:
             self._event_order.clear()
             self._changes.clear()
             self._run = None
-            self._worklist = None
+            self._todo = None
+            self._todo_revision = 0
             self._seen_message_counts.clear()
             self._latest_agent_turn.clear()
+            self._latest_agent_turn_by_task.clear()
             self._agent_sessions.clear()
-            self._failure_messages_by_agent_session.clear()
+            self._generic_agent_identities.clear()
             self._condition.notify_all()
 
     def _agent_identity(
@@ -517,6 +546,72 @@ class LiveRunObserver:
         if parent_session_id is not None:
             identity["parent_session_id"] = parent_session_id
         return identity
+
+    def _generic_agent_task(
+        self,
+        *,
+        parent: _ActiveContext,
+        attributes: Mapping[str, Any],
+        scope: dict[str, Any],
+        input_value: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Create one explicit generic Agent identity and task scope.
+
+        Generic Main and Subagent sessions already supply their Harness-owned
+        IDs in ``Agent.run`` attributes. Unlike legacy ``kind=AGENT`` spans,
+        these identities are authoritative enough for the UI to select a Main
+        conversation and navigate its children without guessing from names.
+        """
+        session_id = str(attributes.get("restscope.agent.session_id") or "")
+        profile_name = str(attributes.get("restscope.agent.profile") or "")
+        lifecycle = str(attributes.get("restscope.agent.lifecycle") or "")
+        if not session_id or not profile_name or lifecycle not in {"main", "subagent"}:
+            return parent.agent or {}, scope
+
+        parent_session_value = attributes.get("restscope.agent.parent_session_id")
+        parent_session_id = (
+            str(parent_session_value) if parent_session_value is not None else None
+        )
+        parent_identity = self._generic_agent_identities.get(parent_session_id or "")
+        parent_path = parent_identity.get("path", []) if parent_identity else []
+        task_id = f"task_{uuid4().hex}"
+        identity: dict[str, Any] = {
+            "session_id": session_id,
+            "parent_session_id": parent_session_id,
+            "name": profile_name,
+            "profile_name": profile_name,
+            "lifecycle": lifecycle,
+            "task_id": task_id,
+            "path": [*parent_path, profile_name],
+        }
+        self._generic_agent_identities[session_id] = deepcopy(identity)
+        safe_input = self._safe(input_value)
+        objective = safe_input.get("objective") if isinstance(safe_input, dict) else None
+        return identity, {
+            **scope,
+            "task_id": task_id,
+            "task_objective": objective,
+        }
+
+    def _complete_agent_task(self, *, task_id: str, output: Any) -> None:
+        """Correct the successful task's last model turn to Final Answer.
+
+        A no-tool model response is only a candidate until the generic Agent
+        validates its schema. The enclosing ``Agent.run`` result is therefore
+        the sole authority that can promote the last response. Failed,
+        cancelled, stopped, and validation-correction tasks remain commentary.
+        """
+        safe_output = self._safe(output)
+        if not isinstance(safe_output, dict) or safe_output.get("status") != "completed":
+            return
+        event_id = self._latest_agent_turn_by_task.get(task_id)
+        event = self._event_copy(event_id)
+        if event is None:
+            return
+        detail = deepcopy(event.get("detail", {}))
+        detail["phase"] = "final_answer"
+        detail["task_result"] = safe_output
+        self._update_event(str(event["event_id"]), detail=detail)
 
     def _new_event(
         self,
@@ -715,60 +810,48 @@ class LiveRunObserver:
         detail["cases"] = cases
         self._update_event(event_id, detail=detail)
 
-    def _record_worklist(self, tool_event: dict[str, Any]) -> None:
-        """Project one successful Worklist result and its operation to the sidebar."""
+    def _record_todo(self, tool_event: dict[str, Any]) -> None:
+        """Project one successful Main Agent Plan replacement as the floating Todo.
+
+        Subagents own independent private Plans. A single page-level Todo must
+        therefore follow only the explicit Main Agent instead of allowing a
+        short-lived child to overwrite its parent's current work.
+        """
+        agent = tool_event.get("agent")
+        if not isinstance(agent, dict) or agent.get("lifecycle") != "main":
+            return
         detail = tool_event.get("detail")
         output = detail.get("output") if isinstance(detail, dict) else None
         if not isinstance(output, dict) or output.get("status") != "succeeded":
             return
-        snapshot = output.get("structured")
-        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("revision"), int):
+        plan = output.get("structured")
+        if not isinstance(plan, dict) or not isinstance(plan.get("plan"), list):
             return
-        current = deepcopy(snapshot)
-        items = current.get("items", [])
-        decided_count = sum(
-            1
-            for item in items
-            if isinstance(item, dict) and item.get("decision") is not None
+        items = [
+            deepcopy(item)
+            for item in plan["plan"]
+            if isinstance(item, dict)
+            and isinstance(item.get("step"), str)
+            and item.get("status") in {"pending", "in_progress", "completed"}
+        ]
+        completed_count = sum(item["status"] == "completed" for item in items)
+        active_step = next(
+            (item["step"] for item in items if item["status"] == "in_progress"),
+            None,
         )
-        agent = tool_event.get("agent")
-        session_id = agent.get("session_id") if isinstance(agent, dict) else None
         with self._condition:
-            failure_messages = (
-                deepcopy(self._failure_messages_by_agent_session.get(str(session_id), {}))
-                if session_id is not None
-                else {}
-            )
-            self._worklist = {
-                "operation_key": deepcopy(tool_event.get("operation_key")),
-                "snapshot": current,
-                "failure_messages": failure_messages,
-                "decided_count": decided_count,
+            self._todo_revision += 1
+            self._todo = {
+                "revision": self._todo_revision,
+                "agent": deepcopy(agent),
+                "explanation": deepcopy(plan.get("explanation")),
+                "items": items,
+                "completed_count": completed_count,
                 "total_count": len(items),
-                "percent": round(decided_count * 100 / len(items)) if items else 0,
+                "active_step": active_step,
+                "percent": round(completed_count * 100 / len(items)) if items else 0,
             }
-            self._publish_locked("worklist.replace", deepcopy(self._worklist))
-
-    def _record_failure_messages(self, *, session_id: str, value: Any) -> None:
-        """Keep exact E-to-Failure text for one Resolution session sidebar.
-
-        The Failure Resolution workflow owns these messages. This observer-only
-        copy lets the browser explain opaque E references without putting
-        Failure text into Agent-authored Worklist state or Phoenix attributes.
-        Invalid observer detail is ignored so observation remains fail-open.
-        """
-        safe = self._safe(value)
-        if not isinstance(safe, dict):
-            return
-        messages = {
-            reference: message
-            for reference, message in safe.items()
-            if isinstance(reference, str)
-            and reference.startswith("E")
-            and isinstance(message, str)
-        }
-        with self._lock:
-            self._failure_messages_by_agent_session[session_id] = messages
+            self._publish_locked("todo.replace", deepcopy(self._todo))
 
 
 class LiveSpan:
@@ -781,19 +864,30 @@ class LiveSpan:
         event_id: str | None,
         context_token: Token[_ActiveContext],
         span_name: str,
-        agent_session_id: str | None,
+        task_id: str | None,
+        is_agent_run: bool,
     ) -> None:
-        """Remember event ownership, nesting token, and elapsed-time start."""
+        """Remember event, Agent task, nesting token, and elapsed-time start."""
         self._observer = observer
         self._event_id = event_id
         self._context_token = context_token
         self._span_name = span_name
-        self._agent_session_id = agent_session_id
+        self._task_id = task_id
+        self._is_agent_run = is_agent_run
         self._started = time.monotonic()
         self._closed = False
 
     def set_content(self, direction: str, value: Any) -> None:
         """Store semantic input/output while preserving nested HTTP evidence."""
+        if (
+            self._is_agent_run
+            and direction == "output"
+            and self._task_id is not None
+        ):
+            self._observer._complete_agent_task(
+                task_id=self._task_id,
+                output=value,
+            )
         if self._event_id is None:
             return
         event = self._observer._event_copy(self._event_id)
@@ -876,11 +970,6 @@ class LiveSpan:
         """Store observer-only detail that must not change Phoenix output."""
         if self._event_id is not None:
             self._observer._set_event_detail_value(self._event_id, name, value)
-        elif name == "failure_messages" and self._agent_session_id is not None:
-            self._observer._record_failure_messages(
-                session_id=self._agent_session_id,
-                value=value,
-            )
 
     def mark_error(self, message: str) -> None:
         """Mark one semantic event failed using a redacted safe message."""
@@ -940,8 +1029,8 @@ class LiveSpan:
                     ended_at=_utc_now(),
                     duration_ms=round((time.monotonic() - self._started) * 1000, 2),
                 )
-                if updated is not None and self._span_name == _WORKLIST_WRITE_TOOL:
-                    self._observer._record_worklist(updated)
+                if updated is not None and self._span_name == _PLAN_UPDATE_TOOL:
+                    self._observer._record_todo(updated)
         finally:
             try:
                 _CURRENT_CONTEXT.reset(self._context_token)
@@ -1088,6 +1177,8 @@ def classify_tool(name: str) -> str:
     """Map a concrete tool name to one stable visual family."""
     if name.startswith("failure_resolution."):
         return "worklist"
+    if name.startswith("plan."):
+        return "plan"
     if name.startswith("openapi."):
         return "openapi"
     if name.startswith("test_case."):

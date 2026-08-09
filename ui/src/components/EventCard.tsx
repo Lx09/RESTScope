@@ -31,13 +31,25 @@ import {
   toolFamily,
   visibleStatusLabel,
 } from "../presentation";
-import { compactMessagePreview, type CanvasToolResult } from "../canvasModel";
 import type { TimelineEvent } from "../types";
 import { BodyView, CodeView, HeaderTable } from "./ValueViews";
 
 const { Text } = Typography;
 
 type UnknownRecord = Record<string, any>;
+
+interface CanvasToolResult {
+  id: string;
+  name: string;
+  toolCallId: string | null;
+  matched: boolean;
+  message: UnknownRecord;
+}
+
+function compactMessagePreview(value: unknown): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return (text ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+}
 
 interface SmokeCase extends UnknownRecord {
   case_index: number;
@@ -67,6 +79,7 @@ const ROLE_ICONS: Record<string, ReactNode> = {
 
 const TOOL_ICONS: Record<string, ReactNode> = {
   worklist: <OrderedListOutlined />,
+  plan: <OrderedListOutlined />,
   openapi: <FileSearchOutlined />,
   test_case: <CodeOutlined />,
   parameter_patch: <DeploymentUnitOutlined />,
@@ -123,7 +136,7 @@ export function parseJsonContainerText(value: string): UnknownRecord | unknown[]
   }
 }
 
-function MarkdownValue({ value }: { value: unknown }) {
+export function MarkdownValue({ value }: { value: unknown }) {
   if (value === null || value === undefined || value === "") {
     return <Text type="secondary">（空消息）</Text>;
   }
@@ -572,7 +585,7 @@ function SmokeBatchDetail({ event }: { event: TimelineEvent }) {
   );
 }
 
-/** Render complete read-only detail inside a legacy card or expanded canvas node. */
+/** Render complete read-only detail inside an expanded conversation row. */
 export function EventDetail({
   event,
   defaultTab,

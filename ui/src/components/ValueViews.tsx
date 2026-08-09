@@ -9,7 +9,14 @@ interface CodeViewProps {
   label?: string;
 }
 
-export function CodeView({ value, label = "复制内容" }: CodeViewProps) {
+interface CopyValueButtonProps {
+  value: unknown;
+  label: string;
+  className?: string;
+}
+
+/** Copy an exact string or JSON value without rendering a second visible copy. */
+export function CopyValueButton({ value, label, className }: CopyValueButtonProps) {
   const [copied, setCopied] = useState(false);
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 
@@ -21,17 +28,25 @@ export function CodeView({ value, label = "复制内容" }: CodeViewProps) {
   }
 
   return (
+    <Tooltip title={copied ? "已复制" : label}>
+      <Button
+        aria-label={label}
+        className={className}
+        icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+        onClick={() => void copy()}
+        size="small"
+        type="text"
+      />
+    </Tooltip>
+  );
+}
+
+/** Show a structured value with an exact-copy action above the visible text. */
+export function CodeView({ value, label = "复制内容" }: CodeViewProps) {
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return (
     <div className="code-view">
-      <Tooltip title={copied ? "已复制" : label}>
-        <Button
-          aria-label={label}
-          className="copy-button"
-          icon={copied ? <CheckOutlined /> : <CopyOutlined />}
-          onClick={() => void copy()}
-          size="small"
-          type="text"
-        />
-      </Tooltip>
+      <CopyValueButton className="copy-button" label={label} value={value} />
       <pre>{text ?? "null"}</pre>
     </div>
   );

@@ -5,23 +5,15 @@ import type { ObserverState } from "../types";
 import { makeEvent } from "./fixtures";
 
 describe("observerReducer", () => {
-  it("does not let an older snapshot rewind the current Worklist", () => {
-    const worklist = (revision: number, activeItemId: string) => ({
-      operation_key: "POST /projects",
-      snapshot: {
-        revision,
-        active_item_id: activeItemId,
-        items: [{
-          item_id: activeItemId,
-          source_failure_refs: ["E1"],
-          test_case_refs: ["TC1"],
-          suspected_parameters: [],
-          candidate_refs: [],
-        }],
-      },
-      failure_messages: { E1: "HTTP 400: invalid input" },
-      decided_count: 0,
+  it("does not let an older snapshot rewind the current Todo", () => {
+    const todo = (revision: number, activeStep: string) => ({
+      revision,
+      agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
+      explanation: null,
+      items: [{ step: activeStep, status: "in_progress" as const }],
+      completed_count: 0,
       total_count: 1,
+      active_step: activeStep,
       percent: 0,
     });
     let state = observerReducer(initialObserverState, {
@@ -30,7 +22,7 @@ describe("observerReducer", () => {
         schema_version: 2,
         run: null,
         events: [],
-        worklist: worklist(6, "WI-006"),
+        todo: todo(6, "Probe endpoint"),
         latest_cursor: 12,
       },
     });
@@ -41,19 +33,19 @@ describe("observerReducer", () => {
         schema_version: 2,
         run: null,
         events: [],
-        worklist: worklist(5, "WI-005"),
+        todo: todo(5, "Read schema"),
         latest_cursor: 10,
       },
     });
 
     expect(state.latestCursor).toBe(12);
-    expect(state.worklist?.snapshot).toMatchObject({
+    expect(state.todo).toMatchObject({
       revision: 6,
-      active_item_id: "WI-006",
+      active_step: "Probe endpoint",
     });
   });
 
-  it("keeps a newer same-run Worklist when another snapshot has a later cursor", () => {
+  it("keeps a newer same-run Todo when another snapshot has a later cursor", () => {
     const run = {
       run_id: "run-1",
       status: "running",
@@ -62,18 +54,20 @@ describe("observerReducer", () => {
       request: {},
       result: null,
     };
-    const currentWorklist = {
-      operation_key: "POST /projects",
-      snapshot: { revision: 6, active_item_id: "WI-006", items: [] },
-      failure_messages: {},
-      decided_count: 0,
+    const currentTodo = {
+      revision: 6,
+      agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
+      explanation: null,
+      items: [],
+      completed_count: 0,
       total_count: 0,
+      active_step: null,
       percent: 0,
     };
     const state: ObserverState = {
       ...initialObserverState,
       run,
-      worklist: currentWorklist,
+      todo: currentTodo,
       latestCursor: 12,
     };
 
@@ -83,51 +77,42 @@ describe("observerReducer", () => {
         schema_version: 2,
         run,
         events: [],
-        worklist: {
-          ...currentWorklist,
-          snapshot: { revision: 5, active_item_id: "WI-005", items: [] },
-        },
+        todo: { ...currentTodo, revision: 5 },
         latest_cursor: 13,
       },
     });
 
     expect(hydrated.latestCursor).toBe(13);
-    expect(hydrated.worklist).toBe(currentWorklist);
+    expect(hydrated.todo).toBe(currentTodo);
   });
 
-  it("advances the cursor without accepting an older Worklist revision", () => {
-    const currentWorklist = {
-      operation_key: "POST /projects",
-      snapshot: {
-        revision: 6,
-        active_item_id: "WI-006",
-        items: [],
-      },
-      failure_messages: {},
-      decided_count: 0,
+  it("advances the cursor without accepting an older Todo revision", () => {
+    const currentTodo = {
+      revision: 6,
+      agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
+      explanation: null,
+      items: [],
+      completed_count: 0,
       total_count: 0,
+      active_step: null,
       percent: 0,
     };
     let state: ObserverState = {
       ...initialObserverState,
-      worklist: currentWorklist,
+      todo: currentTodo,
       latestCursor: 12,
     };
 
     state = observerReducer(state, {
       type: "stream",
-      eventType: "worklist.replace",
-      data: {
-        ...currentWorklist,
-        snapshot: { revision: 5, active_item_id: "WI-005", items: [] },
-      },
+      eventType: "todo.replace",
+      data: { ...currentTodo, revision: 5 },
       cursor: 13,
     });
 
     expect(state.latestCursor).toBe(13);
-    expect(state.worklist?.snapshot).toMatchObject({
+    expect(state.todo).toMatchObject({
       revision: 6,
-      active_item_id: "WI-006",
     });
   });
 
@@ -160,7 +145,7 @@ describe("observerReducer", () => {
         schema_version: 2,
         run: null,
         events: [later, earlier],
-        worklist: null,
+        todo: null,
         latest_cursor: 3,
       },
     });
@@ -177,17 +162,19 @@ describe("observerReducer", () => {
     expect(state.latestCursor).toBe(4);
   });
 
-  it("clears prior events and worklist when a new run reset arrives", () => {
+  it("clears prior events and Todo when a new run reset arrives", () => {
     const populated = {
       ...initialObserverState,
       eventById: { old: makeEvent({ event_id: "old" }) },
       eventIds: ["old"],
-      worklist: {
-        operation_key: "POST /projects",
-        snapshot: { revision: 1, active_item_id: null, items: [] },
-        failure_messages: {},
-        decided_count: 0,
+      todo: {
+        revision: 1,
+        agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
+        explanation: null,
+        items: [],
+        completed_count: 0,
         total_count: 0,
+        active_step: null,
         percent: 0,
       },
     };
@@ -209,6 +196,6 @@ describe("observerReducer", () => {
 
     expect(state.run).toEqual(run);
     expect(state.eventIds).toEqual([]);
-    expect(state.worklist).toBeNull();
+    expect(state.todo).toBeNull();
   });
 });

@@ -203,35 +203,35 @@ not available. After App construction, `app.ui_url` is the actual page URL or
 an occupied port, a disconnected viewer, or observation errors do not change a
 test result.
 
-The page shows a read-only Agent-session canvas built from only three semantic
-event types: `Agent`, `Tool`, and `Smoke Batch`. Every runtime Agent session is
-one node whose message cards remain in chronological System, User/Harness,
-Assistant, and Tool-result order. Tool edges start at the exact Assistant
-message that requested them; Tool and Smoke Batch executions remain separate
-nodes. Clicking a message, Tool, or Batch expands its complete details
-vertically inside that same node—there is no separate detail page or overlay.
-Each collapsed Agent message shows at most 160 Unicode characters. Expanding it
-replaces that summary with only the complete selected message and its own Tool
-call metadata; it does not repeat the whole turn, Prompt, or model response.
-The expanded content remains inside the same role-colored message surface, and
-long bodies scroll within a fixed-height region. Tool and Batch details follow
-the same continuous-card pattern instead of adding a second bordered panel. A
-Tool expansion contains its complete executed Input and ToolResult. The
-`restscope.http.request` Tool also contains its final prepared Request and real
-Response or transport error.
+The page shows a read-only Codex-style document conversation for the one generic
+Agent explicitly marked `lifecycle=main`. A transitional run without that
+identity shows “此运行未启动 Main Agent”; legacy workflow Agents are never
+silently promoted. The conversation has no profile or message-type heading and
+uses the complete page width. Incremental System, Developer, User, and ordinary
+Assistant text is rendered directly as prose without `User Task`, `Commentary`,
+or `Final Answer` annotations.
 
-Ordinary generated HTTP calls do not appear as separate cards. One Smoke Batch
-card contains every Test Case in an expandable table, including final URL,
-headers, query, body, response or transport error, duration, byte size, and
-truncation state. The latest Worklist remains in the fixed sidebar; its history
-is visible through `failure_resolution.write_worklist` Tool cards. Each
-Worklist item has a stable session identity (`WI-001`, `WI-002`, and so on),
-shows the exact Failure message behind every E evidence reference, and separates
-TC Test Cases, suspected parameters, and P Patch candidates into readable
-sections. The sidebar also identifies the operation that owns the latest
-successful Worklist write. Search, semantic filters, node/message collapse,
-copying, theme switching, canvas zoom/pan, and auto-follow are viewer-only; the
-service exposes no mutation route.
+Provider Reasoning appears immediately before its response, expanded by default
+as muted synthetic-oblique text on the same left edge as ordinary prose. It has
+no icon, title, chevron, or copy action: clicking the text collapses it to an
+ellipsis, which can be clicked to reopen the complete already-redacted value.
+Assistant Tool Call messages and Tool Result messages are not repeated as prose.
+Ordinary Tools appear as compact no-chevron rows that are collapsed by default
+and open their complete detail in place. Subagent lifecycle calls are aggregated
+by child session and display the child Profile name instead of protocol names;
+clicking opens the child's same-style conversation in a focus-trapped Drawer
+with navigation through at most three levels. Smoke Batches and other run
+notifications remain in schema-v2 but do not enter the conversation.
+
+The floating page state is Todo, sourced only from a successful `plan.update`
+owned by the explicit Main Agent. It shows completed/total counts, explanation,
+and every generic Plan step in a focus-trapped right Drawer. The in-progress
+item is evident from its row status and is not repeated in a “当前” summary.
+Failure Resolution's domain-specific Worklist is never promoted to Todo; its
+read/write calls remain ordinary collapsed Tool detail. Historical Todo state
+is labeled read only. Search, status filtering, detail expansion, copying,
+theme switching, and auto-follow are viewer-only; the service exposes no
+mutation route.
 
 Observer data lives only in the RESTScope process and browser memory. A new run
 replaces the previous run, and App shutdown clears it. Details are deliberately
@@ -244,7 +244,7 @@ page as a developer diagnostic surface, not a credential boundary.
 Stopping a Run and closing the App are separate lifecycle events. A
 `KeyboardInterrupt` such as Ctrl-C ends the current Run with status `stopped`
 and re-raises to the caller, but the App, UI server, complete event snapshot,
-and latest Worklist remain available. Catch the interrupt inside the App
+and latest Todo remain available. Catch the interrupt inside the App
 lifetime when a local runner should keep the observer open:
 
 ```python

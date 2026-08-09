@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_FILTERS, eventMatches } from "../presentation";
 import { makeEvent } from "./fixtures";
 
-describe("semantic canvas filtering", () => {
+describe("semantic conversation filtering", () => {
   const tool = makeEvent({
     event_id: "tool",
     kind: "tool_call",
@@ -24,8 +24,7 @@ describe("semantic canvas filtering", () => {
     },
   });
 
-  it("filters by Agent, family, semantic kind, status, and detail search", () => {
-    expect(eventMatches(tool, { ...EMPTY_FILTERS, agents: ["FailureResolutionAgent.resolve"] })).toBe(true);
+  it("filters by family, semantic kind, status, and detail search", () => {
     expect(eventMatches(tool, { ...EMPTY_FILTERS, toolFamilies: ["openapi"] })).toBe(false);
     expect(eventMatches(batch, { ...EMPTY_FILTERS, search: "state=active" })).toBe(true);
     expect(eventMatches(batch, { ...EMPTY_FILTERS, kinds: ["smoke_batch"] })).toBe(true);

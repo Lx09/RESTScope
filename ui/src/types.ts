@@ -8,6 +8,9 @@ export interface AgentIdentity {
   session_id: string;
   parent_session_id?: string | null;
   name: string;
+  lifecycle?: "main" | "subagent";
+  profile_name?: string;
+  task_id?: string;
   path: string[];
 }
 
@@ -40,30 +43,19 @@ export interface RunState {
   result: unknown;
 }
 
-export interface WorklistItem {
-  item_id: string;
-  source_failure_refs: string[];
-  test_case_refs: string[];
-  suspected_parameters: string[];
-  progress?: string | null;
-  root_cause?: string | null;
-  candidate_refs?: string[];
-  decision?: unknown;
-  [key: string]: unknown;
+export interface TodoItem {
+  step: string;
+  status: "pending" | "in_progress" | "completed";
 }
 
-export interface WorklistSnapshot {
+export interface TodoState {
   revision: number;
-  active_item_id: string | null;
-  items: WorklistItem[];
-}
-
-export interface WorklistState {
-  operation_key: string | null;
-  snapshot: WorklistSnapshot;
-  failure_messages: Record<string, string>;
-  decided_count: number;
+  agent: AgentIdentity;
+  explanation: string | null;
+  items: TodoItem[];
+  completed_count: number;
   total_count: number;
+  active_step: string | null;
   percent: number;
 }
 
@@ -71,7 +63,7 @@ export interface ObserverSnapshot {
   schema_version: 2;
   run: RunState | null;
   events: TimelineEvent[];
-  worklist: WorklistState | null;
+  todo: TodoState | null;
   latest_cursor: number;
 }
 
@@ -79,7 +71,7 @@ export interface ObserverState {
   run: RunState | null;
   eventById: Record<string, TimelineEvent>;
   eventIds: string[];
-  worklist: WorklistState | null;
+  todo: TodoState | null;
   latestCursor: number;
 }
 
@@ -87,13 +79,12 @@ export type StreamEventType =
   | "run.reset"
   | "run.update"
   | "timeline.upsert"
-  | "worklist.replace";
+  | "todo.replace";
 
 export type StreamStatus = "connecting" | "live" | "reconnecting" | "closed";
 
 export interface TimelineFilters {
   search: string;
-  agents: string[];
   kinds: EventKind[];
   toolFamilies: string[];
   statuses: EventStatus[];

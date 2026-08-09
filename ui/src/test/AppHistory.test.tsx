@@ -26,16 +26,6 @@ vi.mock("../stream", () => ({
   }),
 }));
 
-vi.mock("../components/EventCanvas", () => ({
-  EventCanvas: ({ runId, latestCursor }: { runId: string | null; latestCursor: number }) => (
-    <div data-testid="event-canvas">{runId ?? "no-run"}:{latestCursor}</div>
-  ),
-}));
-
-vi.mock("../components/WorklistPanel", () => ({
-  WorklistPanel: () => <aside data-testid="worklist" />,
-}));
-
 function snapshot(runId: string, cursor: number): ObserverSnapshot {
   return {
     schema_version: 2,
@@ -47,8 +37,28 @@ function snapshot(runId: string, cursor: number): ObserverSnapshot {
       request: {},
       result: null,
     },
-    events: [makeEvent({ event_id: `${runId}-event`, run_id: runId, order: cursor })],
-    worklist: null,
+    events: [makeEvent({
+      event_id: `${runId}-event`,
+      run_id: runId,
+      order: cursor,
+      name: `${runId}-main`,
+      agent: {
+        session_id: `${runId}-session`,
+        parent_session_id: null,
+        name: `${runId}-main`,
+        profile_name: `${runId}-main`,
+        lifecycle: "main",
+        task_id: `${runId}-task`,
+        path: [`${runId}-main`],
+      },
+      detail: {
+        task: { task_id: `${runId}-task`, objective: `Observe ${runId}` },
+        input: { messages: [] },
+        output: { content: `Response for ${runId}` },
+        phase: "final_answer",
+      },
+    })],
+    todo: null,
     latest_cursor: cursor,
   };
 }
@@ -71,7 +81,8 @@ describe("ObserverApp browser history lifecycle", () => {
     render(<StrictMode><ObserverApp /></StrictMode>);
 
     expect(await screen.findByText("本地历史")).toBeVisible();
-    expect(screen.getByTestId("event-canvas")).toHaveTextContent("cached-run:7");
+    expect(screen.getByTestId("conversation-surface")).toHaveAttribute("data-run-id", "cached-run");
+    expect(screen.getByTestId("conversation-surface")).toHaveAttribute("data-cursor", "7");
     expect(screen.getAllByText("历史快照 / 可能已中断").length).toBeGreaterThan(0);
   });
 
@@ -83,7 +94,7 @@ describe("ObserverApp browser history lifecycle", () => {
 
     render(<StrictMode><ObserverApp /></StrictMode>);
 
-    await waitFor(() => expect(screen.getByTestId("event-canvas")).toHaveTextContent("live-run:12"));
+    await waitFor(() => expect(screen.getByTestId("conversation-surface")).toHaveAttribute("data-run-id", "live-run"));
     expect(screen.queryByText("本地历史")).not.toBeInTheDocument();
     const selector = screen.getByRole("combobox", { name: "选择实时或历史运行" });
     expect(selector).toBeEnabled();
@@ -101,7 +112,7 @@ describe("ObserverApp browser history lifecycle", () => {
     const selector = screen.getByRole("combobox", { name: "选择实时或历史运行" });
     await userEvent.click(selector);
     await userEvent.click(await screen.findByText(/cached-run/));
-    await waitFor(() => expect(screen.getByTestId("event-canvas")).toHaveTextContent("cached-run:7"));
+    await waitFor(() => expect(screen.getByTestId("conversation-surface")).toHaveAttribute("data-run-id", "cached-run"));
 
     act(() => {
       streamFixture.dispatch?.({
@@ -112,8 +123,8 @@ describe("ObserverApp browser history lifecycle", () => {
       });
     });
 
-    expect(screen.getByTestId("event-canvas")).toHaveTextContent("cached-run:7");
+    expect(screen.getByTestId("conversation-surface")).toHaveAttribute("data-run-id", "cached-run");
     await userEvent.click(screen.getByRole("button", { name: "返回实时" }));
-    expect(screen.getByTestId("event-canvas")).toHaveTextContent("new-live-run:13");
+    expect(screen.getByText("此运行未启动 Main Agent")).toBeVisible();
   });
 });

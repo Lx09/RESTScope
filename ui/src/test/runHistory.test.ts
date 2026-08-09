@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   RUN_HISTORY_DATABASE_NAME,
+  RUN_HISTORY_DATABASE_VERSION,
   RunHistoryStore,
   RunHistoryWriter,
   observerSnapshotToState,
@@ -36,16 +37,19 @@ function makeSnapshot(runId: string, cursor = 1): ObserverSnapshot {
       run_id: runId,
       order: cursor,
       operation_key: "POST /api/v4/projects",
-      detail: { output: { tool_result: { token: "tool-secret" } } },
+      detail: {
+        reasoning: "complete already-redacted reasoning",
+        output: { tool_result: { token: "tool-secret" } },
+      },
     })],
-    worklist: null,
+    todo: null,
     latest_cursor: cursor,
   };
 }
 
 async function putInvalidRecord(factory: IDBFactory): Promise<void> {
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = factory.open(RUN_HISTORY_DATABASE_NAME, 1);
+    const request = factory.open(RUN_HISTORY_DATABASE_NAME, RUN_HISTORY_DATABASE_VERSION);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
   });
@@ -68,6 +72,35 @@ afterEach(() => {
 });
 
 describe("RunHistoryStore", () => {
+  it("clears every canvas-era v1 record during the v2 database upgrade", async () => {
+    const factory = new FakeIDBFactory();
+    const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = factory.open(RUN_HISTORY_DATABASE_NAME, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("runs", { keyPath: "run_id" });
+      };
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = legacyDatabase.transaction("runs", "readwrite");
+      transaction.objectStore("runs").put({
+        storage_schema_version: 1,
+        run_id: "canvas-run",
+        saved_at: "2026-08-07T00:00:00.000Z",
+        snapshot: makeSnapshot("canvas-run"),
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    legacyDatabase.close();
+
+    const store = new RunHistoryStore(factory);
+
+    expect((await store.list()).summaries).toEqual([]);
+    store.close();
+  });
+
   it("restores the complete observer snapshot without removing sensitive fields", async () => {
     const factory = new FakeIDBFactory();
     const store = new RunHistoryStore(factory, () => new Date("2026-08-07T01:02:03.000Z"));
@@ -94,6 +127,7 @@ describe("RunHistoryStore", () => {
       prompt: ["system prompt", "user prompt"],
     }));
     expect(loaded.record?.snapshot.events[0].detail).toEqual({
+      reasoning: "complete already-redacted reasoning",
       output: { tool_result: { token: "tool-secret" } },
     });
     store.close();

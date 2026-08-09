@@ -31,7 +31,7 @@ class _SnapshotObserver:
             "run": {"run_id": "run-1", "status": "running"},
             "events": [],
             "latest_cursor": 7,
-            "worklist": None,
+            "todo": None,
         }
 
 

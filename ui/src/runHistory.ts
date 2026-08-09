@@ -11,14 +11,14 @@ import type {
   ObserverSnapshot,
   ObserverState,
   TimelineEvent,
-  WorklistState,
+  TodoState,
 } from "./types";
 
 export const RUN_HISTORY_DATABASE_NAME = "restscope-live-observer";
-const RUN_HISTORY_DATABASE_VERSION = 1;
+export const RUN_HISTORY_DATABASE_VERSION = 2;
 const RUN_HISTORY_STORE_NAME = "runs";
 const RUN_HISTORY_INDEX_NAME = "saved_at";
-const RUN_HISTORY_RECORD_VERSION = 1;
+const RUN_HISTORY_RECORD_VERSION = 2;
 const MAX_SAVED_RUNS = 5;
 
 export type HistoryViewMode = "auto" | "live" | "history";
@@ -27,7 +27,7 @@ export type RunHistoryStorageStatus = "loading" | "ready" | "saving" | "saved" |
 
 /** A complete browser-local record for one observer Run. */
 export interface StoredRunRecord {
-  storage_schema_version: 1;
+  storage_schema_version: 2;
   run_id: string;
   saved_at: string;
   snapshot: ObserverSnapshot;
@@ -114,16 +114,16 @@ function isTimelineEvent(value: unknown): value is TimelineEvent {
   );
 }
 
-function isWorklist(value: unknown): value is WorklistState | null {
+function isTodo(value: unknown): value is TodoState | null {
   if (value === null) return true;
-  if (!isObject(value) || !isObject(value.snapshot)) return false;
-  return typeof value.snapshot.revision === "number" && Array.isArray(value.snapshot.items);
+  if (!isObject(value)) return false;
+  return typeof value.revision === "number" && Array.isArray(value.items);
 }
 
 function isObserverSnapshot(value: unknown): value is ObserverSnapshot {
   if (!isObject(value) || value.schema_version !== 2) return false;
   if (!Array.isArray(value.events) || !value.events.every(isTimelineEvent)) return false;
-  if (typeof value.latest_cursor !== "number" || !isWorklist(value.worklist)) return false;
+  if (typeof value.latest_cursor !== "number" || !isTodo(value.todo)) return false;
   if (value.run === null) return true;
   return (
     isObject(value.run)
@@ -157,7 +157,7 @@ function summaryFor(record: StoredRunRecord): RunHistorySummary {
     savedAt: record.saved_at,
     startedAt: record.snapshot.run?.started_at ?? record.saved_at,
     status: record.snapshot.run?.status ?? "unknown",
-    operationKey: record.snapshot.worklist?.operation_key ?? operationEvent?.operation_key ?? null,
+    operationKey: operationEvent?.operation_key ?? null,
     eventCount: record.snapshot.events.length,
   };
 }
@@ -177,12 +177,12 @@ export function observerStateToSnapshot(state: ObserverState): ObserverSnapshot 
     schema_version: 2,
     run: state.run,
     events: state.eventIds.map((eventId) => state.eventById[eventId]),
-    worklist: state.worklist,
+    todo: state.todo,
     latest_cursor: state.latestCursor,
   };
 }
 
-/** Normalize a validated saved snapshot for the existing canvas and sidebar. */
+/** Normalize a validated saved snapshot for the conversation and Drawers. */
 export function observerSnapshotToState(snapshot: ObserverSnapshot): ObserverState {
   const eventById = Object.fromEntries(snapshot.events.map((event) => [event.event_id, event]));
   const eventIds = Object.values(eventById)
@@ -192,7 +192,7 @@ export function observerSnapshotToState(snapshot: ObserverSnapshot): ObserverSta
     run: snapshot.run,
     eventById,
     eventIds,
-    worklist: snapshot.worklist,
+    todo: snapshot.todo,
     latestCursor: snapshot.latest_cursor,
   };
 }
@@ -248,11 +248,16 @@ export class RunHistoryStore implements RunHistoryPersistence {
     if (this.databasePromise !== null) return this.databasePromise;
     this.databasePromise = new Promise((resolve, reject) => {
       const request = this.factory.open(RUN_HISTORY_DATABASE_NAME, RUN_HISTORY_DATABASE_VERSION);
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const database = request.result;
         if (!database.objectStoreNames.contains(RUN_HISTORY_STORE_NAME)) {
           const store = database.createObjectStore(RUN_HISTORY_STORE_NAME, { keyPath: "run_id" });
           store.createIndex(RUN_HISTORY_INDEX_NAME, "saved_at");
+        } else if (event.oldVersion < 2) {
+          // Canvas-era records do not have the explicit Main/Subagent
+          // conversation contract. The approved v2 migration clears them in
+          // the upgrade transaction instead of presenting ambiguous history.
+          request.transaction?.objectStore(RUN_HISTORY_STORE_NAME).clear();
         }
       };
       request.onsuccess = () => {

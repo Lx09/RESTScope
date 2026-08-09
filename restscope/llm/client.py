@@ -80,6 +80,14 @@ class LLMClient:
                 span.mark_error(str(exc))
                 unavailable_error = exc
             else:
+                # Raw Provider reasoning is intentionally sent only to the
+                # browser observer. It is excluded from Phoenix attributes and
+                # from the Agent's provider-neutral continuation messages.
+                if response.reasoning_content:
+                    span.set_live_detail(
+                        "reasoning",
+                        response.reasoning_content,
+                    )
                 trace_tool_calls = [
                     {
                         "id": tool_call.id,

@@ -57,6 +57,7 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
                 provider=self.name,
                 model=request.model,
                 content="done",
+                reasoning_content=reasoning,
                 parsed_json={"ok": True},
                 tool_calls=[
                     ToolCall(

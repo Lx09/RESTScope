@@ -89,10 +89,14 @@ as the active project direction.
 - The user has also approved a browser-only Live Observer recovery boundary.
   The loopback React page may keep the latest five complete schema-v2 snapshots
   in same-origin IndexedDB. Those snapshots contain exactly the already-redacted
-  UI payload, including visible target credentials, Agent prompts, Tool results,
-  HTTP exchanges, Smoke Batches, and the latest Worklist. This is local testing
-  history, not backend evidence or App recovery: no workflow reads it, no API or
-  SQLite schema exposes it, and clearing browser site data deletes it.
+  UI payload, including raw Provider Reasoning, visible target credentials,
+  Agent prompts, Tool results, HTTP exchanges, Smoke Batches, Subagent
+  relationships, and the latest Main Agent Plan projected as Todo. Failure
+  Resolution's private Worklist is retained only inside ordinary Tool detail,
+  not as page-level state. This is local testing history, not
+  backend evidence or App recovery: no workflow reads it, no API, Phoenix span,
+  or SQLite schema exposes the Reasoning, and clearing browser site data deletes
+  the complete history.
 - Earlier database-backed Planner and catalog documents remain historical
   evidence only where later task records mark them as superseded.
 

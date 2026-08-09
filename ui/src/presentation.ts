@@ -1,10 +1,9 @@
-/** Search and redundant visual metadata for schema-v2 canvas events. */
+/** Search and redundant visual metadata for schema-v2 conversation events. */
 
 import type { EventStatus, TimelineEvent, TimelineFilters } from "./types";
 
 export const EMPTY_FILTERS: TimelineFilters = {
   search: "",
-  agents: [],
   kinds: [],
   toolFamilies: [],
   statuses: [],
@@ -32,6 +31,7 @@ export const ROLE_LABELS: Record<string, string> = {
 
 export const TOOL_FAMILY_LABELS: Record<string, string> = {
   worklist: "Worklist",
+  plan: "Plan",
   openapi: "OpenAPI",
   test_case: "Test Case",
   parameter_patch: "Parameter Memory / Patch",
@@ -65,7 +65,6 @@ function searchableText(event: TimelineEvent): string {
 export function eventMatches(event: TimelineEvent, filters: TimelineFilters): boolean {
   const search = filters.search.trim().toLocaleLowerCase();
   if (search && !searchableText(event).includes(search)) return false;
-  if (filters.agents.length && !filters.agents.includes(event.agent?.name ?? "")) return false;
   if (filters.kinds.length && !filters.kinds.includes(event.kind)) return false;
   const family = toolFamily(event);
   if (

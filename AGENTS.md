@@ -155,11 +155,14 @@ explicit project decision:
 - The Live Observer browser history is a third narrow exception approved only
   for local UI testing and recovery. The React page may persist the latest five
   complete schema-v2 snapshots in same-origin IndexedDB, including the
-  already-redacted Agent messages, target Authorization/Cookie values, Tool
-  details, HTTP exchanges, Smoke Batches, and Worklist projection delivered to
-  that browser. It must not add a backend write API, SQLite record, cross-origin
-  sync, or runtime input. Clearing browser site data removes this history; the
-  App and workflows never read it, so it cannot resume or influence a test.
+  already-redacted raw Provider Reasoning, Agent messages, target
+  Authorization/Cookie values, Tool details, HTTP exchanges, Smoke Batches,
+  Subagent relationships, and the Main Agent's generic Plan projection as Todo
+  delivered to that browser. Failure Resolution's private Worklist remains
+  ordinary Tool detail and is not promoted into floating page state.
+  It must not add a backend write API, SQLite record, cross-origin sync, or
+  runtime input. Clearing browser site data removes this history; the App and
+  workflows never read it, so it cannot resume or influence a test.
 - Failure Resolution's current-operation HTTP Probe is an operation-scoped view of
   the global `restscope.http.request` tool. It remains available for every
   supported method, including POST, PUT, PATCH, and DELETE. The Probe must use

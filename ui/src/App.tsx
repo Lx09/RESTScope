@@ -1,4 +1,4 @@
-/** Assemble the fixed run header, Agent session canvas, and Worklist sidebar. */
+/** Assemble run controls, the Main Agent conversation, and auxiliary Drawers. */
 
 import {
   BugOutlined,
@@ -10,7 +10,11 @@ import {
 import {
   Alert,
   Badge,
+  Breadcrumb,
+  Button,
   ConfigProvider,
+  Drawer,
+  Empty,
   Flex,
   Input,
   Select,
@@ -19,14 +23,13 @@ import {
 } from "antd";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { EventCanvas } from "./components/EventCanvas";
+import { ConversationView } from "./components/ConversationView";
+import { FloatingTodo } from "./components/FloatingTodo";
 import { RunHistoryBar } from "./components/RunHistoryBar";
-import { WorklistPanel } from "./components/WorklistPanel";
+import { projectConversation, projectMainConversation } from "./conversationProjector";
 import {
   EMPTY_FILTERS,
-  KIND_LABELS,
   STATUS_LABELS,
-  TOOL_FAMILY_LABELS,
 } from "./presentation";
 import {
   RunHistoryStore,
@@ -43,7 +46,7 @@ import { initialObserverState, observerReducer } from "./state";
 import { connectLiveRun, type LiveConnection } from "./stream";
 import { observerTheme, type ThemeMode } from "./theme";
 import type {
-  EventKind,
+  AgentIdentity,
   EventStatus,
   ObserverSnapshot,
   StreamStatus,
@@ -88,6 +91,7 @@ export default function ObserverApp() {
   const [historyMode, setHistoryMode] = useState<HistoryViewMode>("auto");
   const [filters, setFilters] = useState<TimelineFilters>(EMPTY_FILTERS);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
+  const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
   const [, refreshElapsed] = useState(0);
   const historyStore = useRef<RunHistoryStore | null>(null);
   const historyWriter = useRef<RunHistoryWriter | null>(null);
@@ -237,12 +241,39 @@ export default function ObserverApp() {
     [state.eventById, state.eventIds],
   );
 
-  const agentOptions = useMemo(
-    () => [...new Set(allEvents.map((event) => event.agent?.name).filter(Boolean) as string[])]
-      .sort()
-      .map((value) => ({ label: value, value })),
-    [allEvents],
+  const conversation = useMemo(
+    () => projectMainConversation(allEvents, filters),
+    [allEvents, filters],
   );
+  const selectedSubagent = selectedSubagentId
+    ? conversation.sessionAgents[selectedSubagentId] ?? null
+    : null;
+  const subagentItems = useMemo(
+    () => selectedSubagentId
+      ? projectConversation(allEvents, selectedSubagentId, filters)
+      : [],
+    [allEvents, filters, selectedSubagentId],
+  );
+
+  useEffect(() => {
+    if (selectedSubagentId && !conversation.sessionAgents[selectedSubagentId]) {
+      setSelectedSubagentId(null);
+    }
+  }, [conversation.sessionAgents, selectedSubagentId]);
+
+  const subagentBreadcrumb = useMemo(() => {
+    if (!selectedSubagent) return [];
+    const agents = conversation.sessionAgents;
+    const path: AgentIdentity[] = [];
+    let current: AgentIdentity | undefined = selectedSubagent;
+    for (let depth = 0; current?.lifecycle === "subagent" && depth < 3; depth += 1) {
+      path.unshift(current);
+      const parentId: string | null | undefined = current.parent_session_id;
+      const parent: AgentIdentity | undefined = parentId ? agents[parentId] : undefined;
+      current = parent?.lifecycle === "subagent" ? parent : undefined;
+    }
+    return path;
+  }, [conversation.sessionAgents, selectedSubagent]);
   const runningEvents = allEvents.filter((event) => event.status === "running");
   const currentScopedEvent = [...runningEvents, ...allEvents].reverse().find((event) => event.operation_key);
   const failedCount = allEvents.filter((event) => event.status === "failed").length;
@@ -387,43 +418,13 @@ export default function ObserverApp() {
           onClear={() => { void clearHistory(); }}
         />
 
-        <section className="filter-bar" aria-label="画布筛选">
+        <section className="filter-bar" aria-label="会话筛选">
           <Input
             allowClear
             prefix={<SearchOutlined />}
-            placeholder="搜索 Agent、operation、工具输入输出或测试用例"
+            placeholder="搜索 Prompt、Reasoning 或 Response"
             value={filters.search}
             onChange={(event) => updateFilter("search", event.target.value)}
-          />
-          <Select
-            aria-label="按 Agent 筛选"
-            allowClear
-            mode="multiple"
-            maxTagCount="responsive"
-            options={agentOptions}
-            placeholder="Agent"
-            value={filters.agents}
-            onChange={(value) => updateFilter("agents", value)}
-          />
-          <Select
-            aria-label="按事件类型筛选"
-            allowClear
-            mode="multiple"
-            maxTagCount="responsive"
-            options={Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))}
-            placeholder="事件类型"
-            value={filters.kinds}
-            onChange={(value) => updateFilter("kinds", value as EventKind[])}
-          />
-          <Select
-            aria-label="按工具家族筛选"
-            allowClear
-            mode="multiple"
-            maxTagCount="responsive"
-            options={Object.entries(TOOL_FAMILY_LABELS).map(([value, label]) => ({ value, label }))}
-            placeholder="工具家族"
-            value={filters.toolFamilies}
-            onChange={(value) => updateFilter("toolFamilies", value)}
           />
           <Select
             aria-label="按状态筛选"
@@ -459,15 +460,82 @@ export default function ObserverApp() {
         )}
 
         <main className="observer-main">
-          <EventCanvas
-            events={allEvents}
-            filters={filters}
-            latestCursor={state.latestCursor}
-            runId={state.run?.run_id ?? null}
-            themeMode={themeMode}
-          />
-          <WorklistPanel worklist={state.worklist} />
+          <section
+            aria-label="Main Agent 会话"
+            className="conversation-region"
+            data-cursor={state.latestCursor}
+            data-run-id={state.run?.run_id ?? ""}
+            data-testid="conversation-surface"
+          >
+            {conversation.mainAgent ? (
+              <ConversationView
+                items={conversation.items}
+                onOpenSubagent={setSelectedSubagentId}
+              />
+            ) : (
+              <Empty
+                className="main-agent-empty"
+                description="此运行未启动 Main Agent"
+              >
+                <Text type="secondary">
+                  旧 Agent 运行不会被冒充为 Main Agent；会话将在 lifecycle=main 出现后展示。
+                </Text>
+              </Empty>
+            )}
+          </section>
         </main>
+
+        <FloatingTodo
+          historical={selectedView.source === "history"}
+          todo={state.todo}
+        />
+
+        <Drawer
+          className="subagent-drawer"
+          focusable={{ trap: true, focusTriggerAfterClose: true }}
+          onClose={() => setSelectedSubagentId(null)}
+          open={selectedSubagent !== null}
+          placement="right"
+          title={(
+            <Flex align="center" gap={8} wrap>
+              {selectedSubagent?.parent_session_id
+                && conversation.sessionAgents[selectedSubagent.parent_session_id]?.lifecycle
+                  === "subagent" && (
+                <Button
+                  onClick={() => setSelectedSubagentId(selectedSubagent.parent_session_id ?? null)}
+                  size="small"
+                  type="text"
+                >
+                  返回
+                </Button>
+              )}
+              <Breadcrumb
+                items={subagentBreadcrumb.map((agent) => ({
+                  title: agent.session_id === selectedSubagentId
+                    ? agent.profile_name ?? agent.name
+                    : (
+                      <button
+                        className="breadcrumb-button"
+                        onClick={() => setSelectedSubagentId(agent.session_id)}
+                        type="button"
+                      >
+                        {agent.profile_name ?? agent.name}
+                      </button>
+                    ),
+                }))}
+              />
+            </Flex>
+          )}
+          size={720}
+        >
+          {selectedSubagent && (
+            <ConversationView
+              emptyDescription="此 Subagent 尚无会话内容"
+              items={subagentItems}
+              onOpenSubagent={setSelectedSubagentId}
+            />
+          )}
+        </Drawer>
       </div>
     </ConfigProvider>
   );

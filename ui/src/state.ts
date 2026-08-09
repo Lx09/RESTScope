@@ -6,7 +6,7 @@ import type {
   RunState,
   StreamEventType,
   TimelineEvent,
-  WorklistState,
+  TodoState,
 } from "./types";
 
 export type ObserverAction =
@@ -17,7 +17,7 @@ export const initialObserverState: ObserverState = {
   run: null,
   eventById: {},
   eventIds: [],
-  worklist: null,
+  todo: null,
   latestCursor: 0,
 };
 
@@ -43,19 +43,19 @@ export function observerReducer(state: ObserverState, action: ObserverAction): O
     // must never replace state already hydrated from a newer observer cursor.
     if (action.snapshot.latest_cursor < state.latestCursor) return state;
     const sameRun = state.run?.run_id === action.snapshot.run?.run_id;
-    const snapshotWorklist = action.snapshot.worklist;
-    const keepCurrentWorklist = (
+    const snapshotTodo = action.snapshot.todo;
+    const keepCurrentTodo = (
       sameRun
-      && state.worklist !== null
+      && state.todo !== null
       && (
-        snapshotWorklist === null
-        || snapshotWorklist.snapshot.revision <= state.worklist.snapshot.revision
+        snapshotTodo === null
+        || snapshotTodo.revision <= state.todo.revision
       )
     );
     return {
       run: action.snapshot.run,
       ...replaceEvents(action.snapshot.events),
-      worklist: keepCurrentWorklist ? state.worklist : snapshotWorklist,
+      todo: keepCurrentTodo ? state.todo : snapshotTodo,
       latestCursor: action.snapshot.latest_cursor,
     };
   }
@@ -74,17 +74,17 @@ export function observerReducer(state: ObserverState, action: ObserverAction): O
   if (action.eventType === "run.update") {
     return { ...state, run: action.data as RunState, latestCursor };
   }
-  if (action.eventType === "worklist.replace") {
-    const nextWorklist = action.data as WorklistState;
-    // The cursor can advance while an older Worklist payload is replayed. Keep
-    // the latest successful revision, including its authoritative active item.
+  if (action.eventType === "todo.replace") {
+    const nextTodo = action.data as TodoState;
+    // The cursor can advance while an older Todo payload is replayed. Keep the
+    // latest successful Main Agent Plan projection.
     if (
-      state.worklist !== null
-      && nextWorklist.snapshot.revision <= state.worklist.snapshot.revision
+      state.todo !== null
+      && nextTodo.revision <= state.todo.revision
     ) {
       return { ...state, latestCursor };
     }
-    return { ...state, worklist: nextWorklist, latestCursor };
+    return { ...state, todo: nextTodo, latestCursor };
   }
 
   const event = action.data as TimelineEvent;

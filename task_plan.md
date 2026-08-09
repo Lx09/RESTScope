@@ -1,12 +1,24 @@
-# Task Plan: Profile Agent Prompt Session
+# Task Plan: RESTScope Evolution
 
 ## Goal
-Deepen the generic Profile-started Agent into a private Prompt Session that owns stable role assembly, on-demand Skill instructions, incremental bounded Context, Tool/output protocol budget, and compaction prompts without changing migrated domain Agents.
+Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 18 complete; implementation is verified and local Git delivery is authorized
+Phase 19 implementation and desktop browser verification complete; exact 375 px viewport confirmation remains pending
 
 ## Phases
+
+### Phase 19: Codex-style Main Agent conversation observer
+- [x] Confirm the evolving conversation, Reasoning, Tool/Subagent expansion, floating Todo, history migration, and Git boundaries
+- [x] Create `codex/conversation-observer-ui` in a dedicated worktree
+- [x] Add red Provider, LLM, Observer, conversation-model, component, and history-migration tests
+- [x] Implement Reasoning projection and generic Main/Subagent observation
+- [x] Replace G6 with the full-width virtualized prompt/response document, collapsed Tool/Subagent rows, and floating Todo
+- [x] Update governance, task records, README, code-reading guide, and deterministic static assets
+- [x] Run focused and full tests, lint, Ant Design lint, and production build
+- [x] Complete refreshed-browser desktop visual confirmation, including alignment, Reasoning treatment, Todo, and Subagent interaction
+- [ ] Confirm the exact 375 px viewport in a browser environment that does not rescale the requested viewport
+- **Status:** implementation and desktop browser verification complete; exact 375 px confirmation remains pending
 
 ### Phase 18: Profile Agent Prompt Session
 - [x] Confirm the approved Interfaces, non-goals, and Git authorization boundary
@@ -182,9 +194,10 @@ Phase 18 complete; implementation is verified and local Git delivery is authoriz
 | Phase 17 focused tests could not resolve the not-yet-created reveal component and new geometry constants | 1 | Expected TDD red state; implement the approved shared reveal and canvas motion contracts next. |
 | Phase 17 production build rejected the test Animation double's overly broad mock types | 1 | Keep the mock behavior and type its `cancel` callback and finish event against the browser Animation contract. |
 | Browser motion sampling used `performance.now()`, which the restricted page evaluator does not expose | 1 | Remove timestamps from the sampler and inspect the already-clicked card before issuing another toggle. |
+| Ant Design CLI had no `Drawer basic` demo | 1 | Use the listed `basic-right` Drawer demo; no project file was changed. |
 | The first browser locator call targeted the tab wrapper instead of its Playwright surface | 1 | Use `observerTab.playwright.locator`; no page action occurred. |
 | Restricted page evaluation did not expose DOM `click()` or constructible `MouseEvent` objects | 1 | Use supported locator clicks and rely on the Web Animations regression for frame-level reversal behavior. |
 
 ## Notes
-- Current work occurs only in `/Users/lixin/Workplace/RESTScope-profile-agent-prompt-session` on `codex/profile-agent-prompt-session`.
-- Local commit, merge, and worktree cleanup are authorized; push remains unauthorized.
+- Current work occurs only in `/Users/lixin/Workplace/RESTScope-conversation-observer-ui` on `codex/conversation-observer-ui`.
+- Implementation is authorized. Commit, merge, push, branch deletion, and worktree cleanup remain unauthorized.

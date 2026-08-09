@@ -48,9 +48,10 @@ The core loop is:
 Most backend state used in steps 4–10 is deliberately temporary. RESTScope does
 not persist plans, Agent conversations, hypotheses, queues, Batches, Test Cases,
 or Patch samples in its database. The local observer page is a narrow testing
-exception: it may cache the latest five complete, already-redacted UI snapshots
-in that browser's same-origin IndexedDB, but the App never reads them and cannot
-recover or influence a test from them. RESTScope persists the complete current
+exception: it may cache the latest five complete, already-redacted UI
+snapshots—including raw Provider Reasoning—in that browser's same-origin
+IndexedDB, but the App never reads them and cannot recover or influence a test
+from them. RESTScope persists the complete current
 normalized OpenAPI plus change events for audit/export, current per-input
 Generators and Constraints, bounded
 Behavior Monitor evidence, stable Failures, terminal Resolution Attempts, validated
@@ -405,7 +406,7 @@ Creates Phoenix/OpenTelemetry spans and the independent current-run live event
 narrative while applying the shared exact-value Redactor. `runtime.py` is the
 business-code tracing seam; `live.py` owns current-run event ordering, updates,
 Agent-turn message deltas, Tool input/output, complete Smoke Batch Test Cases,
-and the current Worklist projection. Phoenix retains its lower-level spans;
+and the current Main Agent Plan-to-Todo projection. Phoenix retains its lower-level spans;
 the browser schema exposes only `agent_turn`, `tool_call`, and `smoke_batch`.
 Both outputs are optional and fail-open.
 
@@ -418,17 +419,19 @@ Python installations do not require Node.js at runtime. The page has no command
 or write route. Its live state comes from server memory; `runHistory.ts` may
 additionally retain the latest five complete snapshots in same-origin browser
 IndexedDB so a tester can reopen recent visual evidence. This local cache
-contains every detail visible in the UI, including target credentials, and is
-never read by the backend. `canvasModel.ts` folds
-Agent turns by session and resolves Tool edges to Assistant-message ports;
-`EventCanvas.tsx` owns the read-only G6 lifecycle. Agent messages, Tools, and
-Smoke Batches expand complete details vertically inside their owning node. A
-Smoke Batch uses one expandable table with the complete bounded Request and
-Response evidence for every generated Test Case.
-The Worklist sidebar accepts only monotonically newer successful revisions,
-resolves session-local E references to exact Failure messages, and wraps long
-parameter handles inside its fixed-width column. `WI-*` identities are issued
-and validated by the Failure Resolution worklist store, not inferred by the UI.
+contains every detail visible in the UI, including already-redacted raw Provider
+Reasoning and target credentials, and is never read by the backend.
+`conversationProjector.ts` selects only the explicit Main Agent and projects
+incremental prompt prose, default-expanded title-free Reasoning, model responses,
+collapsed Tool calls, and child-Profile Drawer entries. Tool Call and Tool
+Result messages are excluded from prose because the matching Tool row owns
+their detail. `ConversationView.tsx` owns dynamic-height virtualization and
+keeps all icons and document text on one left edge; the App owns the nested
+Subagent Drawer and three-level breadcrumb. `FloatingTodo.tsx` and
+`TodoPanel.tsx` render only the explicit Main
+Agent's latest successful generic `plan.update`; Failure Resolution Worklist
+writes remain ordinary Tool events and never replace Todo. Smoke Batches stay
+available in schema-v2 history but outside the conversation document.
 
 ### `evaluations/`
 

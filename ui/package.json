@@ -11,8 +11,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "6.3.2",
-    "@antv/g6": "5.1.1",
-    "@antv/g6-extension-react": "0.2.7",
+    "@tanstack/react-virtual": "3.14.9",
     "antd": "6.5.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",

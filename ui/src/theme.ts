@@ -1,10 +1,10 @@
-/** Share the observer's Ant Design theme with the main page and G6 React nodes. */
+/** Share the observer's Ant Design theme across conversations and Drawers. */
 
 import { theme, type ThemeConfig } from "antd";
 
 export type ThemeMode = "dark" | "light";
 
-/** Return one theme contract so React nodes look identical inside and outside G6. */
+/** Return one theme contract for every page-level and expanded detail surface. */
 export function observerTheme(mode: ThemeMode): ThemeConfig {
   return {
     algorithm: mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,

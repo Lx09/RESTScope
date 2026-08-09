@@ -9,7 +9,7 @@ const EVENT_TYPES: StreamEventType[] = [
   "run.reset",
   "run.update",
   "timeline.upsert",
-  "worklist.replace",
+  "todo.replace",
 ];
 
 export interface LiveConnection {
