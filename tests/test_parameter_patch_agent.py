@@ -354,6 +354,7 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     from restscope.operation_smoke.parameter_patch.prompts import (
         build_parameter_patch_prompt,
     )
+    from restscope.skills import PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
 
     affected = [
         "query.updated_after",
@@ -385,12 +386,15 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
         ],
     )
 
-    prompt = build_parameter_patch_prompt(
+    built_prompt = build_parameter_patch_prompt(
         task=task,
         config=_updated_at_filter_config(),
         model=_model(),
-    ).user
+    )
+    prompt = built_prompt.user
 
+    assert built_prompt.system == PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
+    assert "## Self-review a compiled candidate" not in built_prompt.system
     assert "## PATCH REQUIREMENT TO SATISFY — UNTRUSTED" in prompt
     assert 'Requirement ID: "T1"' in prompt
     assert 'Observed failure: "HTTP 400:' in prompt
@@ -435,6 +439,32 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     ):
         assert forbidden not in prompt
     assert max(map(len, prompt.splitlines())) < 240
+
+
+def test_patch_prompt_keeps_the_explicit_evaluation_instruction_override() -> None:
+    """Evaluation fixtures may replace the proposal Skill segment deliberately."""
+    from restscope.operation_smoke.parameter_patch import ParameterPatchTask
+    from restscope.operation_smoke.parameter_patch.prompts import (
+        build_parameter_patch_prompt,
+    )
+
+    task = ParameterPatchTask(
+        todo_id="T-override",
+        failure="The identifier is invalid.",
+        root_cause="The current Generator invents identifiers.",
+        affected_inputs=["path.projectId"],
+        value_requirements="Use one known project identifier.",
+        acceptance_criteria=["path.projectId names an existing project."],
+    )
+
+    prompt = build_parameter_patch_prompt(
+        task=task,
+        config=_sampleable_config(),
+        model=_model(),
+        system_prompt="Evaluation-only Patch instructions.",
+    )
+
+    assert prompt.system == "Evaluation-only Patch instructions."
 
 
 def test_patch_prompt_summarizes_large_choice_generators() -> None:
@@ -1642,9 +1672,9 @@ def test_patch_repairs_a_nested_propose_wrapper_with_the_declared_schema() -> No
     assert "constraint expression must be a recursive object" in correction
 
     initial_system = client.requests[0].messages[0].content
-    # The Schema remains authoritative while this compact DSL makes the exact
-    # field vocabulary readable without copying the full generated document.
-    assert len(initial_system) < 5_000
+    # The Schema remains authoritative while the detailed project Skill stays
+    # inside the specialized Patch Agent's existing system-context boundary.
+    assert len(initial_system) <= 7_000
     assert "Generator DSL:" in initial_system
     assert "Constraint DSL:" in initial_system
     normalized_system = " ".join(initial_system.split())

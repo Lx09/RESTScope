@@ -130,6 +130,12 @@ not expose a separate resolution or Prompt object that callers could use to
 assemble a broader Agent. Unit tests provide their own local stub providers;
 the runtime package does not register an offline fake provider.
 
+The project currently exports one domain Skill, `parameter-patch`. It records
+the evidence-backed Generator/Constraint proposal and future self-review method
+plus its three read-only lookup requirements. The transitional specialized
+Patch Agent reuses only the proposal segment; no production generic Agent
+Profile selects the complete Skill yet.
+
 The same generic `Agent` class runs the reusable Main Agent and task-scoped
 Subagents. A child receives its own Profile and objective, never its parent's
 conversation. The global `subagent.start`, `subagent.wait`, and
