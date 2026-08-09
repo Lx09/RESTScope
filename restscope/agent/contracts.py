@@ -1,7 +1,8 @@
-"""Define the fixed task and result contracts shared by every generic Agent.
+"""Define bounded contracts for task-scoped generic Agent executions.
 
-The Harness supplies one bounded :class:`AgentTask`; the model may finish only
-with :class:`AgentCompletion`. Runtime failures are added by the Agent in an
+Subagents and focused internal callers receive one :class:`AgentTask`; the
+taskless Main startup does not. Every model loop may finish only with
+:class:`AgentCompletion`. Runtime failures are added internally in an
 :class:`AgentResult`, so model-authored content cannot forge lifecycle state.
 """
 

@@ -241,11 +241,10 @@ THINK, FAST, and Phoenix API key values are replaced, while ordinary target
 Authorization, Cookie, and business fields remain visible. Use the loopback
 page as a developer diagnostic surface, not a credential boundary.
 
-Stopping a Run and closing the App are separate lifecycle events. A
-`KeyboardInterrupt` such as Ctrl-C ends the current Run with status `stopped`
-and re-raises to the caller, but the App, UI server, complete event snapshot,
-and latest Todo remain available. Catch the interrupt inside the App
-lifetime when a local runner should keep the observer open:
+Interrupting the blocking Main loop and closing the App are separate lifecycle
+events. A `KeyboardInterrupt` such as Ctrl-C marks the observed Main lifetime
+as `stopped` and re-raises, while the App, UI server, complete event snapshot,
+and latest Todo remain available until explicit close:
 
 ```python
 app = RESTScopeApp.from_environment()
@@ -255,18 +254,18 @@ try:
         base_url="http://127.0.0.1:8000",
     )
     try:
-        app.run(RESTScopeRunRequest())
+        app.start()
     except KeyboardInterrupt:
-        print(f"Run stopped; observer retained at {app.ui_url}")
+        print(f"Main Agent stopped; observer retained at {app.ui_url}")
         input("Press Enter to close RESTScope and its observer...")
 finally:
     app.close()
 ```
 
 This is process-local interruption, not a remote control interface: the page
-remains GET-only and offers no stop, pause, retry, or mutation action. A later
-`app.run(...)` replaces the retained snapshot; `app.close()` remains the only
-operation that shuts down the App-owned UI and clears its memory.
+remains GET-only and offers no stop, pause, retry, or mutation action.
+`app.close()` remains the only operation that shuts down the App-owned UI and
+clears its memory. A Main loop can start only once per App.
 
 ## Local trace monitoring with Phoenix
 
@@ -299,9 +298,9 @@ are also replaced wherever they appear. Provider-private tool-call context is
 not projected into traces; model-visible reasoning remains visible when it is
 part of a recorded message.
 
-Agent, tool, and chain inputs and outputs are indented JSON. App and Run Harness
-root spans contain bounded run summaries, while operation and case details stay
-on their child spans. Manual `LLMClient.invoke` spans use OpenInference message
+Agent, Tool, and chain inputs and outputs are indented JSON. The App and Main
+Agent root spans contain bounded lifecycle summaries; Tool details stay on
+their child spans. Manual `LLMClient.invoke` spans use OpenInference message
 attributes, so Phoenix renders system, user, and assistant messages separately;
 their generic input and output values contain only readable summaries and parsed
 JSON. Oversized content is truncated to a structured JSON preview at the
@@ -460,9 +459,11 @@ complete current Generator and Constraint configuration.
 The raw HTTP result includes all response headers, including authentication and
 Cookie headers, plus its bounded JSON or text body.
 
-The default and only execution path is
-`RunHarness → OperationSmokeCoordinator → OperationTestingService.run_smoke_batch`.
-The default App does not start MCP processes.
+The product entry path is `RESTScopeApp.start → Agent.start → model/Tool loop`.
+The first Main Profile grants only `plan.read` and `plan.update`; existing Smoke,
+Failure Resolution, and Patch Modules remain transitional internal capabilities
+and are not selected by that Profile. The default App does not start MCP
+processes.
 
 ## API Behavior Monitor Coordinator
 
@@ -591,12 +592,12 @@ Deterministic exact matches do not call the model.
 
 ## Program Startup
 
-`RESTScopeApp` is the Python API entrypoint for the standalone runtime. It loads
-RESTScope config, builds the capability and Thinking-model runtimes, discovers
-all schema operations, and schedules them through round-based FIFO queues:
+`RESTScopeApp` is the Python entrypoint for the standalone runtime. It loads
+configuration, binds one API target, then starts one blocking generic Main
+Agent. Startup has no task argument and returns no result DTO:
 
 ```python
-from restscope import RESTScopeApp, RESTScopeRunRequest
+from restscope import RESTScopeApp
 
 with RESTScopeApp.from_environment() as app:
     app.initialize(
@@ -604,13 +605,16 @@ with RESTScopeApp.from_environment() as app:
         base_url="http://localhost:8000",
         headers={"Authorization": "Bearer ..."},
     )
-    report = app.run(RESTScopeRunRequest())
+    app.start()
 ```
 
-`RESTScopeApp.run()` is an execution API, not a dry-run API. The default Smoke
-Coordinator immediately sends generated requests to the target bound during
-`initialize()`, including operations that may have side effects. Run it only
-against a target you are authorized to test.
+`app.start()` blocks until the Main Agent returns its internal bounded
+`AgentCompletion`, is interrupted, or fails safely. The initial production
+Profile intentionally has only the private Plan pair: no testing Skills,
+OpenAPI discovery Tool, HTTP Tool, Context Source, or child Profile is yet
+authorized. It therefore reports the missing capability instead of testing the
+target. Later capability work must still obtain authorization before any live
+external action.
 
 App construction prepares the database before building the default capability
 and LLM runtimes. If construction fails, RESTScope removes only the SQLite file
@@ -624,11 +628,8 @@ exactly once for the lifetime of the App. The resulting IR and target settings
 are bound out-of-band to trusted tool handlers; they are not copied into Harness
 state, tool schemas, or model arguments.
 
-Run Harness orders operations by stable path depth and retains every attempt.
-Smoke receives only the target operation key. Its three normal stop reasons are
-all satisfied Harness outcomes, even when the measured rate remains below
-80%. An operation-scoped technical error may be scheduled in a later round so
-other operations can add global pool evidence first; the default is at most
-three attempts. Unsupported operations are recorded without retry. Shared
-setup or uncaught runtime failures stop immediately as
-`errored/technical_error`. Queue and retry state are not persisted.
+The Main Profile currently has no Operation discovery or testing method, so App
+startup does not generate or send cases. Smoke still receives one operation key
+when an internal focused caller invokes it, and its legacy coordinators retain
+their existing stop and persistence contracts while they await Skill/Subagent
+migration. No FIFO or retry scheduler is part of the App entrypoint.

@@ -131,13 +131,28 @@ def test_current_sources_do_not_restore_retired_agent_names_or_paths() -> None:
     assert violations == []
 
 
-def test_run_harness_has_no_graph_framework_dependency() -> None:
-    """Scenario: the ephemeral FIFO loop requires no graph runtime package."""
+def test_main_agent_replacement_removes_run_harness_and_graph_dependencies() -> None:
+    """The blocking Main loop has no legacy FIFO module or graph framework."""
+    import restscope
+    import restscope.harness as harness
+    from restscope import RESTScopeApp
+
     project = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     production = "\n".join(
         path.read_text(encoding="utf-8") for path in SOURCE_ROOT.rglob("*.py")
     )
 
+    assert not (SOURCE_ROOT / "harness" / "run.py").exists()
+    for old_name in (
+        "OperationAttempt",
+        "RESTScopeRunReport",
+        "RESTScopeRunRequest",
+        "RunHarness",
+    ):
+        assert not hasattr(restscope, old_name)
+        assert not hasattr(harness, old_name)
+    assert not hasattr(RESTScopeApp, "run")
+    assert hasattr(RESTScopeApp, "start")
     assert "lang" + "graph" not in project
     assert "lang" + "graph" not in production
 

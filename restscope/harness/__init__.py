@@ -17,10 +17,6 @@ __all__ = [
     "AgentRuntimeDefinition",
     "ContextSourceBinding",
     "ToolBindingFactory",
-    "OperationAttempt",
-    "RESTScopeRunReport",
-    "RESTScopeRunRequest",
-    "RunHarness",
     "build_harness",
     "build_harness_with_mcp_host",
 ]
@@ -30,16 +26,8 @@ def __getattr__(name: str) -> Any:
     """Load one approved runtime export on first use."""
     if name not in __all__:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    run_exports = {
-        "OperationAttempt",
-        "RESTScopeRunReport",
-        "RESTScopeRunRequest",
-        "RunHarness",
-    }
     module_name = (
-        ".run"
-        if name in run_exports
-        else ".agent_runtime"
+        ".agent_runtime"
         if name in {"AgentRuntimeDefinition", "ContextSourceBinding", "ToolBindingFactory"}
         else ".runtime"
     )

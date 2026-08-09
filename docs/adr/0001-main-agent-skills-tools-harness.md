@@ -8,7 +8,8 @@ status: accepted
 record's assignment of the operation FIFO and retry loop to the Harness. The
 configurable Agent runtime, explicit Profile authorization, global Tool
 Catalog, Skill loading, Prompt Session, and mechanical Harness responsibilities
-recorded here remain accepted.
+recorded here remain accepted. The old FIFO implementation has since been
+removed.
 
 RESTScope will converge on one configurable Agent runtime: one long-lived Main
 Agent may request independent task-scoped Subagents, while Agent Profiles name
@@ -26,9 +27,8 @@ Built-in and external MCP Tool Catalogs remain separate, raw logs never become
 Agent context, and Schema rules are enforced locally even when a provider does
 not support strict calls. Existing named Agent classes remain only as explicit
 migration exceptions until their behavior becomes Skills and Subagent Profiles.
-The ephemeral operation FIFO and retry loop also belongs to the deterministic
-Harness; it does not use a graph framework because RESTScope neither persists
-nor resumes scheduler state.
+ADR 0002 later removed the ephemeral operation FIFO and retry loop from the
+Harness assignment.
 
 ## Profile-authorized launch
 
@@ -44,8 +44,8 @@ intentionally one deep operation:
 resolve-then-assemble result that could be changed or broadened by a caller.
 
 Main Agent and Subagent are lifecycles of the same `Agent` class. The Main
-Agent may accept later tasks while retaining bounded in-memory history. A
-Subagent accepts exactly its creation objective, has its own Profile and
+Agent uses one taskless, blocking App-lifetime start protocol. A Subagent
+accepts exactly its creation objective, has its own Profile and
 Context, and receives no parent transcript or hidden state. It may start only
 Profiles explicitly listed by its own Profile.
 

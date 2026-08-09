@@ -2,10 +2,10 @@
 
 The :class:`LiveRunObserver` receives the App's existing trace and target HTTP
 activity. It folds that lower-level evidence into model turns, executed tools,
-and complete Smoke Batches. Generic ``Agent.run`` scopes add the stable Main or
-Subagent identity, task objective, and authoritative final-response phase used
-by the conversation projector. Browser adapters read JSON-safe snapshots and
-cursor-addressed changes; workflow code never depends on UI DTOs.
+and complete Smoke Batches. Generic ``Agent.start`` and ``Agent.run`` scopes add
+stable Main or Subagent identities and the authoritative final-response phase
+used by the conversation projector. Browser adapters read JSON-safe snapshots
+and cursor-addressed changes; workflow code never depends on UI DTOs.
 
 The observer never persists data and never raises into testing code. It keeps
 every detail until the next run or App shutdown, as explicitly approved, so a
@@ -262,7 +262,7 @@ class LiveRunObserver:
             agent = parent.agent
             visible_parent_id = parent.event_id
 
-            if name == "Agent.run" and kind == "CHAIN":
+            if name in {"Agent.run", "Agent.start"} and kind == "CHAIN":
                 agent, scope = self._generic_agent_task(
                     parent=parent,
                     attributes=safe_attributes,
@@ -367,7 +367,7 @@ class LiveRunObserver:
                     if scope.get("task_id") is not None
                     else None
                 ),
-                is_agent_run=name == "Agent.run" and kind == "CHAIN",
+                is_agent_run=name in {"Agent.run", "Agent.start"} and kind == "CHAIN",
             )
         except Exception:
             return None
@@ -558,9 +558,9 @@ class LiveRunObserver:
         """Create one explicit generic Agent identity and task scope.
 
         Generic Main and Subagent sessions already supply their Harness-owned
-        IDs in ``Agent.run`` attributes. Unlike legacy ``kind=AGENT`` spans,
-        these identities are authoritative enough for the UI to select a Main
-        conversation and navigate its children without guessing from names.
+        IDs in generic Agent lifecycle attributes. Unlike legacy ``kind=AGENT``
+        spans, these identities are authoritative enough for the UI to select a
+        Main conversation and navigate its children without guessing names.
         """
         session_id = str(attributes.get("restscope.agent.session_id") or "")
         profile_name = str(attributes.get("restscope.agent.profile") or "")

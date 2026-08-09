@@ -65,6 +65,67 @@ def _completion(summary: str = "Done"):
     )
 
 
+def test_profile_instructions_are_complete_stable_developer_guidance() -> None:
+    """The current Agent sees its own instructions without confusing description."""
+    from restscope.agent import AgentProfile, AgentTask
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+
+    instructions = "Own every semantic decision for the current bounded task."
+    client, provider = _client(_completion())
+    agent = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(
+                AgentProfile(
+                    name="main",
+                    description="Parent-visible metadata is not self-guidance.",
+                    instructions=instructions,
+                    model_config_name="thinking",
+                ),
+            ),
+            models=(_model(),),
+            client=client,
+        )
+    ).start_main_agent("main")
+
+    result = agent.run(AgentTask(objective="Inspect the current objective."))
+
+    assert result.status == "completed"
+    messages = provider.requests[0].messages
+    assert messages[0].role == "system"
+    assert instructions not in messages[0].content
+    assert messages[1].role == "developer"
+    assert instructions in messages[1].content
+    assert "Parent-visible metadata" not in messages[1].content
+
+
+def test_profile_instructions_fail_closed_when_the_stable_prefix_cannot_fit() -> None:
+    """Mandatory Profile guidance is never truncated to force a model request."""
+    from restscope.agent import AgentProfile, AgentTask
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+
+    client, provider = _client()
+    agent = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(
+                AgentProfile(
+                    name="main",
+                    instructions="I" * 12_000,
+                    model_config_name="thinking",
+                ),
+            ),
+            models=(
+                _model(context_window_tokens=3_500, max_tokens=256),
+            ),
+            client=client,
+        )
+    ).start_main_agent("main")
+
+    result = agent.run(AgentTask(objective="Do not reach the model."))
+
+    assert result.status == "context_budget_exceeded"
+    assert provider.requests == []
+
+
 def test_skill_read_is_auto_appended_and_injects_only_authorized_instructions() -> None:
     """Skill metadata is stable; each successful read adds one user instruction."""
     from restscope.agent import AgentProfile, AgentTask

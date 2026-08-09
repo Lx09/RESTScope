@@ -107,6 +107,116 @@ def test_harness_starts_one_reusable_main_agent_from_an_authoritative_profile() 
     assert replacement is not agent
 
 
+def test_main_agent_start_blocks_until_completion_without_an_agent_task() -> None:
+    """The App-lifetime Main loop starts from Profile guidance, not a task DTO."""
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.llm import LLMResponse
+
+    client, provider = _client(
+        LLMResponse(
+            provider="scripted",
+            model="thinking-model",
+            parsed_json={"summary": "Main loop complete.", "findings": []},
+        )
+    )
+    runtime = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(
+                AgentProfile(
+                    name="main",
+                    instructions="Own the App-lifetime API testing loop.",
+                    model_config_name="thinking",
+                ),
+            ),
+            models=(_model(),),
+            client=client,
+        )
+    )
+    agent = runtime.start_main_agent("main")
+
+    assert agent.start() is None
+    assert len(provider.requests) == 1
+    assert any(
+        "MAIN AGENT LOOP START" in message.content
+        for message in provider.requests[0].messages
+    )
+    assert all(
+        "AGENT TASK" not in message.content
+        for message in provider.requests[0].messages
+    )
+
+    with pytest.raises(RuntimeError, match="already started"):
+        agent.start()
+
+
+def test_subagent_cannot_use_the_taskless_main_start_protocol() -> None:
+    """Children always need the complete bounded objective supplied by a parent."""
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+
+    client, provider = _client()
+    runtime = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(
+                AgentProfile(
+                    name="main",
+                    model_config_name="thinking",
+                    tool_names=(
+                        "subagent.start",
+                        "subagent.wait",
+                        "subagent.cancel",
+                    ),
+                    subagent_profile_names=("child",),
+                ),
+                AgentProfile(
+                    name="child",
+                    description="Handle one bounded delegated task.",
+                    model_config_name="thinking",
+                ),
+            ),
+            models=(_model(),),
+            client=client,
+        )
+    )
+    main = runtime.start_main_agent("main")
+    child = main.tree_control._build_child(
+        "child",
+        main.tree_control,
+        1,
+        main.session_id,
+        "agent_child",
+        main.cancel_event,
+    )
+
+    with pytest.raises(RuntimeError, match="Main Agent"):
+        child.start()
+
+    assert provider.requests == []
+
+
+def test_blocking_main_start_raises_safe_terminal_runtime_failures() -> None:
+    """A void App entry cannot silently treat cancellation as completion."""
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+
+    client, provider = _client()
+    runtime = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+            models=(_model(),),
+            client=client,
+        )
+    )
+    agent = runtime.start_main_agent("main")
+    agent.cancel_event.set()
+
+    with pytest.raises(RuntimeError, match="agent_cancelled"):
+        agent.start()
+
+    assert provider.requests == []
+
+
 def test_unconfigured_harness_returns_a_stable_startup_error() -> None:
     """Default Operation Smoke composition remains valid but has no Main Profile."""
     from restscope.harness import AgentRuntimeNotConfiguredError, build_harness

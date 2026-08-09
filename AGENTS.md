@@ -193,10 +193,10 @@ These five terms are RESTScope's core runtime language and hard constraints:
   independent, task-scoped use of the same configurable Agent runtime, started
   by the Harness only after the Main Agent requests it. Do not create separate
   Agent inheritance trees or new domain-specific `*Agent` classes. The approved
-  product target makes the Main LLM responsible for choosing testing methods,
+  product runtime makes the Main LLM responsible for choosing testing methods,
   Tools, Subagents, ordering, domain retries, and completion. The current
-  `RunHarness` remains a migration implementation, not the target owner of
-  those decisions.
+  blocking `RESTScopeApp.start()` entry launches that loop without a public
+  task or result DTO; the removed FIFO Run Harness must not be restored.
 - **Agent Profile** explicitly names one model configuration, ordered Tools,
   Skills, bounded context sources, and the child Profiles it may start. A
   Profile may include a bounded description; every Profile named as a child
@@ -207,10 +207,9 @@ These five terms are RESTScope's core runtime language and hard constraints:
   A Subagent receives no hidden Main-Agent state and returns only a structured,
   bounded result. The current Failure Resolution, Compact, Parameter Patch,
   and Patch Review Agent classes are temporary migration exceptions; do not
-  copy their class-per-role structure into new code. The approved, not-yet-
-  implemented Main design adds bounded Profile instructions as stable guidance
-  for the Agent itself; this is distinct from the parent-visible description
-  and must not be treated as an available field until activation.
+  copy their class-per-role structure into new code. Bounded Profile
+  `instructions` are stable guidance for the Agent itself and remain distinct
+  from the parent-visible `description`.
 - **Skill** is reusable instruction and method knowledge. It does not execute
   code, own runtime state, or grant access. A Profile selects Skills explicitly,
   and the Harness verifies that the same Profile grants every Tool and bounded
@@ -227,11 +226,10 @@ These five terms are RESTScope's core runtime language and hard constraints:
   validation, dependency injection, session state, Tool execution, output
   validation, tracing, and logs. A Harness must not make an LLM-owned domain
   decision. Deterministic request generation and execution belong under
-  `restscope.harness` rather than a generic `testing` package. The current
-  run-scoped operation FIFO and retry loop remains a plain in-memory migration
-  implementation. Do not expand it, add a graph framework, or persist its
-  state. The approved target removes that semantic scheduling from the Harness
-  when the Main Agent replacement can be activated atomically.
+  `restscope.harness` rather than a generic `testing` package. The retired
+  run-scoped FIFO and retry scheduler must not be restored; the blocking Main
+  loop owns any future semantic scheduling through explicitly granted Skills
+  and Tools.
 - Built-in Tools form one immutable global Catalog. Runtime-discovered MCP Tools
   use a separate external Catalog. Every Agent receives only the exact names in
   its Profile; neither Catalog is automatically injected. `skill.read` is the

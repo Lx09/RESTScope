@@ -78,12 +78,13 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         pytest.skip("select -m phoenix_contract to run the local Phoenix contract")
 
     from restscope import RESTScopeApp
-    from restscope.harness import RESTScopeRunRequest
-    from restscope.harness import build_harness
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
     from restscope.tools import AgentToolbox
     from restscope.llm import (
         LLMClient,
         LLMMessage,
+        LLMModelConfig,
         LLMProviderRegistry,
         LLMRequest,
         LLMResponse,
@@ -114,7 +115,36 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     assert runtime.enabled is True
 
-    capabilities = build_harness(tracing_runtime=runtime)
+    class MainProvider(BaseLLMProvider):
+        """Finish the taskless Main loop without calling a real provider."""
+
+        name = "main-contract"
+
+        def invoke(self, llm_request: LLMRequest) -> LLMResponse:
+            return LLMResponse(
+                provider=self.name,
+                model=llm_request.model,
+                parsed_json={"summary": "Main contract complete.", "findings": []},
+            )
+
+    main_registry = LLMProviderRegistry()
+    main_registry.register(MainProvider())
+    capabilities = build_harness(
+        tracing_runtime=runtime,
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+            models=(
+                LLMModelConfig(
+                    role="thinking",
+                    provider="main-contract",
+                    model="main-contract-model",
+                    max_tokens=512,
+                    context_window_tokens=8_192,
+                ),
+            ),
+            client=LLMClient(main_registry, tracing_runtime=runtime),
+        ),
+    )
     toolbox = AgentToolbox(tracing_runtime=runtime)
     toolbox.register(
         spec=ToolSpec(
@@ -148,11 +178,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         base_url="http://example.test",
         headers={"Authorization": "Bearer contract-secret"},
     )
-    app.run(
-        RESTScopeRunRequest(
-            metadata={"task_id": "phoenix-contract"},
-        )
-    )
+    app.start()
     toolbox.execute(
         ToolCall(
             id="contract-tool",
@@ -204,10 +230,8 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     app.close()
 
     expected_names = {
-        "RESTScopeApp.run",
-        "RunHarness.run",
-        "RunHarness.operation_attempt",
-        "OperationSmokeCoordinator.run",
+        "RESTScopeApp.start",
+        "Agent.start",
         "contract.tool",
         "LLMClient.invoke",
         "contract.truncated",
@@ -228,27 +252,30 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         {span["span_kind"] for span in spans}
     )
 
-    app_span = next(span for span in spans if span["name"] == "RESTScopeApp.run")
-    run_harness_span = next(span for span in spans if span["name"] == "RunHarness.run")
-    attempt_span = next(
+    app_span = next(span for span in spans if span["name"] == "RESTScopeApp.start")
+    agent_span = next(
         span
         for span in spans
-        if span["name"] == "RunHarness.operation_attempt"
+        if span["name"] == "Agent.start"
         and span["context"]["trace_id"] == app_span["context"]["trace_id"]
     )
-    operation_span = next(
+    main_llm_span = next(
         span
         for span in spans
-        if span["name"] == "OperationSmokeCoordinator.run"
+        if span["name"] == "LLMClient.invoke"
         and span["context"]["trace_id"] == app_span["context"]["trace_id"]
     )
     tool_span = next(span for span in spans if span["name"] == "contract.tool")
-    llm_span = next(span for span in spans if span["name"] == "LLMClient.invoke")
+    llm_span = next(
+        span
+        for span in spans
+        if span["name"] == "LLMClient.invoke"
+        and span["context"]["trace_id"] != app_span["context"]["trace_id"]
+    )
     truncated_span = next(span for span in spans if span["name"] == "contract.truncated")
 
-    assert run_harness_span["parent_id"] == app_span["context"]["span_id"]
-    assert attempt_span["parent_id"] == run_harness_span["context"]["span_id"]
-    assert operation_span["parent_id"] == attempt_span["context"]["span_id"]
+    assert agent_span["parent_id"] == app_span["context"]["span_id"]
+    assert main_llm_span["parent_id"] == agent_span["context"]["span_id"]
     assert run_harness_span["span_kind"] == "CHAIN"
     assert attempt_span["span_kind"] == "CHAIN"
     assert operation_span["span_kind"] == "CHAIN"

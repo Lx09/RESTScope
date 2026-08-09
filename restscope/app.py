@@ -1,4 +1,11 @@
-"""Top-level RESTScope application bootstrap API."""
+"""Compose RESTScope and run its one blocking App-lifetime Main Agent.
+
+``RESTScopeApp`` prepares deterministic services, binds one parsed OpenAPI
+target during :meth:`initialize`, and starts the generic Profile-authorized
+Main Agent during :meth:`start`. The Main loop receives no public task or
+result DTO: its stable Profile instructions define the mission, and the call
+blocks until the Agent completes or a safe runtime failure is raised.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +17,7 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from restscope.agent import Agent, AgentProfile
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
@@ -21,12 +29,11 @@ from restscope.operation_smoke import (
     build_operation_smoke_coordinator,
 )
 from restscope.harness import (
+    AgentRuntimeDefinition,
     HarnessRuntime,
-    RESTScopeRunReport,
-    RESTScopeRunRequest,
-    RunHarness,
     build_harness,
 )
+from restscope.llm import ModelSelector, build_llm_client
 from restscope.tools import ToolContext, ToolContextError
 from restscope.http_transport import TargetHTTPTransport
 from restscope.catalog import OpenAPIChangeEventRecord
@@ -38,6 +45,36 @@ from restscope.restscope_config import RESTScopeConfig
 from restscope.bootstrap import build_generator_config_catalog
 from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
 from restscope.harness.testing import OperationTestingService
+from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
+
+
+_MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent.
+
+- Work on the API target already initialized for this App lifetime. Treat these
+  Profile instructions as the continuing mission; there is no separate task
+  request or user-authored objective at startup.
+- Own every semantic workflow decision. Decide what to investigate, which
+  authorized Skills to load, which Tools or Subagents to use, what order to
+  follow, whether another attempt is useful, and when to finish.
+- Inspect authorized Skill metadata and load the Skills relevant to the current
+  work. Skills provide methods; they do not grant access or override this
+  Profile or the Harness contract.
+- Initialize the private Plan for the current work and revise it as evidence
+  changes. The Plan is working memory, not evidence, a scheduler, or persistent
+  state.
+- Use a child Profile only when its described capability fits a bounded piece
+  of the work. Supply a complete objective and required evidence because the
+  child receives no parent conversation or hidden state.
+- Base factual conclusions on current authorized Tool or Subagent results.
+  Never invent evidence references or treat a plan, prior belief, Skill text,
+  OpenAPI description, or successful Tool execution as proof of an API outcome.
+- Do not repeat an action unless new evidence, changed state, or a specific
+  predicted benefit makes the next attempt materially different.
+- Finish when the current authorized capabilities cannot make meaningful safe
+  progress. Report unsupported, blocked, safety-skipped, and unresolved work
+  explicitly.
+- Return only the required bounded AgentCompletion result.
+"""
 
 
 class _SchemaSourceModel(BaseModel):
@@ -78,9 +115,9 @@ class RESTScopeApp:
     """Own all long-lived services used by one RESTScope process.
 
     Creating the app is intentionally more than constructing a data object.  It
-    opens the run-local database, tracing exporter, behavior monitor, HTTP
-    transport, testing service, shared Tool implementations, and the
-    deterministic run Harness.
+    opens the App-lifetime database, tracing exporter, behavior monitor, HTTP
+    transport, testing service, shared Tool implementations, and deterministic
+    Agent Harness.
     The app also records which resources it created so :meth:`close` can release
     them if startup succeeds *or* fails part-way through.
     """
@@ -166,11 +203,16 @@ class RESTScopeApp:
                 # The Harness exposes HTTP and evidence lookup Tools.
                 # Generated Batch execution stays internal: Smoke receives the
                 # testing service through its narrow runner Protocol below.
+                main_runtime = _build_main_agent_runtime_definition(
+                    config,
+                    tracing_runtime=self._tracing_runtime,
+                )
                 built_runtime = build_harness(
                     tracing_runtime=self._tracing_runtime,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
                     api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
+                    agent_runtime=main_runtime,
                 )
                 harness_runtime = built_runtime
                 if smoke_coordinator is None:
@@ -187,6 +229,7 @@ class RESTScopeApp:
                         ),
                         reference_values=reference_values,
                         harness_runtime=built_runtime,
+                        llm_client=(main_runtime.client if main_runtime else None),
                         tracing_runtime=self._tracing_runtime,
                     )
             elif smoke_coordinator is None:
@@ -221,6 +264,8 @@ class RESTScopeApp:
                     run_observer = None
             self._run_observer = run_observer
             self._ui_service = ui_service
+            self._main_agent: Agent | None = None
+            self._main_loop_started = False
             self._closed = False
         except BaseException:
             # Startup is transactional from the caller's perspective: a failed
@@ -310,41 +355,48 @@ class RESTScopeApp:
                 assert generator_catalog is not None
                 assert operation_testing_service is not None
                 assert api_behavior_monitor_coordinator is not None
+                main_runtime = _build_main_agent_runtime_definition(
+                    config,
+                    tracing_runtime=trace_runtime,
+                )
                 runtime = build_harness(
                     tracing_runtime=trace_runtime,
                     operation_testing_service=operation_testing_service,
                     target_http_transport=target_transport,
                     api_behavior_monitor_coordinator=api_behavior_monitor_coordinator,
+                    agent_runtime=main_runtime,
                 )
                 runtime_is_owned = True
-            elif smoke_coordinator is None:
-                operation_testing_service = getattr(
-                    runtime,
-                    "operation_testing_service",
-                    None,
-                )
-                api_behavior_monitor_coordinator = getattr(
-                    runtime,
-                    "api_behavior_monitor_coordinator",
-                    None,
-                )
-                if (
-                    operation_testing_service is None
-                    or api_behavior_monitor_coordinator is None
-                ):
-                    raise ValueError(
-                        "A custom Harness runtime requires an injected "
-                        "OperationSmokeCoordinator or testing and API behavior "
-                        "monitor services"
+            else:
+                main_runtime = None
+                if smoke_coordinator is None:
+                    operation_testing_service = getattr(
+                        runtime,
+                        "operation_testing_service",
+                        None,
                     )
-                generator_catalog = operation_testing_service.config_catalog
-                reference_values = (
-                    operation_testing_service.reference_values
-                    or BehaviorMonitorReferenceValues(
-                        api_behavior_monitor_coordinator
+                    api_behavior_monitor_coordinator = getattr(
+                        runtime,
+                        "api_behavior_monitor_coordinator",
+                        None,
                     )
-                )
-                operation_testing_service.reference_values = reference_values
+                    if (
+                        operation_testing_service is None
+                        or api_behavior_monitor_coordinator is None
+                    ):
+                        raise ValueError(
+                            "A custom Harness runtime requires an injected "
+                            "OperationSmokeCoordinator or testing and API behavior "
+                            "monitor services"
+                        )
+                    generator_catalog = operation_testing_service.config_catalog
+                    reference_values = (
+                        operation_testing_service.reference_values
+                        or BehaviorMonitorReferenceValues(
+                            api_behavior_monitor_coordinator
+                        )
+                    )
+                    operation_testing_service.reference_values = reference_values
 
             if smoke_coordinator is None:
                 assert generator_catalog is not None
@@ -356,6 +408,7 @@ class RESTScopeApp:
                     batch_runner=operation_testing_service,
                     reference_values=reference_values,
                     harness_runtime=runtime,
+                    llm_client=(main_runtime.client if main_runtime else None),
                     tracing_runtime=trace_runtime,
                 )
 
@@ -506,43 +559,39 @@ class RESTScopeApp:
             raise RuntimeError("The current runtime has no OpenAPI audit catalog")
         return catalog.list_changes(operation_key)
 
-    def run(self, request: RESTScopeRunRequest) -> RESTScopeRunReport:
-        """Run every current operation through one ephemeral Run Harness.
+    def start(self) -> None:
+        """Start the Main Agent once and block until its model loop finishes.
 
-        ``KeyboardInterrupt`` stops this Run and is re-raised for the caller to
-        acknowledge, but it does not close the App, observer, or UI server.
-        The stopped timeline remains readable until another call replaces it
-        or :meth:`close` explicitly ends the App lifetime.
+        The target must already be initialized. This call intentionally takes
+        no task and returns no result: the ``main`` Profile contains the stable
+        App-lifetime mission, while ``AgentCompletion`` remains an internal
+        loop-termination protocol. Cancellation, budget exhaustion, prompt
+        capacity failures, and other terminal runtime failures are raised.
         """
 
         self._ensure_open()
-        context = self.tool_context
-        if context is None:
+        if self.tool_context is None:
             raise ToolContextError(
                 "tool_context_not_initialized",
                 "Tool context is not initialized",
             )
+        if self._main_loop_started:
+            raise RuntimeError("RESTScope Main Agent loop has already started")
+        self._main_loop_started = True
+        marker = {"profile_name": "main", "mode": "blocking"}
         if self._run_observer is not None:
-            self._run_observer.begin_run(request)
-        task_id = request.metadata.get("task_id")
-        attributes = {"restscope.task_id": task_id} if task_id else {}
+            self._run_observer.begin_run(marker)
         try:
             with self.tracing_runtime.span(
-                "RESTScopeApp.run",
+                "RESTScopeApp.start",
                 kind="CHAIN",
-                input_value=request,
-                attributes=attributes,
+                input_value=marker,
             ) as span:
-                report = RunHarness(
-                    operation_smoke_coordinator=self.operation_smoke_coordinator,
-                    tool_context=context,
-                    random_seed=self.random_source.seed,
-                    tracing_runtime=self.tracing_runtime,
-                ).run(request)
-                span.set_output(_app_run_trace_summary(report))
-                span.set_attribute("restscope.run.status", report.status)
-                if report.status == "errored":
-                    span.mark_error("RESTScope run returned an errored report")
+                self._main_agent = self.harness_runtime.start_main_agent("main")
+                self._main_agent.start()
+                terminal = {"profile_name": "main", "status": "completed"}
+                span.set_output(terminal)
+                span.set_attribute("restscope.agent.status", "completed")
         except KeyboardInterrupt:
             if self._run_observer is not None:
                 self._run_observer.interrupt_run()
@@ -552,8 +601,7 @@ class RESTScopeApp:
                 self._run_observer.end_run(error=exc)
             raise
         if self._run_observer is not None:
-            self._run_observer.end_run(report)
-        return report
+            self._run_observer.end_run(terminal)
 
     def close(self) -> None:
         """Close owned runtime resources."""
@@ -610,16 +658,6 @@ class RESTScopeApp:
             raise RuntimeError("RESTScopeApp is already closed")
 
 
-def _app_run_trace_summary(report: RESTScopeRunReport) -> dict[str, object]:
-    return {
-        "report_id": report.report_id,
-        "status": report.status,
-        "stop_reason": report.stop_reason,
-        "operation_count": len(report.operations),
-        "attempt_count": report.attempt_count,
-    }
-
-
 def _schema_source_value(source: Any) -> str:
     if source.kind == "file":
         return source.path
@@ -638,6 +676,37 @@ def _build_app_tracing_runtime(config: RESTScopeConfig) -> TracingRuntime:
                 config.tracing.api_key,
             )
         ),
+    )
+
+
+def _build_main_agent_runtime_definition(
+    config: RESTScopeConfig,
+    *,
+    tracing_runtime: TracingRuntime,
+) -> AgentRuntimeDefinition | None:
+    """Compose the currently runnable, intentionally capability-light Main.
+
+    An unset thinking model keeps configuration-only and parser tests usable,
+    but :meth:`RESTScopeApp.start` then fails closed through the Harness's
+    existing ``agent_runtime_not_configured`` error. Once configured, the Main
+    receives only its private Plan pair. Testing Skills, OpenAPI discovery,
+    domain Tools, Context Sources, and child Profiles remain empty until their
+    individual contracts are approved and implemented.
+    """
+    model = ModelSelector.from_config(config.llm).thinking
+    if not model.enabled:
+        return None
+    return AgentRuntimeDefinition(
+        profiles=(
+            AgentProfile(
+                name="main",
+                instructions=_MAIN_PROFILE_INSTRUCTIONS,
+                model_config_name="thinking",
+                tool_names=(PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME),
+            ),
+        ),
+        models=(model,),
+        client=build_llm_client(config.llm, tracing_runtime=tracing_runtime),
     )
 
 

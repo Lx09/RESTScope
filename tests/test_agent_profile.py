@@ -56,6 +56,31 @@ def test_agent_profile_accepts_only_a_bounded_optional_description() -> None:
         )
 
 
+def test_agent_profile_accepts_only_bounded_nonblank_instructions() -> None:
+    """Profile guidance is complete trusted text, never blank or oversized."""
+    from restscope.agent import AgentProfile
+
+    profile = AgentProfile(
+        name="main",
+        model_config_name="thinking",
+        instructions="Own semantic testing decisions.",
+    )
+
+    assert profile.instructions == "Own semantic testing decisions."
+    with pytest.raises(ValidationError):
+        AgentProfile(
+            name="blank",
+            model_config_name="thinking",
+            instructions="   \n",
+        )
+    with pytest.raises(ValidationError):
+        AgentProfile(
+            name="large",
+            model_config_name="thinking",
+            instructions="X" * 12_001,
+        )
+
+
 def test_harness_exposes_atomic_start_instead_of_shallow_profile_resolution() -> None:
     """Callers cannot resolve grants and then assemble an Agent themselves."""
     import restscope.harness as harness

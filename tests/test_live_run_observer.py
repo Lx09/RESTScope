@@ -35,7 +35,7 @@ def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -
     runtime = TracingRuntime(redactor=Redactor(["model-secret"]), run_observer=observer)
 
     with runtime.span(
-        "RESTScopeApp.run",
+        "RESTScopeApp.start",
         kind="CHAIN",
     ):
         with runtime.span(
@@ -762,7 +762,7 @@ def test_new_run_replaces_prior_events_and_close_releases_snapshot() -> None:
     observer = LiveRunObserver()
     first_run = observer.begin_run({"name": "first"})
     runtime = TracingRuntime(run_observer=observer)
-    with runtime.span("RESTScopeApp.run", kind="CHAIN"):
+    with runtime.span("RESTScopeApp.start", kind="CHAIN"):
         pass
 
     second_run = observer.begin_run({"name": "second"})

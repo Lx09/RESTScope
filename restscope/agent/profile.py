@@ -16,6 +16,7 @@ class AgentProfile(BaseModel):
     Args:
         name: Stable configuration name used by the Harness and observability.
         description: Optional plain-language purpose shown to a direct parent.
+        instructions: Optional stable guidance shown to this Agent itself.
         model_config_name: Name of the exact provider/model configuration.
         tool_names: Global Tool names this Agent may invoke.
         skill_names: Reusable instruction bundles this Agent may receive.
@@ -30,6 +31,7 @@ class AgentProfile(BaseModel):
 
     name: str = Field(min_length=1, max_length=120, pattern=r"^[a-z][a-z0-9_.-]*$")
     description: str | None = Field(default=None, min_length=1, max_length=2_000)
+    instructions: str | None = Field(default=None, min_length=1, max_length=12_000)
     model_config_name: str = Field(
         min_length=1,
         max_length=120,
@@ -39,6 +41,14 @@ class AgentProfile(BaseModel):
     skill_names: tuple[str, ...] = ()
     context_sources: tuple[str, ...] = ()
     subagent_profile_names: tuple[str, ...] = ()
+
+    @field_validator("instructions")
+    @classmethod
+    def require_nonblank_instructions(cls, value: str | None) -> str | None:
+        """Reject whitespace-only guidance without rewriting trusted text."""
+        if value is not None and not value.strip():
+            raise ValueError("Agent Profile instructions must not be blank")
+        return value
 
     @field_validator(
         "tool_names",

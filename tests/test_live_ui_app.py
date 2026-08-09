@@ -18,10 +18,11 @@ class _InjectedCapabilities:
 
     mcp_host = None
 
-    def __init__(self) -> None:
+    def __init__(self, *, main_agent=None) -> None:
         self.tracing_runtime = None
         self.context_cleared = False
         self.context = None
+        self.main_agent = main_agent
 
     def bind_tracing_runtime(self, runtime) -> None:
         """Record the App's trace facade as a normal injected runtime would."""
@@ -46,6 +47,19 @@ class _InjectedCapabilities:
             )
         return self.context
 
+    def start_main_agent(self, profile_name):
+        """Return the injected Main loop after checking its stable name."""
+        assert profile_name == "main"
+        if self.main_agent is None:
+            raise RuntimeError("No Main Agent was injected")
+        return self.main_agent
+
+    def close_main_agent(self) -> None:
+        """Close the injected loop when it exposes the normal lifecycle hook."""
+        close = getattr(self.main_agent, "close", None)
+        if callable(close):
+            close()
+
 
 class _InjectedSmokeCoordinator:
     """Provide the optional cleanup hook expected by RESTScopeApp.close."""
@@ -56,30 +70,6 @@ class _InjectedSmokeCoordinator:
     def clear_app_state(self) -> None:
         """Record that App cleanup reached the coordinator."""
         self.cleared = True
-
-
-class _InterruptThenPassCoordinator(_InjectedSmokeCoordinator):
-    """Interrupt the first run and let a later run prove App reuse remains valid."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls = 0
-
-    def run(self, _context, request):
-        """Raise once, then return one normal passing Smoke result."""
-        from restscope.operation_smoke import OperationSmokeResult
-
-        self.calls += 1
-        if self.calls == 1:
-            raise KeyboardInterrupt()
-        return OperationSmokeResult(
-            status="passed",
-            operation_key=request.operation_key,
-            success_rate=1,
-            required_success_rate=request.success_rate_threshold,
-            stop_reason="success_rate_reached",
-            reason="The replacement run completed in the test double.",
-        )
 
 
 _ONE_GET_SCHEMA = json.dumps(
@@ -134,15 +124,20 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     assert tracing.run_observer.snapshot()["run"] is None
 
 
-def test_keyboard_interrupt_stops_only_the_run_and_keeps_app_ui_available(
+def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """Scenario: Ctrl-C preserves the snapshot, server, and reusable App lifetime."""
+    """Ctrl-C preserves the stopped snapshot until the App is closed."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
     from restscope.restscope_config import RESTScopeConfig, UIConfig
-    from restscope.harness import RESTScopeRunRequest
+
+    class InterruptingMain:
+        """Represent a blocking Main loop interrupted by its local caller."""
+
+        def start(self):
+            raise KeyboardInterrupt()
 
     service = SimpleNamespace(url="http://127.0.0.1:9987", closed=False)
     service.close = lambda: setattr(service, "closed", True)
@@ -152,11 +147,11 @@ def test_keyboard_interrupt_stops_only_the_run_and_keeps_app_ui_available(
         ui=UIConfig(enabled=True, port=9987),
     )
     tracing = TracingRuntime.disabled()
-    coordinator = _InterruptThenPassCoordinator()
+    coordinator = _InjectedSmokeCoordinator()
     app = RESTScopeApp(
         config=config,
         operation_smoke_coordinator=coordinator,
-        harness_runtime=_InjectedCapabilities(),
+        harness_runtime=_InjectedCapabilities(main_agent=InterruptingMain()),
         tracing_runtime=tracing,
     )
     app.initialize(
@@ -169,20 +164,15 @@ def test_keyboard_interrupt_stops_only_the_run_and_keeps_app_ui_available(
     )
 
     with pytest.raises(KeyboardInterrupt):
-        app.run(RESTScopeRunRequest(max_operation_attempts=1))
+        app.start()
 
     stopped = tracing.run_observer.snapshot()
     assert stopped["run"]["status"] == "stopped"
     assert stopped["run"]["ended_at"] is not None
-    # The injected coordinator never reaches an Agent, Tool, or Smoke Batch, so
-    # schema v2 correctly retains the stopped Run with an empty semantic timeline.
+    # The interrupting test double emits no model or Tool spans, so the stopped
+    # Main lifetime correctly has an empty semantic timeline.
     assert stopped["events"] == []
     assert app.ui_url == "http://127.0.0.1:9987"
-    assert service.closed is False
-
-    replacement = app.run(RESTScopeRunRequest(max_operation_attempts=1))
-    assert replacement.status == "passed"
-    assert tracing.run_observer.snapshot()["run"]["status"] == "passed"
     assert service.closed is False
 
     app.close()

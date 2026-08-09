@@ -462,11 +462,26 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
 
 
 def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
-    """Scenario: verify that app owns one runtime and emits a CHAIN hierarchy."""
+    """The blocking App, Main Agent, and model call form one trace hierarchy."""
+    from restscope.agent import AgentProfile
     from restscope import RESTScopeApp
-    from restscope.harness import RESTScopeRunRequest
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
+    from restscope.llm.registry import LLMProviderRegistry
     from restscope.restscope_config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
+
+    class Provider:
+        """Return a local Main completion and expose the request to tracing."""
+
+        name = "scripted"
+
+        def invoke(self, request):
+            return LLMResponse(
+                provider=self.name,
+                model=request.model,
+                parsed_json={"summary": "Main complete.", "findings": []},
+            )
 
     schema = {
         "openapi": "3.0.0",
@@ -493,11 +508,28 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     runtime, exporter = _recording_runtime()
+    registry = LLMProviderRegistry()
+    registry.register(Provider())
+    capabilities = build_harness(
+        tracing_runtime=runtime,
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+            models=(
+                LLMModelConfig(
+                    role="thinking",
+                    provider="scripted",
+                    model="thinking-model",
+                    max_tokens=512,
+                    context_window_tokens=8_192,
+                ),
+            ),
+            client=LLMClient(registry, tracing_runtime=runtime),
+        ),
+    )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(
-            tracing_runtime=runtime
-        ),
+        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
+        harness_runtime=capabilities,
         tracing_runtime=runtime,
     )
     context = app.initialize(
@@ -506,11 +538,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
         headers={"Authorization": "Bearer header-secret"},
     )
 
-    report = app.run(
-        RESTScopeRunRequest(
-            metadata={"task_id": "trace-task"},
-        )
-    )
+    assert app.start() is None
     with runtime.span(
         "test.config-secrets",
         kind="CHAIN",
@@ -523,57 +551,30 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     app.close()
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
-    app_span = spans["RESTScopeApp.run"]
-    run_harness_span = spans["RunHarness.run"]
-    attempt_span = spans["RunHarness.operation_attempt"]
-    operation_span = spans["OperationSmokeCoordinator.run"]
+    app_span = spans["RESTScopeApp.start"]
+    agent_span = spans["Agent.start"]
+    model_span = spans["LLMClient.invoke"]
     rendered = json.dumps(
         [dict(span.attributes) for span in spans.values()],
         default=str,
     )
 
     assert app.tracing_runtime is runtime
-    assert app.harness_runtime.operation_testing_service.tracing_runtime is runtime
-    assert (
-        app.tracing_runtime.redactor
-        is app.harness_runtime.operation_testing_service.tracing_runtime.redactor
-    )
     with pytest.raises(AttributeError):
         app.tracing_runtime = runtime
-    assert run_harness_span.parent.span_id == app_span.context.span_id
-    assert attempt_span.parent.span_id == run_harness_span.context.span_id
-    assert operation_span.parent.span_id == attempt_span.context.span_id
+    assert agent_span.parent.span_id == app_span.context.span_id
+    assert model_span.parent.span_id == agent_span.context.span_id
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert run_harness_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert attempt_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert operation_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert app_span.attributes["restscope.task_id"] == "trace-task"
+    assert agent_span.attributes["openinference.span.kind"] == "CHAIN"
+    assert model_span.attributes["openinference.span.kind"] == "LLM"
     assert json.loads(app_span.attributes["output.value"]) == {
-        "report_id": report.report_id,
-        "status": "passed",
-        "stop_reason": "completed",
-        "operation_count": 1,
-        "attempt_count": 1,
-    }
-    assert json.loads(run_harness_span.attributes["output.value"]) == {
-        "report_id": report.report_id,
-        "status": "passed",
-        "stop_reason": "completed",
-        "operation_count": 1,
-        "attempt_count": 1,
-        "rounds": 1,
-        "satisfied_operation_count": 1,
-        "unattempted_operation_count": 0,
-        "disposition_counts": {"satisfied": 1},
-        "failure_kind_counts": {},
-        "error": None,
+        "profile_name": "main",
+        "status": "completed",
     }
     assert app_span.attributes["restscope.output.truncated"] is False
-    assert run_harness_span.attributes["restscope.output.truncated"] is False
     assert "header-secret" in rendered
     assert "thinking-secret" not in rendered
     assert "fast-secret" not in rendered
-    assert "tracing" not in report.model_dump(mode="json")
     assert not hasattr(context, "tracing_runtime")
 
 

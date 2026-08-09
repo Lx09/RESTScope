@@ -258,7 +258,7 @@ def test_enabled_runtime_emits_nested_sanitized_openinference_spans() -> None:
     )
 
     with runtime.span(
-        "RESTScopeApp.run",
+        "RESTScopeApp.start",
         kind="CHAIN",
         input_value={"authorization": "span-secret"},
     ) as root:
@@ -272,7 +272,7 @@ def test_enabled_runtime_emits_nested_sanitized_openinference_spans() -> None:
     runtime.close()
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
-    root_span = spans["RESTScopeApp.run"]
+    root_span = spans["RESTScopeApp.start"]
     child_span = spans["LLMClient.invoke"]
 
     assert child_span.parent.span_id == root_span.context.span_id

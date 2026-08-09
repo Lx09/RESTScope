@@ -69,10 +69,11 @@ as the active project direction.
   in progress.
 - The approved target Main Agent owns semantic testing decisions, including
   Skill and Tool choice, delegation, ordering, domain retries, and completion.
-  The Harness will enforce and execute authorized runtime contracts but will
-  not choose testing work. The current `RunHarness` FIFO remains executable
-  migration evidence until the Main Profile, testing capabilities, App task
-  contract, and deterministic fact ledger replace it together.
+  The Harness enforces and executes authorized runtime contracts but does not
+  choose testing work. `RESTScopeApp.start()` now blocks on one taskless Main
+  loop; the former FIFO Run Harness and its request/report DTOs are retired.
+  The initial Main Profile intentionally has only its private Plan Tools until
+  separate testing Skills and Tools are approved and connected.
 - Test plans, inferred operation relationships, scheduler state, and Agent
   intermediate decisions are ephemeral and are not database records or durable
   artifacts.

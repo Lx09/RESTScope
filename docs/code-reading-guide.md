@@ -20,14 +20,12 @@ The core loop is:
 3. **Create runtime services.** Build the database repositories, shared HTTP
    transport, Agent Profiles, selected Tool Bindings, language-model clients,
    tracing runtime, and testing Harness.
-4. **Choose an operation.** The Run Harness selects one OpenAPI operation that
-   still needs evidence.
-5. **Generate a batch.** Generator configurations produce concrete path,
-   query, header, cookie, and body values.
-6. **Send HTTP requests.** Test cases are executed against the configured
-   target API.
-7. **Observe responses.** The API Behavior Monitor checks response contracts
-   and learns narrowly approved identifier and response-value evidence.
+4. **Start Main.** `RESTScopeApp.start()` creates the `main` Profile Agent and
+   blocks in its model loop without constructing a task DTO.
+5. **Use authorized capabilities.** The initial Profile can read and replace
+   only its private Plan; unfinished testing Skills and Tools are absent.
+6. **Finish safely.** Main returns its internal `AgentCompletion`, normally to
+   report that testing cannot proceed until those capabilities are connected.
 8. **Index Test Cases.** One run-local Catalog retains every sent request's
    structured input JSON and only failed response bodies.
 9. **Resolve the failed Batch.** Runtime collapses exact duplicate messages into
@@ -245,11 +243,11 @@ observations spell it as a `$...` selector, including arrays and Schema
 combination branches. It owns no OpenAPI registry, response values, or
 persistent state.
 
-### `restscope/harness/run.py`
+### `restscope/agent/runtime.py`
 
-Owns the run-scoped deterministic loop. It chooses operations from current
-runtime evidence and keeps FIFO/retry state in memory only; it does not load a
-persisted static plan or require a graph framework.
+Owns the shared one-Tool-or-final model loop. `Agent.start()` is the taskless,
+one-shot Main entry; `Agent.run(AgentTask)` remains the bounded task protocol
+for Subagents and focused internal callers. The Harness is the only constructor.
 
 ### `restscope/operation_smoke/`
 
@@ -455,16 +453,19 @@ For a normal generated Smoke case:
 
 ```text
 RESTScopeApp
-  -> RunHarness
-  -> OperationSmokeCoordinator
-  -> OperationTestingService
-  -> generate_test_case
-  -> serialize generated values
-  -> TargetHTTPTransport
-  -> APIBehaviorMonitorCoordinator
-  -> BatchExecutionResult
-  -> TestCaseCatalog
+  -> HarnessRuntime.start_main_agent("main")
+  -> Agent.start()
+  -> AgentPromptSession taskless bootstrap
+  -> LLMClient
+  -> authorized plan.read / plan.update
+  -> internal AgentCompletion ends the blocking call
 ```
+
+The first production Main Profile has no testing Skill or domain Tool, so this
+is currently a runtime/lifecycle path rather than an executable Smoke path.
+`OperationSmokeCoordinator`, `OperationTestingService`, Failure Resolution, and
+Parameter Patch remain readable transitional Modules but are not selected by
+the Main Profile.
 
 For a failed Batch that receives an applied Patch:
 

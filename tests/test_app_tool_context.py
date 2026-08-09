@@ -26,27 +26,120 @@ def _spec(*, operation_id: str = "listPets") -> dict:
 
 
 def _app(tmp_path):
+    from restscope.agent import AgentProfile
     from restscope import RESTScopeApp
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
+    from restscope.llm.registry import LLMProviderRegistry
     from restscope.restscope_config import RESTScopeConfig
     from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
+
+    class Provider:
+        """Complete the blocking Main loop locally without external I/O."""
+
+        name = "scripted"
+
+        def invoke(self, request):
+            return LLMResponse(
+                provider=self.name,
+                model=request.model,
+                parsed_json={"summary": "Main loop complete.", "findings": []},
+            )
 
     database = tmp_path / "app-context.sqlite"
     env_file = tmp_path / ".env"
     env_file.write_text(f"DB_URL=sqlite:///{database}\n", encoding="utf-8")
+    registry = LLMProviderRegistry()
+    registry.register(Provider())
+    runtime = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+            models=(
+                LLMModelConfig(
+                    role="thinking",
+                    provider="scripted",
+                    model="thinking-model",
+                    max_tokens=512,
+                    context_window_tokens=8_192,
+                ),
+            ),
+            client=LLMClient(registry),
+        )
+    )
     return RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
         operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
+        harness_runtime=runtime,
     )
 
 
-def _request():
-    from restscope.harness import RESTScopeRunRequest
+def test_production_main_profile_is_thinking_and_capability_light(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Unimplemented testing methods stay absent from the first Main Profile."""
+    from restscope.app import _build_main_agent_runtime_definition
+    from restscope.harness import build_harness
+    from restscope.llm import LLMClient, LLMResponse
+    from restscope.llm.registry import LLMProviderRegistry
+    from restscope.observability import TracingRuntime
+    from restscope.restscope_config import RESTScopeConfig
 
-    return RESTScopeRunRequest()
+    class Provider:
+        """Record the one production-shaped Main request without network I/O."""
+
+        name = "scripted"
+
+        def __init__(self):
+            self.requests = []
+
+        def invoke(self, request):
+            self.requests.append(request)
+            return LLMResponse(
+                provider=self.name,
+                model=request.model,
+                parsed_json={"summary": "Capabilities reported.", "findings": []},
+            )
+
+    provider = Provider()
+    registry = LLMProviderRegistry()
+    registry.register(provider)
+    client = LLMClient(registry)
+    monkeypatch.setattr("restscope.app.build_llm_client", lambda *_args, **_kwargs: client)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "THINK_PROVIDER=scripted\n"
+        "THINK_MODEL=thinking-model\n"
+        "THINK_MAX_TOKENS=512\n"
+        "THINK_CONTEXT_WINDOW_TOKENS=8192\n",
+        encoding="utf-8",
+    )
+    definition = _build_main_agent_runtime_definition(
+        RESTScopeConfig.from_environment(env_file),
+        tracing_runtime=TracingRuntime.disabled(),
+    )
+    assert definition is not None
+    profile = definition.profiles[0]
+
+    assert profile.name == "main"
+    assert profile.model_config_name == "thinking"
+    assert profile.tool_names == ("plan.read", "plan.update")
+    assert profile.skill_names == ()
+    assert profile.context_sources == ()
+    assert profile.subagent_profile_names == ()
+
+    build_harness(agent_runtime=definition).start_main_agent("main").start()
+    request = provider.requests[0]
+    assert request.model == "thinking-model"
+    assert [tool.name for tool in request.tools] == ["plan.read", "plan.update"]
+    assert any(
+        "single long-lived Main Agent" in message.content
+        for message in request.messages
+    )
 
 
-def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tmp_path) -> None:
-    """Scenario: verify that app initializes once and reuses the same ir across runs."""
+def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp_path) -> None:
+    """One parsed target feeds the only taskless Main loop in this App."""
     from restscope.tools import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
@@ -71,10 +164,8 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tm
     source["content"] = "changed"
     headers["Authorization"] = "changed"
 
-    first = app.run(_request())
-    second = app.run(_request())
+    assert app.start() is None
 
-    assert first.status == second.status == "passed"
     assert len(seen) == 1
     assert app.tool_context is context
     assert app.harness_runtime.require_context() is context
@@ -85,6 +176,8 @@ def test_app_initializes_once_and_reuses_the_same_ir_across_runs(monkeypatch, tm
     with pytest.raises(ToolContextError) as exc_info:
         app.initialize(schema_source={"kind": "inline", "content": json.dumps(_spec())})
     assert exc_info.value.code == "tool_context_already_initialized"
+    with pytest.raises(RuntimeError, match="already started"):
+        app.start()
 
 
 @pytest.mark.parametrize(
@@ -171,7 +264,7 @@ def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> No
     assert app.harness_runtime is not None
 
     with pytest.raises(ToolContextError) as exc_info:
-        app.run(_request())
+        app.start()
     assert exc_info.value.code == "tool_context_not_initialized"
 
     context = app.initialize(
@@ -187,4 +280,4 @@ def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> No
         runtime.require_context()
     assert exc_info.value.code == "tool_context_not_initialized"
     with pytest.raises(RuntimeError, match="closed"):
-        app.run(_request())
+        app.start()

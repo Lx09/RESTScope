@@ -39,14 +39,10 @@ assertion.
 | `test_workflow_package_boundaries.py` | Main Agent/Subagent migration guard, global Tool locality, Harness ownership, and deliberately small public facades. |
 | `test_builtin_skill_loader.py`, `test_parameter_patch_skill.py`, `test_file_read_tool.py`, `test_parameter_patch_agent.py` | Strict built-in standard Skill discovery, lazy Profile-scoped References, Parameter Patch authorization, proposal-only transitional Agent, deterministic trust boundary, fresh-context Review Agent, shared budget, and strict fallbacks. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |
-| `test_harness_run.py` | Run-scoped FIFO scheduling across operations and rounds. |
-| `test_tools_catalog.py`, `test_agent_profile.py`, `test_agent_runtime.py`, `test_agent_plan.py` | Global Tool discovery, deep Schema construction, atomic Profile authorization, private Agent Plans, exact Provider payloads, correction loops, shared budget, and Context compaction. |
+| `test_app_tool_context.py`, `test_agent_profile.py`, `test_agent_runtime.py`, `test_agent_plan.py` | Blocking taskless Main startup, bounded Profile instructions, capability-light production Profile, private Agent Plans, exact Provider payloads, correction loops, shared budget, and Context compaction. |
 | `test_subagent_runtime.py` | Asynchronous direct-child start/wait/cancel, Profile DAG/depth rules, slot release, timeout, and cooperative cancellation. |
 | `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, operation scope, execution, separate external Catalogs, and MCP adaptation. |
 | `test_observability*`, `test_phoenix_tracing_contract.py` | Redaction and trace hierarchy/attributes without changing business behavior. |
-| `test_gitlab_post_projects_smoke_live.py` | Opt-in one-operation GitLab acceptance: real project creation, 80% Smoke threshold, and Phoenix trace coverage. |
-| `test_gitlab_projects_operations_live.py` | Opt-in five-operation GitLab Projects acceptance: every collection/item operation reaches Batch without technical failure; caller enforces a ten-minute deadline. |
-| `test_gitlab_live_env_lookup.py` | Offline regression for locating the main checkout's ignored model configuration from either GitLab live worktree layout. |
 | `test_*_live.py`, `test_project_swagger_smoke_e2e_live.py` | Opt-in checks against real local services or providers; these are not ordinary offline tests. |
 
 ## Fakes, stubs, and fixtures
