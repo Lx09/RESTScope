@@ -67,6 +67,12 @@ as the active project direction.
 - OpenAPI operations are discovered from the supplied source at runtime.
 - Testing evidence may change dependency analysis and scheduling while a run is
   in progress.
+- The approved target Main Agent owns semantic testing decisions, including
+  Skill and Tool choice, delegation, ordering, domain retries, and completion.
+  The Harness will enforce and execute authorized runtime contracts but will
+  not choose testing work. The current `RunHarness` FIFO remains executable
+  migration evidence until the Main Profile, testing capabilities, App task
+  contract, and deterministic fact ledger replace it together.
 - Test plans, inferred operation relationships, scheduler state, and Agent
   intermediate decisions are ephemeral and are not database records or durable
   artifacts.

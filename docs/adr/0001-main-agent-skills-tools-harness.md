@@ -4,6 +4,12 @@ status: accepted
 
 # Use one Agent runtime with global Tools, explicit Skills, and a Harness
 
+[ADR 0002](0002-main-agent-owns-testing-decisions.md) supersedes only this
+record's assignment of the operation FIFO and retry loop to the Harness. The
+configurable Agent runtime, explicit Profile authorization, global Tool
+Catalog, Skill loading, Prompt Session, and mechanical Harness responsibilities
+recorded here remain accepted.
+
 RESTScope will converge on one configurable Agent runtime: one long-lived Main
 Agent may request independent task-scoped Subagents, while Agent Profiles name
 the exact model, Skills, global Tools, and bounded context sources each instance
