@@ -125,16 +125,25 @@ construction, then `start_main_agent(profile_name)` atomically resolves and
 binds only that Profile's model configuration, ordered Tools, selected Skill
 metadata, bounded Context Sources, and described direct child Profiles. A
 private Prompt Session automatically adds `skill.read` when Skills are selected
-so the model can load only an authorized instruction body on demand. It does
-not expose a separate resolution or Prompt object that callers could use to
-assemble a broader Agent. Unit tests provide their own local stub providers;
-the runtime package does not register an offline fake provider.
+so the model can load only an authorized `SKILL.md` body on demand. A Profile
+must explicitly grant `file.read` when a selected Skill requires its linked
+Markdown References; the Harness binds that Tool only to the selected Skills'
+startup-validated in-memory files. It does not expose a separate resolution or
+Prompt object that callers could use to assemble a broader Agent. Unit tests
+provide their own local stub providers; the runtime package does not register
+an offline fake provider.
 
-The project currently exports one domain Skill, `parameter-patch`. It records
-the evidence-backed Generator/Constraint proposal and future self-review method
-plus its three read-only lookup requirements. The transitional specialized
-Patch Agent reuses only the proposal segment; no production generic Agent
-Profile selects the complete Skill yet.
+The project currently ships one built-in standard Skill, `parameter-patch`, in
+`restscope/builtin_skills/parameter-patch/`. Its `SKILL.md` routes to detailed
+Generator, Constraint, compiler/sampling, proposal, and Review references.
+Its standard frontmatter contains only `name` and `description`, while
+`restscope.yaml` declares version, risk, three read-only domain Tools, and the
+ordinary `file.read` grant. `restscope.skills` automatically discovers these
+packaged files and exposes an immutable built-in Catalog; callers may add test
+definitions but cannot replace a built-in. The transitional specialized Patch
+Agent reads the same proposal Reference through that generic Catalog without
+offering `file.read` to its model. No production generic Agent Profile selects
+the complete Skill yet.
 
 The same generic `Agent` class runs the reusable Main Agent and task-scoped
 Subagents. A child receives its own Profile and objective, never its parent's

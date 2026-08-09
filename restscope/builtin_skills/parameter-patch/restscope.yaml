@@ -1,0 +1,8 @@
+version: "1.0"
+risk_level: low
+required_tools:
+  - resource.list_resources
+  - resource.list_ids
+  - openapi.find_observed_response_fields
+  - file.read
+required_context_sources: []

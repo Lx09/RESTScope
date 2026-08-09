@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from restscope.tools.file import file_read_tool_spec
 from restscope.tools.http import http_request_tool_spec
 from restscope.tools.openapi import (
     openapi_find_observed_response_fields_tool_spec,
@@ -81,6 +82,7 @@ def builtin_tool_catalog() -> ToolCatalog:
             (plan_read_tool_spec(), plan_update_tool_spec()),
         ),
         ("skill", (skill_read_tool_spec(),)),
+        ("file", (file_read_tool_spec(),)),
         (
             "parameter",
             (

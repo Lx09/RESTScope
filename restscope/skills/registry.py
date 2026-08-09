@@ -29,3 +29,7 @@ class SkillRegistry:
     def select(self, names: tuple[str, ...]) -> tuple[SkillDefinition, ...]:
         """Resolve only the ordered Skill names granted by one Agent Profile."""
         return tuple(self.get(name) for name in names)
+
+    def definitions(self) -> tuple[SkillDefinition, ...]:
+        """Return loaded definitions in stable discovery or declaration order."""
+        return tuple(self._skills.values())

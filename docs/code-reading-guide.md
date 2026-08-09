@@ -282,11 +282,15 @@ testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and coordinates a separate semantic Reviewer.
 `agent.py` owns one continuing proposal/revision conversation;
 `coordinator.py` owns deterministic checks, shared output budget, and feedback.
-The project-native `parameter-patch` Skill owns the maintained proposal method,
-including evidence authority, Generator/Constraint selection, lookup rules, and
-correction guidance. The specialized Proposal Agent temporarily consumes only
-that Skill's proposal segment. The full Skill also records the future generic
-Agent's self-review method, but no production Profile selects it yet.
+The standard project-native `parameter-patch` Skill lives under
+`restscope/builtin_skills/parameter-patch/`. Its `SKILL.md` and focused
+references own evidence authority, Generator construction, Constraint solving,
+compilation/sampling semantics, proposal correction, and semantic Review. The
+generic built-in Skill loader validates and caches those package files before
+an Agent starts. The specialized Proposal Agent temporarily consumes only the
+packaged proposal Reference through that Catalog. The complete Skill also
+records the future generic Agent's self-review method, but no production
+Profile selects it yet.
 Both Proposal and Review return JSON Schema responses that are validated again
 locally. The Proposal Schema exposes only model-constructible Generators and a
 recursive Constraint language that uses semantic input handles. The Proposal
@@ -339,20 +343,22 @@ and the Profile that names its model configuration, ordered Tools, Skills,
 bounded context sources, and described authorized child Profiles. Its private
 `prompt.py` Module owns generic Profile prompt roles, changing Context
 fingerprints, Skill instruction injection, protocol reservation, and compaction
-requests without exporting a Prompt platform. `skills/` stores
-reusable loaded instructions and their required grants; a Skill executes
-nothing by itself. Its `parameter_patch.py` Module defines the first
-project-owned domain Skill and its three read-only evidence requirements;
-future activation still requires an explicit Profile and current execution
-consumer. `tools/` owns every
+requests without exporting a Prompt platform. `builtin_skills/` stores standard
+project-owned `SKILL.md` instruction assets, optional `restscope.yaml` runtime
+manifests, and directly linked Markdown References. `skills/` discovers them in
+stable order, validates the standard and runtime contracts, and caches
+immutable definitions. A Skill executes nothing and discovery grants nothing;
+each Profile must still select it and grant every dependency. `tools/` owns every
 RESTScope Tool contract and execution Adapter, grouped by the thing handled:
-HTTP, OpenAPI, Resource, Test Case, Worklist, Plan, Skill, Parameter, and
+HTTP, OpenAPI, Resource, Test Case, Worklist, Plan, Skill, File, Parameter, and
 Subagent. Its immutable built-in Catalog is authoritative, while one Profile
 still selects the exact definitions made executable for an Agent.
 `tools/plan/` owns the small read/replace Interface for one Agent session's
 private task progress;
-`tools/skill/` owns the one Harness-bound loader contract; selecting Skills
-automatically appends it after explicitly ordered Profile Tools; and
+`tools/skill/` owns the one Harness-bound core loader contract; selecting Skills
+automatically appends it after explicitly ordered Profile Tools. `tools/file/`
+owns explicit, Profile-scoped reads of only startup-registered Skill Reference
+Markdown held in memory; it never resolves model input as a filesystem path; and
 `tools/worklist/` retains Failure Resolution's reference-rich domain behavior.
 
 ### `restscope/harness/`

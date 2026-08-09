@@ -53,6 +53,14 @@ message. Profiles cannot name `skill.read` directly and caller Binding factories
 cannot replace it. Skill-required Tools and Context Sources are still checked
 before launch whether or not the model loads the body.
 
+Packaged standard Skills are discovered automatically from
+`restscope/builtin_skills/`, but discovery does not select or authorize them.
+`skill.read` adds only the selected Skill's core `SKILL.md` body. A Skill may
+directly link bounded one-level Markdown References; reading one requires the
+ordinary explicit `file.read` Profile grant. The Harness binds `file.read` to
+an immutable in-memory map containing only the selected Skills' validated
+References, so model input is never resolved against the live filesystem.
+
 Every Profile-started Main Agent or Subagent owns a private
 `AgentPromptSession`. It assembles the stable system/developer prefix, tasks,
 incremental Context replacements, Skill instruction messages, immutable Tool

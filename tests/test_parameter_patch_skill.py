@@ -1,10 +1,13 @@
-"""Protect the project-native Parameter Patch Skill and its Harness grants."""
+"""Protect Parameter Patch as a packaged standard Skill with lazy references."""
 
 from __future__ import annotations
 
+from importlib.resources import files
+import json
 from typing import Any
 
 import pytest
+import yaml
 
 
 class _SkillProvider:
@@ -48,9 +51,10 @@ def _model():
 
 
 def _binding_factories(names: tuple[str, ...]):
-    """Provide inert bindings because these tests exercise Skill loading only."""
+    """Bind only domain Tools; the Harness owns Skill and file readers."""
     from restscope.harness import ToolBindingFactory
     from restscope.tools import ToolBinding
+    from restscope.tools.file import FILE_READ_TOOL_NAME
 
     def factory(name: str) -> ToolBindingFactory:
         """Capture one exact Catalog name in its session factory."""
@@ -59,17 +63,20 @@ def _binding_factories(names: tuple[str, ...]):
             create=lambda: ToolBinding(name=name, execute=lambda **_arguments: {}),
         )
 
-    return tuple(factory(name) for name in names)
+    return tuple(factory(name) for name in names if name != FILE_READ_TOOL_NAME)
+
+
+def _parameter_patch_skill():
+    """Resolve Parameter Patch through the same built-in Catalog as production."""
+    from restscope.skills import builtin_skill_catalog
+
+    return builtin_skill_catalog().get("parameter-patch")
 
 
 def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
-    """The reusable method must remain bounded and require no hidden access."""
-    from restscope.skills import (
-        PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS,
-        PARAMETER_PATCH_SKILL,
-    )
-
-    manifest = PARAMETER_PATCH_SKILL.manifest
+    """The standard files alone must drive the bounded runtime definition."""
+    skill = _parameter_patch_skill()
+    manifest = skill.manifest
 
     assert manifest.name == "parameter-patch"
     assert manifest.version == "1.0"
@@ -78,40 +85,79 @@ def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
         "resource.list_resources",
         "resource.list_ids",
         "openapi.find_observed_response_fields",
+        "file.read",
     )
     assert manifest.required_context_sources == ()
     assert manifest.instruction_artifact_uri is None
-    assert len(PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS) <= 7_000
-    assert len(PARAMETER_PATCH_SKILL.instructions) <= 24_000
-    assert PARAMETER_PATCH_SKILL.instructions.startswith(
-        PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
+    assert len(skill.instructions) <= 24_000
+
+    skill_root = files("restscope.builtin_skills").joinpath("parameter-patch")
+    skill_source = skill_root.joinpath("SKILL.md").read_text(encoding="utf-8")
+    frontmatter = yaml.safe_load(skill_source.split("---", 2)[1])
+    runtime_manifest = yaml.safe_load(
+        skill_root.joinpath("restscope.yaml").read_text(encoding="utf-8")
     )
-    assert "## Self-review a compiled candidate" not in (
-        PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
-    )
-    for required_heading in (
-        "# Build a Parameter Patch",
-        "## Evidence authority",
-        "## Choose a Generator",
-        "## Express cross-input Constraints",
-        "## Correct a rejected proposal",
-        "## Self-review a compiled candidate",
-    ):
-        assert required_heading in PARAMETER_PATCH_SKILL.instructions
+
+    assert frontmatter == {
+        "name": "parameter-patch",
+        "description": manifest.description,
+    }
+    assert runtime_manifest == {
+        "version": "1.0",
+        "risk_level": "low",
+        "required_tools": list(manifest.required_tools),
+        "required_context_sources": [],
+    }
 
 
-def test_parameter_patch_skill_rejects_a_profile_missing_one_required_tool() -> None:
-    """Harness validation must fail before the model sees an incomplete Profile."""
+def test_parameter_patch_core_and_references_remain_separate() -> None:
+    """Skill loading must reveal the core body without flattening its library."""
+    skill = _parameter_patch_skill()
+    skill_root = files("restscope.builtin_skills").joinpath("parameter-patch")
+    skill_source = skill_root.joinpath("SKILL.md").read_text(encoding="utf-8")
+    expected_core = skill_source.split("---", 2)[2].strip()
+    expected_paths = (
+        "references/proposal-protocol.md",
+        "references/generators.md",
+        "references/constraints.md",
+        "references/compiler-and-sampling.md",
+        "references/review.md",
+    )
+
+    assert skill.instructions == expected_core
+    assert tuple(reference.path for reference in skill.references) == expected_paths
+    assert "# Generator construction and patching" not in skill.instructions
+    for reference in skill.references:
+        expected = skill_root.joinpath(reference.path).read_text(encoding="utf-8").strip()
+        assert reference.content == expected
+        assert 0 < len(reference.content) <= 24_000
+
+
+@pytest.mark.parametrize(
+    "missing_tool",
+    (
+        "resource.list_resources",
+        "resource.list_ids",
+        "openapi.find_observed_response_fields",
+        "file.read",
+    ),
+)
+def test_parameter_patch_rejects_a_profile_missing_any_required_tool(
+    missing_tool: str,
+) -> None:
+    """Harness validation must fail before an incompletely authorized launch."""
     from restscope.agent import AgentProfile
     from restscope.harness import AgentRuntimeDefinition, build_harness
-    from restscope.skills import PARAMETER_PATCH_SKILL
 
-    granted = PARAMETER_PATCH_SKILL.manifest.required_tools[:-1]
+    skill = _parameter_patch_skill()
+    granted = tuple(
+        name for name in skill.manifest.required_tools if name != missing_tool
+    )
     client, _provider = _client()
 
     with pytest.raises(
         ValueError,
-        match="parameter-patch requires Tool openapi.find_observed_response_fields",
+        match=rf"parameter-patch requires Tool {missing_tool}",
     ):
         build_harness(
             agent_runtime=AgentRuntimeDefinition(
@@ -125,19 +171,19 @@ def test_parameter_patch_skill_rejects_a_profile_missing_one_required_tool() -> 
                 ),
                 models=(_model(),),
                 client=client,
-                skills=(PARAMETER_PATCH_SKILL,),
                 tool_binding_factories=_binding_factories(granted),
             )
         )
 
 
-def test_parameter_patch_skill_body_is_injected_only_after_skill_read() -> None:
-    """Metadata is stable context while the detailed method remains on demand."""
+def test_skill_and_reference_bodies_are_each_loaded_only_on_demand() -> None:
+    """Metadata, core instructions, and one Reference enter in separate stages."""
     from restscope.agent import AgentProfile, AgentTask
     from restscope.harness import AgentRuntimeDefinition, build_harness
     from restscope.llm import LLMResponse, ToolCall
-    from restscope.skills import PARAMETER_PATCH_SKILL
 
+    skill = _parameter_patch_skill()
+    reference = skill.reference("references/generators.md")
     client, provider = _client(
         LLMResponse(
             provider="scripted",
@@ -153,10 +199,24 @@ def test_parameter_patch_skill_body_is_injected_only_after_skill_read() -> None:
         LLMResponse(
             provider="scripted",
             model="fast-model",
+            tool_calls=[
+                ToolCall(
+                    id="read-generator-reference",
+                    name="file.read",
+                    arguments={
+                        "skill_name": "parameter-patch",
+                        "path": reference.path,
+                    },
+                )
+            ],
+        ),
+        LLMResponse(
+            provider="scripted",
+            model="fast-model",
             parsed_json={"summary": "Patch method loaded.", "findings": []},
         ),
     )
-    required_tools = PARAMETER_PATCH_SKILL.manifest.required_tools
+    required_tools = skill.manifest.required_tools
     runtime = build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
@@ -169,7 +229,6 @@ def test_parameter_patch_skill_body_is_injected_only_after_skill_read() -> None:
             ),
             models=(_model(),),
             client=client,
-            skills=(PARAMETER_PATCH_SKILL,),
             tool_binding_factories=_binding_factories(required_tools),
         )
     )
@@ -185,12 +244,20 @@ def test_parameter_patch_skill_body_is_injected_only_after_skill_read() -> None:
     ]
     stable_context = provider.requests[0].messages[0].content
     assert "parameter-patch" in stable_context
-    assert PARAMETER_PATCH_SKILL.manifest.description in stable_context
-    assert "# Build a Parameter Patch" not in stable_context
-    injected_messages = [
-        message.content
-        for message in provider.requests[1].messages
-        if "AUTHORIZED SKILL INSTRUCTIONS: parameter-patch" in message.content
-    ]
-    assert len(injected_messages) == 1
-    assert PARAMETER_PATCH_SKILL.instructions in injected_messages[0]
+    assert skill.manifest.description in stable_context
+    assert skill.instructions not in stable_context
+    assert reference.content not in stable_context
+
+    second_request = "\n".join(
+        message.content for message in provider.requests[1].messages
+    )
+    assert skill.instructions in second_request
+    assert reference.content not in second_request
+
+    third_request = "\n".join(
+        message.content for message in provider.requests[2].messages
+    )
+    assert json.dumps(reference.content)[1:-1] in third_request
+    assert skill.reference("references/proposal-protocol.md").content not in (
+        third_request
+    )

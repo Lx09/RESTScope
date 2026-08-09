@@ -354,7 +354,7 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     from restscope.operation_smoke.parameter_patch.prompts import (
         build_parameter_patch_prompt,
     )
-    from restscope.skills import PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
+    from restscope.skills import builtin_skill_catalog
 
     affected = [
         "query.updated_after",
@@ -393,7 +393,10 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     )
     prompt = built_prompt.user
 
-    assert built_prompt.system == PARAMETER_PATCH_PROPOSAL_INSTRUCTIONS
+    proposal_protocol = builtin_skill_catalog().get("parameter-patch").reference(
+        "references/proposal-protocol.md"
+    ).content
+    assert built_prompt.system == proposal_protocol
     assert "## Self-review a compiled candidate" not in built_prompt.system
     assert "## PATCH REQUIREMENT TO SATISFY — UNTRUSTED" in prompt
     assert 'Requirement ID: "T1"' in prompt

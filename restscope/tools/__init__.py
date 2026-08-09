@@ -12,6 +12,7 @@ from .external import (
     UnsupportedToolSourceKindError,
     register_tool_source,
 )
+from .file import FILE_READ_TOOL_NAME, file_read_tool_binding, file_read_tool_spec
 from .http import HTTP_REQUEST_TOOL_NAME, TargetHTTPRequestTool, http_request_tool_spec
 from .openapi import (
     OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME,
@@ -52,6 +53,9 @@ __all__ = [
     "ToolFailure",
     "ToolContext",
     "ToolContextError",
+    "FILE_READ_TOOL_NAME",
+    "file_read_tool_binding",
+    "file_read_tool_spec",
     "HTTP_REQUEST_TOOL_NAME",
     "TargetHTTPRequestTool",
     "http_request_tool_spec",

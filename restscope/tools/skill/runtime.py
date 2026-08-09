@@ -44,8 +44,9 @@ def skill_read_tool_spec() -> ToolSpec:
     return ToolSpec(
         name=SKILL_READ_TOOL_NAME,
         description=(
-            "Load the complete instructions for one Skill selected by this "
-            "Agent Profile. The instructions are added to the next user message."
+            "Load the core SKILL.md instructions for one Skill selected by this "
+            "Agent Profile. The instructions are added to the next user message; "
+            "linked References require an authorized file.read call."
         ),
         kind="local_function",
         input_schema=_ReadSkillInput.model_json_schema(),
