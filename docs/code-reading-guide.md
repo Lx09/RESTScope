@@ -282,6 +282,11 @@ testing types, validates Generator schemas and Constraints, generates
 `case_count` local samples, and coordinates a separate semantic Reviewer.
 `agent.py` owns one continuing proposal/revision conversation;
 `coordinator.py` owns deterministic checks, shared output budget, and feedback.
+The project-native `parameter-patch` Skill owns the maintained proposal method,
+including evidence authority, Generator/Constraint selection, lookup rules, and
+correction guidance. The specialized Proposal Agent temporarily consumes only
+that Skill's proposal segment. The full Skill also records the future generic
+Agent's self-review method, but no production Profile selects it yet.
 Both Proposal and Review return JSON Schema responses that are validated again
 locally. The Proposal Schema exposes only model-constructible Generators and a
 recursive Constraint language that uses semantic input handles. The Proposal
@@ -336,7 +341,10 @@ bounded context sources, and described authorized child Profiles. Its private
 fingerprints, Skill instruction injection, protocol reservation, and compaction
 requests without exporting a Prompt platform. `skills/` stores
 reusable loaded instructions and their required grants; a Skill executes
-nothing by itself. `tools/` owns every
+nothing by itself. Its `parameter_patch.py` Module defines the first
+project-owned domain Skill and its three read-only evidence requirements;
+future activation still requires an explicit Profile and current execution
+consumer. `tools/` owns every
 RESTScope Tool contract and execution Adapter, grouped by the thing handled:
 HTTP, OpenAPI, Resource, Test Case, Worklist, Plan, Skill, Parameter, and
 Subagent. Its immutable built-in Catalog is authoritative, while one Profile
