@@ -133,17 +133,26 @@ Prompt object that callers could use to assemble a broader Agent. Unit tests
 provide their own local stub providers; the runtime package does not register
 an offline fake provider.
 
-The project currently ships one built-in standard Skill, `parameter-patch`, in
-`restscope/builtin_skills/parameter-patch/`. Its `SKILL.md` routes to detailed
-Generator, Constraint, compiler/sampling, proposal, and Review references.
-Its standard frontmatter contains only `name` and `description`, while
-`restscope.yaml` declares version, risk, three read-only domain Tools, and the
-ordinary `file.read` grant. `restscope.skills` automatically discovers these
-packaged files and exposes an immutable built-in Catalog; callers may add test
+The project currently ships two built-in standard Skills. The low-risk
+`build-parameter-patch` Skill owns detailed Generator, Constraint,
+compiler/sampling, proposal-correction, and semantic-Review methods. The
+medium-risk `resolve-operation-failures` Skill owns one-operation Failure
+grouping, evidence-driven diagnosis, controlled HTTP Probe guidance, Worklist
+method, and delegation of a confirmed Parameter repair to an authorized child
+Profile that selects `build-parameter-patch`. The parent Skill deliberately has
+no direct Patch-generation Tool. A generic child completion remains advice
+until a future deterministic bridge compiles, samples, reviews, and registers a
+real candidate.
+
+Each standard `SKILL.md` frontmatter contains only `name` and `description`,
+while `restscope.yaml` declares version, risk, required Tools, and bounded
+Context Sources. `restscope.skills` automatically discovers these packaged
+files and exposes an immutable built-in Catalog; callers may add test
 definitions but cannot replace a built-in. The transitional specialized Patch
-Agent reads the same proposal Reference through that generic Catalog without
-offering `file.read` to its model. No production generic Agent Profile selects
-the complete Skill yet.
+Agent reads `build-parameter-patch`'s proposal Reference through that Catalog
+without offering `file.read` to its model. No production generic Profile
+selects either complete Skill yet, so the specialized Failure Resolution and
+Patch/Review runtime below remains unchanged.
 
 The same generic `Agent` class runs the reusable Main Agent and task-scoped
 Subagents. A child receives its own Profile and objective, never its parent's

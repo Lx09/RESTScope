@@ -1,4 +1,4 @@
-"""Protect Parameter Patch as a packaged standard Skill with lazy references."""
+"""Protect Build Parameter Patch as a packaged standard Skill with lazy references."""
 
 from __future__ import annotations
 
@@ -67,10 +67,10 @@ def _binding_factories(names: tuple[str, ...]):
 
 
 def _parameter_patch_skill():
-    """Resolve Parameter Patch through the same built-in Catalog as production."""
+    """Resolve Build Parameter Patch through production's built-in Catalog."""
     from restscope.skills import builtin_skill_catalog
 
-    return builtin_skill_catalog().get("parameter-patch")
+    return builtin_skill_catalog().get("build-parameter-patch")
 
 
 def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
@@ -78,7 +78,7 @@ def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
     skill = _parameter_patch_skill()
     manifest = skill.manifest
 
-    assert manifest.name == "parameter-patch"
+    assert manifest.name == "build-parameter-patch"
     assert manifest.version == "1.0"
     assert manifest.risk_level == "low"
     assert manifest.required_tools == (
@@ -91,7 +91,7 @@ def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
     assert manifest.instruction_artifact_uri is None
     assert len(skill.instructions) <= 24_000
 
-    skill_root = files("restscope.builtin_skills").joinpath("parameter-patch")
+    skill_root = files("restscope.builtin_skills").joinpath("build-parameter-patch")
     skill_source = skill_root.joinpath("SKILL.md").read_text(encoding="utf-8")
     frontmatter = yaml.safe_load(skill_source.split("---", 2)[1])
     runtime_manifest = yaml.safe_load(
@@ -99,7 +99,7 @@ def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
     )
 
     assert frontmatter == {
-        "name": "parameter-patch",
+        "name": "build-parameter-patch",
         "description": manifest.description,
     }
     assert runtime_manifest == {
@@ -113,7 +113,7 @@ def test_parameter_patch_skill_declares_its_complete_read_only_grants() -> None:
 def test_parameter_patch_core_and_references_remain_separate() -> None:
     """Skill loading must reveal the core body without flattening its library."""
     skill = _parameter_patch_skill()
-    skill_root = files("restscope.builtin_skills").joinpath("parameter-patch")
+    skill_root = files("restscope.builtin_skills").joinpath("build-parameter-patch")
     skill_source = skill_root.joinpath("SKILL.md").read_text(encoding="utf-8")
     expected_core = skill_source.split("---", 2)[2].strip()
     expected_paths = (
@@ -157,7 +157,7 @@ def test_parameter_patch_rejects_a_profile_missing_any_required_tool(
 
     with pytest.raises(
         ValueError,
-        match=rf"parameter-patch requires Tool {missing_tool}",
+        match=rf"build-parameter-patch requires Tool {missing_tool}",
     ):
         build_harness(
             agent_runtime=AgentRuntimeDefinition(
@@ -166,7 +166,7 @@ def test_parameter_patch_rejects_a_profile_missing_any_required_tool(
                         name="patch",
                         model_config_name="fast",
                         tool_names=granted,
-                        skill_names=("parameter-patch",),
+                        skill_names=("build-parameter-patch",),
                     ),
                 ),
                 models=(_model(),),
@@ -192,7 +192,7 @@ def test_skill_and_reference_bodies_are_each_loaded_only_on_demand() -> None:
                 ToolCall(
                     id="read-patch-skill",
                     name="skill.read",
-                    arguments={"name": "parameter-patch"},
+                    arguments={"name": "build-parameter-patch"},
                 )
             ],
         ),
@@ -204,7 +204,7 @@ def test_skill_and_reference_bodies_are_each_loaded_only_on_demand() -> None:
                     id="read-generator-reference",
                     name="file.read",
                     arguments={
-                        "skill_name": "parameter-patch",
+                        "skill_name": "build-parameter-patch",
                         "path": reference.path,
                     },
                 )
@@ -224,7 +224,7 @@ def test_skill_and_reference_bodies_are_each_loaded_only_on_demand() -> None:
                     name="patch",
                     model_config_name="fast",
                     tool_names=required_tools,
-                    skill_names=("parameter-patch",),
+                    skill_names=("build-parameter-patch",),
                 ),
             ),
             models=(_model(),),
@@ -243,7 +243,7 @@ def test_skill_and_reference_bodies_are_each_loaded_only_on_demand() -> None:
         "skill.read",
     ]
     stable_context = provider.requests[0].messages[0].content
-    assert "parameter-patch" in stable_context
+    assert "build-parameter-patch" in stable_context
     assert skill.manifest.description in stable_context
     assert skill.instructions not in stable_context
     assert reference.content not in stable_context

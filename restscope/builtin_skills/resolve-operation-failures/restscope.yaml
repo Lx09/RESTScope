@@ -1,0 +1,20 @@
+version: "1.0"
+risk_level: medium
+required_tools:
+  - file.read
+  - openapi.list_inputs
+  - openapi.list_response_fields
+  - openapi.get_input_schema
+  - openapi.get_response_field_schema
+  - test_case.get_parameter_value
+  - test_case.find_parameters_by_value
+  - test_case.get_response_field_value
+  - test_case.find_response_fields_by_value
+  - failure_resolution.read_worklist
+  - failure_resolution.write_worklist
+  - lookup_parameter_history
+  - restscope.http.request
+  - subagent.start
+  - subagent.wait
+  - subagent.cancel
+required_context_sources: []

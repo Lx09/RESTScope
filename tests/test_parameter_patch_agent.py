@@ -393,7 +393,7 @@ def test_patch_prompt_renders_gitlab_requirement_as_readable_cards() -> None:
     )
     prompt = built_prompt.user
 
-    proposal_protocol = builtin_skill_catalog().get("parameter-patch").reference(
+    proposal_protocol = builtin_skill_catalog().get("build-parameter-patch").reference(
         "references/proposal-protocol.md"
     ).content
     assert built_prompt.system == proposal_protocol

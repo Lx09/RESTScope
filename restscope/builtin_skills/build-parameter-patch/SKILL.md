@@ -1,6 +1,6 @@
 ---
-name: parameter-patch
-description: Construct the smallest evidence-backed Parameter Patch for a confirmed Failure root cause, including Generator selection, cross-input Constraints, bounded reference lookup, correction, and semantic self-review. Use when an Agent must turn an approved Parameter value requirement into one complete Patch proposal.
+name: build-parameter-patch
+description: Build and semantically review the smallest evidence-backed Parameter Patch for a confirmed Failure root cause, including Generator selection, cross-input Constraints, bounded reference lookup, and complete candidate correction. Use when an Agent must turn an approved Parameter value requirement into one complete Patch proposal without applying it.
 ---
 
 # Parameter Patch
@@ -16,7 +16,7 @@ DSL feature.
 
 ## Load the method references
 
-Call `file.read` with `skill_name` set to `parameter-patch` and the exact
+Call `file.read` with `skill_name` set to `build-parameter-patch` and the exact
 linked `path` for each reference needed by the current stage:
 
 - Read [references/proposal-protocol.md](references/proposal-protocol.md) to

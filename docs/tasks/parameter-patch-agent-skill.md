@@ -1,14 +1,17 @@
-# Parameter Patch Agent Skill
+# Build Parameter Patch Standard Skill
 
-Status: Standard Skill is an implemented and verified first-class runtime
-format; Git delivery remains unauthorized
+Status: Original standard format was completed and merged; the approved
+verb-led rename is implemented and verified in the uncommitted
+`resolve-operation-failures` Skill follow-up
 
 ## Objective
 
 Make the standard directory under `restscope/builtin_skills/` the only source
-of truth for built-in RESTScope Skills. Parameter Patch must not need a
+of truth for built-in RESTScope Skills. Build Parameter Patch must not need a
 domain-specific Python adapter, and its detailed method library must remain
-available through genuine progressive disclosure.
+available through genuine progressive disclosure. The approved follow-up
+renames the public Skill from the noun-like `parameter-patch` to the verb-led
+`build-parameter-patch` without a compatibility alias.
 
 This is a RESTScope runtime Skill. It is not installed into Codex personal or
 project Skill directories.
@@ -63,7 +66,7 @@ by local JSON Schema validation before the Binding runs.
   Generator domains, final relationships, source provenance, and sample
   witnesses. HTTP success or Failure disappearance cannot replace value checks.
 
-The Parameter Patch runtime manifest is version `1.0`, low risk, and requires
+The Build Parameter Patch runtime manifest is version `1.0`, low risk, and requires
 `resource.list_resources`, `resource.list_ids`,
 `openapi.find_observed_response_fields`, and `file.read`.
 
@@ -109,7 +112,7 @@ the same normalized compiled candidate facts.
 ## Verification plan
 
 ```bash
-uv run python /Users/lixin/.codex/skills/.system/skill-creator/scripts/quick_validate.py restscope/builtin_skills/parameter-patch
+uv run python /Users/lixin/.codex/skills/.system/skill-creator/scripts/quick_validate.py restscope/builtin_skills/build-parameter-patch
 uv run pytest -q tests/test_builtin_skill_loader.py tests/test_parameter_patch_skill.py tests/test_file_read_tool.py tests/test_parameter_patch_agent.py tests/test_agent_prompt_session.py tests/test_agent_runtime.py tests/test_tools_catalog.py tests/test_workflow_package_boundaries.py
 uv build
 uv run pytest -q
@@ -126,8 +129,9 @@ Verification results:
   and package-boundary verification passed 144 tests.
 - `uv build` succeeded. The wheel contains `SKILL.md`, `restscope.yaml`, all
   five References, the generic Skill loader, and the File Tool package.
-- Loading the unpacked wheel's built-in Catalog returned `parameter-patch`, its
-  2,086-character core body, and all five registered References.
+- The original unpacked wheel exposed `parameter-patch`; the approved follow-up
+  replaces that public name with `build-parameter-patch` and retains the same
+  five registered References.
 - Full offline verification passed 763 tests with 18 optional/live skips.
 - Python compilation and `git diff --check` passed.
 - No real model, target API, MCP server, Phoenix service, or other external
