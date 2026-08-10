@@ -134,7 +134,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
             profiles=(AgentProfile(name="main", model_config_name="thinking"),),
             models=(
                 LLMModelConfig(
-                    role="thinking",
+                    name="thinking",
                     provider="main-contract",
                     model="main-contract-model",
                     max_tokens=512,

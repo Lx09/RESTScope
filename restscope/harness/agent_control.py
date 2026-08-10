@@ -55,15 +55,20 @@ class BudgetCharge:
 
 
 class RolloutBudget:
-    """Share weighted model usage across one Main Agent and all descendants."""
+    """Share weighted model usage across one root Agent and all descendants.
+
+    ``None`` keeps accounting active without enforcing a ceiling. System Agent
+    roots use that mode so Harness validation can continue until a valid result
+    or an external terminal condition occurs.
+    """
 
     _REMINDER_PERCENTAGES = (50, 25, 10)
 
-    def __init__(self, limit: float = 1_000_000) -> None:
+    def __init__(self, limit: float | None = 1_000_000) -> None:
         """Create an atomic App-memory allowance with one-shot reminders."""
-        if limit <= 0:
+        if limit is not None and limit <= 0:
             raise ValueError("rollout budget must be greater than zero")
-        self.limit = float(limit)
+        self.limit = float(limit) if limit is not None else None
         self._used = 0.0
         self._sent: set[int] = set()
         self._lock = RLock()
@@ -79,6 +84,14 @@ class RolloutBudget:
         non_cached_input = max(0, prompt_tokens - cached_input_tokens)
         weighted = output_tokens + non_cached_input * 0.1
         with self._lock:
+            if self.limit is None:
+                self._used += weighted
+                return BudgetCharge(
+                    weighted_tokens=weighted,
+                    remaining_tokens=0.0,
+                    exceeded=False,
+                    reminder_percentages=(),
+                )
             before_remaining = self.limit - self._used
             self._used += weighted
             remaining = self.limit - self._used
@@ -127,7 +140,7 @@ class AgentTreeControl:
         build_child: BuildChild,
         max_open_agents: int = 4,
         max_active_agents: int = 4,
-        rollout_budget_weighted_tokens: float = 1_000_000,
+        rollout_budget_weighted_tokens: float | None = 1_000_000,
     ) -> None:
         """Create an empty tree before its Main Agent is registered."""
         if max_open_agents < 1:
@@ -144,17 +157,23 @@ class AgentTreeControl:
         self._records: dict[str, _AgentRecord] = {}
         self._open_count = 0
 
-    def register_main(self, session_id: str, profile_name: str) -> None:
-        """Reserve the tree's first open slot for its unique Main Agent."""
+    def register_root(
+        self,
+        session_id: str,
+        profile_name: str,
+        cancel_event: Event | None = None,
+    ) -> None:
+        """Reserve the tree's first open slot for its Main or System root."""
         with self._lock:
             if self._records:
-                raise RuntimeError("Agent tree already has a Main Agent")
+                raise RuntimeError("Agent tree already has a root Agent")
             self._records[session_id] = _AgentRecord(
                 session_id=session_id,
                 profile_name=profile_name,
                 parent_id=None,
                 depth=0,
                 status="running",
+                cancel_event=cancel_event or Event(),
             )
             self._open_count = 1
 
@@ -305,7 +324,7 @@ class AgentTreeControl:
         """Cancel the complete tree and stop accepting executor submissions."""
         with self._lock:
             for record in self._records.values():
-                if record.parent_id is not None and not record.collected:
+                if not record.collected:
                     record.cancel_event.set()
         self._executor.shutdown(wait=False, cancel_futures=False)
 

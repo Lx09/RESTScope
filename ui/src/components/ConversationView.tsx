@@ -4,10 +4,11 @@ import {
   ApartmentOutlined,
   DownOutlined,
   LoadingOutlined,
+  RobotOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Button, Collapse, Empty, Flex, Typography } from "antd";
+import { Badge, Button, Collapse, Empty, Flex, Typography } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ConversationItem } from "../conversationProjector";
@@ -97,9 +98,11 @@ function ReasoningItemView({ item }: { item: ConversationItem }) {
 function ConversationItemView({
   item,
   onOpenSubagent,
+  onOpenSystemAgent,
 }: {
   item: ConversationItem;
   onOpenSubagent?: (sessionId: string) => void;
+  onOpenSystemAgent?: (sessionId: string) => void;
 }) {
   if (item.kind === "prompt") {
     return (
@@ -136,6 +139,7 @@ function ConversationItemView({
   if (item.kind === "tool") {
     const event = item.event;
     if (!event) return null;
+    const systemAgents = item.systemAgents ?? [];
     return (
       <article className="conversation-item tool-item">
         <div className="conversation-content">
@@ -145,12 +149,59 @@ function ConversationItemView({
               key: "tool",
               showArrow: false,
               label: (
-                <Flex align="center" gap={8}>
-                  <ToolOutlined />
-                  <Text type="secondary">{event.name}</Text>
+                <Flex align="center" gap={8} justify="space-between" style={{ width: "100%" }}>
+                  <Flex align="center" gap={8}>
+                    <ToolOutlined />
+                    <Text type="secondary">{event.name}</Text>
+                  </Flex>
+                  {systemAgents.length > 0 && (
+                    <Badge
+                      count={systemAgents.length}
+                      overflowCount={99}
+                      title={`${systemAgents.length} 个 System Agent 会话`}
+                    />
+                  )}
                 </Flex>
               ),
-              children: <EventDetail event={event} />,
+              children: (
+                <div>
+                  <EventDetail event={event} />
+                  {systemAgents.length > 0 && (
+                    <section className="system-agent-list" aria-label="System Agent 会话">
+                      <Text type="secondary">System Agent ({systemAgents.length})</Text>
+                      {systemAgents.map((agent) => (
+                        <button
+                          aria-label={`打开 ${agent.profileName} System Agent 会话`}
+                          className="system-agent-activity"
+                          disabled={!onOpenSystemAgent}
+                          key={agent.sessionId}
+                          onClick={() => onOpenSystemAgent?.(agent.sessionId)}
+                          type="button"
+                        >
+                          <RobotOutlined aria-hidden />
+                          <span className="system-agent-name">{agent.profileName}</span>
+                          <Badge
+                            status={agent.status === "succeeded"
+                              ? "success"
+                              : agent.status === "running"
+                                ? "processing"
+                                : agent.status === "warning"
+                                  ? "warning"
+                                  : "error"}
+                            text={agent.status === "succeeded"
+                              ? "成功"
+                              : agent.status === "running"
+                                ? "运行中"
+                                : agent.status === "warning"
+                                  ? "警告"
+                                  : "失败"}
+                          />
+                        </button>
+                      ))}
+                    </section>
+                  )}
+                </div>
+              ),
             }]}
             size="small"
           />
@@ -175,11 +226,13 @@ export function ConversationView({
   items,
   emptyDescription = "此会话暂无可展示内容",
   onOpenSubagent,
+  onOpenSystemAgent,
   virtualize = true,
 }: {
   items: ConversationItem[];
   emptyDescription?: ReactNode;
   onOpenSubagent?: (sessionId: string) => void;
+  onOpenSystemAgent?: (sessionId: string) => void;
   virtualize?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -216,7 +269,12 @@ export function ConversationView({
     return (
       <div aria-label="LLM 会话" className="conversation-test-list" role="feed">
         {items.map((item) => (
-          <ConversationItemView item={item} key={item.id} onOpenSubagent={onOpenSubagent} />
+          <ConversationItemView
+            item={item}
+            key={item.id}
+            onOpenSubagent={onOpenSubagent}
+            onOpenSystemAgent={onOpenSystemAgent}
+          />
         ))}
       </div>
     );
@@ -245,7 +303,11 @@ export function ConversationView({
                 style={{ transform: `translateY(${virtualItem.start}px)` }}
                 className="conversation-virtual-item"
               >
-                <ConversationItemView item={item} onOpenSubagent={onOpenSubagent} />
+                <ConversationItemView
+                  item={item}
+                  onOpenSubagent={onOpenSubagent}
+                  onOpenSystemAgent={onOpenSystemAgent}
+                />
               </div>
             );
           })}

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 
 class StubLLMClient:
+    """Simulate the Harness System Agent seam for tracker-focused tests."""
+
     def __init__(self, *parsed_responses: dict) -> None:
         from restscope.observability import TracingRuntime
 
@@ -14,18 +16,67 @@ class StubLLMClient:
         self.requests = []
         self.tracing_runtime = TracingRuntime.disabled()
 
-    def invoke(self, request):
-        from restscope.llm import LLMResponse
+    def run_system_agent(self, profile_name, task):
+        """Apply the same unlimited alias correction rule as the Harness."""
+        from restscope.agent import AgentError, AgentUsage, SystemAgentResult
+        from restscope.llm import LLMMessage
 
-        self.requests.append(request)
-        if not self.parsed_responses:
-            raise AssertionError(
-                "Resource Identifier Tracker made an unexpected LLM call"
+        messages = [
+            LLMMessage(role="system", content="Harness contract"),
+            LLMMessage(role="user", content=task.objective),
+        ]
+        while self.parsed_responses:
+            output = self.parsed_responses.pop(0)
+            request = SimpleNamespace(
+                metadata={"role": profile_name},
+                messages=list(messages),
+                response_format="json_schema",
+                json_schema={
+                    "properties": {
+                        "identifier": {
+                            "anyOf": [
+                                {"enum": list(task.allowed_result_aliases)},
+                                {"type": "null"},
+                            ]
+                        }
+                    }
+                },
             )
-        return LLMResponse(
-            provider=request.provider,
-            model=request.model,
-            parsed_json=self.parsed_responses.pop(0),
+            self.requests.append(request)
+            valid_shape = set(output) == {"identifier"}
+            identifier = output.get("identifier") if valid_shape else None
+            valid_alias = identifier is None or identifier in task.allowed_result_aliases
+            if valid_shape and valid_alias:
+                return SystemAgentResult(
+                    session_id="system-test",
+                    profile_name=profile_name,
+                    status="completed",
+                    output=output,
+                    usage=AgentUsage(model_outputs=len(self.requests)),
+                )
+            messages.extend(
+                (
+                    LLMMessage(role="assistant", content=str(output)),
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "CORRECTION: The previous final result was rejected "
+                            "by the Harness; return only identifier and choose an "
+                            "offered alias from "
+                            f"{', '.join(task.allowed_result_aliases)}. "
+                            f"Rejected value: {identifier!r}."
+                        ),
+                    ),
+                )
+            )
+        return SystemAgentResult(
+            session_id="system-test",
+            profile_name=profile_name,
+            status="failed",
+            error=AgentError(
+                code="provider_invoke_failed",
+                message="Scripted provider responses were exhausted.",
+            ),
         )
 
 
@@ -52,17 +103,11 @@ def _catalog(tmp_path: Path):
 
 def _tracker(tmp_path: Path, client: StubLLMClient):
     from restscope.api_behavior_monitor.resource_identifiers.tracker import ResourceIdentifierTracker
-    from restscope.llm import LLMModelConfig
 
     catalog = _catalog(tmp_path)
     tracker = ResourceIdentifierTracker(
         catalog=catalog,
-        client=client,
-        model=LLMModelConfig(
-            role="api_behavior_monitor",
-            provider="stub",
-            model="fast-stub",
-        ),
+        system_agent_runner=client,
     )
     return tracker, catalog
 
@@ -171,7 +216,7 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     assert result.status == "updated"
     assert len(client.requests) == 1
     request = client.requests[0]
-    assert request.metadata["role"] == "api_behavior_monitor"
+    assert request.metadata["role"] == "resource-identifier-selector"
     prompt = request.messages[1].content
     assert "- `operation`" in prompt
     assert 'method: "POST"' in prompt
@@ -183,8 +228,8 @@ def test_semantic_identifier_prompt_is_minimal_and_hides_values(
     assert "- `I2`" in prompt
     assert 'field: "message"' in prompt
     assert "string:" not in prompt
-    assert request.response_format == "json"
-    assert request.json_schema is None
+    assert request.response_format == "json_schema"
+    assert request.json_schema["properties"]["identifier"]
     for forbidden in (
         "secret-abc123",
         "operation_key",
@@ -356,11 +401,9 @@ def test_invalid_first_selection_uses_second_and_final_call_for_repair(
     assert len(client.requests) == 2
     repair = client.requests[1].messages[-1].content
     assert (
-        "## REASONS THE PREVIOUS IDENTIFIER SELECTION WAS REJECTED — UNTRUSTED"
-        in repair
+        "previous final result was rejected by the Harness" in repair
     )
-    assert "## REQUIRED REPLACEMENT IDENTIFIER SELECTION" in repair
-    assert "forged was not offered" in repair
+    assert "offered alias" in repair
     assert "I1" in repair
 
 
@@ -385,7 +428,7 @@ def test_two_invalid_model_outputs_do_not_persist_partial_rules(
             )
         )
 
-    assert raised.value.code == "resource_monitor_output_invalid"
+    assert raised.value.code == "resource_monitor_system_agent_failed"
     assert len(client.requests) == 2
     assert catalog.list_rules("POST /commits") == []
     assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == (
@@ -419,7 +462,7 @@ def test_extra_model_fields_are_repaired_and_not_persisted(
     assert result.status == "updated"
     assert len(client.requests) == 2
     repair = client.requests[1].messages[-1].content
-    assert "only the identifier field" in repair
+    assert "only identifier" in repair
     assert catalog.lookup(ResourceLookupRequest(resource="revision")).status == (
         "not_found"
     )
@@ -850,8 +893,8 @@ def test_legacy_negative_rule_is_replaced_by_positive_evidence(
     assert catalog.list_rules(operation.operation_key)[0].has_resource is True
 
 
-def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
-    """Scenario: verify that builder selects configured fast model."""
+def test_builder_injects_the_supplied_system_agent_runner(tmp_path: Path) -> None:
+    """Coordinator construction never creates a second direct LLM client."""
     from restscope.api_behavior_monitor import build_api_behavior_monitor_coordinator
     from restscope.config import RESTScopeConfig
 
@@ -873,12 +916,11 @@ def test_builder_selects_configured_fast_model(tmp_path: Path) -> None:
         resource_catalog=SimpleNamespace(),
         response_value_catalog=SimpleNamespace(),
         openapi_audit=SimpleNamespace(),
-        llm_client=client,
+        system_agent_runner=client,
     )
 
-    assert coordinator.resource_identifier_tracker.client is client
-    assert coordinator.resource_identifier_tracker.model.role == "api_behavior_monitor"
-    assert coordinator.resource_identifier_tracker.model.model == "fast-model"
+    assert coordinator.resource_identifier_tracker.system_agent_runner is client
+    assert coordinator.response_value_tracker.system_agent_runner is client
 
 
 def test_resource_lookup_capability_remains_without_model_tool_wrapper(

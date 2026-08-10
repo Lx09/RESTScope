@@ -46,7 +46,7 @@ def _model(
     from restscope.llm import LLMModelConfig
 
     return LLMModelConfig(
-        role=role,
+        name=role,
         provider="scripted",
         model=model,
         context_window_tokens=context_window_tokens,

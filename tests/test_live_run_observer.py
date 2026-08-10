@@ -272,6 +272,51 @@ def test_failed_generic_agent_task_never_marks_a_final_answer() -> None:
     assert event["detail"]["phase"] == "commentary"
 
 
+def test_system_agent_is_an_independent_root_displayed_under_its_http_tool() -> None:
+    """Causal UI nesting does not invent Subagent parentage."""
+    from restscope.observability import LiveRunObserver, TracingRuntime
+
+    observer = LiveRunObserver()
+    observer.begin_run({})
+    runtime = TracingRuntime(run_observer=observer)
+
+    with runtime.span("main", kind="AGENT"):
+        with runtime.span("restscope.http.request", kind="TOOL") as http_span:
+            with runtime.span(
+                "Agent.run",
+                kind="CHAIN",
+                input_value={"objective": "Choose I1"},
+                attributes={
+                    "restscope.agent.session_id": "system-1",
+                    "restscope.agent.profile": "resource-identifier-selector",
+                    "restscope.agent.lifecycle": "system",
+                },
+            ) as system_span:
+                with runtime.span("LLMClient.invoke", kind="LLM") as model_span:
+                    model_span.set_llm_input_messages(
+                        [{"role": "user", "content": "Choose I1"}]
+                    )
+                    model_span.set_llm_output_messages(
+                        [{"role": "assistant", "content": '{"identifier":"I1"}'}]
+                    )
+                system_span.set_output(
+                    {
+                        "session_id": "system-1",
+                        "profile_name": "resource-identifier-selector",
+                        "status": "completed",
+                        "output": {"identifier": "I1"},
+                    }
+                )
+            http_span.set_output({"status": "succeeded"})
+
+    http_event, system_turn = observer.snapshot()["events"]
+
+    assert system_turn["parent_event_id"] == http_event["event_id"]
+    assert system_turn["agent"]["lifecycle"] == "system"
+    assert system_turn["agent"]["parent_session_id"] is None
+    assert system_turn["detail"]["phase"] == "final_answer"
+
+
 def test_llm_client_routes_reasoning_only_to_the_redacted_live_observer() -> None:
     """The shared client emits Reasoning through observer detail, not prompt data."""
     from restscope.llm import (

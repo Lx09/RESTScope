@@ -96,6 +96,40 @@ describe("Codex-style conversation components", () => {
     expect(document.querySelector(".tool-item .ant-collapse-item-active")).toBeInTheDocument();
   });
 
+  it("shows System Agent status inside the HTTP Tool and opens its session", async () => {
+    const openSystemAgent = vi.fn();
+    render(
+      <ConversationView
+        items={[{
+          id: "tool:http",
+          kind: "tool",
+          order: 1,
+          sessionId: "main-1",
+          event: makeEvent({
+            event_id: "http",
+            kind: "tool_call",
+            name: "restscope.http.request",
+          }),
+          systemAgents: [{
+            sessionId: "system-1",
+            profileName: "resource-identifier-selector",
+            status: "succeeded",
+          }],
+        }]}
+        onOpenSystemAgent={openSystemAgent}
+        virtualize={false}
+      />,
+    );
+
+    expect(screen.getByTitle("1 个 System Agent 会话")).toBeVisible();
+    await userEvent.click(screen.getByText("restscope.http.request"));
+    expect(screen.getByText("成功")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", {
+      name: "打开 resource-identifier-selector System Agent 会话",
+    }));
+    expect(openSystemAgent).toHaveBeenCalledWith("system-1");
+  });
+
   it("shows the child Agent name and opens its Drawer target without protocol text", async () => {
     const openSubagent = vi.fn();
     render(

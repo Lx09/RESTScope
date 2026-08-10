@@ -288,11 +288,11 @@ def _resource_monitor(tmp_path: Path):
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.llm import LLMModelConfig
-
     class UnexpectedLLM:
-        def invoke(self, request):
-            raise AssertionError(f"unexpected LLM request: {request}")
+        def run_system_agent(self, profile_name, task):
+            raise AssertionError(
+                f"unexpected System Agent request: {profile_name} {task}"
+            )
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'resource-monitor.sqlite'}")
     Base.metadata.create_all(engine)
@@ -302,12 +302,7 @@ def _resource_monitor(tmp_path: Path):
     )
     resource_tracker = ResourceIdentifierTracker(
         catalog=catalog,
-        client=UnexpectedLLM(),
-        model=LLMModelConfig(
-            role="api_behavior_monitor",
-            provider="stub",
-            model="fast",
-        ),
+        system_agent_runner=UnexpectedLLM(),
     )
     response_value_catalog = ResponseValueCatalog(
         lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)

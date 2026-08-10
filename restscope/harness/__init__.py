@@ -14,8 +14,10 @@ from typing import Any
 __all__ = [
     "HarnessRuntime",
     "AgentRuntimeNotConfiguredError",
+    "SystemAgentNotConfiguredError",
     "AgentRuntimeDefinition",
     "ContextSourceBinding",
+    "SystemAgentDefinition",
     "ToolBindingFactory",
     "build_harness",
     "build_harness_with_mcp_host",
@@ -28,7 +30,7 @@ def __getattr__(name: str) -> Any:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name = (
         ".agent_runtime"
-        if name in {"AgentRuntimeDefinition", "ContextSourceBinding", "ToolBindingFactory"}
+        if name in {"AgentRuntimeDefinition", "ContextSourceBinding", "SystemAgentDefinition", "ToolBindingFactory"}
         else ".runtime"
     )
     value = getattr(import_module(module_name, __name__), name)

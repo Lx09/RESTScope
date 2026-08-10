@@ -8,7 +8,7 @@ export interface AgentIdentity {
   session_id: string;
   parent_session_id?: string | null;
   name: string;
-  lifecycle?: "main" | "subagent";
+  lifecycle?: "main" | "subagent" | "system";
   profile_name?: string;
   task_id?: string;
   path: string[];

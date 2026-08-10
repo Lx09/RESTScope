@@ -103,6 +103,38 @@ describe("conversation projector", () => {
     });
   });
 
+  it("nests independent System Agent sessions under the causal HTTP Tool", () => {
+    const http = makeEvent({
+      event_id: "http-1",
+      kind: "tool_call",
+      name: "restscope.http.request",
+      agent: mainAgent,
+    });
+    const systemAgent = {
+      session_id: "system-1",
+      parent_session_id: null,
+      name: "resource-identifier-selector",
+      profile_name: "resource-identifier-selector",
+      lifecycle: "system" as const,
+      path: ["resource-identifier-selector"],
+    };
+    const systemTurn = makeEvent({
+      event_id: "system-turn",
+      order: 2,
+      parent_event_id: "http-1",
+      agent: systemAgent,
+    });
+
+    const projection = projectMainConversation([http, systemTurn]);
+
+    expect(projection.sessionAgents["system-1"]).toEqual(systemAgent);
+    expect(projection.items[0].systemAgents).toEqual([{
+      sessionId: "system-1",
+      profileName: "resource-identifier-selector",
+      status: "succeeded",
+    }]);
+  });
+
   it("does not repeat Tool Call or Tool Result messages as body text", () => {
     const turn = makeEvent({
       event_id: "tool-turn",

@@ -212,7 +212,7 @@ def _plan_runtime(*, profiles, binding_factories=()):
             profiles=profiles,
             models=(
                 LLMModelConfig(
-                    role="thinking",
+                    name="thinking",
                     provider="scripted",
                     model="thinking-model",
                     max_tokens=256,

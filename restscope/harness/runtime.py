@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import RLock
 from typing import TYPE_CHECKING, Any
 
-from restscope.agent import Agent
+from restscope.agent import Agent, SystemAgentResult
 
 from restscope.tools.external.mcp import (
     MCPHost,
@@ -44,6 +45,12 @@ class AgentRuntimeNotConfiguredError(RuntimeError):
     code = "agent_runtime_not_configured"
 
 
+class SystemAgentNotConfiguredError(RuntimeError):
+    """Report an unknown or unavailable Harness-owned System Agent Profile."""
+
+    code = "system_agent_not_configured"
+
+
 @dataclass
 class HarnessRuntime:
     """Own deterministic state and start one fully authorized Main Agent.
@@ -71,6 +78,13 @@ class HarnessRuntime:
         repr=False,
     )
     _main_agent: Agent | None = field(default=None, init=False, repr=False)
+    _system_agents: dict[str, Agent] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+    _system_agents_lock: RLock = field(default_factory=RLock, init=False, repr=False)
+    _system_agents_closing: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Bind the OpenAPI Tool backend to this Harness's target context."""
@@ -124,11 +138,50 @@ class HarnessRuntime:
             )
         if self._main_agent is not None and not self._main_agent.closed:
             raise ValueError("Main Agent is already started")
-        self._main_agent = self.agent_runtime.start(profile_name)
+        self._main_agent = self.agent_runtime.start_main(profile_name)
         return self._main_agent
 
+    def run_system_agent(
+        self,
+        profile_name: str,
+        task: object,
+    ) -> SystemAgentResult:
+        """Run one independent registered System Agent synchronously.
+
+        Every invocation owns a fresh root tree and Profile-resolved capability
+        set. The Harness tracks it only while active so App shutdown can request
+        cancellation even when unlimited result correction is still running.
+        """
+        if self.agent_runtime is None:
+            raise SystemAgentNotConfiguredError(
+                "Generic Agent runtime is not configured"
+            )
+        try:
+            agent, bounded_task = self.agent_runtime.start_system(profile_name, task)
+        except (KeyError, ValueError) as exc:
+            raise SystemAgentNotConfiguredError(str(exc)) from exc
+        with self._system_agents_lock:
+            if self._system_agents_closing:
+                agent.close()
+                raise RuntimeError("Harness is closing System Agents")
+            self._system_agents[agent.session_id] = agent
+        try:
+            result = agent.run(bounded_task)
+            if not isinstance(result, SystemAgentResult):
+                raise RuntimeError("System Agent returned the wrong lifecycle result")
+            return result
+        finally:
+            agent.close()
+            with self._system_agents_lock:
+                self._system_agents.pop(agent.session_id, None)
+
     def close_main_agent(self) -> None:
-        """Close the current Main Agent and cooperatively cancel its descendants."""
+        """Close Main and active System roots, cancelling all descendants."""
+        with self._system_agents_lock:
+            self._system_agents_closing = True
+            active_system_agents = tuple(self._system_agents.values())
+        for agent in active_system_agents:
+            agent.close()
         if self._main_agent is not None:
             self._main_agent.close()
             self._main_agent = None

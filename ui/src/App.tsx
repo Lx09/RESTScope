@@ -4,6 +4,7 @@ import {
   BugOutlined,
   DisconnectOutlined,
   MoonOutlined,
+  RobotOutlined,
   SearchOutlined,
   SunOutlined,
 } from "@ant-design/icons";
@@ -92,6 +93,7 @@ export default function ObserverApp() {
   const [filters, setFilters] = useState<TimelineFilters>(EMPTY_FILTERS);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
+  const [selectedSystemAgentId, setSelectedSystemAgentId] = useState<string | null>(null);
   const [, refreshElapsed] = useState(0);
   const historyStore = useRef<RunHistoryStore | null>(null);
   const historyWriter = useRef<RunHistoryWriter | null>(null);
@@ -254,12 +256,30 @@ export default function ObserverApp() {
       : [],
     [allEvents, filters, selectedSubagentId],
   );
+  const selectedSystemAgent = selectedSystemAgentId
+    ? conversation.sessionAgents[selectedSystemAgentId] ?? null
+    : null;
+  const systemAgentItems = useMemo(
+    () => selectedSystemAgentId
+      ? projectConversation(allEvents, selectedSystemAgentId, filters)
+      : [],
+    [allEvents, filters, selectedSystemAgentId],
+  );
 
   useEffect(() => {
     if (selectedSubagentId && !conversation.sessionAgents[selectedSubagentId]) {
       setSelectedSubagentId(null);
     }
   }, [conversation.sessionAgents, selectedSubagentId]);
+
+  useEffect(() => {
+    if (
+      selectedSystemAgentId
+      && conversation.sessionAgents[selectedSystemAgentId]?.lifecycle !== "system"
+    ) {
+      setSelectedSystemAgentId(null);
+    }
+  }, [conversation.sessionAgents, selectedSystemAgentId]);
 
   const subagentBreadcrumb = useMemo(() => {
     if (!selectedSubagent) return [];
@@ -471,6 +491,7 @@ export default function ObserverApp() {
               <ConversationView
                 items={conversation.items}
                 onOpenSubagent={setSelectedSubagentId}
+                onOpenSystemAgent={setSelectedSystemAgentId}
               />
             ) : (
               <Empty
@@ -533,6 +554,31 @@ export default function ObserverApp() {
               emptyDescription="此 Subagent 尚无会话内容"
               items={subagentItems}
               onOpenSubagent={setSelectedSubagentId}
+              onOpenSystemAgent={setSelectedSystemAgentId}
+            />
+          )}
+        </Drawer>
+
+        <Drawer
+          className="system-agent-drawer"
+          focusable={{ trap: true, focusTriggerAfterClose: true }}
+          onClose={() => setSelectedSystemAgentId(null)}
+          open={selectedSystemAgent?.lifecycle === "system"}
+          placement="right"
+          title={(
+            <Flex align="center" gap={8}>
+              <RobotOutlined aria-hidden />
+              <span>{selectedSystemAgent?.profile_name ?? "System Agent"}</span>
+            </Flex>
+          )}
+          size={720}
+        >
+          {selectedSystemAgent?.lifecycle === "system" && (
+            <ConversationView
+              emptyDescription="此 System Agent 尚无会话内容"
+              items={systemAgentItems}
+              onOpenSubagent={setSelectedSubagentId}
+              onOpenSystemAgent={setSelectedSystemAgentId}
             />
           )}
         </Drawer>

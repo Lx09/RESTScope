@@ -2,8 +2,8 @@
 
 The :class:`LiveRunObserver` receives the App's existing trace and target HTTP
 activity. It folds that lower-level evidence into model turns and executed
-tools. Generic ``Agent.start`` and ``Agent.run`` scopes add
-stable Main or Subagent identities and the authoritative final-response phase
+tools. Generic ``Agent.start`` and ``Agent.run`` scopes add stable Main,
+Subagent, or System Agent identities and the authoritative final-response phase
 used by the conversation projector. Browser adapters read JSON-safe snapshots
 and cursor-addressed changes; workflow code never depends on UI DTOs.
 
@@ -517,7 +517,7 @@ class LiveRunObserver:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Create one explicit generic Agent identity and task scope.
 
-        Generic Main and Subagent sessions already supply their Harness-owned
+        Generic Main, Subagent, and System sessions supply their Harness-owned
         IDs in generic Agent lifecycle attributes. Unlike legacy ``kind=AGENT``
         spans, these identities are authoritative enough for the UI to select a
         Main conversation and navigate its children without guessing names.
@@ -525,7 +525,11 @@ class LiveRunObserver:
         session_id = str(attributes.get("restscope.agent.session_id") or "")
         profile_name = str(attributes.get("restscope.agent.profile") or "")
         lifecycle = str(attributes.get("restscope.agent.lifecycle") or "")
-        if not session_id or not profile_name or lifecycle not in {"main", "subagent"}:
+        if not session_id or not profile_name or lifecycle not in {
+            "main",
+            "subagent",
+            "system",
+        }:
             return parent.agent or {}, scope
 
         parent_session_value = attributes.get("restscope.agent.parent_session_id")

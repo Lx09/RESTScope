@@ -9,13 +9,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from threading import Event
 from typing import TYPE_CHECKING
+
+from pydantic import BaseModel
 
 from restscope.agent import (
     Agent,
     AgentCompletion,
     AgentProfile,
     AgentProfileRegistry,
+    SystemAgentTask,
 )
 from restscope.agent.prompt import AgentPromptSession, PromptSessionError
 from restscope.llm import LLMClient, LLMModelConfig
@@ -105,6 +109,41 @@ class ContextSourceBinding:
             raise ValueError("Context Source max_chars must be between 1 and 24000")
 
 
+SystemOutputSchemaBuilder = Callable[[SystemAgentTask], dict[str, object]]
+SystemOutputValidator = Callable[[BaseModel, SystemAgentTask], tuple[str, ...]]
+SystemTaskAdapter = Callable[[object], SystemAgentTask]
+
+
+@dataclass(frozen=True)
+class SystemAgentDefinition:
+    """Bind one Profile to its Harness-owned structured result contract.
+
+    The Profile continues to own all model and capability grants. This
+    definition only states which result type a deterministic caller expects and
+    how task-local aliases narrow that type for one invocation.
+    """
+
+    profile_name: str
+    adapt_task: SystemTaskAdapter
+    output_model: type[BaseModel]
+    build_output_schema: SystemOutputSchemaBuilder
+    validate_output: SystemOutputValidator
+    output_schema_name: str
+
+    def __post_init__(self) -> None:
+        """Reject incomplete result contracts before any Profile can run."""
+        if not self.profile_name.strip():
+            raise ValueError("System Agent Profile name must not be blank")
+        if not self.output_schema_name.strip():
+            raise ValueError("System Agent output schema name must not be blank")
+        if not issubclass(self.output_model, BaseModel):
+            raise TypeError("System Agent output model must be a Pydantic model")
+        if not callable(self.adapt_task):
+            raise TypeError("System Agent task adapter must be callable")
+        if not callable(self.build_output_schema) or not callable(self.validate_output):
+            raise TypeError("System Agent result contract callbacks must be callable")
+
+
 @dataclass(frozen=True)
 class AgentRuntimeDefinition:
     """Provide all runtime objects needed to launch configured generic Agents.
@@ -122,6 +161,7 @@ class AgentRuntimeDefinition:
     skills: tuple[SkillDefinition, ...] = ()
     context_sources: tuple[ContextSourceBinding, ...] = ()
     tool_binding_factories: tuple[ToolBindingFactory, ...] = ()
+    system_agents: tuple[SystemAgentDefinition, ...] = ()
     max_open_agents: int = 4
     max_active_agents: int = 4
     rollout_budget_weighted_tokens: float = 1_000_000
@@ -164,31 +204,89 @@ class AgentRuntimeResolver:
         )
         self.skill_policy = SkillPolicy()
         self.context_sources = _unique_context_sources(definition.context_sources)
+        self.system_agents = _unique_system_agents(definition.system_agents)
         self._validate()
 
-    def start(self, profile_name: str) -> Agent:
+    def start_main(self, profile_name: str) -> Agent:
         """Construct one Main Agent and its isolated in-memory tree control."""
-        profile = self.profiles.get(profile_name)
+        return self._start_root(
+            profile_name=profile_name,
+            lifecycle="main",
+            rollout_budget_weighted_tokens=self.definition.rollout_budget_weighted_tokens,
+            output_model=AgentCompletion,
+            output_schema=AgentCompletion.model_json_schema(),
+            output_schema_name="AgentCompletion",
+            validate_output=lambda _output: (),
+        )
+
+    def start_system(
+        self,
+        profile_name: str,
+        task: object,
+    ) -> tuple[Agent, SystemAgentTask]:
+        """Adapt one bounded task and construct its unbounded System root."""
+        try:
+            definition = self.system_agents[profile_name]
+        except KeyError as exc:
+            raise ValueError(f"System Agent Profile is not registered: {profile_name}") from exc
+        bounded_task = definition.adapt_task(task)
+        if not isinstance(bounded_task, SystemAgentTask):
+            raise TypeError("System Agent task adapter must return SystemAgentTask")
+        schema = definition.build_output_schema(bounded_task)
+        if not isinstance(schema, dict):
+            raise TypeError("System Agent output schema builder must return an object")
+        return (
+            self._start_root(
+                profile_name=profile_name,
+                lifecycle="system",
+                rollout_budget_weighted_tokens=None,
+                output_model=definition.output_model,
+                output_schema=schema,
+                output_schema_name=definition.output_schema_name,
+                validate_output=lambda output: definition.validate_output(
+                    output,
+                    bounded_task,
+                ),
+            ),
+            bounded_task,
+        )
+
+    def _start_root(
+        self,
+        *,
+        profile_name: str,
+        lifecycle: str,
+        rollout_budget_weighted_tokens: float | None,
+        output_model: type[BaseModel],
+        output_schema: dict[str, object],
+        output_schema_name: str,
+        validate_output: Callable[[BaseModel], tuple[str, ...]],
+    ) -> Agent:
+        """Build one isolated Main or System root behind the launch Interfaces."""
         from uuid import uuid4
 
+        profile = self.profiles.get(profile_name)
         session_id = f"agent_{uuid4().hex}"
+        cancel_event = Event()
         control = AgentTreeControl(
             build_child=self._build_child,
             max_open_agents=self.definition.max_open_agents,
             max_active_agents=self.definition.max_active_agents,
-            rollout_budget_weighted_tokens=(
-                self.definition.rollout_budget_weighted_tokens
-            ),
+            rollout_budget_weighted_tokens=rollout_budget_weighted_tokens,
         )
-        control.register_main(session_id, profile.name)
+        control.register_root(session_id, profile.name, cancel_event)
         return self._build_agent(
             profile_name=profile_name,
             control=control,
             depth=0,
             parent_id=None,
             session_id=session_id,
-            cancel_event=None,
-            is_subagent=False,
+            cancel_event=cancel_event,
+            lifecycle=lifecycle,
+            output_model=output_model,
+            output_schema=output_schema,
+            output_schema_name=output_schema_name,
+            validate_output=validate_output,
         )
 
     def _build_child(
@@ -208,7 +306,11 @@ class AgentRuntimeResolver:
             parent_id=parent_id,
             session_id=session_id,
             cancel_event=cancel_event,
-            is_subagent=True,
+            lifecycle="subagent",
+            output_model=AgentCompletion,
+            output_schema=AgentCompletion.model_json_schema(),
+            output_schema_name="AgentCompletion",
+            validate_output=lambda _output: (),
         )
 
     def _build_agent(
@@ -220,7 +322,11 @@ class AgentRuntimeResolver:
         parent_id: str | None,
         session_id: str,
         cancel_event,
-        is_subagent: bool,
+        lifecycle: str,
+        output_model: type[BaseModel],
+        output_schema: dict[str, object],
+        output_schema_name: str,
+        validate_output: Callable[[BaseModel], tuple[str, ...]],
     ) -> Agent:
         """Resolve fixed grants and create one Main or Subagent instance."""
         profile = self.profiles.get(profile_name)
@@ -304,7 +410,8 @@ class AgentRuntimeResolver:
             ),
             model=model,
             tool_specs=toolbox.specs(),
-            output_schema=AgentCompletion.model_json_schema(),
+            output_schema=output_schema,
+            output_schema_name=output_schema_name,
         )
         return Agent._from_harness(
             profile=profile,
@@ -314,7 +421,9 @@ class AgentRuntimeResolver:
             session_id=session_id,
             tree_control=control,
             cancel_event=cancel_event,
-            is_subagent=is_subagent,
+            lifecycle=lifecycle,
+            output_model=output_model,
+            validate_output=validate_output,
             depth=depth,
             parent_session_id=parent_id,
         )
@@ -348,6 +457,8 @@ class AgentRuntimeResolver:
         """Reject the complete Profile graph and all unresolved launch names."""
         _reject_profile_cycles(self.profiles)
         _reject_profile_depth(self.profiles)
+        for profile_name in self.system_agents:
+            self.profiles.get(profile_name)
         built_in_names = {
             definition.name for definition in self.built_in_catalog.definitions()
         }
@@ -423,7 +534,7 @@ class AgentRuntimeResolver:
                 ) from exc
             if not model.enabled:
                 raise ValueError(
-                    f"Agent Profile model configuration is disabled: {model.role}"
+                    f"Agent Profile model configuration is disabled: {model.name}"
                 )
             if model.provider not in provider_names:
                 raise ValueError(
@@ -492,9 +603,9 @@ def _unique_models(models: tuple[LLMModelConfig, ...]) -> dict[str, LLMModelConf
     """Index enabled or disabled model configurations without replacement."""
     indexed: dict[str, LLMModelConfig] = {}
     for model in models:
-        if model.role in indexed:
-            raise ValueError(f"Model configuration is duplicated: {model.role}")
-        indexed[model.role] = model
+        if model.name in indexed:
+            raise ValueError(f"Model configuration is duplicated: {model.name}")
+        indexed[model.name] = model
     return indexed
 
 
@@ -521,6 +632,20 @@ def _unique_context_sources(
         if source.name in indexed:
             raise ValueError(f"Context Source is duplicated: {source.name}")
         indexed[source.name] = source
+    return indexed
+
+
+def _unique_system_agents(
+    definitions: tuple[SystemAgentDefinition, ...],
+) -> dict[str, SystemAgentDefinition]:
+    """Index System Agent result contracts without silent replacement."""
+    indexed: dict[str, SystemAgentDefinition] = {}
+    for definition in definitions:
+        if definition.profile_name in indexed:
+            raise ValueError(
+                f"System Agent Profile is duplicated: {definition.profile_name}"
+            )
+        indexed[definition.profile_name] = definition
     return indexed
 
 

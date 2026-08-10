@@ -12,6 +12,8 @@ from .contracts import (
     AgentResult,
     AgentTask,
     AgentUsage,
+    SystemAgentResult,
+    SystemAgentTask,
 )
 from .profile import AgentProfile
 from .registry import AgentProfileRegistry
@@ -27,4 +29,6 @@ __all__ = [
     "AgentResult",
     "AgentTask",
     "AgentUsage",
+    "SystemAgentResult",
+    "SystemAgentTask",
 ]

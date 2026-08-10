@@ -262,7 +262,7 @@ def _model_for_duplicate_test():
     from restscope.llm import LLMModelConfig
 
     return LLMModelConfig(
-        role="fast",
+        name="fast",
         provider="scripted",
         model="fast-model",
         context_window_tokens=8_192,

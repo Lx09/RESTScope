@@ -516,7 +516,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
             profiles=(AgentProfile(name="main", model_config_name="thinking"),),
             models=(
                 LLMModelConfig(
-                    role="thinking",
+                    name="thinking",
                     provider="scripted",
                     model="thinking-model",
                     max_tokens=512,

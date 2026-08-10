@@ -12,13 +12,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from threading import RLock
 from types import TracebackType
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import Engine
 
-from restscope.agent import Agent, AgentProfile
+from restscope.agent import Agent, AgentProfile, SystemAgentResult, SystemAgentTask
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
@@ -28,9 +29,10 @@ from restscope.api_behavior_monitor.response_values import ResponseValueCatalog
 from restscope.harness import (
     AgentRuntimeDefinition,
     HarnessRuntime,
+    SystemAgentDefinition,
     build_harness,
 )
-from restscope.llm import ModelSelector, build_llm_client
+from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.tools.context import ToolContext, ToolContextError
 from restscope.tools.resource import ResourceToolBackend
 from restscope.target_http import TargetHTTPTransport
@@ -60,6 +62,22 @@ from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
 from restscope.request_generation import RequestGenerationConfigStore
 from restscope.harness.operation_testing import OperationTestingService
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
+from restscope.api_behavior_monitor.resource_identifiers.prompts import (
+    IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
+    IdentifierSelectionDecision,
+    identifier_system_output_schema,
+    validate_identifier_system_output,
+)
+from restscope.api_behavior_monitor.response_values.prompts import (
+    RESPONSE_SOURCE_SYSTEM_AGENT_INSTRUCTIONS,
+    ResponseSourceSelectionDecision,
+    response_source_system_output_schema,
+    validate_response_source_system_output,
+)
+from restscope.api_behavior_monitor.system_agents import (
+    RESOURCE_IDENTIFIER_PROFILE_NAME,
+    RESPONSE_SOURCE_PROFILE_NAME,
+)
 
 
 _MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent.
@@ -89,6 +107,42 @@ _MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent
   explicitly.
 - Return only the required bounded AgentCompletion result.
 """
+
+
+class _DeferredSystemAgentRunner:
+    """Break the Monitor/HTTP/Harness construction cycle with one bind-once Adapter.
+
+    Trackers can be constructed before the HTTP transport and Harness exist.
+    The App binds the final Harness method before any target response can be
+    observed. Calling before binding fails safely and never falls back to a
+    direct model invocation.
+    """
+
+    def __init__(self) -> None:
+        """Create an unbound App-private runner."""
+        self._lock = RLock()
+        self._run = None
+
+    def bind(self, run) -> None:
+        """Install the sole production runner exactly once."""
+        if not callable(run):
+            raise TypeError("System Agent runner must be callable")
+        with self._lock:
+            if self._run is not None:
+                raise RuntimeError("System Agent runner is already bound")
+            self._run = run
+
+    def run_system_agent(
+        self,
+        profile_name: str,
+        task: SystemAgentTask,
+    ) -> SystemAgentResult:
+        """Forward one synchronous decision after App composition completes."""
+        with self._lock:
+            run = self._run
+        if run is None:
+            raise RuntimeError("System Agent runner is not initialized")
+        return run(profile_name, task)
 
 
 class _SchemaSourceModel(BaseModel):
@@ -214,11 +268,13 @@ class RESTScopeApp:
                 openapi_audit = OpenAPIAudit(
                     lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
                 )
+                system_agent_runner = _DeferredSystemAgentRunner()
                 api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
                     config,
                     resource_catalog=resource_catalog,
                     response_value_catalog=response_value_catalog,
                     openapi_audit=openapi_audit,
+                    system_agent_runner=system_agent_runner,
                     tracing_runtime=self._tracing_runtime,
                 )
                 reference_values = BehaviorMonitorReferenceValues(
@@ -267,6 +323,7 @@ class RESTScopeApp:
                     operation_testing_service=operation_testing_service,
                     agent_runtime=main_runtime,
                 )
+                system_agent_runner.bind(built_runtime.run_system_agent)
                 harness_runtime = built_runtime
             self.harness_runtime = harness_runtime
             self.operation_testing_service = (
@@ -586,29 +643,71 @@ def _build_main_agent_runtime_definition(
     *,
     tracing_runtime: TracingRuntime,
 ) -> AgentRuntimeDefinition | None:
-    """Compose the currently runnable, intentionally capability-light Main.
+    """Compose Profile-authorized Main and Monitor System Agent runtimes.
 
-    An unset thinking model keeps configuration-only and parser tests usable,
-    but :meth:`RESTScopeApp.start` then fails closed through the Harness's
-    existing ``agent_runtime_not_configured`` error. Once configured, the Main
-    receives only its private Plan pair. Testing Skills, OpenAPI discovery,
-    domain Tools, Context Sources, and child Profiles remain empty until their
-    individual contracts are approved and implemented.
+    Disabled model configurations simply omit their Profiles. The Main keeps
+    only its private Plan pair, while the two Monitor Profiles intentionally
+    start without Tools. That empty Tool grant is configuration, not a System
+    Agent lifecycle restriction.
     """
-    model = ModelSelector.from_config(config.llm).thinking
-    if not model.enabled:
-        return None
-    return AgentRuntimeDefinition(
-        profiles=(
+    thinking = build_llm_model_config("thinking", config.llm.thinking)
+    fast = build_llm_model_config("fast", config.llm.fast)
+    profiles: list[AgentProfile] = []
+    system_agents: list[SystemAgentDefinition] = []
+    models = []
+    if thinking.enabled:
+        models.append(thinking)
+        profiles.append(
             AgentProfile(
                 name="main",
                 instructions=_MAIN_PROFILE_INSTRUCTIONS,
                 model_config_name="thinking",
                 tool_names=(PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME),
-            ),
-        ),
-        models=(model,),
+            )
+        )
+    if fast.enabled:
+        models.append(fast)
+        profiles.extend(
+            (
+                AgentProfile(
+                    name=RESOURCE_IDENTIFIER_PROFILE_NAME,
+                    instructions=IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
+                    model_config_name="fast",
+                ),
+                AgentProfile(
+                    name=RESPONSE_SOURCE_PROFILE_NAME,
+                    instructions=RESPONSE_SOURCE_SYSTEM_AGENT_INSTRUCTIONS,
+                    model_config_name="fast",
+                ),
+            )
+        )
+        system_agents.extend(
+            (
+                SystemAgentDefinition(
+                    profile_name=RESOURCE_IDENTIFIER_PROFILE_NAME,
+                    adapt_task=SystemAgentTask.model_validate,
+                    output_model=IdentifierSelectionDecision,
+                    build_output_schema=identifier_system_output_schema,
+                    validate_output=validate_identifier_system_output,
+                    output_schema_name="IdentifierSelectionDecision",
+                ),
+                SystemAgentDefinition(
+                    profile_name=RESPONSE_SOURCE_PROFILE_NAME,
+                    adapt_task=SystemAgentTask.model_validate,
+                    output_model=ResponseSourceSelectionDecision,
+                    build_output_schema=response_source_system_output_schema,
+                    validate_output=validate_response_source_system_output,
+                    output_schema_name="ResponseSourceSelectionDecision",
+                ),
+            )
+        )
+    if not profiles:
+        return None
+    return AgentRuntimeDefinition(
+        profiles=tuple(profiles),
+        models=tuple(models),
         client=build_llm_client(config.llm, tracing_runtime=tracing_runtime),
+        system_agents=tuple(system_agents),
     )
 
 

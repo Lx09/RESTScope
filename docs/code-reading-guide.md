@@ -21,9 +21,9 @@ The runtime has five distinct responsibilities:
    prepares a complete Batch, and sends its requests.
 4. `restscope.tools` exposes narrow model-callable behaviors. Profiles—not the
    global Catalog—decide which Tools an Agent may call.
-5. `restscope.agent`, `restscope.skills`, and `restscope.harness` run generic
-   Main Agents and Subagents. Skills teach a method but do not execute code or
-   grant Tools.
+5. `restscope.agent`, `restscope.skills`, and `restscope.harness` run the same
+   generic Agent as a Main Agent, Subagent, or System Agent. Skills teach a
+   method but do not execute code or grant Tools.
 
 Operation Smoke and its dedicated Failure Resolution, Patch, Review, Compact,
 candidate, Finalizer, and Memory Modules have been retired. Do not look for a
@@ -75,8 +75,8 @@ a stale or changed Patch from being applied.
 2. `restscope/agent/profile.py` and `restscope/agent/runtime.py` — Profile
    authorization and the generic model/Tool loop.
 3. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
-   Context, and Subagent lifecycle. App-owned domain runtimes arrive already
-   constructed.
+   Context, Subagent lifecycle, and repeatable synchronous System Agent roots.
+   App-owned domain runtimes arrive already constructed.
 4. `restscope/request_generation/store.py` — revisioned operation state,
    snapshots, locks, and atomic replacement.
 5. `restscope/request_generation/parameter_patch/models.py` — semantic Patch
@@ -173,10 +173,14 @@ Tool grants the domain Tools named by a Skill.
 
 ### `restscope/agent/` and `restscope/harness/`
 
-There is one generic Agent implementation for Main and child sessions. A
-Profile selects a model, ordered Tools, Skills, Context Sources, child Profiles,
-and bounded instructions. The Harness performs mechanical validation and
-execution but does not decide testing semantics.
+There is one generic Agent implementation for Main, child, and System sessions.
+A Profile selects a model, ordered Tools, Skills, Context Sources, child
+Profiles, and bounded instructions. A registered `SystemAgentDefinition` binds
+only the expected result contract and task adapter; it does not grant
+capabilities. Every System invocation is a fresh root and has no token budget
+limit, while the Harness still records usage and validates final output until
+it is valid or a terminal runtime event occurs. The Harness performs mechanical
+validation and execution but does not decide testing semantics.
 
 The Main Profile is intentionally plan-only today. The new testing Tools and
 Skills cannot be used by it until a later approved Profile change.
@@ -187,6 +191,10 @@ The API Behavior Monitor observes bounded target responses. It owns response
 contract tracking, resource identifiers, and response-value pools. A successful
 Patch Apply stages exact response-value pool replacements, publishes matching
 generation state, then commits or restores that publication before unlock.
+Ambiguous resource-identifier and response-source choices use two registered
+`fast` System Agent Profiles through a narrow runner. Their task-local `I*` and
+`S*` aliases make the output Schema closed over the current candidates; the
+Monitor never calls an LLM client directly.
 
 ### `restscope/target_http/`
 
@@ -203,9 +211,12 @@ Generator, Constraint, Failure, Attempt, or candidate tables.
 ### `restscope/observability/`, `restscope/ui/`, and `ui/`
 
 Observability records redacted Agent turns, Tool calls, Subagent relationships,
-HTTP exchanges, and the Main Plan. Browser schema-v3 has only `agent_turn` and
-`tool_call` events. Batch and Patch Apply are ordinary Tool cards. Same-origin
-IndexedDB retains at most five complete v3 snapshots and ignores older schemas.
+System Agent roots, HTTP exchanges, and the Main Plan. Browser schema-v3 has
+only `agent_turn` and `tool_call` events. A System root keeps an empty
+`parent_session_id` but uses the active HTTP Tool's `parent_event_id`, allowing
+the UI to nest one or more System conversations under that Tool without copying
+events. Batch and Patch Apply are ordinary Tool cards. Same-origin IndexedDB
+retains at most five complete v3 snapshots and ignores older schemas.
 
 ## 5. Follow a Patch from diagnosis to target evidence
 

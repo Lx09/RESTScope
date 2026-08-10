@@ -128,7 +128,7 @@ def test_resolution_profile_rejects_each_missing_tool(missing_tool: str) -> None
                 ),
                 models=(
                     LLMModelConfig(
-                        role="fast",
+                        name="fast",
                         provider="unused",
                         model="unused",
                         max_tokens=256,
