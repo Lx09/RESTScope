@@ -15,7 +15,7 @@ business tables plus Alembic's `alembic_version` table.
   revisioned current Generator/Constraint state. It has no database Adapter.
 - `restscope.harness.operation_testing` owns deterministic Batch execution and
   run-local Test Case evidence; neither is persisted.
-- API Behavior Monitor owns bounded Resource Identifier and Response Value
+- API Behavior Pool owns bounded Resource Identifier and Response Value
   evidence.
 - `restscope.db` owns SQLAlchemy mappings, domain-adjacent persistence Adapters,
   transactions, foreign-key setup, and the one baseline migration.
@@ -51,14 +51,16 @@ listing. Neither API restores an App.
 
 `RequestGenerationConfigStore` initializes one revision-0 state for every
 OpenAPI operation and keeps it only for the current App lifetime. A Batch
-freezes one complete revision. A validated Parameter Patch replaces the
-Generator/Constraint state under the operation lock and increments the
-revision. Restarting the App recreates defaults from OpenAPI.
+freezes one complete revision and every reference pool named by that revision.
+A validated Parameter Patch replaces Generator, Constraint, and exact
+reference-binding state under the operation lock and increments the revision.
+Restarting the App recreates defaults from OpenAPI.
 
 The Store deliberately has no Patch history, candidate registry, rollback
 record, Failure memory, sample storage, or database mapping. Response-value
-source registrations used by a Patch remain API Behavior Monitor evidence and
-are persisted in that owner's tables below.
+pool sources used by a Patch remain API Behavior Pool evidence. Apply stages
+their durable replacement, publishes in-memory state, then commits; a commit
+failure restores the old state before unlocking.
 
 ## Resource Identifier: 6 tables
 
@@ -76,11 +78,12 @@ are persisted in that owner's tables below.
 
 ## Response Value: 5 tables
 
-- `response_value_monitors`: natural `value_name` primary key and one unique
-  consumer operation/input registration. Every stored monitor is active.
-- `response_value_sources`: natural composite key for an explicit producer
-  status/media/selector feeding one value pool.
-- `response_values`: typed natural key plus first/last seen timestamps. Each
+- `response_value_pools`: natural `value_name` primary key and one unique
+  consumer operation/input pool. Every stored pool is active.
+- `response_value_pool_sources`: natural composite key for the complete
+  producer status/media/selector set feeding one value pool. Patch replaces
+  this set instead of appending an implicit alternative.
+- `response_value_pool_values`: typed natural key plus first/last seen timestamps. Each
   pool retains its 100 most recently active distinct values.
 - `response_observations`: successful JSON observation metadata. Each producer
   operation retains its latest 100 observations.

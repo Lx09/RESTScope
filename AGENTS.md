@@ -141,8 +141,10 @@ explicit project decision:
   plans, queues, general Agent memory, or recovery snapshots.
 - Request Generation configuration is an App-lifetime in-memory store, not a
   persistence exception. It keeps one revisioned Generator/Constraint state per
-  operation. A validated Parameter Patch replaces that state atomically, and a
-  Batch freezes one complete revision before generating requests. It must not
+  operation, including exact reference bindings. A validated Parameter Patch
+  replaces that state and its affected response-value pools atomically within
+  the running App, and a Batch freezes one complete revision plus its named
+  reference pools before generating requests. It must not
   persist Patch history, samples, Failures, Agent reasoning, or rollback state.
 - The Live Observer browser history is a second narrow exception approved only
   for local UI testing and recovery. The React page may persist the latest five

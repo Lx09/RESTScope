@@ -53,7 +53,8 @@ the linked Reference when its stage becomes active:
    Do not construct or rewrite the Patch in this parent session.
 8. Wait for the child. Treat its completion as a claim until this parent calls
    `request_generation.get_input_state` and verifies the reported revision,
-   state digest, last-applied validation digest, Generators, and Constraints.
+   state digest, last-applied validation digest, Generators, Constraints, and
+   exact reference bindings.
 9. After confirmed application, call `test_case.run_batch` for a new complete
    Batch. Apply success is not HTTP success; Batch success is not a substitute
    for value-predicate proof.

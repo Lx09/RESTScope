@@ -18,9 +18,9 @@ BUSINESS_TABLES = {
     "resource_identifiers",
     "resource_operation_usages",
     "resource_monitor_errors",
-    "response_value_monitors",
-    "response_value_sources",
-    "response_values",
+    "response_value_pools",
+    "response_value_pool_sources",
+    "response_value_pool_values",
     "response_observations",
     "response_observation_scalars",
 }
@@ -51,6 +51,7 @@ def test_default_app_creates_only_the_thirteen_persistent_business_tables(
             *BUSINESS_TABLES,
         }
         assert app.request_generation_store is not None
+        assert app.request_generation_patch_runtime is not None
         assert app.operation_testing_service is not None
     finally:
         app.close()

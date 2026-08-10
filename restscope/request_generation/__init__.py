@@ -63,16 +63,18 @@ from .models import (
 from .generation import generate_strategy_value, project_generated_input_value
 from .ports import ReferenceValueProvider
 from .reference_values import BehaviorMonitorReferenceValues
-from .patch_models import (
+from .parameter_patch.models import (
     CompiledConstraintPatch,
     CompiledParameterPatch,
     SelectedReferenceProvenance,
     SemanticParameterPatch,
 )
-from .patch_validation import (
-    ParameterPatchRuntime,
+from .parameter_patch.runtime import (
+    RequestGenerationPatchRuntime,
     ParameterPatchValidationError,
     ValidatedPatch,
+)
+from .parameter_patch.projection import (
     constraint_closure,
     semantic_state_payload,
     validation_payload,
@@ -119,7 +121,7 @@ __all__ = [
     "CompiledParameterPatch",
     "SelectedReferenceProvenance",
     "SemanticParameterPatch",
-    "ParameterPatchRuntime",
+    "RequestGenerationPatchRuntime",
     "ParameterPatchValidationError",
     "ValidatedPatch",
     "ResourceIdentifierGenerator",

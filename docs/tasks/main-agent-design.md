@@ -39,7 +39,9 @@ Sources, domain Tools, or child Profiles. `skill.read` therefore is not added;
 
 This capability-light Profile is deliberate. OpenAPI discovery, request-state
 inspection, Patch validation/application, and bounded Batch execution now have
-production bindings, and the two standard testing Skills exist. Binding does
+production bindings, and the two standard testing Skills exist. The App owns
+the single Patch runtime and passes it whole to Harness binding; Harness does
+not assemble or inspect its Store. Binding does
 not grant access. Until a later decision selects Skills, grants every required
 Tool, and supplies any needed child Profile, Main can only plan and report that
 it cannot safely test the target.

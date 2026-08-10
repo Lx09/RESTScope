@@ -19,6 +19,8 @@ Check in this order:
    rule and preservation of compatible old relationships.
 5. Match every reference-backed input to its kind, canonical resource or
    producer identity, compatible type, and positive value count.
+   For `response_value`, require exactly the reviewed source; do not accept an
+   output that merely adds it beside a stale source.
 6. Treat samples as witnesses: pair `presence` with `values` and reject any
    counterexample, but do not demand enumeration of the whole domain.
 7. Reject unnecessary changes or weakening of unrelated behavior.

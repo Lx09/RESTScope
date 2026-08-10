@@ -686,7 +686,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> N
     from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
-        ParameterPatchRuntime,
+        RequestGenerationPatchRuntime,
         RequestGenerationConfigStore,
         SemanticParameterPatch,
     )
@@ -715,7 +715,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> N
     operation = ir.operations["GET /search"]
     catalog = RequestGenerationConfigStore()
     assert catalog.initialize_once(ir) is True
-    patch_runtime = ParameterPatchRuntime(store=catalog, ir_provider=lambda: ir)
+    patch_runtime = RequestGenerationPatchRuntime(store=catalog, ir_provider=lambda: ir)
     patch = SemanticParameterPatch.model_validate(
         {
             "changes": [

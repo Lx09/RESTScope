@@ -23,8 +23,8 @@ testing or state mutation.
   `request_generation.validate_patch`, `parameter_patch.apply`, and
   `test_case.run_batch` with production Harness bindings.
 - Added deterministic semantic Patch validation, reference checks, finite-domain
-  solving, bounded witnesses, validation digests, atomic response-source
-  registration, and conflict-safe Store replacement.
+  solving, bounded witnesses, validation digests, response-source replacement,
+  and conflict-safe Store replacement.
 - Replaced `build-parameter-patch` with `apply-parameter-patch` and expanded its
   method through state confirmation. Reworked `resolve-operation-failures` for
   inline Batch evidence and generic child delegation.
@@ -35,8 +35,14 @@ testing or state mutation.
 
 - Store state, Patches, samples, Failures, and Agent work remain non-persistent.
 - Apply performs no HTTP call and provides no automatic rollback.
-- A validation or Apply error leaves Store state unchanged.
-- A Batch freezes one state revision before generating any case.
+- Apply stages durable pool changes and publishes Store state under one
+  Operation lock; a database commit failure restores the old Store state.
+- A Batch freezes one state revision and all named reference pools before
+  generating any case.
+
+The stricter ownership and atomicity contract is recorded in
+[ADR 0004](../adr/0004-atomic-generation-state-and-response-pools.md) and the
+[follow-up task](parameter-patch-ownership-and-atomicity.md).
 - Tool binding is not authorization; the production Main Profile still grants
   only `plan.read` and `plan.update`.
 - No real model, target API, MCP, Phoenix, or other external service is used by

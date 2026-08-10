@@ -1,131 +1,79 @@
-# RESTScope
+# RESTScope domain language
 
-RESTScope explores an API through generated requests, classifies observed
-failures, and evolves input generators from evidence gathered during one App
-lifetime.
+RESTScope explores an API with generated requests and changes future request
+generation only when current evidence supports a bounded Parameter Patch.
 
-## Architecture vocabulary
-
-**OpenAPI Audit**:
+**OpenAPI Audit**
 The current normalized OpenAPI document plus append-only response-contract
-change events used for audit and export. It does not restore an App or own live
-response monitoring.
+change events. It supports audit and export; it does not restore an App.
 
-**Operation Reference**:
-A stable semantic path to one request input or response field inside a single
-OpenAPI Operation. It translates between OpenAPI structure, model-facing
-handles, and bounded runtime evidence without owning those facts.
+**Operation Reference**
+A stable semantic path to one request input or response field inside one
+OpenAPI Operation. Examples are `query.sort`, `body.project.startDate`, and
+`body.items[].id`.
 
-**Catalog**:
-A collection whose main job is discovering or looking up definitions or facts
-by stable identity. Catalog membership does not imply Tool authorization.
+**Parameter**
+One request input within one Operation, identified to Agents by an Operation
+Reference. A repeated field name in another location or Operation is a
+different Parameter.
 
-**Store**:
-Mutable current state that can be replaced or revised during its approved
-lifetime. A Store name must identify which domain owns that state.
+**Generator**
+The complete current rule for whether one input is present and which values it
+can produce. A Generator owns single-input value and presence rules.
 
-**Registry**:
-A runtime mapping for names, short references, or lifecycle objects. A Registry
-is not the durable source of domain facts.
+**Constraint**
+A typed Boolean relationship among two or more request inputs generated in the
+same request. Constraints do not invent values; participating Generators must
+already expose values that can satisfy the relationship.
 
-**Backend**:
-A trusted implementation that supplies data access or execution behind a Tool
-Interface. The model sees the Tool contract, never the Backend object.
+**Generation State**
+One immutable view of all Generators, active Constraints, reference bindings,
+revision, and digest for an Operation. The App-lifetime
+`RequestGenerationConfigStore` holds only the latest state.
 
-**Coordinator**:
-An object that sequences several independently meaningful Modules. Do not use
-this name for a wrapper around one collaborator or one pass-through call.
+**Reference Value Pool**
+A bounded set of typed values supplied to a reference-backed Generator.
+Resource pools contain learned canonical identifiers. Response pools contain
+values materialized from one explicitly selected Response Value Source.
 
-## Agent Context
+**Response Value Source**
+The exact producer Operation, response status, media type, and field selector
+feeding one consumer input's Reference Value Pool. A Parameter Patch replaces
+the complete source identity; it never appends an implicit alternative.
 
-Agent Context is the short-lived, model-facing message view for one LLM
-decision. It is not Operation Smoke Memory and is never stored. A workflow
-first selects typed domain facts; `CompactTextWriter` encodes them as safe,
-compact text, and `AgentContext` keeps the initial task plus bounded tool and
-validation exchanges. Final Agent decisions still use strict JSON.
+**Parameter Patch**
+A complete semantic replacement for the changed Generators and the full active
+Constraint closure intersecting its affected inputs. It also establishes the
+final reference bindings for changed inputs. A Patch changes future RESTScope
+request generation and does not itself send an HTTP request.
 
-## Operation Smoke Language
+**Patch Validation**
+Deterministic compilation, source revalidation, Constraint solving, domain
+analysis, and sample generation against one exact Generation State revision.
+The validation digest binds the complete semantic Patch, state, sources, seed,
+sample count, and witnesses. Validation is read-only.
 
-**Failure Source**:
-One exact Failure message folded deterministically across its original failed
-Test Cases. A Resolution session gives it a short `E*` reference.
-_Avoid_: Stable Failure, worklist item
+**Applied Revision**
+The next Generation State published after the same validated Patch is
+recompiled and its durable response-pool replacement commits. Publication and
+pool commit are atomic within the running App: either both become visible or
+the previous state remains visible.
 
-**Stable Failure**:
-A persisted semantic conclusion derived only from a decided final worklist
-item. Its key combines operation, real source messages, and suspected input
-node identities.
-_Avoid_: Error message, worklist draft
+**Batch Evidence**
+Bounded inline requests and HTTP or transport outcomes from 1–5 generated
+cases. A Batch freezes one Generation State and all named Reference Value
+Pools before generating its first case. It creates no persistent Test Case,
+Failure, candidate, or Agent memory record.
 
-**Test Case Catalog**:
-An in-memory index shared by every Batch and Resolution Probe during one
-operation Smoke run. It stores sent request inputs as structured JSON for
-all cases and response bodies only for 4xx/5xx cases. It is never written to
-the database.
-_Avoid_: Batch report, persistent test history
+## Core relationships
 
-**Current-operation HTTP Probe**:
-A Failure Resolution request through the global HTTP Tool, restricted to
-the exact operation method and path template. It is available
-for read and write operations; every attempt enters the Test Case Catalog, and
-write effects are not rolled back.
-_Avoid_: Read-only Probe, separate HTTP tool
-
-**Resolution Worklist**:
-The Agent-owned, revisioned list for one failed Batch. It contains only `E*`,
-`TC*`, `P*`, semantic Parameter handles, and bounded diagnostic text. The Agent
-may merge, split, overlap, reorder, reopen, or leave items undecided.
-_Avoid_: Plan, queue, persistent Agent memory
-
-**Resolution Session**:
-One continuous Agent conversation for all exact Failure sources in a failed
-Batch. It owns semantic grouping, investigation order, worklist changes, root
-causes, candidate selection, and finish timing.
-_Avoid_: Per-Failure Agent, fixed todo list
-
-**Resolution Context Checkpoint**:
-An ephemeral Markdown handoff produced when the next Resolution prompt reaches
-80% of its configured input capacity. The FAST Compact Agent reads the same
-system contract plus the complete saved conversation and a temporary summary
-instruction. Runtime then keeps the original Failure prompt plus the summary;
-the worklist and reference registries remain authoritative and unchanged.
-_Avoid_: Persistent Agent memory, worklist snapshot
-
-**Parameter**:
-One operation input identified by the combination of operation key and
-canonical input node identity.
-_Avoid_: Field name
-
-**Generator Requirement**:
-A structured description of the values or relationships that a candidate
-Generator or Constraint must produce.
-_Avoid_: Patch
-
-**Applied Patch**:
-A reviewed registry candidate selected by the final worklist and atomically
-written with every other compatible decision from that Resolution session.
-_Avoid_: Candidate, resolved Patch
-
-## Relationships and identity
-
-- One exact source may appear in several overlapping worklist items, but every
-  original `(E*, TC*)` association must remain covered before finalization.
-- Worklist items without a decision are discarded rather than persisted.
-- A selected `P*` resolves to one immutable, reviewed candidate held only by
-  the session registry; worklist text cannot alter its executable content.
-- One Parameter may appear in many stable Failures and Resolution Attempts.
-- Compatible selected candidates and all decided Failures/Attempts commit in
-  one transaction; any validation or write failure rolls the whole set back.
-
-Models never receive database primary keys. Resolution sees semantic input
-handles such as `body.project.startDate`, exact sources as `E1`, `E2`, …,
-run-local Test Cases as `TC1`, `TC2`, …, and Patch candidates as `P1`, `P2`, ….
-Runtime code maps and validates every reference.
-
-A semantic handle is the unique cross-workflow name: `query.sort` identifies
-the direct key `sort` at `request.query.sort`. Test Case JSON keeps direct keys
-inside `path`, `query`, `header`, `cookie`, and optional `body` containers.
-
-There is no permanent “resolved” state. A later complete Batch may show that a
-previous Patch helped, did nothing, or interacted with another change; Memory
-keeps the evidence and chronological attempts instead of rewriting history.
+- A Generator owns a single Parameter's possible values and presence.
+- A Constraint owns only cross-Parameter relationships.
+- Generation State includes exact reference bindings, so changing only a
+  Response Value Source changes the state digest and advances the revision.
+- Patch Validation supplies proof material but does not mutate state.
+- Applying a Parameter Patch atomically replaces in-memory Generation State
+  and the affected durable response pools. A database commit failure restores
+  the old in-memory state before the Operation lock is released.
+- An Applied Revision proves only that RESTScope changed future generation.
+  A later Batch provides new evidence about the target API.

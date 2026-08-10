@@ -17,17 +17,17 @@ from sqlalchemy.orm import Session
 from restscope.api_behavior_monitor.response_values.catalog import (
     ObservedResponseField,
     PersistedResponseValueSource,
-    ResponseValueCatalogRegistration,
-    ResponseValueMonitorRecord,
+    ResponseValuePoolRegistration,
+    ResponseValuePoolRecord,
     ResponseValueSource,
 )
 
 from ..orm.response_value_orm import (
     ResponseObservationORM,
     ResponseObservationScalarORM,
-    ResponseValueMonitorORM,
-    ResponseValueORM,
-    ResponseValueSourceORM,
+    ResponseValuePoolORM,
+    ResponseValuePoolValueORM,
+    ResponseValuePoolSourceORM,
 )
 from ._transaction import _SqlAlchemyUnitOfWork
 
@@ -45,25 +45,25 @@ class SqlAlchemyResponseValueCatalogRepository:
 
         self.session = session
 
-    def ensure_monitor(
+    def ensure_pool(
         self,
-        registration: ResponseValueCatalogRegistration,
+        registration: ResponseValuePoolRegistration,
         *,
         now: datetime,
-    ) -> ResponseValueMonitorRecord:
+    ) -> ResponseValuePoolRecord:
         """Create or refresh the one pool assigned to a consumer input."""
 
         row = self.session.scalar(
-            select(ResponseValueMonitorORM).where(
-                ResponseValueMonitorORM.consumer_operation_key
+            select(ResponseValuePoolORM).where(
+                ResponseValuePoolORM.consumer_operation_key
                 == registration.consumer_operation_key,
-                ResponseValueMonitorORM.consumer_input_node_id
+                ResponseValuePoolORM.consumer_input_node_id
                 == registration.consumer_input_node_id,
             )
         )
         created = row is None
         if row is None:
-            row = ResponseValueMonitorORM(
+            row = ResponseValuePoolORM(
                 value_name=registration.value_name,
                 consumer_operation_key=registration.consumer_operation_key,
                 consumer_input_node_id=registration.consumer_input_node_id,
@@ -82,7 +82,7 @@ class SqlAlchemyResponseValueCatalogRepository:
         self.session.flush()
         return _monitor_record(row, created=created)
 
-    def add_sources(
+    def _insert_sources(
         self,
         value_name: str,
         sources: list[ResponseValueSource],
@@ -91,7 +91,7 @@ class SqlAlchemyResponseValueCatalogRepository:
     ) -> list[PersistedResponseValueSource]:
         """Insert missing explicit producer selectors for one value pool."""
 
-        if self.session.get(ResponseValueMonitorORM, value_name) is None:
+        if self.session.get(ResponseValuePoolORM, value_name) is None:
             raise ValueError(f"Unknown response-value pool: {value_name}")
         for source in sources:
             key = (
@@ -101,9 +101,9 @@ class SqlAlchemyResponseValueCatalogRepository:
                 source.media_type,
                 source.selector,
             )
-            if self.session.get(ResponseValueSourceORM, key) is None:
+            if self.session.get(ResponseValuePoolSourceORM, key) is None:
                 self.session.add(
-                    ResponseValueSourceORM(
+                    ResponseValuePoolSourceORM(
                         value_name=value_name,
                         producer_operation_key=source.producer_operation_key,
                         status_code=source.status_code,
@@ -116,6 +116,34 @@ class SqlAlchemyResponseValueCatalogRepository:
         self.session.flush()
         return self._list_sources(value_name=value_name)
 
+    def replace_pool_sources(
+        self,
+        value_name: str,
+        sources: list[ResponseValueSource],
+        *,
+        now: datetime,
+    ) -> list[PersistedResponseValueSource]:
+        """Replace one pool's complete source set and discard stale values."""
+        if self.session.get(ResponseValuePoolORM, value_name) is None:
+            raise ValueError(f"Unknown response-value pool: {value_name}")
+        self.session.execute(
+            delete(ResponseValuePoolSourceORM).where(
+                ResponseValuePoolSourceORM.value_name == value_name
+            )
+        )
+        self.session.execute(
+            delete(ResponseValuePoolValueORM).where(ResponseValuePoolValueORM.value_name == value_name)
+        )
+        self.session.flush()
+        return self._insert_sources(value_name, sources, now=now)
+
+    def delete_pool(self, value_name: str) -> None:
+        """Delete one inactive pool; database cascades remove sources and values."""
+        row = self.session.get(ResponseValuePoolORM, value_name)
+        if row is not None:
+            self.session.delete(row)
+            self.session.flush()
+
     def list_sources_for_operation(
         self,
         producer_operation_key: str,
@@ -123,27 +151,27 @@ class SqlAlchemyResponseValueCatalogRepository:
         """Return every registered selector that reads one producer operation."""
 
         rows = self.session.scalars(
-            select(ResponseValueSourceORM)
+            select(ResponseValuePoolSourceORM)
             .where(
-                ResponseValueSourceORM.producer_operation_key
+                ResponseValuePoolSourceORM.producer_operation_key
                 == producer_operation_key
             )
             .order_by(
-                ResponseValueSourceORM.value_name,
-                ResponseValueSourceORM.status_code,
-                ResponseValueSourceORM.media_type,
-                ResponseValueSourceORM.selector,
+                ResponseValuePoolSourceORM.value_name,
+                ResponseValuePoolSourceORM.status_code,
+                ResponseValuePoolSourceORM.media_type,
+                ResponseValuePoolSourceORM.selector,
             )
         ).all()
         return [_source_record(row) for row in rows]
 
-    def list_monitors(self) -> list[ResponseValueMonitorRecord]:
-        """Return all registered pools; every stored monitor is active."""
+    def list_pools(self) -> list[ResponseValuePoolRecord]:
+        """Return all registered pools; every stored pool is active."""
 
         rows = self.session.scalars(
-            select(ResponseValueMonitorORM).order_by(
-                ResponseValueMonitorORM.consumer_operation_key,
-                ResponseValueMonitorORM.consumer_input_node_id,
+            select(ResponseValuePoolORM).order_by(
+                ResponseValuePoolORM.consumer_operation_key,
+                ResponseValuePoolORM.consumer_input_node_id,
             )
         ).all()
         return [_monitor_record(row, created=False) for row in rows]
@@ -290,16 +318,16 @@ class SqlAlchemyResponseValueCatalogRepository:
     def values_for(self, value_name: str, *, limit: int) -> list[object]:
         """Return the most recently active typed values for one registered pool."""
 
-        if self.session.get(ResponseValueMonitorORM, value_name) is None:
+        if self.session.get(ResponseValuePoolORM, value_name) is None:
             return []
         rows = self.session.scalars(
-            select(ResponseValueORM)
-            .where(ResponseValueORM.value_name == value_name)
+            select(ResponseValuePoolValueORM)
+            .where(ResponseValuePoolValueORM.value_name == value_name)
             .order_by(
-                ResponseValueORM.last_seen_at,
-                ResponseValueORM.first_seen_at,
-                ResponseValueORM.value_type,
-                ResponseValueORM.value_text,
+                ResponseValuePoolValueORM.last_seen_at,
+                ResponseValuePoolValueORM.first_seen_at,
+                ResponseValuePoolValueORM.value_type,
+                ResponseValuePoolValueORM.value_text,
             )
             .limit(limit)
         ).all()
@@ -314,7 +342,7 @@ class SqlAlchemyResponseValueCatalogRepository:
     ) -> int:
         """Upsert typed values and delete rows beyond the pool retention limit."""
 
-        if self.session.get(ResponseValueMonitorORM, value_name) is None:
+        if self.session.get(ResponseValuePoolORM, value_name) is None:
             raise ValueError(f"Unknown response-value pool: {value_name}")
         recorded = 0
         seen: set[tuple[str, str]] = set()
@@ -325,13 +353,13 @@ class SqlAlchemyResponseValueCatalogRepository:
             seen.add(encoded)
             value_type, value_text = encoded
             row = self.session.get(
-                ResponseValueORM,
+                ResponseValuePoolValueORM,
                 (value_name, value_type, value_text),
             )
             if row is None:
                 timestamp = now + timedelta(microseconds=sequence)
                 self.session.add(
-                    ResponseValueORM(
+                    ResponseValuePoolValueORM(
                         value_name=value_name,
                         value_type=value_type,
                         value_text=value_text,
@@ -344,13 +372,13 @@ class SqlAlchemyResponseValueCatalogRepository:
                 row.last_seen_at = now + timedelta(microseconds=sequence)
         self.session.flush()
         expired = self.session.scalars(
-            select(ResponseValueORM)
-            .where(ResponseValueORM.value_name == value_name)
+            select(ResponseValuePoolValueORM)
+            .where(ResponseValuePoolValueORM.value_name == value_name)
             .order_by(
-                ResponseValueORM.last_seen_at.desc(),
-                ResponseValueORM.first_seen_at.desc(),
-                ResponseValueORM.value_type,
-                ResponseValueORM.value_text,
+                ResponseValuePoolValueORM.last_seen_at.desc(),
+                ResponseValuePoolValueORM.first_seen_at.desc(),
+                ResponseValuePoolValueORM.value_type,
+                ResponseValuePoolValueORM.value_text,
             )
             .offset(MAX_RESPONSE_VALUES_PER_POOL)
         ).all()
@@ -429,26 +457,26 @@ class SqlAlchemyResponseValueCatalogRepository:
         """Return one pool's sources in deterministic display order."""
 
         rows = self.session.scalars(
-            select(ResponseValueSourceORM)
-            .where(ResponseValueSourceORM.value_name == value_name)
+            select(ResponseValuePoolSourceORM)
+            .where(ResponseValuePoolSourceORM.value_name == value_name)
             .order_by(
-                ResponseValueSourceORM.producer_operation_key,
-                ResponseValueSourceORM.status_code,
-                ResponseValueSourceORM.media_type,
-                ResponseValueSourceORM.selector,
+                ResponseValuePoolSourceORM.producer_operation_key,
+                ResponseValuePoolSourceORM.status_code,
+                ResponseValuePoolSourceORM.media_type,
+                ResponseValuePoolSourceORM.selector,
             )
         ).all()
         return [_source_record(row) for row in rows]
 
 
 def _monitor_record(
-    row: ResponseValueMonitorORM,
+    row: ResponseValuePoolORM,
     *,
     created: bool,
-) -> ResponseValueMonitorRecord:
-    """Project one monitor row into the database-independent contract."""
+) -> ResponseValuePoolRecord:
+    """Project one pool row into the database-independent contract."""
 
-    return ResponseValueMonitorRecord(
+    return ResponseValuePoolRecord(
         value_name=row.value_name,
         consumer_operation_key=row.consumer_operation_key,
         consumer_input_node_id=row.consumer_input_node_id,
@@ -458,7 +486,7 @@ def _monitor_record(
     )
 
 
-def _source_record(row: ResponseValueSourceORM) -> PersistedResponseValueSource:
+def _source_record(row: ResponseValuePoolSourceORM) -> PersistedResponseValueSource:
     """Project a natural-key source row into the catalog contract."""
 
     return PersistedResponseValueSource(

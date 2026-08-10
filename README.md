@@ -386,10 +386,12 @@ transitively intersecting state for selected inputs.
 schema and reference compatibility, solves Constraints, generates deterministic
 samples, and returns a validation digest without changing state.
 `parameter_patch.apply` revalidates the exact request under the operation lock,
-registers response-value sources transactionally, and atomically advances the
-revision. A failed or stale application changes nothing.
+stages complete response-value pool replacements, publishes the new Generation
+State, and commits both as one visible change. A failed commit restores the old
+state before unlocking; a stale application changes nothing.
 
-`test_case.run_batch` freezes one complete generation revision before it
+`test_case.run_batch` freezes one complete generation revision and every named
+reference pool before it
 preflights and executes 1–5 cases. The result contains bounded inline canonical
 requests and HTTP or transport outcomes plus the frozen revision. It creates no
 `TC*`, `E*`, Test Case registry, Failure memory, candidate, or database row.
@@ -420,14 +422,15 @@ The Monitor coordinates three bounded responsibilities:
 - Resource Identifier reuses the exact-`id` heuristic and bounded FAST
   classification. Learned selectors, typed identifiers, resource aliases,
   operation usage, and errors remain in the App database.
-- Response Value registers a stable value pool when `parameter_patch.apply`
-  atomically accepts a validated `response_value` Generator. Candidate producer
+- Response Value creates or exactly replaces a stable value pool when
+  `parameter_patch.apply` atomically accepts a validated `response_value`
+  Generator. Candidate producer
   fields come from the latest IR; exact normalized names are selected locally
   and an optional bounded FAST choice handles semantic names such as `commitId`
   and `sha`.
   Every valid, non-truncated 2xx JSON response contributes flattened scalar
   evidence. The latest 100 observations per operation and the 100 most recently
-  active values per pool are retained, allowing a later monitor registration
+  active values per pool are retained, allowing a later pool replacement
   to backfill a deduplicated typed value pool. A response with more than 1000
   valid scalars is skipped in full and returns a structured warning; partial
   evidence is never written.
@@ -442,8 +445,9 @@ scalar evidence is another narrow exception, and all non-null scalar fields,
 including sensitive-looking names, may be retained. The public read-only
 Tool Backend exposes `resource.list_resources`, `resource.list_ids`, and
 `openapi.find_observed_response_fields`. Response Value pools are read without
-registration during Patch validation; `parameter_patch.apply` performs the
-producer-to-consumer registration before publishing the new Store state.
+mutation during Patch validation. `parameter_patch.apply` stages the exact
+producer-to-consumer replacement, publishes matching Store state, then commits
+the pool or restores the old Store state before unlocking.
 
 ## Failure Resolution and Parameter Patch workflow
 

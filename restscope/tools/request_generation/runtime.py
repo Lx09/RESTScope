@@ -1,7 +1,7 @@
 """Expose bounded read-only request-generation state and Patch validation.
 
 The Tool Module owns both JSON contracts, expected failure translation, and
-model-facing projection. ``ParameterPatchRuntime`` remains the trusted domain
+model-facing projection. ``RequestGenerationPatchRuntime`` remains the trusted domain
 implementation; these Tools never send HTTP requests or mutate generation
 state.
 """
@@ -13,11 +13,10 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from restscope.llm import ToolSpec
-from restscope.request_generation.patch_models import SemanticParameterPatch
-from restscope.request_generation.patch_validation import (
-    ParameterPatchRuntime,
+from restscope.request_generation.parameter_patch import (
+    RequestGenerationPatchRuntime,
     ParameterPatchValidationError,
-    semantic_state_payload,
+    SemanticParameterPatch,
     validation_payload,
 )
 from restscope.request_generation.store import GeneratorConfigError
@@ -117,15 +116,17 @@ class ValidatePatchOutput(_StrictModel):
 class RequestGenerationToolBackend:
     """Bind Store reads and deterministic validation to Tool-shaped methods."""
 
-    def __init__(self, runtime: ParameterPatchRuntime) -> None:
+    def __init__(self, runtime: RequestGenerationPatchRuntime) -> None:
         self.runtime = runtime
 
     def get_input_state(self, **arguments: Any) -> dict[str, Any]:
         """Read current state without truncating its Constraint closure."""
         try:
             request = GetInputStateInput.model_validate(arguments)
-            state = self.runtime.store.require_state(request.operation_key)
-            payload = semantic_state_payload(state, request.inputs)
+            payload = self.runtime.read_state(
+                operation_key=request.operation_key,
+                input_handles=request.inputs,
+            )
             output = InputStateOutput.model_validate(payload)
         except ValidationError as exc:
             raise ToolFailure(

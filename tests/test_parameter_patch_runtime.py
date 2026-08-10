@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 
@@ -11,7 +12,7 @@ def _runtime():
     """Create one initialized two-input operation without external services."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
-        ParameterPatchRuntime,
+        RequestGenerationPatchRuntime,
         RequestGenerationConfigStore,
     )
 
@@ -42,7 +43,7 @@ def _runtime():
     )
     store = RequestGenerationConfigStore()
     assert store.initialize_once(ir) is True
-    return store, ParameterPatchRuntime(store=store, ir_provider=lambda: ir)
+    return store, RequestGenerationPatchRuntime(store=store, ir_provider=lambda: ir)
 
 
 def _relational_patch():
@@ -79,7 +80,7 @@ def _relational_patch():
 
 def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
     """The exact same Patch produces one digest and becomes future state once."""
-    from restscope.request_generation.patch_validation import semantic_state_payload
+    from restscope.request_generation.parameter_patch import semantic_state_payload
 
     store, runtime = _runtime()
     patch = _relational_patch()
@@ -103,7 +104,7 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
     assert first.samples == second.samples
     assert all(sample["values"] == {"query.minimum": 2, "query.maximum": 8} for sample in first.samples)
 
-    applied, validated, references = runtime.apply(
+    result = runtime.apply(
         operation_key="GET /items",
         expected_revision=0,
         validation_digest=first.validation_digest,
@@ -112,7 +113,9 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
         seed=17,
         sample_count=5,
     )
-    assert references == []
+    applied = result.state
+    validated = result.validated
+    assert result.final_reference_bindings == ()
     assert applied.revision == 1
     assert applied.last_applied_validation_digest == validated.validation_digest
 
@@ -124,7 +127,7 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
 def test_digest_mismatch_and_no_change_leave_store_untouched() -> None:
     """Failed Apply attempts never increment revision or replace content."""
     from restscope.request_generation import SemanticParameterPatch
-    from restscope.request_generation.patch_validation import ParameterPatchValidationError
+    from restscope.request_generation.parameter_patch import ParameterPatchValidationError
     from restscope.request_generation.store import GeneratorConfigError
 
     store, runtime = _runtime()
@@ -165,7 +168,7 @@ def test_digest_mismatch_and_no_change_leave_store_untouched() -> None:
 
 def test_two_concurrent_applies_of_one_revision_have_one_winner() -> None:
     """The operation lock turns the second old-revision Apply into a conflict."""
-    from restscope.request_generation.patch_validation import ParameterPatchValidationError
+    from restscope.request_generation.parameter_patch import ParameterPatchValidationError
     from restscope.request_generation.store import GeneratorConfigError
 
     store, runtime = _runtime()
@@ -196,28 +199,164 @@ def test_two_concurrent_applies_of_one_revision_have_one_winner() -> None:
     assert store.require_state("GET /items").revision == 1
 
 
-def test_fallible_apply_preparation_cannot_publish_partial_store_state() -> None:
-    """A failed reference-registration callback leaves the complete revision intact."""
-    store, _runtime_value = _runtime()
-    before = store.require_state("GET /items")
+def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() -> None:
+    """Source identity is state, and a failed durable commit restores that state."""
+    from restscope.operation_references import ResponseFieldReference
+    from restscope.request_generation.store import ReferenceValueBinding
+    from restscope.request_generation.parameter_patch import SemanticParameterPatch
+    from restscope.request_generation.parameter_patch.models import (
+        SelectedReferenceProvenance,
+    )
+    from restscope.request_generation.reference_values import StagedReferenceUpdate
 
-    def fail_before_replace(_state):
-        """Represent a transactional response-source registration failure."""
-        raise ValueError("registration failed")
+    class ReferenceEvidence:
+        """Model a staged database transaction whose commit can fail on exit."""
 
-    with pytest.raises(ValueError, match="registration failed"):
-        store.apply_validated(
-            operation_key="GET /items",
-            expected_revision=0,
-            prepare=fail_before_replace,
+        fail_commit = False
+
+        def values_for(self, _strategy):
+            return [3]
+
+        def resolve_response_source(self, *, input_node_id, field, **_arguments):
+            selector = ResponseFieldReference.from_handle(field).selector
+            return (
+                SelectedReferenceProvenance(
+                    input_node_id=input_node_id,
+                    kind="response_value",
+                    value_name="response_consumer_value",
+                    compatible_scalar_type="integer",
+                    value_count=1,
+                    producer_operation_keys=["GET /producer"],
+                    producer_status_code="200",
+                    producer_media_type="application/json",
+                    source_field=field,
+                    source_selector=selector,
+                ),
+                [3],
+            )
+
+        @contextmanager
+        def stage_updates(
+            self,
+            *,
+            updates,
+            selected_reference_provenance,
+            **_arguments,
+        ):
+            selected = selected_reference_provenance[0]
+            yield StagedReferenceUpdate(
+                updates=tuple(updates),
+                bindings=(
+                    ReferenceValueBinding(
+                        input_node_id=selected.input_node_id,
+                        kind="response_value",
+                        value_name=selected.value_name,
+                        producer_operation_key=selected.producer_operation_keys[0],
+                        producer_status_code=selected.producer_status_code,
+                        producer_media_type=selected.producer_media_type,
+                        source_field=selected.source_field,
+                        source_selector=selected.source_selector,
+                    ),
+                ),
+                removed_response_value_inputs=(),
+            )
+            if self.fail_commit:
+                raise RuntimeError("database commit failed")
+
+    store, original_runtime = _runtime()
+    evidence = ReferenceEvidence()
+    runtime = type(original_runtime)(
+        store=store,
+        ir_provider=original_runtime._ir_provider,
+        reference_values=evidence,
+    )
+
+    def response_patch(field: str) -> SemanticParameterPatch:
+        return SemanticParameterPatch.model_validate(
+            {
+                "changes": [
+                    {
+                        "input": "query.minimum",
+                        "inclusion_probability": 1,
+                        "strategy": {
+                            "type": "response_value",
+                            "source": {
+                                "operation_key": "GET /producer",
+                                "matched_status_code": "200",
+                                "media_type": "application/json",
+                                "field": field,
+                            },
+                        },
+                    }
+                ]
+            }
         )
 
-    assert store.require_state("GET /items") == before
+    first_patch = response_patch("body.old")
+    first_validation = runtime.validate(
+        operation_key="GET /items",
+        expected_revision=0,
+        affected_inputs=("query.minimum",),
+        patch=first_patch,
+    )
+    first = runtime.apply(
+        operation_key="GET /items",
+        expected_revision=0,
+        validation_digest=first_validation.validation_digest,
+        affected_inputs=("query.minimum",),
+        patch=first_patch,
+    ).state
+    assert first.reference_bindings[0].source_field == "body.old"
+
+    second_patch = response_patch("body.new")
+    second_validation = runtime.validate(
+        operation_key="GET /items",
+        expected_revision=1,
+        affected_inputs=("query.minimum",),
+        patch=second_patch,
+    )
+    evidence.fail_commit = True
+    with pytest.raises(RuntimeError, match="database commit failed"):
+        runtime.apply(
+            operation_key="GET /items",
+            expected_revision=1,
+            validation_digest=second_validation.validation_digest,
+            affected_inputs=("query.minimum",),
+            patch=second_patch,
+        )
+    assert store.require_state("GET /items") == first
+
+    evidence.fail_commit = False
+    second = runtime.apply(
+        operation_key="GET /items",
+        expected_revision=1,
+        validation_digest=second_validation.validation_digest,
+        affected_inputs=("query.minimum",),
+        patch=second_patch,
+    ).state
+    assert second.revision == 2
+    assert second.state_digest != first.state_digest
+    assert second.reference_bindings[0].source_field == "body.new"
+    projected = runtime.read_state(
+        operation_key="GET /items",
+        input_handles=("query.minimum",),
+    )
+    strategy = projected["inputs"][0]["generator"]["strategy"]
+    assert strategy == {
+        "type": "response_value",
+        "source": {
+            "operation_key": "GET /producer",
+            "matched_status_code": "200",
+            "media_type": "application/json",
+            "field": "body.new",
+        },
+    }
+    assert "response_consumer_value" not in str(projected)
 
 
 def test_get_state_fails_instead_of_truncating_a_large_constraint_closure() -> None:
     """A model never receives an incomplete active Constraint set."""
-    from restscope.request_generation.patch_validation import semantic_state_payload
+    from restscope.request_generation.parameter_patch import semantic_state_payload
     from restscope.request_generation.store import RequestGenerationState
 
     store, _runtime_value = _runtime()
@@ -228,6 +367,7 @@ def test_get_state_fails_instead_of_truncating_a_large_constraint_closure() -> N
         revision=current.revision,
         state_digest=current.state_digest,
         last_applied_validation_digest="x" * 25_000,
+        reference_bindings=current.reference_bindings,
     )
     with pytest.raises(ValueError, match="24000"):
         semantic_state_payload(huge, ("query.minimum",))

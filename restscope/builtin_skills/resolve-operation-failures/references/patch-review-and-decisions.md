@@ -6,8 +6,8 @@ the runtime and target boundaries:
 1. Re-read every affected input plus returned Constraint participants.
 2. Require the reported current revision, state digest, and last-applied
    validation digest to match Store output.
-3. Require final Generators and Constraints to match the child's reported
-   reviewed state without extra or missing scope.
+3. Require final Generators, Constraints, and exact reference bindings to match
+   the child's reported reviewed state without extra or missing scope.
 4. Confirm the child did not change the parent-fixed root cause, value
    predicates, or affected-input boundary.
 5. Run a fresh complete Batch from the applied revision.

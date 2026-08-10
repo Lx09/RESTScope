@@ -43,7 +43,11 @@ from restscope.observability import (
     build_tracing_runtime,
     configure_logging,
 )
-from restscope.request_generation import BehaviorMonitorReferenceValues, SeededRandom
+from restscope.request_generation import (
+    BehaviorMonitorReferenceValues,
+    RequestGenerationPatchRuntime,
+    SeededRandom,
+)
 from restscope.config import RESTScopeConfig
 from restscope.db import (
     SqlAlchemyOpenAPIUnitOfWork,
@@ -157,6 +161,7 @@ class RESTScopeApp:
         ui_service: Any | None = None
         operation_testing_service: OperationTestingService | None = None
         request_generation_store: RequestGenerationConfigStore | None = None
+        request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None
         api_behavior_monitor_coordinator = None
         target_transport: TargetHTTPTransport | None = None
         openapi_audit: OpenAPIAudit | None = None
@@ -237,6 +242,12 @@ class RESTScopeApp:
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
                 )
+                request_generation_patch_runtime = RequestGenerationPatchRuntime(
+                    store=request_generation_store,
+                    ir_provider=lambda: self.harness_runtime.require_context().ir,
+                    reference_values=reference_values,
+                    resource_backend=resource_backend,
+                )
                 # Production Bindings make domain Tools executable without
                 # granting them to the intentionally plan-only Main Profile.
                 main_runtime = _build_main_agent_runtime_definition(
@@ -250,9 +261,10 @@ class RESTScopeApp:
                         observed_response_fields_provider
                     ),
                     resource_tool_backend=resource_backend,
-                    request_generation_store=request_generation_store,
+                    request_generation_patch_runtime=(
+                        request_generation_patch_runtime
+                    ),
                     operation_testing_service=operation_testing_service,
-                    reference_values=reference_values,
                     agent_runtime=main_runtime,
                 )
                 harness_runtime = built_runtime
@@ -262,6 +274,11 @@ class RESTScopeApp:
             )
             self.request_generation_store = (
                 request_generation_store if harness_runtime is built_runtime else None
+            )
+            self.request_generation_patch_runtime = (
+                request_generation_patch_runtime
+                if harness_runtime is built_runtime
+                else None
             )
             self.api_behavior_monitor_coordinator = (
                 api_behavior_monitor_coordinator

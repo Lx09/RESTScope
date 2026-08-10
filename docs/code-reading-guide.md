@@ -75,12 +75,14 @@ a stale or changed Patch from being applied.
 2. `restscope/agent/profile.py` and `restscope/agent/runtime.py` — Profile
    authorization and the generic model/Tool loop.
 3. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
-   Context, Subagent lifecycle, and production composition.
+   Context, and Subagent lifecycle. App-owned domain runtimes arrive already
+   constructed.
 4. `restscope/request_generation/store.py` — revisioned operation state,
    snapshots, locks, and atomic replacement.
-5. `restscope/request_generation/patch_models.py` — semantic Patch language.
-6. `restscope/request_generation/patch_validation.py` — compilation, scope and
-   reference checks, deterministic samples, digests, and application runtime.
+5. `restscope/request_generation/parameter_patch/models.py` — semantic Patch
+   language.
+6. `restscope/request_generation/parameter_patch/runtime.py` — state reads,
+   validation orchestration, deterministic samples, digests, and atomic Apply.
 7. `restscope/harness/operation_testing/service.py` — frozen-revision Batch
    generation and execution.
 8. `restscope/tools/request_generation/`, `restscope/tools/parameter_patch/`,
@@ -124,8 +126,10 @@ This is the owner of the whole request-generation language:
 - `generators.py`, `constraints.py`, `compiler.py`, and `solver.py` compile and
   solve executable cases.
 - `store.py` keeps current state per operation under an App-lifetime lock.
-- `patch_models.py` defines the semantic replacement accepted by the new Tools.
-- `patch_validation.py` validates, samples, digests, and applies that replacement.
+- `parameter_patch/models.py` defines the semantic replacement accepted by Tools.
+- `parameter_patch/compiler.py` owns pure semantic and Constraint compilation.
+- `parameter_patch/projection.py` owns bounded model-facing output.
+- `parameter_patch/runtime.py` exposes state read, validation, and atomic Apply.
 - `reference_values.py` bridges resource and response-value evidence through
   narrow Protocols.
 
@@ -133,8 +137,9 @@ The Store is not persistent and records no Patch history or rollback state.
 
 ### `restscope/harness/operation_testing/`
 
-`OperationTestingService` freezes a complete Store snapshot before generating
-the whole Batch. `outcomes.py` and `failure.py` define bounded inline evidence.
+`OperationTestingService` freezes a complete Store snapshot and all named
+reference pools before generating the whole Batch. `outcomes.py` and
+`failure.py` define bounded inline evidence.
 There is no Test Case Catalog or `TC*`/`E*` identity layer.
 
 ### `restscope/tools/`
@@ -180,8 +185,8 @@ Skills cannot be used by it until a later approved Profile change.
 
 The API Behavior Monitor observes bounded target responses. It owns response
 contract tracking, resource identifiers, and response-value pools. A successful
-Patch Apply may register response-value sources transactionally before the new
-generation state becomes visible.
+Patch Apply stages exact response-value pool replacements, publishes matching
+generation state, then commits or restores that publication before unlock.
 
 ### `restscope/target_http/`
 

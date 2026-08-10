@@ -17,18 +17,6 @@ class ReferenceValueProvider(Protocol):
     ) -> Sequence[object]: ...
 
 
-class ObservedResponseFieldLookup(Protocol):
-    """Expose only the observed-field lookup needed during Patch validation."""
-
-    def find_observed_response_fields(
-        self,
-        *,
-        name: str,
-        offset: int,
-        limit: int,
-    ) -> dict[str, Any]: ...
-
-
 class ResourceIdentifierLookup(Protocol):
     """Expose only canonical resource identifiers needed during validation."""
 

@@ -1,11 +1,15 @@
 """Adapt API Behavior Monitor evidence to reference-backed Generators.
 
 Validation reads resource and response-value pools without mutation. Patch
-application revalidates response sources and registers all selected sources in
-one monitor transaction before the Generation Store changes revision.
+application stages exact response-pool replacements in one transaction while
+the matching Generation Store revision is published.
 """
 
 from __future__ import annotations
+
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
+from typing import Iterator
 
 from restscope.api_behavior_monitor import (
     APIBehaviorMonitorCoordinator,
@@ -26,11 +30,21 @@ from .models import (
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
-from .patch_models import SelectedReferenceProvenance
+from .parameter_patch.models import SelectedReferenceProvenance
+from .store import ReferenceValueBinding
 
 _SCALAR_REFERENCE_TYPES = frozenset(
     {"string", "integer", "number", "boolean"}
 )
+
+
+@dataclass(frozen=True, slots=True)
+class StagedReferenceUpdate:
+    """Describe reference state ready to publish before database commit."""
+
+    updates: tuple[InputGeneratorPatch, ...]
+    bindings: tuple[ReferenceValueBinding, ...]
+    removed_response_value_inputs: tuple[str, ...]
 
 
 class BehaviorMonitorReferenceValues:
@@ -173,15 +187,21 @@ class BehaviorMonitorReferenceValues:
             values,
         )
 
-    def register_updates(
+    @contextmanager
+    def stage_updates(
         self,
         *,
-        ir: OpenAPISpecIR,
         config: OperationGeneratorConfig,
         updates: list[InputGeneratorPatch],
+        current_bindings: tuple[ReferenceValueBinding, ...],
         selected_reference_provenance: list[SelectedReferenceProvenance] | None = None,
-    ) -> tuple[list[InputGeneratorPatch], list[dict[str, object]]]:
-        """Revalidate references and register all response pools atomically."""
+    ) -> Iterator[StagedReferenceUpdate]:
+        """Stage exact response-pool changes while the Store lock remains held.
+
+        The returned context commits only after the Patch runtime publishes the
+        new in-memory revision.  Raising on context exit therefore lets the
+        Store transaction restore its old state before any Batch can read it.
+        """
 
         nodes = {
             item.input_node_id: item
@@ -198,7 +218,13 @@ class BehaviorMonitorReferenceValues:
         prepared: list[InputGeneratorPatch] = []
         response_requests: list[ResponseValueRegistrationRequest] = []
         response_positions: list[int] = []
-        summaries: list[dict[str, object]] = []
+        updated_node_ids = {item.input_node_id for item in updates}
+        prior_by_input = {item.input_node_id: item for item in current_bindings}
+        final_bindings = [
+            item for item in current_bindings if item.input_node_id not in updated_node_ids
+        ]
+        removed_response_value_inputs: list[str] = []
+        removed_value_names: list[str] = []
         for update in updates:
             strategy = update.strategy
             selected = selected_by_input.get(update.input_node_id)
@@ -217,32 +243,20 @@ class BehaviorMonitorReferenceValues:
                     raise ValueError(
                         f"Unknown resource input node: {update.input_node_id}"
                     )
-                compatible, expected_type = _reference_expected_type(
-                    node=node,
-                    parameter=parameters.get(update.input_node_id),
-                )
-                values = self.values_for(strategy)
-                if (
-                    not compatible
-                    or not values
-                    or not all(
-                        _observed_value_compatible(expected_type, value)
-                        for value in values
-                    )
-                ):
-                    raise ValueError(
-                        "Resource Identifier pool changed or became incompatible"
-                    )
                 prepared.append(update)
-                summaries.append(
-                    {
-                        "kind": "resource_identifier",
-                        "resource": strategy.resource,
-                        "value_count": len(values),
-                    }
+                final_bindings.append(
+                    ReferenceValueBinding(
+                        input_node_id=update.input_node_id,
+                        kind="resource_identifier",
+                        value_name=strategy.resource,
+                    )
                 )
                 continue
             if not isinstance(strategy, ResponseValueGenerator):
+                prior = prior_by_input.get(update.input_node_id)
+                if prior is not None and prior.kind == "response_value":
+                    removed_response_value_inputs.append(update.input_node_id)
+                    removed_value_names.append(prior.value_name)
                 prepared.append(update)
                 continue
             node = nodes.get(update.input_node_id)
@@ -272,17 +286,6 @@ class BehaviorMonitorReferenceValues:
             assert selected.producer_media_type is not None
             assert selected.source_selector is not None
             assert selected.source_field is not None
-            # Revalidate both current IR and retained values immediately before
-            # the first persistent response-pool registration.
-            self.resolve_response_source(
-                config=config,
-                input_node_id=update.input_node_id,
-                operation_key=selected.producer_operation_keys[0],
-                matched_status_code=selected.producer_status_code,
-                media_type=selected.producer_media_type,
-                field=selected.source_field,
-                ir=ir,
-            )
             source_reference = ResponseFieldReference.from_handle(
                 selected.source_field
             )
@@ -318,9 +321,56 @@ class BehaviorMonitorReferenceValues:
             prepared.append(update)
 
         try:
-            registrations = self.coordinator.register_response_value_source_batches(
-                response_requests
+            staged = (
+                self.coordinator.stage_response_value_source_batches(
+                    response_requests,
+                    removed_value_names=tuple(sorted(set(removed_value_names))),
+                )
+                if response_requests or removed_value_names
+                else nullcontext([])
             )
+            with staged as registrations:
+                for position, registration, request in zip(
+                    response_positions,
+                    registrations,
+                    response_requests,
+                    strict=True,
+                ):
+                    existing = prepared[position]
+                    prepared[position] = existing.model_copy(
+                        update={
+                            "strategy": ResponseValueGenerator(
+                                type="response_value",
+                                value_name=registration.value_name,
+                            )
+                        }
+                    )
+                    source = request.sources[0]
+                    final_bindings.append(
+                        ReferenceValueBinding(
+                            input_node_id=existing.input_node_id,
+                            kind="response_value",
+                            value_name=registration.value_name,
+                            producer_operation_key=source.producer_operation_key,
+                            producer_status_code=source.status_code,
+                            producer_media_type=source.media_type,
+                            source_field=next(
+                                item.source_field
+                                for item in selected_by_input.values()
+                                if item.input_node_id == existing.input_node_id
+                            ),
+                            source_selector=source.selector,
+                        )
+                    )
+                yield StagedReferenceUpdate(
+                    updates=tuple(prepared),
+                    bindings=tuple(
+                        sorted(final_bindings, key=lambda item: item.input_node_id)
+                    ),
+                    removed_response_value_inputs=tuple(
+                        sorted(removed_response_value_inputs)
+                    ),
+                )
         except RuntimeError as exc:
             if not response_requests or getattr(exc, "code", None) != (
                 "response_value_pool_unavailable"
@@ -329,32 +379,6 @@ class BehaviorMonitorReferenceValues:
             raise ValueError(
                 "Selected response values disappeared before registration"
             ) from exc
-        for position, registration, request in zip(
-            response_positions,
-            registrations,
-            response_requests,
-            strict=True,
-        ):
-            existing = prepared[position]
-            prepared[position] = existing.model_copy(
-                update={
-                    "strategy": ResponseValueGenerator(
-                        type="response_value",
-                        value_name=registration.value_name,
-                    )
-                }
-            )
-            summaries.append(
-                {
-                    "kind": "response_value",
-                    "value_name": registration.value_name,
-                    "producer_operation_keys": sorted(
-                        {source.producer_operation_key for source in request.sources}
-                    ),
-                    "source_count": len(request.sources),
-                }
-            )
-        return prepared, summaries
 
 
 def _input_name(
