@@ -39,6 +39,7 @@ from .response_values.tracker import (
     ResponseValueObservationResult,
     ResponseValuePreview,
     ResponseValueRegistrationResult,
+    ResponseValueRegistrationRequest,
     ResponseValueSourceOption,
     ResponseValueTracker,
 )
@@ -169,8 +170,8 @@ class APIBehaviorMonitorCoordinator:
                 "API behavior monitoring requires an initialized OpenAPI IR",
             )
         try:
-            # A caller-supplied operation key wins for scoped probes. Ordinary
-            # requests fall back to method/path matching inside `_resolve_operation`.
+            # Generated Batches already know their operation. Ordinary HTTP
+            # Tool requests fall back to method/path matching.
             operation, operation_ir = _resolve_operation(
                 observation,
                 context=context,
@@ -387,6 +388,13 @@ class APIBehaviorMonitorCoordinator:
             expected_type=expected_type,
             sources=sources,
         )
+
+    def register_response_value_source_batches(
+        self,
+        requests: list[ResponseValueRegistrationRequest],
+    ) -> list[ResponseValueRegistrationResult]:
+        """Register all Patch-selected response sources transactionally."""
+        return self.response_value_tracker.register_selected_source_batches(requests)
 
     def preview_response_value(
         self,

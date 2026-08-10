@@ -549,6 +549,67 @@ def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
     assert catalog.list_sources_for_operation("GET /producer") == []
 
 
+def test_multi_source_registration_rolls_back_every_pool_when_one_is_empty() -> None:
+    """A multi-input Patch cannot persist the first pool when a later pool fails."""
+    import pytest
+
+    from restscope.api_behavior_monitor import ResponseValueSource
+    from restscope.api_behavior_monitor.response_values.catalog import (
+        ResponseValueCatalogRegistration,
+    )
+
+    catalog = _catalog()
+    catalog.record_observation(
+        operation_key="GET /producer",
+        status_code=200,
+        media_type="application/json",
+        scalars=[("$.available", "ready")],
+    )
+    available = ResponseValueSource(
+        producer_operation_key="GET /producer",
+        status_code="200",
+        media_type="application/json",
+        selector="$.available",
+        field_name="available",
+    )
+    missing = ResponseValueSource(
+        producer_operation_key="GET /producer",
+        status_code="200",
+        media_type="application/json",
+        selector="$.missing",
+        field_name="missing",
+    )
+
+    with pytest.raises(ValueError, match="compatible values"):
+        catalog.register_many_with_backfill(
+            [
+                (
+                    ResponseValueCatalogRegistration(
+                        value_name="response_available",
+                        consumer_operation_key="GET /consumer",
+                        consumer_input_node_id="query/available",
+                        parameter_name="available",
+                        expected_type="string",
+                    ),
+                    [available],
+                ),
+                (
+                    ResponseValueCatalogRegistration(
+                        value_name="response_missing",
+                        consumer_operation_key="GET /consumer",
+                        consumer_input_node_id="query/missing",
+                        parameter_name="missing",
+                        expected_type="string",
+                    ),
+                    [missing],
+                ),
+            ]
+        )
+
+    assert catalog.list_monitors() == []
+    assert catalog.list_sources_for_operation("GET /producer") == []
+
+
 def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> None:
     """Scenario: verify that preview rejects observed values incompatible with consumer type."""
     from restscope.api_behavior_monitor.response_values.tracker import (

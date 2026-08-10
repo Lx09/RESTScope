@@ -1,9 +1,21 @@
-"""Combine App-lifetime OpenAPI operation shapes with current Generator rows."""
+"""Own mutable App-lifetime request-generation state.
+
+The store receives a parsed OpenAPI document during App initialization and
+creates one default Generator configuration for every operation. Callers can
+freeze an immutable revision for Batch execution or atomically replace one
+operation after a Parameter Patch has been revalidated. No Generator,
+Constraint, Patch, sample, or revision history is persisted.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+import hashlib
+import json
+from threading import RLock
+from typing import TypeVar
 
 from restscope.openapi_parser import OpenAPISpecIR
 
@@ -28,12 +40,44 @@ from .models import (
     RequestBodyGenerator,
     VariantGenerator,
 )
-from .ports import GeneratorConfigConcurrentWrite, GeneratorConfigUnitOfWorkFactory
 from .snapshot import build_initial_catalog
+from .constraints import OperationConstraintRecord
+
+
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True, slots=True)
+class RequestGenerationState:
+    """Freeze one complete operation revision for readers and Batch execution.
+
+    ``config`` contains every current Generator and the immutable OpenAPI input
+    snapshot. ``constraints`` contains every active normalized cross-input
+    relationship. Digests identify exact content without exposing internal
+    input-node identifiers in model-facing Tool results.
+    """
+
+    config: OperationGeneratorConfig
+    constraints: tuple[OperationConstraintRecord, ...]
+    revision: int
+    state_digest: str
+    last_applied_validation_digest: str | None
+
+
+@dataclass(slots=True)
+class _MutableOperationState:
+    """Keep one operation's replaceable content behind its private lock."""
+
+    config: OperationGeneratorConfig
+    constraints: tuple[OperationConstraintRecord, ...]
+    revision: int
+    state_digest: str
+    last_applied_validation_digest: str | None
+    lock: RLock
 
 
 class GeneratorConfigError(ValueError):
-    """Base error with a stable code for Smoke and execution boundaries."""
+    """Base error with a stable code for generation and execution boundaries."""
 
     def __init__(
         self,
@@ -52,52 +96,47 @@ class GeneratorConfigStateConflict(GeneratorConfigError):
 
     def __init__(self) -> None:
         super().__init__(
-            "generator_config_state_conflict",
+            "request_generation_state_conflict",
             "Generator configuration changed while the Patch was being prepared",
         )
 
 
 class RequestGenerationConfigStore:
-    """Combine App-lifetime operation snapshots with persisted current inputs."""
+    """Expose immutable snapshots and atomic replacements of current state.
 
-    def __init__(self, unit_of_work_factory: GeneratorConfigUnitOfWorkFactory) -> None:
-        self.unit_of_work_factory = unit_of_work_factory
-        self._baselines: dict[str, OperationGeneratorConfig] = {}
+    The outer lock protects initialization and the operation map. Each
+    operation has a separate re-entrant lock, so unrelated operations can run
+    concurrently while a Batch or Patch obtains a coherent snapshot.
+    """
+
+    def __init__(self) -> None:
+        self._states: dict[str, _MutableOperationState] = {}
+        self._catalog_lock = RLock()
 
     def get_operation(self, operation_key: str) -> OperationGeneratorConfig | None:
-        """Return current Generator and Constraint state for one initialized operation, or ``None`` when unknown."""
-        baseline = self._baselines.get(operation_key)
-        if baseline is None:
+        """Return a detached current Generator configuration, or ``None``."""
+        state = self.get_state(operation_key)
+        return state.config if state is not None else None
+
+    def get_state(self, operation_key: str) -> RequestGenerationState | None:
+        """Return one detached, internally consistent operation snapshot."""
+        with self._catalog_lock:
+            state = self._states.get(operation_key)
+        if state is None:
             return None
-        with self.unit_of_work_factory() as uow:
-            inputs = uow.generator_configs.get_inputs(operation_key)
-        # Operations without configurable inputs legitimately have no rows.
-        if not inputs and baseline.configs:
-            raise GeneratorConfigError(
-                "generator_config_incomplete",
-                f"No persisted Generator inputs exist for {operation_key}",
-            )
-        return rebuild_generator_config(baseline, inputs)
+        with state.lock:
+            return _freeze_state(state)
 
     def initialize_once(self, ir: OpenAPISpecIR) -> bool:
-        """Freeze the App's IR in memory and persist only its initial inputs."""
-
-        if self._baselines:
-            return False
-        records = [
-            _validate_initial_record(record)
-            for record in build_initial_catalog(ir)
-        ]
-        with self.unit_of_work_factory() as uow:
-            try:
-                uow.generator_configs.initialize(
-                    [(record.operation_key, record.configs) for record in records]
-                )
-            except GeneratorConfigConcurrentWrite:
-                uow.rollback()
+        """Create revision-zero state once from the App's current OpenAPI IR."""
+        records = [_validate_initial_record(item) for item in build_initial_catalog(ir)]
+        with self._catalog_lock:
+            if self._states:
                 return False
-            uow.commit()
-        self._baselines = {record.operation_key: record for record in records}
+            self._states = {
+                item.operation_key: _new_operation_state(item)
+                for item in records
+            }
         return True
 
     def require_operation(self, operation_key: str) -> OperationGeneratorConfig:
@@ -111,6 +150,75 @@ class RequestGenerationConfigStore:
             )
         return current
 
+    def require_state(self, operation_key: str) -> RequestGenerationState:
+        """Return a detached complete state or raise the stable unknown error."""
+        state = self.get_state(operation_key)
+        if state is None:
+            raise GeneratorConfigError(
+                "generator_config_not_found",
+                f"No generator configuration exists for {operation_key}",
+            )
+        if not state.config.enabled:
+            reasons = [reason.code for reason in state.config.disabled_reasons]
+            raise GeneratorConfigError(
+                "generator_operation_unsupported",
+                f"Generator operation is disabled: {reasons}",
+            )
+        return state
+
+    def apply_validated(
+        self,
+        *,
+        operation_key: str,
+        expected_revision: int,
+        prepare: Callable[
+            [RequestGenerationState],
+            tuple[
+                OperationGeneratorConfig,
+                Sequence[OperationConstraintRecord],
+                str,
+                _T,
+            ],
+        ],
+    ) -> tuple[RequestGenerationState, _T | None]:
+        """Validate and atomically replace one operation under its write lock.
+
+        ``prepare`` receives a detached snapshot while the operation lock is
+        already held. It must recompile the Patch, reproduce deterministic
+        samples, compare the caller's validation digest, and complete any
+        fallible reference registration. Only its successful return reaches the
+        no-fail assignment below, so readers never observe half-updated state.
+        """
+        with self._catalog_lock:
+            state = self._states.get(operation_key)
+        if state is None:
+            raise GeneratorConfigError(
+                "generator_config_not_found",
+                f"No generator configuration exists for {operation_key}",
+            )
+        with state.lock:
+            if state.revision != expected_revision:
+                raise GeneratorConfigStateConflict()
+            config, constraints, validation_digest, callback_result = prepare(
+                _freeze_state(state)
+            )
+            frozen_constraints = tuple(
+                item.model_copy(deep=True) for item in constraints
+            )
+            next_config = config.model_copy(deep=True)
+            next_digest = generation_state_digest(next_config, frozen_constraints)
+            if next_digest == state.state_digest:
+                raise GeneratorConfigError(
+                    "generator_patch_no_change",
+                    "The validated Patch does not change Generator or Constraint state",
+                )
+            state.config = next_config
+            state.constraints = frozen_constraints
+            state.revision += 1
+            state.state_digest = next_digest
+            state.last_applied_validation_digest = validation_digest
+            return _freeze_state(state), callback_result
+
     def _require_existing(self, operation_key: str) -> OperationGeneratorConfig:
         current = self.get_operation(operation_key)
         if current is None:
@@ -119,6 +227,45 @@ class RequestGenerationConfigStore:
                 f"No generator configuration exists for {operation_key}",
             )
         return current
+
+
+def generation_state_digest(
+    config: OperationGeneratorConfig,
+    constraints: Sequence[OperationConstraintRecord],
+) -> str:
+    """Return a stable SHA-256 digest for mutable generation content."""
+    payload = {
+        "operation_key": config.operation_key,
+        "active_media_type": config.active_media_type,
+        "configs": [item.model_dump(mode="json") for item in config.configs],
+        "constraints": [item.model_dump(mode="json") for item in constraints],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _new_operation_state(config: OperationGeneratorConfig) -> _MutableOperationState:
+    """Build revision-zero mutable state from one validated baseline."""
+    detached = config.model_copy(deep=True)
+    return _MutableOperationState(
+        config=detached,
+        constraints=(),
+        revision=0,
+        state_digest=generation_state_digest(detached, ()),
+        last_applied_validation_digest=None,
+        lock=RLock(),
+    )
+
+
+def _freeze_state(state: _MutableOperationState) -> RequestGenerationState:
+    """Detach mutable containers before exposing a revision to a caller."""
+    return RequestGenerationState(
+        config=state.config.model_copy(deep=True),
+        constraints=tuple(item.model_copy(deep=True) for item in state.constraints),
+        revision=state.revision,
+        state_digest=state.state_digest,
+        last_applied_validation_digest=state.last_applied_validation_digest,
+    )
 
 def _apply_patches(
     current: OperationGeneratorConfig,
@@ -279,7 +426,7 @@ def prepare_accepted_generator_patch(
 ) -> OperationGeneratorConfig:
     """Build the accepted current Generator state without writing a database.
 
-    Operation Smoke uses this pure step before opening its atomic persistence
+    Patch validation uses this pure step before opening its atomic state update
     transaction.  It applies presence closure, validates every resulting input
     config, and clears only recoverable disabled reasons owned by patched
     inputs.  The caller remains responsible for a content-compare write.

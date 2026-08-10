@@ -18,21 +18,12 @@ class ModelSelector:
         "result_analyst",
         "check_designer",
         "intelligence_updater",
-        "operation_smoke_failure_resolution",
     }
     FAST_ROLES = {
         "api_behavior_monitor",
         "decision_maker",
-        "operation_smoke_failure_resolution_compact",
-        "parameter_patch_agent",
-        "parameter_patch_review_agent",
     }
-    ZERO_TEMPERATURE_ROLES = {
-        "operation_smoke_failure_resolution",
-        "operation_smoke_failure_resolution_compact",
-        "parameter_patch_agent",
-        "parameter_patch_review_agent",
-    }
+    ZERO_TEMPERATURE_ROLES: set[str] = set()
 
     def __init__(self, *, thinking: LLMModelConfig, fast: LLMModelConfig) -> None:
         self.thinking = thinking

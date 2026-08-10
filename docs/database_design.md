@@ -4,7 +4,7 @@ Status: Active exploratory design (2026-08-01)
 
 RESTScope creates one SQLite file for one App. The file is an audit artifact,
 not a recovery image: a later App always rejects that existing path and never
-deletes, migrates, overwrites, or resumes it. The current baseline contains 19
+deletes, migrates, overwrites, or resumes it. The current baseline contains 13
 business tables plus Alembic's `alembic_version` table.
 
 ## Boundary
@@ -12,12 +12,11 @@ business tables plus Alembic's `alembic_version` table.
 - `restscope.openapi_audit` owns the database-independent current OpenAPI and
   change-event contracts.
 - `restscope.request_generation` owns the App-memory operation snapshot and
-  current per-input Generator and Constraint contracts.
+  revisioned current Generator/Constraint state. It has no database Adapter.
 - `restscope.harness.operation_testing` owns deterministic Batch execution and
   run-local Test Case evidence; neither is persisted.
 - API Behavior Monitor owns bounded Resource Identifier and Response Value
   evidence.
-- Operation Smoke owns stable Failures and append-only terminal Resolution Attempts.
 - `restscope.db` owns SQLAlchemy mappings, domain-adjacent persistence Adapters,
   transactions, foreign-key setup, and the one baseline migration.
 - Raw responses, Test Cases, Batches, model messages, Patch samples, plans,
@@ -48,42 +47,18 @@ event. A database failure restores both IR and tracker retry state.
 The App exposes read-only current-document export and operation-filtered event
 listing. Neither API restores an App.
 
-## Generator and Constraint: 3 tables
+## Generator and Constraint: no tables
 
-### `input_generator_configs`
+`RequestGenerationConfigStore` initializes one revision-0 state for every
+OpenAPI operation and keeps it only for the current App lifetime. A Batch
+freezes one complete revision. A validated Parameter Patch replaces the
+Generator/Constraint state under the operation lock and increments the
+revision. Restarting the App recreates defaults from OpenAPI.
 
-One row per deterministic `input_node_id` stores the current inclusion
-probability and Generator strategy. The operation's method, path, input tree,
-media choice, disabled reasons, and request serialization snapshot stay in
-memory and are rebuilt with these rows. There is no operation snapshot,
-revision number, initialization marker, or full historical copy.
-
-### `operation_constraints`
-
-Each row is one current normalized executable Constraint. Its ID is derived
-from `operation_key + normalized expression`; its owner list is derived from
-the expression's referenced input node IDs. An expression with no owner or an
-input outside the operation is rejected.
-
-A complete Constraint Patch starts from its real new owners and replaces every
-old Constraint whose owner overlaps directly or transitively. The expanded old
-scope is used only to find rows to replace; it does not enlarge the new owner.
-A Generator-only Patch leaves all Constraints unchanged. Candidate sampling
-uses this final replacement set.
-
-### `generator_change_events`
-
-One append-only event is linked one-to-one with the successful Resolution Attempt
-that applied it. It records only deterministic Generator and Constraint
-insert/update/delete changes with per-item before and after values. Samples are
-run-local and are never stored. A candidate with no actual current-state change
-is rejected before an Attempt or event is written.
-
-All decided stable Failures and Attempts, current Generator rows, compatible
-Constraint replacements, input links, and per-candidate change events commit in
-one transaction at Resolution finalization. Exact current content provides
-optimistic locking; a stale or overlapping candidate rejects the whole
-finalization and writes nothing before the same Agent session continues.
+The Store deliberately has no Patch history, candidate registry, rollback
+record, Failure memory, sample storage, or database mapping. Response-value
+source registrations used by a Patch remain API Behavior Monitor evidence and
+are persisted in that owner's tables below.
 
 ## Resource Identifier: 6 tables
 
@@ -117,43 +92,6 @@ and returns a structured warning. At or below the limit, the observation,
 scalars, all matching pool updates, and both retention passes share one
 transaction. A failure cannot leave partial observation or pool evidence.
 
-## Operation Smoke: 3 tables
-
-### `smoke_failures`
-
-A stable Failure key hashes the operation, normalized sorted message set, and
-the complete suspected-input list. `[]` means operation-level, while a
-non-empty array contains exact input identities resolved from worklist handles
-or a selected candidate. There is no `null` attribution state. Repeated evidence
-reuses the row and updates occurrence count, last-seen time, and last HTTP
-status; one final Batch increments the same key at most once.
-
-### `smoke_solve_attempts`
-
-The physical table keeps its original exploratory name, but current runtime
-rows are terminal decisions from the continuous Failure Resolution session.
-
-Every terminal `applied_patch`, `no_patch`, or lower-level `conflict` conclusion
-appends a row with one non-empty `reason`. Current Resolution decisions store
-the final worklist root cause for both apply-Patch and no-Patch outcomes.
-Attempts are never overwritten and there is no permanent resolved flag.
-
-### `smoke_solve_attempt_parameters`
-
-A composite Attempt/input key stores cause attribution in affected-input order.
-Applied-Patch and lower-level conflict Attempts use candidate input identities;
-no-Patch Resolution converts its validated suspected handles to the same stable
-input identities. An operation-level no-Patch decision uses `[]` and therefore
-has no rows here. Input links reference current operation input rows; the
-deterministic repository rejects unknown or cross-operation attribution.
-
-Failure Resolution uses only the current run's in-memory Test Case Catalog for
-`TC*` evidence and persists decided source messages, input attribution, and
-occurrence metadata—not worklist state or Test Case references. It reads
-Parameter projections on demand, while HTTP probes and candidate samples stay
-temporary. Exact message folding, semantic grouping, and candidate selection
-all happen before the single final transaction.
-
 ## Lifecycle and compatibility
 
 The default App accepts only a nonexistent local file SQLite target. It claims
@@ -162,7 +100,7 @@ rejected unchanged. Construction failure removes only a file and sidecars
 created by that construction; successful construction, initialization failure,
 and `close()` retain the artifact.
 
-Alembic has one `0001_current_baseline` that creates the final 19 tables. It
+Alembic has one `0001_current_baseline` that creates the final 13 tables. It
 contains no old-database data migration. Databases stamped with the retired
 exploratory chain are intentionally incompatible, and RESTScope provides no
 restore, reset, or automatic delete entrypoint.

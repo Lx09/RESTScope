@@ -17,9 +17,7 @@ from restscope.target_http import (
     TargetHTTPTimeout,
     TargetHTTPTransport,
     TargetHTTPTransportError,
-    TargetOperationIdentity,
     TargetResponseOperationContext,
-    current_target_operation_identity,
 )
 
 
@@ -108,14 +106,13 @@ class HTTPRequestArguments(BaseModel):
 
 
 def http_request_tool_spec() -> ToolSpec:
-    """Return the one canonical contract for target requests and scoped probes."""
+    """Return the one canonical contract for an ordinary target request."""
     return ToolSpec(
         name=HTTP_REQUEST_TOOL_NAME,
         description=(
             "Send one HTTP request to the target bound to this RESTScope App. "
-            "The path must be relative to the configured base URL. A Harness "
-            "may further restrict the method and path to the current operation; "
-            "that Probe returns a TC reference instead of the response body."
+            "The path must be relative to the configured base URL. Write methods "
+            "may permanently change target state and are not rolled back."
         ),
         kind="local_function",
         input_schema={
@@ -208,83 +205,17 @@ def http_request_tool_spec() -> ToolSpec:
                         "additionalProperties": False,
                     },
                 },
-                "case_id": {
-                    "type": "string",
-                    "pattern": "^TC[1-9][0-9]*$",
-                    "description": (
-                        "Fresh run-local Test Case reference returned only when "
-                        "the Harness binds this Tool as an operation Probe."
-                    ),
-                },
-                "failure": {
-                    "description": (
-                        "Parsed HTTP/transport Failure, or null for a successful "
-                        "operation Probe. Present only with case_id."
-                    ),
-                    "oneOf": [
-                        {"type": "null"},
-                        {
-                            "type": "object",
-                            "properties": {
-                                "kind": {"const": "http"},
-                                "status_code": {
-                                    "type": "integer",
-                                    "minimum": 100,
-                                    "maximum": 599,
-                                },
-                                "messages": {
-                                    "type": "array",
-                                    "items": {"type": "string", "minLength": 1},
-                                    "minItems": 1,
-                                    "maxItems": 100,
-                                },
-                                "body_truncated": {"type": "boolean"},
-                            },
-                            "required": [
-                                "kind",
-                                "status_code",
-                                "messages",
-                                "body_truncated",
-                            ],
-                            "additionalProperties": False,
-                        },
-                        {
-                            "type": "object",
-                            "properties": {
-                                "kind": {"const": "transport"},
-                                "code": {"type": "string", "minLength": 1},
-                                "messages": {
-                                    "type": "array",
-                                    "items": {"type": "string", "minLength": 1},
-                                    "minItems": 1,
-                                    "maxItems": 100,
-                                },
-                            },
-                            "required": ["kind", "code", "messages"],
-                            "additionalProperties": False,
-                        },
-                    ],
-                },
             },
-            "oneOf": [
-                {
-                    "required": [
-                        "status_code",
-                        "reason_phrase",
-                        "url",
-                        "headers",
-                        "body_format",
-                        "body",
-                        "size_bytes",
-                        "response_validation",
-                        "behavior_monitor_warnings",
-                    ],
-                    "not": {"required": ["case_id"]},
-                },
-                {
-                    "required": ["case_id", "failure"],
-                    "not": {"required": ["body_format"]},
-                },
+            "required": [
+                "status_code",
+                "reason_phrase",
+                "url",
+                "headers",
+                "body_format",
+                "body",
+                "size_bytes",
+                "response_validation",
+                "behavior_monitor_warnings",
             ],
             "additionalProperties": False,
         },
@@ -295,9 +226,8 @@ class TargetHTTPRequestTool:
     """Send one bounded request to the App's configured target.
 
     Arguments are validated twice: Pydantic checks their data shape, then the
-    shared transport checks URL/header security. During an Operation Smoke probe
-    an invisible operation identity is also attached for unambiguous Behavior
-    Monitor attribution.
+    shared transport checks URL/header security. Behavior monitoring matches
+    the concrete method and path against the current OpenAPI document.
     """
 
     def __init__(
@@ -315,7 +245,6 @@ class TargetHTTPRequestTool:
         request = _validate_arguments(arguments)
         request_kwargs = _body_arguments(request)
         request_headers = dict(request.headers)
-        identity = current_target_operation_identity()
         if (
             "form_body" in request.model_fields_set
             and not _contains_header(request_headers, "content-type")
@@ -332,7 +261,7 @@ class TargetHTTPRequestTool:
                 request_headers=request_headers,
                 override_context_headers=True,
                 allowed_sensitive_request_headers=(
-                    {"cookie"} if identity is not None else set()
+                    set()
                 ),
             )
             response = self.transport.request_prepared(
@@ -341,11 +270,7 @@ class TargetHTTPRequestTool:
                 request_kwargs=request_kwargs,
                 response_body_limit=MAX_RESPONSE_BYTES,
                 truncate_response_body=False,
-                processor_context=_response_operation_context(
-                    context,
-                    request=request,
-                    identity=identity,
-                ),
+                processor_context=TargetResponseOperationContext(ir=context.ir),
             )
             payload = _response_payload(response)
         except TargetHTTPTimeout as exc:
@@ -363,43 +288,6 @@ class TargetHTTPRequestTool:
             ),
             "structured": payload,
         }
-
-
-def _response_operation_context(
-    context: ToolContext,
-    *,
-    request: HTTPRequestArguments,
-    identity: TargetOperationIdentity | None,
-) -> TargetResponseOperationContext:
-    """Attach verified probe identity or leave ordinary tool calls open-world.
-
-    A scoped identity is checked against both current IR and requested method.
-    The concrete path is intentionally not rematched because static and
-    parameter routes can overlap.
-    """
-    if identity is None:
-        return TargetResponseOperationContext(ir=context.ir)
-    operation = context.ir.operations.get(identity.operation_key)
-    if operation is None:
-        raise HTTPRequestToolError(
-            "operation_context_invalid",
-            "The scoped operation is not present in the current OpenAPI IR",
-        )
-    if (
-        operation.method.upper() != identity.method.upper()
-        or operation.path != identity.path
-        or request.method.upper() != identity.method.upper()
-    ):
-        raise HTTPRequestToolError(
-            "operation_context_invalid",
-            "The scoped operation identity does not match the HTTP request",
-        )
-    return TargetResponseOperationContext(
-        ir=context.ir,
-        operation_key=operation.operation_key,
-        operation_method=identity.method.upper(),
-        operation_path=operation.path,
-    )
 
 
 def _validate_arguments(arguments: Mapping[str, Any]) -> HTTPRequestArguments:

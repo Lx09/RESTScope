@@ -44,7 +44,7 @@ export async function connectLiveRun(
     }
     const snapshot = (await response.json()) as ObserverSnapshot;
     if (closed) return inactiveConnection;
-    if (snapshot.schema_version !== 2) {
+    if (snapshot.schema_version !== 3) {
       throw new Error(`Unsupported observer schema version ${String(snapshot.schema_version)}`);
     }
     dispatch({ type: "snapshot", snapshot });

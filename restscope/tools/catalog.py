@@ -22,11 +22,11 @@ ToolSubject = Literal[
     "openapi",
     "resource",
     "test_case",
-    "worklist",
+    "request_generation",
+    "parameter_patch",
     "plan",
     "skill",
     "file",
-    "parameter",
     "subagent",
     "external",
 ]

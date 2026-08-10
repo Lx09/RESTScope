@@ -15,22 +15,20 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 
-EventKind = Literal["agent_turn", "tool_call", "smoke_batch"]
+EventKind = Literal["agent_turn", "tool_call"]
 HTTP_TOOL_NAME = "restscope.http.request"
 
 
 def classify_tool(name: str) -> str:
     """Map a concrete Tool name to one stable visual family."""
 
-    if name.startswith("failure_resolution."):
-        return "worklist"
     if name.startswith("plan."):
         return "plan"
     if name.startswith("openapi."):
         return "openapi"
     if name.startswith("test_case."):
         return "test_case"
-    if name == "lookup_parameter_history" or "parameter_patch" in name:
+    if name.startswith("request_generation.") or name.startswith("parameter_patch."):
         return "parameter_patch"
     if name.startswith("resource."):
         return "resource"
@@ -53,8 +51,7 @@ def event_summary(
         return f"Agent turn · {name}"
     if kind == "tool_call":
         return f"{classify_tool(name).replace('_', ' ').title()} · {name}"
-    count = attributes.get("restscope.test.case_count")
-    return f"Smoke Batch · {count} cases" if count is not None else "Smoke Batch"
+    raise ValueError(f"Unsupported live event kind: {kind}")
 
 
 def merge_scope(
@@ -90,15 +87,6 @@ def semantic_status(
     if event.get("kind") == "tool_call":
         status = output.get("status")
         return tool_status(str(status)) if status is not None else None
-    if event.get("kind") == "smoke_batch":
-        success_count = output.get("success_count")
-        case_count = output.get("case_count")
-        if isinstance(success_count, int) and isinstance(case_count, int):
-            if success_count == case_count:
-                return "succeeded"
-            if success_count == 0:
-                return "failed"
-            return "warning"
     return None
 
 

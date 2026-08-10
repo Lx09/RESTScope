@@ -17,6 +17,7 @@ from .specs import (
     OPENAPI_GET_INPUT_SCHEMA_TOOL_NAME,
     OPENAPI_GET_RESPONSE_FIELD_SCHEMA_TOOL_NAME,
     OPENAPI_LIST_INPUTS_TOOL_NAME,
+    OPENAPI_LIST_OPERATIONS_TOOL_NAME,
     OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
 )
 
@@ -27,6 +28,7 @@ def openapi_tool_bindings(
 ) -> tuple[ToolBinding, ...]:
     """Bind selected OpenAPI Tools to one App-scoped read implementation."""
     method_by_name = (
+        (OPENAPI_LIST_OPERATIONS_TOOL_NAME, "list_operations"),
         (OPENAPI_LIST_INPUTS_TOOL_NAME, "list_inputs"),
         (OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME, "list_response_fields"),
         (

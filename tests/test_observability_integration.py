@@ -426,7 +426,7 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
         execute=query,
     )
 
-    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+    with runtime.span("main", kind="AGENT"):
         results = toolbox.execute_many(
             [
                 ToolCall(
@@ -445,7 +445,7 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
 
     spans = exporter.get_finished_spans()
     agent_span = next(
-        span for span in spans if span.name == "FailureResolutionAgent.resolve"
+        span for span in spans if span.name == "main"
     )
     tool_spans = [span for span in spans if span.name == "catalog.query"]
 
@@ -470,7 +470,6 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.config import RESTScopeConfig
-    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     class Provider:
         """Return a local Main completion and expose the request to tracing."""
@@ -529,7 +528,6 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         harness_runtime=capabilities,
         tracing_runtime=runtime,
     )
@@ -586,7 +584,6 @@ def test_app_rebinds_only_harness_owned_trace_consumers(tmp_path: Path) -> None:
     from restscope.observability import TracingRuntime
     from restscope.observability import Redactor
     from restscope.config import RESTScopeConfig
-    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
     app_runtime = TracingRuntime.disabled(redactor=Redactor(["app-key"]))
@@ -608,7 +605,6 @@ def test_app_rebinds_only_harness_owned_trace_consumers(tmp_path: Path) -> None:
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(tmp_path / ".env"),
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         harness_runtime=capabilities,
         tracing_runtime=app_runtime,
     )
@@ -682,17 +678,11 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     assert "runtime-secret" not in span.attributes["output.value"]
 
 
-def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> None:
-    """Scenario: Smoke's internal batch runner emits sanitized batch and case spans."""
+def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> None:
+    """The generic Batch runner traces structure without target secrets."""
     import httpx
 
     from restscope.tools.context import ToolContext
-    from restscope.db import (
-        Base,
-        SqlAlchemyGeneratorConfigUnitOfWork,
-        create_engine_from_url,
-        make_session_factory,
-    )
     from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
@@ -722,11 +712,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     )
     operation = ir.operations["GET /search"]
     node = next(iter(operation.input_nodes.values()))
-    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'trace-testing.sqlite'}")
-    Base.metadata.create_all(engine)
-    catalog = RequestGenerationConfigStore(
-        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
-    )
+    catalog = RequestGenerationConfigStore()
     assert catalog.initialize_once(ir) is True
     from restscope.request_generation import prepare_accepted_generator_patch
 
@@ -741,13 +727,15 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
             }
         ],
     )
-    with catalog.unit_of_work_factory() as uow:
-        uow.generator_configs.replace_inputs(
-            operation_key=operation.operation_key,
-            expected=current.configs,
-            updated=updated.configs,
-        )
-        uow.commit()
+    state = catalog.require_state(operation.operation_key)
+    catalog.apply(
+        operation_key=operation.operation_key,
+        expected_revision=state.revision,
+        expected_state_digest=state.state_digest,
+        config=updated,
+        constraints=(),
+        validation_digest="test-setup",
+    )
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
         config_store=catalog,
@@ -780,7 +768,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
         },
     )
 
-    result = service.run_smoke_batch(
+    result = service.run_batch(
         context,
         operation_key=operation.operation_key,
         case_count=2,
@@ -790,7 +778,6 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
 
     rendered_result = json.dumps(
         {
-            "run_id": result.run_id,
             "operation_key": result.operation_key,
             "seed": result.seed,
             "cases": [
@@ -808,7 +795,7 @@ def test_smoke_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> Non
     batch = next(
         span
         for span in spans
-        if span.name == "OperationTestingService.run_smoke_batch"
+        if span.name == "OperationTestingService.run_batch"
     )
     cases = [span for span in spans if span.name == "RESTScopeTestCase.execute"]
     assert len(cases) == 2

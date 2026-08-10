@@ -61,17 +61,6 @@ class _InjectedCapabilities:
             close()
 
 
-class _InjectedSmokeCoordinator:
-    """Provide the optional cleanup hook expected by RESTScopeApp.close."""
-
-    def __init__(self) -> None:
-        self.cleared = False
-
-    def clear_app_state(self) -> None:
-        """Record that App cleanup reached the coordinator."""
-        self.cleared = True
-
-
 _ONE_GET_SCHEMA = json.dumps(
     {
         "openapi": "3.0.3",
@@ -106,11 +95,8 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     )
     tracing = TracingRuntime.disabled()
     capabilities = _InjectedCapabilities()
-    coordinator = _InjectedSmokeCoordinator()
-
     app = RESTScopeApp(
         config=config,
-        operation_smoke_coordinator=coordinator,
         harness_runtime=capabilities,
         tracing_runtime=tracing,
     )
@@ -120,7 +106,6 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     app.close()
     assert service.closed is True
     assert capabilities.context_cleared is True
-    assert coordinator.cleared is True
     assert tracing.run_observer.snapshot()["run"] is None
 
 
@@ -147,10 +132,8 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
         ui=UIConfig(enabled=True, port=9987),
     )
     tracing = TracingRuntime.disabled()
-    coordinator = _InjectedSmokeCoordinator()
     app = RESTScopeApp(
         config=config,
-        operation_smoke_coordinator=coordinator,
         harness_runtime=_InjectedCapabilities(main_agent=InterruptingMain()),
         tracing_runtime=tracing,
     )
@@ -197,7 +180,6 @@ def test_app_continues_without_collection_when_ui_startup_fails(
 
     app = RESTScopeApp(
         config=config,
-        operation_smoke_coordinator=_InjectedSmokeCoordinator(),
         harness_runtime=_InjectedCapabilities(),
         tracing_runtime=tracing,
     )

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import Engine
@@ -25,12 +25,6 @@ from restscope.api_behavior_monitor import (
 )
 from restscope.api_behavior_monitor.resource_identifiers import ResourceCatalog
 from restscope.api_behavior_monitor.response_values import ResponseValueCatalog
-from restscope.operation_smoke import (
-    BehaviorMonitorReferenceValues,
-    OperationSmokeCoordinator,
-    SmokeBatchRunner,
-    build_operation_smoke_coordinator,
-)
 from restscope.harness import (
     AgentRuntimeDefinition,
     HarnessRuntime,
@@ -49,14 +43,12 @@ from restscope.observability import (
     build_tracing_runtime,
     configure_logging,
 )
-from restscope.request_generation import SeededRandom
+from restscope.request_generation import BehaviorMonitorReferenceValues, SeededRandom
 from restscope.config import RESTScopeConfig
 from restscope.db import (
-    SqlAlchemyGeneratorConfigUnitOfWork,
     SqlAlchemyOpenAPIUnitOfWork,
     SqlAlchemyResourceCatalogUnitOfWork,
     SqlAlchemyResponseValueCatalogUnitOfWork,
-    SqlAlchemySmokeMemoryUnitOfWork,
     create_engine_from_config,
     make_session_factory,
 )
@@ -144,15 +136,14 @@ class RESTScopeApp:
         self,
         *,
         config: RESTScopeConfig,
-        operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
         harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Build runtime collaborators, or adopt explicitly injected test doubles.
 
-        ``harness_runtime`` and ``operation_smoke_coordinator`` are injection
-        points used by tests and embedders.  In the normal path both are
-        omitted and RESTScope wires the complete production stack itself.
+        ``harness_runtime`` is the only runtime injection point used by tests
+        and embedders. In the normal path RESTScope wires all App-owned Tool
+        backends and the generic Agent Harness itself.
         """
 
         # Keep local ownership markers until construction completes.  If any
@@ -165,6 +156,7 @@ class RESTScopeApp:
         run_observer: LiveRunObserver | None = None
         ui_service: Any | None = None
         operation_testing_service: OperationTestingService | None = None
+        request_generation_store: RequestGenerationConfigStore | None = None
         api_behavior_monitor_coordinator = None
         target_transport: TargetHTTPTransport | None = None
         openapi_audit: OpenAPIAudit | None = None
@@ -180,7 +172,6 @@ class RESTScopeApp:
             self.config = config
             configure_logging(config.logging, log_file=config.log_file)
             self.random_source = SeededRandom(config.random.seed)
-            smoke_coordinator = operation_smoke_coordinator
             trace_runtime = (
                 _build_app_tracing_runtime(config)
                 if tracing_runtime is None
@@ -206,9 +197,7 @@ class RESTScopeApp:
                 # every response to that monitor.
                 database_engine = create_engine_from_config(config.db)
                 session_factory = make_session_factory(database_engine)
-                request_generation_store = RequestGenerationConfigStore(
-                    lambda: SqlAlchemyGeneratorConfigUnitOfWork(session_factory)
-                )
+                request_generation_store = RequestGenerationConfigStore()
                 resource_catalog = ResourceCatalog(
                     lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
                 )
@@ -248,9 +237,8 @@ class RESTScopeApp:
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
                 )
-                # The Harness exposes HTTP and evidence lookup Tools.
-                # Generated Batch execution stays internal: Smoke receives the
-                # testing service through its narrow runner Protocol below.
+                # Production Bindings make domain Tools executable without
+                # granting them to the intentionally plan-only Main Profile.
                 main_runtime = _build_main_agent_runtime_definition(
                     config,
                     tracing_runtime=self._tracing_runtime,
@@ -262,46 +250,18 @@ class RESTScopeApp:
                         observed_response_fields_provider
                     ),
                     resource_tool_backend=resource_backend,
+                    request_generation_store=request_generation_store,
+                    operation_testing_service=operation_testing_service,
+                    reference_values=reference_values,
                     agent_runtime=main_runtime,
                 )
                 harness_runtime = built_runtime
-                if smoke_coordinator is None:
-                    smoke_coordinator = build_operation_smoke_coordinator(
-                        config,
-                        config_store=request_generation_store,
-                        # OperationTestingService implements this structural
-                        # Protocol. The cast records that composition-root
-                        # binding without making the testing layer import its
-                        # coordinating workflow.
-                        batch_runner=cast(
-                            SmokeBatchRunner,
-                            operation_testing_service,
-                        ),
-                        reference_values=reference_values,
-                        http_tool=built_runtime.target_http_tool,
-                        context_provider=built_runtime.require_context,
-                        openapi_backend=built_runtime.openapi_backend,
-                        resource_backend=resource_backend,
-                        unit_of_work_factory=(
-                            lambda: SqlAlchemySmokeMemoryUnitOfWork(
-                                session_factory
-                            )
-                        ),
-                        llm_client=(main_runtime.client if main_runtime else None),
-                        tracing_runtime=self._tracing_runtime,
-                    )
-            elif smoke_coordinator is None:
-                # Mixing a custom Harness with a default Smoke Coordinator would
-                # connect unrelated runtime state, so require callers
-                # to inject the matching Coordinator explicitly.
-                raise ValueError(
-                    "A custom Harness runtime requires an injected "
-                    "OperationSmokeCoordinator"
-                )
-            self.operation_smoke_coordinator = smoke_coordinator
             self.harness_runtime = harness_runtime
             self.operation_testing_service = (
                 operation_testing_service if harness_runtime is built_runtime else None
+            )
+            self.request_generation_store = (
+                request_generation_store if harness_runtime is built_runtime else None
             )
             self.api_behavior_monitor_coordinator = (
                 api_behavior_monitor_coordinator
@@ -372,7 +332,6 @@ class RESTScopeApp:
         cls,
         *,
         env_file: str | Path | None = None,
-        operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
         harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
@@ -381,7 +340,6 @@ class RESTScopeApp:
         config = RESTScopeConfig.from_environment(Path(env_file).expanduser() if env_file else None)
         return cls.from_config(
             config,
-            operation_smoke_coordinator=operation_smoke_coordinator,
             harness_runtime=harness_runtime,
             tracing_runtime=tracing_runtime,
         )
@@ -391,7 +349,6 @@ class RESTScopeApp:
         cls,
         config: RESTScopeConfig,
         *,
-        operation_smoke_coordinator: OperationSmokeCoordinator | None = None,
         harness_runtime: HarnessRuntime | Any | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
@@ -399,7 +356,6 @@ class RESTScopeApp:
 
         return cls(
             config=config,
-            operation_smoke_coordinator=operation_smoke_coordinator,
             harness_runtime=harness_runtime,
             tracing_runtime=tracing_runtime,
         )
@@ -463,13 +419,12 @@ class RESTScopeApp:
             base_url=base_url,
             headers=headers or {},
         )
-        testing_service = self.operation_testing_service
-        if testing_service is not None:
-            if self.openapi_audit is not None:
-                self.openapi_audit.initialize(
-                    build_openapi_document(ir, list(ir.operations))
-                )
-            testing_service.config_store.initialize_once(ir)
+        if self.openapi_audit is not None:
+            self.openapi_audit.initialize(
+                build_openapi_document(ir, list(ir.operations))
+            )
+        if self.request_generation_store is not None:
+            self.request_generation_store.initialize_once(ir)
         self.harness_runtime.bind_context(context)
         return context
 
@@ -552,18 +507,6 @@ class RESTScopeApp:
         clear_context = getattr(self.harness_runtime, "clear_context", None)
         if callable(clear_context):
             clear_context()
-        clear_smoke_state = getattr(
-            self.operation_smoke_coordinator,
-            "clear_app_state",
-            None,
-        )
-        if callable(clear_smoke_state):
-            try:
-                clear_smoke_state()
-            except Exception:
-                # Resource cleanup must continue even if a custom injected
-                # Smoke Coordinator cannot release its optional in-memory state.
-                pass
         mcp_host = getattr(self.harness_runtime, "mcp_host", None)
         try:
             if mcp_host is not None:

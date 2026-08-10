@@ -1,4 +1,4 @@
-/** Search and redundant visual metadata for schema-v2 conversation events. */
+/** Search and redundant visual metadata for schema-v3 conversation events. */
 
 import type { EventStatus, TimelineEvent, TimelineFilters } from "./types";
 
@@ -19,7 +19,6 @@ export const STATUS_LABELS: Record<EventStatus, string> = {
 export const KIND_LABELS: Record<TimelineEvent["kind"], string> = {
   agent_turn: "Agent",
   tool_call: "Tool",
-  smoke_batch: "Smoke Batch",
 };
 
 export const ROLE_LABELS: Record<string, string> = {

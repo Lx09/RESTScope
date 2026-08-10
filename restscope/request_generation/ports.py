@@ -1,21 +1,15 @@
-"""Persistence ports for current per-input Generator configuration."""
+"""Define the narrow evidence Interface used by reference-backed Generators."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from types import TracebackType
-from typing import Protocol, TypeAlias
+from collections.abc import Sequence
+from typing import Any, Protocol
 
-from .models import InputGeneratorConfig, ResourceIdentifierGenerator, ResponseValueGenerator
-from .constraints import OperationConstraintRecord
-
-
-class GeneratorConfigConcurrentWrite(RuntimeError):
-    """The stored input content changed after a Patch candidate was prepared."""
+from .models import ResourceIdentifierGenerator, ResponseValueGenerator
 
 
 class ReferenceValueProvider(Protocol):
-    """Resolve persisted evidence used by reference-backed generators."""
+    """Return current typed values for one resource or response-value pool."""
 
     def values_for(
         self,
@@ -23,59 +17,19 @@ class ReferenceValueProvider(Protocol):
     ) -> Sequence[object]: ...
 
 
-class GeneratorConfigRepository(Protocol):
-    """Persist only current Generator rows keyed by stable input-node identity."""
+class ObservedResponseFieldLookup(Protocol):
+    """Expose only the observed-field lookup needed during Patch validation."""
 
-    def initialize(self, records: list[tuple[str, list[InputGeneratorConfig]]]) -> None: ...
-
-    def get_inputs(self, operation_key: str) -> list[InputGeneratorConfig]: ...
-
-    def replace_inputs(
+    def find_observed_response_fields(
         self,
         *,
-        operation_key: str,
-        expected: list[InputGeneratorConfig],
-        updated: list[InputGeneratorConfig],
-    ) -> None: ...
-
-    def get_constraints(self, operation_key: str) -> list[OperationConstraintRecord]: ...
-
-    def replace_constraints(
-        self,
-        *,
-        operation_key: str,
-        expected: list[OperationConstraintRecord],
-        updated: list[OperationConstraintRecord],
-    ) -> None: ...
-
-    def record_change_event(
-        self,
-        *,
-        solve_attempt_id: str,
-        operation_key: str,
-        reason: str,
-        generator_changes: list[dict],
-        constraint_changes: list[dict],
-    ) -> str: ...
+        name: str,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]: ...
 
 
-class GeneratorConfigUnitOfWork(Protocol):
-    """Expose one transaction around current Generator rows."""
+class ResourceIdentifierLookup(Protocol):
+    """Expose only canonical resource identifiers needed during validation."""
 
-    generator_configs: GeneratorConfigRepository
-
-    def __enter__(self) -> "GeneratorConfigUnitOfWork": ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None: ...
-
-    def commit(self) -> None: ...
-
-    def rollback(self) -> None: ...
-
-
-GeneratorConfigUnitOfWorkFactory: TypeAlias = Callable[[], GeneratorConfigUnitOfWork]
+    def list_ids(self, *, resource: str, limit: int) -> dict[str, Any]: ...

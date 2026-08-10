@@ -28,7 +28,7 @@ vi.mock("../stream", () => ({
 
 function snapshot(runId: string, cursor: number): ObserverSnapshot {
   return {
-    schema_version: 2,
+    schema_version: 3,
     run: {
       run_id: runId,
       status: "running",

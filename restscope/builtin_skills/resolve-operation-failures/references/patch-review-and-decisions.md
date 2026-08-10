@@ -1,55 +1,33 @@
-# Review Patch recommendations and decide
+# Applied-state review and decisions
 
-## Review values before outcomes
+The Patch child owns construction and semantic self-review. The parent checks
+the runtime and target boundaries:
 
-Turn every acceptance criterion into one atomic value or presence predicate and
-check it separately against the recommended final state:
+1. Re-read every affected input plus returned Constraint participants.
+2. Require the reported current revision, state digest, and last-applied
+   validation digest to match Store output.
+3. Require final Generators and Constraints to match the child's reported
+   reviewed state without extra or missing scope.
+4. Confirm the child did not change the parent-fixed root cause, value
+   predicates, or affected-input boundary.
+5. Run a fresh complete Batch from the applied revision.
+6. Compare its inline requests/outcomes with the original evidence and predicted
+   target effect.
 
-1. Confirm the affected-input set is minimal and complete.
-2. Inspect each final Generator's entire possible domain, not just its type or
-   samples.
-3. Verify required presence, mandatory ancestors, shadowing container
-   Generators, and enclosing variant selection.
-4. Inspect the complete post-replacement Constraint set and every transitive
-   participant.
-5. Match every reference-backed Generator to the proven kind, canonical
-   resource or producer, compatible type, and positive current value count.
-6. Pair sample `present` and `values` fields. Reject every counterexample, but
-   treat samples only as witnesses rather than exhaustive proof.
-7. Reject unrelated edits, lost compatible relationships, or weakened behavior.
+Do not use Apply success as HTTP proof. Do not use Batch success, a status
+change, or disappearance of a failure message as proof of all value predicates.
+Do not use compiler success or finite samples as proof of an entire domain.
 
-Do not replace these checks with HTTP success, an API status, disappearance of
-the Failure, compilation success, a Reviewer verdict, or a few passing samples.
+Choose one conclusion:
 
-## Keep diagnosis and construction separate
+- `resolved`: the Store application is confirmed and new Batch evidence
+  supports the specific target effect.
+- `no safe parameter patch`: a confirmed non-parameter cause or evidence shows
+  no safe Generator/Constraint repair.
+- `unresolved`: evidence is insufficient, the child/Profile is unavailable,
+  validation/application failed, Store confirmation differs, or the new Batch
+  reveals a new problem.
 
-Reject a child recommendation that changes the confirmed root cause or expands
-the affected-input boundary. Return to parent investigation only when new
-runtime evidence—not compiler, sampler, child, or Reviewer feedback—invalidates
-those facts.
-
-Treat protocol, scope, reference, variant, preview, Constraint, solver,
-generation, and Reviewer failures as defects in the current candidate. Correct
-one complete replacement. Do not escalate from ordinary generation to
-`choice`, `resource_identifier`, or `response_value` without new runtime
-evidence supporting that source.
-
-## Record only defensible decisions
-
-Use `apply_patch` only when a deterministic bridge has compiled, sampled,
-semantically reviewed, and registered the exact recommendation as a real `P*`.
-List that `P*` in `candidate_refs` and select the same reference.
-
-Use `no_patch` only when evidence establishes a terminal reason, such as:
-
-- a non-Parameter root cause;
-- a target resource-state problem with no safe request-generation repair;
-- an input requirement that current authorized value sources cannot safely
-  satisfy;
-- a confirmed repair outside Parameter Generator and Constraint ownership.
-
-State the causal reason and select no candidate.
-
-Leave the item undecided when evidence is insufficient, no authorized Patch
-child exists, the child failed, or no deterministic candidate-registration
-bridge exists. Missing runtime capability is not a business `no_patch` result.
+A failed new Batch does not trigger automatic rollback. Diagnose its current
+revision as new evidence. Restoring old behavior requires another complete
+Patch validated and applied against the current revision.

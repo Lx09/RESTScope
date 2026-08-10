@@ -39,8 +39,8 @@ describe("semantic event cards", () => {
     );
 
     expect(screen.getByText("Agent")).toBeVisible();
-    expect(screen.getByText("Agent · FailureResolutionAgent.resolve")).toBeVisible();
-    expect(screen.getAllByText("FailureResolutionAgent.resolve", { exact: true })).toHaveLength(1);
+    expect(screen.getByText("Agent · main")).toBeVisible();
+    expect(screen.getAllByText("main", { exact: true })).toHaveLength(1);
     await openCard();
     expect(screen.getByText("Prompt (2)")).toBeInTheDocument();
     expect(screen.getByText("Tool result")).toBeInTheDocument();
@@ -73,70 +73,14 @@ describe("semantic event cards", () => {
     );
 
     expect(screen.getByText("restscope.http.request")).toBeVisible();
-    expect(screen.getByText("Agent · FailureResolutionAgent.resolve")).toBeVisible();
-    expect(screen.queryByText("FailureResolutionAgent.resolve", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText("Agent · main")).toBeVisible();
+    expect(screen.queryByText("main", { exact: true })).not.toBeInTheDocument();
     await openCard();
     expect(screen.getByText("GET")).toBeInTheDocument();
     expect(screen.getByText("https://api.test/projects")).toBeInTheDocument();
     await userEvent.click(screen.getByText("Output"));
     expect(screen.getByText(/HTTP 422 Unprocessable/)).toBeInTheDocument();
     expect(screen.getByText(/invalid/)).toBeInTheDocument();
-  });
-
-  it("shows a Smoke Batch table and expands complete Test Case evidence", async () => {
-    render(
-      <EventCard
-        event={makeEvent({
-          kind: "smoke_batch",
-          name: "OperationTestingService.run_smoke_batch",
-          agent: null,
-          operation_key: "POST /projects",
-          status: "warning",
-          detail: {
-            run_id: "test-run-1",
-            seed: 42,
-            constraint_count: 2,
-            case_count: 2,
-            success_count: 1,
-            cases: [
-              {
-                case_index: 0,
-                case_id: "TC1",
-                method: "POST",
-                url: "https://api.test/projects?case=0",
-                status: "succeeded",
-                duration_ms: 12,
-                request: { method: "POST", url: "https://api.test/projects?case=0", headers: {}, query: [], body: { format: "json", value: { name: "demo" } } },
-                response: { status_code: 201, reason_phrase: "Created", headers: {}, body: { format: "json", value: { id: 1 } }, size_bytes: 8, body_truncated: false },
-                transport_error: null,
-              },
-              {
-                case_index: 1,
-                case_id: "TC2",
-                method: "POST",
-                url: "https://api.test/projects?case=1",
-                status: "failed",
-                duration_ms: 30_000,
-                request: { method: "POST", url: "https://api.test/projects?case=1", headers: {}, query: [], body: null },
-                response: null,
-                transport_error: { type: "TargetHTTPTimeout", message: "HTTP request timed out" },
-              },
-            ],
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("Smoke Batch")).toBeVisible();
-    await openCard();
-    expect(screen.getByText("TC1")).toBeInTheDocument();
-    expect(screen.getByText("TC2")).toBeInTheDocument();
-    expect(screen.getByText("1 / 2 成功")).toBeInTheDocument();
-    const expandButtons = screen.getAllByRole("button", { name: /Expand row/ });
-    await userEvent.click(expandButtons[0]);
-    expect(screen.getByText(/Request/)).toBeVisible();
-    expect(screen.getByText(/Response/)).toBeVisible();
-    expect(screen.getByText(/demo/)).toBeVisible();
   });
 
   it("labels stopped cards without counting them as failures visually", () => {

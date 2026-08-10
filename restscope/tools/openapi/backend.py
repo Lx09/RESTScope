@@ -1,4 +1,4 @@
-"""Adapt trusted App context to the five bounded OpenAPI query behaviors.
+"""Adapt trusted App context to the six bounded OpenAPI query behaviors.
 
 ``OpenAPIToolBackend`` is the stable binding object used by the Harness and
 temporary Agents. Each public method delegates to one behavior-specific module;
@@ -64,6 +64,33 @@ class OpenAPIToolBackend:
             offset=offset,
             limit=limit,
         )
+
+    def list_operations(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = _DEFAULT_LIST_LIMIT,
+    ) -> dict[str, Any]:
+        """Return one stable page of exact operation identities."""
+        ir = self._current_ir()
+        operations = [ir.operations[key] for key in sorted(ir.operations)]
+        page = operations[offset : offset + limit]
+        result: dict[str, Any] = {
+            "operations": [
+                {
+                    "operation_key": item.operation_key,
+                    "method": item.method.upper(),
+                    "path": item.path,
+                    "deprecated": bool(getattr(item, "deprecated", False)),
+                }
+                for item in page
+            ],
+            "total": len(operations),
+            "offset": offset,
+        }
+        if offset + len(page) < len(operations):
+            result["next_offset"] = offset + len(page)
+        return {"structured": result}
 
     def list_response_fields(
         self,

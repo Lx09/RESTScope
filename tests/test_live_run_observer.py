@@ -1,8 +1,8 @@
-"""Behavior contracts for the schema-v2 semantic run observer.
+"""Behavior contracts for the schema-v3 semantic run observer.
 
 These scenarios exercise the observer through the same tracing and target HTTP
 Interfaces used by production. They protect the user-visible meaning of Agent,
-Tool, and Smoke Batch cards without treating Phoenix's lower-level span model
+and Tool cards without treating Phoenix's lower-level span model
 as the browser contract.
 """
 
@@ -25,7 +25,7 @@ class _Response:
     processor_result: object | None = None
 
 
-def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -> None:
+def test_live_observer_emits_only_agent_and_tool_cards_without_phoenix() -> None:
     """Scenario: the UI remains semantic and complete with Phoenix disabled."""
     from restscope.observability import LiveRunObserver, TracingRuntime
     from restscope.observability import Redactor
@@ -39,7 +39,7 @@ def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -
         kind="CHAIN",
     ):
         with runtime.span(
-            "FailureResolutionAgent.resolve",
+            "main",
             kind="AGENT",
             attributes={"restscope.operation.key": "GET /projects"},
         ) as agent_span:
@@ -67,14 +67,14 @@ def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -
                 )
 
             with runtime.span(
-                "failure_resolution.write_worklist",
+                "diagnosis.record",
                 kind="TOOL",
                 input_value={"arguments": {"expected_revision": 0}},
             ) as tool_span:
                 tool_span.set_output(
                     {
                         "tool_call_id": "call-1",
-                        "name": "failure_resolution.write_worklist",
+                        "name": "diagnosis.record",
                         "status": "succeeded",
                         "structured": {
                             "revision": 1,
@@ -97,21 +97,21 @@ def test_live_observer_emits_only_agent_tool_and_batch_cards_without_phoenix() -
 
     snapshot = observer.snapshot()
 
-    assert snapshot["schema_version"] == 2
+    assert snapshot["schema_version"] == 3
     assert [event["kind"] for event in snapshot["events"]] == [
         "agent_turn",
         "tool_call",
     ]
     turn, tool = snapshot["events"]
-    assert turn["name"] == "FailureResolutionAgent.resolve"
+    assert turn["name"] == "main"
     assert turn["detail"]["input"]["messages"][0]["content"] == (
         "Keep ***REDACTED*** safe"
     )
     assert turn["detail"]["output"]["content"] == "Create one work item"
     assert tool["detail"]["input"] == {"arguments": {"expected_revision": 0}}
     assert tool["detail"]["output"]["status"] == "succeeded"
-    # Resolution's private Worklist remains a normal collapsed Tool event. It
-    # is no longer promoted into the page-level floating state.
+    # An ordinary domain Tool does not become the Main Plan merely because the
+    # payload happens to contain similarly shaped working data.
     assert snapshot["todo"] is None
     assert "model-secret" not in str(snapshot)
 
@@ -332,7 +332,7 @@ def test_agent_session_produces_incremental_turn_cards_with_exact_outputs() -> N
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
-    with runtime.span("ParameterPatchAgent.propose", kind="AGENT"):
+    with runtime.span("patch", kind="AGENT"):
         first_prompt = [
             {"role": "system", "content": "Patch safely"},
             {"role": "user", "content": "Fix query.sort"},
@@ -348,7 +348,7 @@ def test_agent_session_produces_incremental_turn_cards_with_exact_outputs() -> N
                 },
                 {
                     "id": "call-memory",
-                    "name": "lookup_parameter_history",
+                    "name": "request_generation.get_input_state",
                     "arguments": {"input_handles": ["query.sort"]},
                 },
             ],
@@ -375,7 +375,7 @@ def test_agent_session_produces_incremental_turn_cards_with_exact_outputs() -> N
                     },
                     {
                         "role": "tool",
-                        "name": "lookup_parameter_history",
+                        "name": "request_generation.get_input_state",
                         "tool_call_id": "call-memory",
                         "content": "no prior values",
                     },
@@ -424,7 +424,7 @@ def test_nested_agent_identity_keeps_its_direct_parent_session() -> None:
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
-    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+    with runtime.span("main", kind="AGENT"):
         with runtime.span("LLMClient.invoke", kind="LLM") as parent_turn:
             parent_turn.set_llm_input_messages(
                 [{"role": "user", "content": "Compact the current investigation."}]
@@ -432,7 +432,7 @@ def test_nested_agent_identity_keeps_its_direct_parent_session() -> None:
             parent_turn.set_llm_output_messages(
                 [{"role": "assistant", "content": "Compaction is needed.", "tool_calls": []}]
             )
-        with runtime.span("FailureResolutionCompactAgent.run", kind="AGENT"):
+        with runtime.span("summarize", kind="AGENT"):
             with runtime.span("LLMClient.invoke", kind="LLM") as child_turn:
                 child_turn.set_llm_input_messages(
                     [{"role": "system", "content": "Summarize the investigation."}]
@@ -456,7 +456,7 @@ def test_tool_mediated_agent_keeps_the_tool_as_its_visible_parent() -> None:
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
-    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+    with runtime.span("main", kind="AGENT"):
         with runtime.span("LLMClient.invoke", kind="LLM") as parent_turn:
             parent_turn.set_llm_input_messages(
                 [{"role": "user", "content": "Draft a parameter patch."}]
@@ -467,17 +467,17 @@ def test_tool_mediated_agent_keeps_the_tool_as_its_visible_parent() -> None:
                     "content": "Starting patch work.",
                     "tool_calls": [{
                         "id": "call-patch",
-                        "name": "failure_resolution.draft_parameter_patch",
+                        "name": "patch.delegate",
                         "arguments": {},
                     }],
                 }]
             )
         with runtime.span(
-            "failure_resolution.draft_parameter_patch",
+            "patch.delegate",
             kind="TOOL",
             input_value={"arguments": {}},
         ) as tool:
-            with runtime.span("ParameterPatchAgent.propose", kind="AGENT"):
+            with runtime.span("patch", kind="AGENT"):
                 with runtime.span("LLMClient.invoke", kind="LLM") as child_turn:
                     child_turn.set_llm_input_messages(
                         [{"role": "system", "content": "Propose a patch."}]
@@ -502,10 +502,10 @@ def test_tool_request_and_parallel_executions_keep_their_own_inputs_and_outputs(
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
-    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+    with runtime.span("main", kind="AGENT"):
         tool_calls = [
             {"id": "call-1", "name": "openapi.list_inputs", "arguments": {"path": "/a"}},
-            {"id": "call-2", "name": "test_case.get", "arguments": {"case_id": "TC1"}},
+            {"id": "call-2", "name": "evidence.get", "arguments": {"case_id": "case-1"}},
         ]
         with runtime.span("LLMClient.invoke", kind="LLM") as turn:
             turn.set_llm_input_messages(
@@ -524,12 +524,12 @@ def test_tool_request_and_parallel_executions_keep_their_own_inputs_and_outputs(
                 {"tool_call_id": "call-1", "name": "openapi.list_inputs", "status": "succeeded", "structured": {"inputs": ["query.q"]}}
             )
         with runtime.span(
-            "test_case.get",
+            "evidence.get",
             kind="TOOL",
             input_value={"arguments": {"case_id": "TC1"}},
         ) as second:
             second.set_output(
-                {"tool_call_id": "call-2", "name": "test_case.get", "status": "denied", "error": {"code": "not_found", "message": "Unknown case"}}
+                {"tool_call_id": "call-2", "name": "evidence.get", "status": "denied", "error": {"code": "not_found", "message": "Unknown case"}}
             )
 
     turn, first_tool, second_tool = observer.snapshot()["events"]
@@ -543,7 +543,7 @@ def test_tool_request_and_parallel_executions_keep_their_own_inputs_and_outputs(
     assert second_tool["status"] == "warning"
 
 
-def test_http_probe_is_merged_into_one_tool_card() -> None:
+def test_http_request_is_merged_into_one_tool_card() -> None:
     """Scenario: final target request and response enrich, rather than duplicate, a tool."""
     from restscope.observability import LiveRunObserver, TracingRuntime
 
@@ -551,7 +551,7 @@ def test_http_probe_is_merged_into_one_tool_card() -> None:
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
-    with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+    with runtime.span("main", kind="AGENT"):
         with runtime.span("LLMClient.invoke", kind="LLM") as turn:
             turn.set_llm_input_messages(
                 [{"role": "system", "content": "Inspect"}, {"role": "user", "content": "Probe"}]
@@ -624,118 +624,8 @@ def test_http_probe_is_merged_into_one_tool_card() -> None:
     }
 
 
-def test_smoke_batch_aggregates_every_case_and_suppresses_standalone_http() -> None:
-    """Scenario: success, binary failure, and timeout remain inside one Batch card."""
-    from restscope.observability import LiveRunObserver, TracingRuntime
-
-    observer = LiveRunObserver()
-    observer.begin_run({})
-    runtime = TracingRuntime(run_observer=observer)
-
-    with runtime.span(
-        "OperationTestingService.run_smoke_batch",
-        kind="CHAIN",
-        input_value={
-            "operation_key": "POST /projects",
-            "case_count": 3,
-            "seed": 42,
-            "constraint_count": 2,
-        },
-        attributes={
-            "restscope.operation.key": "POST /projects",
-            "restscope.operation.round": 3,
-            "restscope.test.case_count": 3,
-            "restscope.test.constraint_count": 2,
-        },
-    ) as batch:
-        for index, case_id in enumerate(("TC1", "TC2")):
-            with runtime.span(
-                "RESTScopeTestCase.execute",
-                kind="TOOL",
-                attributes={
-                    "restscope.operation.key": "POST /projects",
-                    "restscope.test.run_id": "test-run-1",
-                    "restscope.test.case_id": case_id,
-                    "restscope.test.case_index": index,
-                },
-            ):
-                exchange = observer.start_http_exchange(
-                    method="POST",
-                    path="/projects",
-                    url=f"https://api.test/projects?case={index}",
-                    headers={"Cookie": "session=visible"},
-                    request_kwargs={"json": {"case": index}},
-                    operation_key="POST /projects",
-                    path_template="/projects",
-                )
-                assert exchange is not None
-                exchange.finish(
-                    _Response(
-                        status_code=201 if index == 0 else 500,
-                        reason_phrase="Created" if index == 0 else "Server Error",
-                        url=f"https://api.test/projects?case={index}",
-                        headers={
-                            "content-type": (
-                                "application/json"
-                                if index == 0
-                                else "application/octet-stream"
-                            )
-                        },
-                        body=(b'{"id":1}' if index == 0 else b"\x00\x01"),
-                        body_truncated=index == 1,
-                    )
-                )
-        with runtime.span(
-            "RESTScopeTestCase.execute",
-            kind="TOOL",
-            attributes={
-                "restscope.operation.key": "POST /projects",
-                "restscope.test.run_id": "test-run-1",
-                "restscope.test.case_id": "TC3",
-                "restscope.test.case_index": 2,
-            },
-        ):
-            exchange = observer.start_http_exchange(
-                method="POST",
-                path="/projects",
-                url="https://api.test/projects?case=2",
-                headers={},
-                request_kwargs={"content": "slow"},
-                operation_key="POST /projects",
-                path_template="/projects",
-            )
-            assert exchange is not None
-            exchange.fail(TimeoutError("HTTP request timed out"))
-        batch.set_output(
-            {"run_id": "test-run-1", "case_count": 3, "success_count": 1}
-        )
-
-    snapshot = observer.snapshot()
-
-    assert [event["kind"] for event in snapshot["events"]] == ["smoke_batch"]
-    event = snapshot["events"][0]
-    assert event["operation_key"] == "POST /projects"
-    assert event["round_number"] == 3
-    assert event["detail"]["seed"] == 42
-    assert event["detail"]["constraint_count"] == 2
-    assert event["detail"]["run_id"] == "test-run-1"
-    assert event["detail"]["success_count"] == 1
-    assert [case["case_id"] for case in event["detail"]["cases"]] == ["TC1", "TC2", "TC3"]
-    assert event["detail"]["cases"][0]["response"]["body"] == {
-        "format": "json",
-        "value": {"id": 1},
-    }
-    assert event["detail"]["cases"][1]["response"]["body"] == {
-        "format": "base64",
-        "value": "AAE=",
-    }
-    assert event["detail"]["cases"][1]["response"]["body_truncated"] is True
-    assert event["detail"]["cases"][2]["transport_error"]["type"] == "TimeoutError"
-    assert event["detail"]["cases"][2]["status"] == "failed"
-
-
-def test_http_exchange_outside_a_tool_or_smoke_batch_is_not_a_timeline_card() -> None:
-    """Scenario: ordinary target HTTP evidence has no independent card in v2."""
+def test_http_exchange_outside_the_http_tool_is_not_a_timeline_card() -> None:
+    """Scenario: nested target HTTP evidence has no independent card in v3."""
     from restscope.observability import LiveRunObserver
 
     observer = LiveRunObserver()
@@ -786,7 +676,7 @@ def test_interrupted_run_marks_inflight_semantic_cards_as_stopped_warnings() -> 
     runtime = TracingRuntime(run_observer=observer)
 
     with pytest.raises(KeyboardInterrupt):
-        with runtime.span("FailureResolutionAgent.resolve", kind="AGENT"):
+        with runtime.span("main", kind="AGENT"):
             with runtime.span("LLMClient.invoke", kind="LLM") as turn:
                 turn.set_llm_input_messages(
                     [{"role": "system", "content": "Wait"}, {"role": "user", "content": "Run"}]
@@ -834,7 +724,7 @@ def test_live_only_hidden_phase_does_not_add_a_phoenix_or_timeline_span() -> Non
     runtime = TracingRuntime(backend=backend, run_observer=observer)
 
     with runtime.live_span(
-        "FailureResolutionFinalizer.finalize",
+        "cleanup",
         kind="CHAIN",
         attributes={"restscope.operation.round": 2},
     ):
@@ -844,7 +734,7 @@ def test_live_only_hidden_phase_does_not_add_a_phoenix_or_timeline_span() -> Non
     assert backend.names == []
 
 
-def test_target_transport_keeps_binary_probe_evidence_inside_the_tool() -> None:
+def test_target_transport_keeps_binary_response_evidence_inside_the_tool() -> None:
     """Scenario: final headers/query and truncated binary bytes enrich one HTTP tool."""
     import httpx
 

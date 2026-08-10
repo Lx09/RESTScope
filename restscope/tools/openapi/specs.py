@@ -1,4 +1,4 @@
-"""Define the five model-visible OpenAPI query contracts.
+"""Define the model-visible OpenAPI query contracts.
 
 Each function returns one closed, bounded Tool Schema. Runtime access and
 OpenAPI traversal live in sibling modules so contract changes can be reviewed
@@ -12,6 +12,7 @@ from typing import Any
 from restscope.llm import ToolSpec
 
 OPENAPI_LIST_INPUTS_TOOL_NAME = "openapi.list_inputs"
+OPENAPI_LIST_OPERATIONS_TOOL_NAME = "openapi.list_operations"
 OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME = "openapi.list_response_fields"
 OPENAPI_FIND_OBSERVED_RESPONSE_FIELDS_TOOL_NAME = (
     "openapi.find_observed_response_fields"
@@ -32,6 +33,55 @@ _OPERATION_KEY_SCHEMA = {
         "convert it to an alias, camelCase, or snake_case variant."
     ),
 }
+
+
+def openapi_list_operations_tool_spec() -> ToolSpec:
+    """Describe stable discovery of operations in the current document."""
+    return ToolSpec(
+        name=OPENAPI_LIST_OPERATIONS_TOOL_NAME,
+        description=(
+            "List exact RESTScope operation keys from the current OpenAPI "
+            "document with method, path, and deprecated status."
+        ),
+        kind="local_function",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": _MAX_LIST_LIMIT,
+                    "default": _DEFAULT_LIST_LIMIT,
+                },
+            },
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "operation_key": {"type": "string"},
+                            "method": {"type": "string"},
+                            "path": {"type": "string"},
+                            "deprecated": {"type": "boolean"},
+                        },
+                        "required": ["operation_key", "method", "path", "deprecated"],
+                        "additionalProperties": False,
+                    },
+                },
+                "total": {"type": "integer", "minimum": 0},
+                "offset": {"type": "integer", "minimum": 0},
+                "next_offset": {"type": "integer", "minimum": 0},
+            },
+            "required": ["operations", "total", "offset"],
+            "additionalProperties": False,
+        },
+    )
 
 def openapi_list_inputs_tool_spec() -> ToolSpec:
     """Describe the paginated request-input discovery tool.

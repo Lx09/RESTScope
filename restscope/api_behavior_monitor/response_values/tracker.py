@@ -46,6 +46,17 @@ class ResponseValueRegistrationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ResponseValueRegistrationRequest:
+    """Describe one already validated consumer/source registration."""
+
+    consumer_operation_key: str
+    consumer_input_node_id: str
+    parameter_name: str
+    expected_type: str | None
+    sources: list[ResponseValueSource]
+
+
+@dataclass(frozen=True, slots=True)
 class ResponseValueObservationResult:
     """Report bounded warnings and counts from extracting registered values from one response."""
     sources_processed: int = 0
@@ -182,6 +193,40 @@ class ResponseValueTracker:
             value_name=monitor.value_name,
             sources=sources,
         )
+
+    def register_selected_source_batches(
+        self,
+        requests: list[ResponseValueRegistrationRequest],
+    ) -> list[ResponseValueRegistrationResult]:
+        """Register all requested consumer pools in one Catalog transaction."""
+        registrations = [
+            (
+                ResponseValueCatalogRegistration(
+                    value_name=_value_name(
+                        request.consumer_operation_key,
+                        request.consumer_input_node_id,
+                    ),
+                    consumer_operation_key=request.consumer_operation_key,
+                    consumer_input_node_id=request.consumer_input_node_id,
+                    parameter_name=request.parameter_name,
+                    expected_type=request.expected_type,
+                ),
+                request.sources,
+            )
+            for request in requests
+        ]
+        try:
+            persisted = self.catalog.register_many_with_backfill(registrations)
+        except ValueError as exc:
+            raise ResponseValueUnavailableError(str(exc)) from exc
+        return [
+            ResponseValueRegistrationResult(
+                status="registered" if monitor.created else "existing",
+                value_name=monitor.value_name,
+                sources=sources,
+            )
+            for monitor, sources in persisted
+        ]
 
     def available_source_options(
         self,

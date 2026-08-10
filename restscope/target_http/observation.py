@@ -8,9 +8,7 @@ its warnings accompany the real HTTP result and never replace it.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -23,42 +21,6 @@ class TargetResponseOperationContext:
     operation_key: str | None = None
     operation_method: str | None = None
     operation_path: str | None = None
-
-
-@dataclass(slots=True, frozen=True)
-class TargetOperationIdentity:
-    """Identify the exact operation around one internal HTTP invocation."""
-
-    operation_key: str
-    method: str
-    path: str
-
-
-_TARGET_OPERATION_IDENTITY: ContextVar[TargetOperationIdentity | None] = ContextVar(
-    "restscope_target_operation_identity",
-    default=None,
-)
-
-
-@contextmanager
-def target_operation_scope(identity: TargetOperationIdentity) -> Iterator[None]:
-    """Bind an operation identity without exposing it as a model argument.
-
-    The ``finally`` reset prevents an internal Probe identity from leaking into
-    a later ordinary HTTP Tool call, including when the request raises.
-    """
-
-    token = _TARGET_OPERATION_IDENTITY.set(identity)
-    try:
-        yield
-    finally:
-        _TARGET_OPERATION_IDENTITY.reset(token)
-
-
-def current_target_operation_identity() -> TargetOperationIdentity | None:
-    """Return the internal operation identity bound to this execution context."""
-
-    return _TARGET_OPERATION_IDENTITY.get()
 
 
 @dataclass(slots=True, frozen=True)

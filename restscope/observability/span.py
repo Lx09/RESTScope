@@ -1,7 +1,7 @@
 """Project one traced runtime span into the current live semantic event.
 
 ``LiveSpan`` is a best-effort handle returned by :class:`LiveRunObserver`. It
-updates Agent, Tool, and Smoke Batch cards while keeping observer state,
+updates Agent and Tool cards while keeping observer state,
 locking, and cursor publication inside the observer module.
 """
 
@@ -62,12 +62,7 @@ class LiveSpan:
             return
         safe_value = self._observer._safe(value)
         detail = deepcopy(event.get("detail", {}))
-        if event.get("kind") == "smoke_batch" and direction == "output":
-            if isinstance(safe_value, dict):
-                detail.update(safe_value)
-            else:
-                detail["output"] = safe_value
-        elif event.get("kind") == "tool_call" and event.get("name") == _HTTP_TOOL:
+        if event.get("kind") == "tool_call" and event.get("name") == _HTTP_TOOL:
             if direction == "input":
                 request = (
                     detail.get("input", {}).get("request")
@@ -129,10 +124,6 @@ class LiveSpan:
             changes["operation_key"] = self._observer._safe(value)
         elif name == "restscope.operation.round":
             changes["round_number"] = self._observer._safe(value)
-        elif name == "restscope.test.run_id" and event.get("kind") == "smoke_batch":
-            detail = deepcopy(event.get("detail", {}))
-            detail["run_id"] = self._observer._safe(value)
-            changes["detail"] = detail
         elif name == "restscope.tool.status" and event.get("kind") == "tool_call":
             changes["status"] = _tool_status(str(value))
         if changes:

@@ -1,6 +1,6 @@
 /** Wire contracts emitted by the App-owned current-run observer. */
 
-export type EventKind = "agent_turn" | "tool_call" | "smoke_batch";
+export type EventKind = "agent_turn" | "tool_call";
 
 export type EventStatus = "running" | "succeeded" | "warning" | "failed";
 
@@ -60,7 +60,7 @@ export interface TodoState {
 }
 
 export interface ObserverSnapshot {
-  schema_version: 2;
+  schema_version: 3;
   run: RunState | null;
   events: TimelineEvent[];
   todo: TodoState | null;

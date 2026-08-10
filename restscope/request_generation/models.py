@@ -33,7 +33,14 @@ class ChoiceGenerator(_Strategy):
     corresponding service functions.
     """
     type: Literal["choice"]
-    values: list[Any] = Field(min_length=1)
+    values: list[Any] = Field(
+        min_length=1,
+        json_schema_extra={
+            "items": {
+                "description": "One typed JSON value in the finite choice domain."
+            }
+        },
+    )
     weights: list[float] | None = None
 
     @model_validator(mode="after")

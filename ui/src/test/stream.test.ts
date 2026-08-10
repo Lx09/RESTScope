@@ -32,7 +32,7 @@ it("hydrates a snapshot and lets EventSource resume named cursor events", async 
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({
-      schema_version: 2,
+      schema_version: 3,
       run: null,
       events: [],
       todo: null,
@@ -108,7 +108,7 @@ it("does not hydrate or open SSE after the initial snapshot is cancelled", async
   resolveFetch?.({
     ok: true,
     json: async () => ({
-      schema_version: 2,
+      schema_version: 3,
       run: null,
       events: [],
       todo: null,

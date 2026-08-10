@@ -1,21 +1,18 @@
-"""Generate and execute bounded Test Case batches against the App-bound target.
+"""Generate and execute bounded request Batches against the App-bound target.
 
 The service freezes Generator configuration, prepares every request before the
 first network call, then executes the requests sequentially. Its output is a
-``BatchExecutionResult``: structured direct-name request JSON and the outcome
-of each case, ready to enter Operation Smoke's run-local Test Case Catalog. It
-does not build a second reporting representation.
+``BatchExecutionResult`` contains inline canonical requests and bounded
+HTTP/transport outcomes. It creates no Test Case identity or persistent state.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 import json
 import secrets
 from typing import Any
-from uuid import uuid4
 
 from restscope.tools.context import ToolContext
 from restscope.target_http import (
@@ -26,11 +23,8 @@ from restscope.target_http import (
     TargetResponseOperationContext,
 )
 from restscope.observability import TracingRuntime
-from restscope.harness.operation_testing.test_case_catalog import (
-    CatalogTestCase,
-    parse_http_failure,
-    parse_transport_failure,
-)
+from .failure import parse_http_failure, parse_transport_failure
+from .outcomes import BatchCaseOutcome
 
 from restscope.request_generation import RequestGenerationConfigStore
 from restscope.request_generation.constraints import (
@@ -48,27 +42,24 @@ from restscope.request_generation.serialization import serialize_test_case
 
 
 BEHAVIOR_MONITOR_RESPONSE_BYTES = 1024 * 1024
-SMOKE_FAILURE_RESPONSE_BYTES = 10 * 1024 * 1024
+FAILURE_RESPONSE_BYTES = 10 * 1024 * 1024
+MAX_INLINE_REQUEST_CHARACTERS = 2_400
 
 
 @dataclass(frozen=True, slots=True)
 class BatchExecutionResult:
-    """Return one prepared-and-executed batch without constructing a report.
+    """Return one frozen generation revision and every inline case outcome."""
 
-    ``cases`` contains every attempted request, including successes and
-    transport failures. A Coordinator can record those immutable cases in its
-    run-local Catalog without translating a second evidence structure.
-    """
-
-    run_id: str
     operation_key: str
+    generation_revision: int
+    generation_state_digest: str
     seed: int
-    cases: tuple[CatalogTestCase, ...]
+    cases: tuple[BatchCaseOutcome, ...]
 
     @property
     def success_count(self) -> int:
-        """Count HTTP 2xx cases, represented by the absence of a Failure."""
-        return sum(case.failure is None for case in self.cases)
+        """Count HTTP 2xx cases, represented by no normalized Failure."""
+        return sum(case.status_code is not None and case.failure is None for case in self.cases)
 
     @property
     def success_rate(self) -> float:
@@ -106,7 +97,7 @@ class OperationTestingService:
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.reference_values = reference_values
 
-    def run_smoke_batch(
+    def run_batch(
         self,
         context: ToolContext,
         /,
@@ -114,30 +105,17 @@ class OperationTestingService:
         operation_key: str,
         case_count: int = 1,
         seed: int | None = None,
-        constraints: ConstraintSet | None = None,
-        case_id_factory: Callable[[], str] | None = None,
     ) -> BatchExecutionResult:
-        """Execute one complete Smoke batch and return Catalog-ready cases.
+        """Execute 1–5 cases from one frozen Generation Store revision."""
 
-        ``operation_key`` selects the frozen operation snapshot. ``case_count`` and
-        ``seed`` control deterministic generation, while optional runtime
-        ``constraints`` express relationships learned during the current App
-        lifetime. ``case_id_factory`` lets a run-level Catalog assign identities
-        continuously across Batch rounds and Solve probes. Generation or
-        serialization failures abort before any request is sent; transport
-        failures are recorded per case.
-        """
-
-        return self._run_smoke_batch_traced(
+        return self._run_batch_traced(
             context,
             operation_key=operation_key,
             case_count=case_count,
             seed=seed,
-            constraints=constraints,
-            case_id_factory=case_id_factory,
         )
 
-    def _run_smoke_batch_traced(
+    def _run_batch_traced(
         self,
         context: ToolContext,
         /,
@@ -145,46 +123,32 @@ class OperationTestingService:
         operation_key: str,
         case_count: int,
         seed: int | None,
-        constraints: ConstraintSet | None,
-        case_id_factory: Callable[[], str] | None,
     ) -> BatchExecutionResult:
         """
         Trace deterministic request generation, constraint solving, and execution.
         """
         with self.tracing_runtime.span(
-            "OperationTestingService.run_smoke_batch",
+            "OperationTestingService.run_batch",
             kind="CHAIN",
             input_value={
                 "operation_key": operation_key,
                 "case_count": case_count,
                 "seed": seed,
-                "constraint_count": (
-                    len(constraints.constraints)
-                    if constraints is not None
-                    else 0
-                ),
             },
             attributes={
                 "restscope.operation.key": operation_key,
                 "restscope.test.case_count": case_count,
-                "restscope.test.constraint_count": (
-                    len(constraints.constraints)
-                    if constraints is not None
-                    else 0
-                ),
             },
         ) as span:
-            outcome = self._execute_smoke_batch(
+            outcome = self._execute_batch(
                 context,
                 operation_key=operation_key,
                 case_count=case_count,
                 seed=seed,
-                constraints=constraints,
-                case_id_factory=case_id_factory,
             )
             span.set_output(
                 {
-                    "run_id": outcome.run_id,
+                    "generation_revision": outcome.generation_revision,
                     "case_count": len(outcome.cases),
                     "success_count": outcome.success_count,
                 }
@@ -195,14 +159,17 @@ class OperationTestingService:
             set_live_detail = getattr(span, "set_live_detail", None)
             if callable(set_live_detail):
                 set_live_detail("seed", outcome.seed)
-            span.set_attribute("restscope.test.run_id", outcome.run_id)
+            span.set_attribute(
+                "restscope.request_generation.revision",
+                outcome.generation_revision,
+            )
             span.set_attribute(
                 "restscope.test.observed_2xx",
                 outcome.success_count > 0,
             )
             return outcome
 
-    def _execute_smoke_batch(
+    def _execute_batch(
         self,
         context: ToolContext,
         /,
@@ -210,22 +177,32 @@ class OperationTestingService:
         operation_key: str,
         case_count: int = 1,
         seed: int | None = None,
-        constraints: ConstraintSet | None = None,
-        case_id_factory: Callable[[], str] | None = None,
     ) -> BatchExecutionResult:
         """Perform fail-before-send preflight, then execute prepared cases."""
-        if not 1 <= case_count <= 20:
+        if not 1 <= case_count <= 5:
             raise TestingExecutionError(
                 "invalid_case_count",
-                "case_count must be between 1 and 20",
+                "case_count must be between 1 and 5",
             )
-        config = self.config_store.require_operation(operation_key)
+        generation_state = self.config_store.require_state(operation_key)
+        config = generation_state.config
         operation = config.snapshot
+        expressions = [
+            expression
+            for item in generation_state.constraints
+            for expression in item.constraint.constraints
+        ]
+        constraints = ConstraintSet(constraints=expressions) if expressions else None
         run_seed = seed if seed is not None else secrets.randbits(63)
         # Build the complete request list before any network call. If one case
         # cannot be solved or serialized, the target sees none of the batch.
         prepared: list[
-            tuple[GeneratedTestCase, PreparedTestRequest, PreparedTargetRequest]
+            tuple[
+                GeneratedTestCase,
+                PreparedTestRequest,
+                PreparedTargetRequest,
+                dict[str, Any],
+            ]
         ] = []
         try:
             for case_index in range(case_count):
@@ -248,42 +225,44 @@ class OperationTestingService:
                     override_context_headers=True,
                     allowed_sensitive_request_headers={"cookie"},
                 )
-                prepared.append((generated, request, target_request))
+                inline_request = _catalog_request(generated)
+                if len(
+                    json.dumps(
+                        inline_request,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                ) > MAX_INLINE_REQUEST_CHARACTERS:
+                    raise TestingExecutionError(
+                        "test_case_request_too_large",
+                        "Generated request evidence exceeds 2400 characters",
+                    )
+                prepared.append((generated, request, target_request, inline_request))
         except (ConstraintValidationError, ConstraintSolveError) as exc:
             raise TestingExecutionError(exc.code, str(exc)) from exc
 
         # Network execution begins only after preflight succeeds for every case.
-        run_id = f"test_run_{uuid4().hex}"
-        if case_id_factory is None:
-            next_case_number = 1
-
-            def case_id_factory() -> str:
-                """Assign simple identities when no shared Catalog owns the run."""
-                nonlocal next_case_number
-                case_id = f"TC{next_case_number}"
-                next_case_number += 1
-                return case_id
-
-        cases: list[CatalogTestCase] = []
-        for case_index, (generated, request, target_request) in enumerate(
+        cases: list[BatchCaseOutcome] = []
+        for case_index, (generated, request, target_request, inline_request) in enumerate(
             prepared
         ):
             cases.append(
                 self._execute_case(
                     context,
-                    run_id=run_id,
-                    case_id=case_id_factory(),
+                    case_number=case_index + 1,
                     case_index=case_index,
                     generated=generated,
                     request=request,
                     target_request=target_request,
-                    catalog_request=_catalog_request(generated),
+                    catalog_request=inline_request,
+                    operation_path=operation.path,
                 )
             )
 
         return BatchExecutionResult(
-            run_id=run_id,
             operation_key=operation_key,
+            generation_revision=generation_state.revision,
+            generation_state_digest=generation_state.state_digest,
             seed=run_seed,
             cases=tuple(cases),
         )
@@ -292,31 +271,27 @@ class OperationTestingService:
         self,
         context: ToolContext,
         *,
-        run_id: str,
-        case_id: str,
+        case_number: int,
         case_index: int,
         generated: GeneratedTestCase,
         request: PreparedTestRequest,
         target_request: PreparedTargetRequest,
         catalog_request: dict[str, Any],
-    ) -> CatalogTestCase:
-        """Execute one prepared request and retain only Catalog-approved facts."""
+        operation_path: str,
+    ) -> BatchCaseOutcome:
+        """Execute one prepared request and retain bounded inline facts."""
         with self.tracing_runtime.span(
             "RESTScopeTestCase.execute",
             kind="TOOL",
             input_value={
                 "operation_key": generated.operation_key,
-                "run_id": run_id,
-                "case_id": case_id,
+                "case_number": case_number,
                 "method": request.method,
-                "path_template": self.config_store.require_operation(
-                    generated.operation_key
-                ).snapshot.path,
+                "path_template": operation_path,
             },
             attributes={
                 "restscope.operation.key": generated.operation_key,
-                "restscope.test.run_id": run_id,
-                "restscope.test.case_id": case_id,
+                "restscope.test.case_number": case_number,
                 "restscope.test.case_index": case_index,
             },
         ) as span:
@@ -335,16 +310,14 @@ class OperationTestingService:
                         or getattr(self.transport, "run_observer", None) is not None
                         else None
                     ),
-                    failure_response_body_limit=SMOKE_FAILURE_RESPONSE_BYTES,
+                    failure_response_body_limit=FAILURE_RESPONSE_BYTES,
                     truncate_response_body=True,
                     buffer_success_body_only=True,
                     processor_context=TargetResponseOperationContext(
                         ir=context.ir,
                         operation_key=generated.operation_key,
                         operation_method=request.method,
-                        operation_path=self.config_store.require_operation(
-                            generated.operation_key
-                        ).snapshot.path,
+                        operation_path=operation_path,
                     ),
                 )
                 media_type = (
@@ -365,15 +338,16 @@ class OperationTestingService:
                     response_body=response_body,
                     body_truncated=response.body_truncated,
                 )
-                result = CatalogTestCase(
-                    case_id=case_id,
+                result = BatchCaseOutcome(
+                    case_number=case_number,
                     request=catalog_request,
-                    response_body=response_body,
+                    status_code=response.status_code,
+                    reason_phrase=response.reason_phrase or None,
                     failure=failure,
                 )
                 span.set_output(
                     {
-                        "case_id": case_id,
+                        "case_number": case_number,
                         "status_code": response.status_code,
                         "failed": failure is not None,
                         "body_retained": response_body is not None,
@@ -394,10 +368,9 @@ class OperationTestingService:
                 )
                 span.mark_error(failure.messages[0])
 
-        return CatalogTestCase(
-            case_id=case_id,
+        return BatchCaseOutcome(
+            case_number=case_number,
             request=catalog_request,
-            response_body=None,
             failure=failure,
         )
 

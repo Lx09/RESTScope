@@ -1,6 +1,6 @@
 # Main Agent First-Class Runtime
 
-Status: Implemented; testing capabilities intentionally incomplete
+Status: Implemented; testing capabilities bound but intentionally unauthorized
 
 ## Outcome
 
@@ -37,12 +37,12 @@ exactly `plan.read` and `plan.update`. It currently selects no Skills, Context
 Sources, domain Tools, or child Profiles. `skill.read` therefore is not added;
 `file.read` and all Subagent lifecycle Tools remain unauthorized.
 
-This capability-light Profile is deliberate. The approved Main lifecycle is
-runnable, but missing testing methods are not simulated with deterministic
-orchestration or silently borrowed from transitional workflows. Until later
-work adds `openapi.list_operations`, testing Skills, their Tool bindings, and
-any needed child Profiles, Main can only plan and report that it cannot safely
-test the target.
+This capability-light Profile is deliberate. OpenAPI discovery, request-state
+inspection, Patch validation/application, and bounded Batch execution now have
+production bindings, and the two standard testing Skills exist. Binding does
+not grant access. Until a later decision selects Skills, grants every required
+Tool, and supplies any needed child Profile, Main can only plan and report that
+it cannot safely test the target.
 
 ## Blocking lifecycle
 
@@ -84,21 +84,22 @@ model and Tool calls, prompt/context capacity, budgets, tracing, cancellation,
 and child lifecycle. It does not restore an Operation FIFO, choose testing
 coverage, or interpret a model Plan as scheduler state.
 
-## Transitional Modules and later work
+## Retired workflows and later work
 
-Operation Smoke, Failure Resolution, Compact, Parameter Patch, Patch Review,
-their persistence rules, and their focused tests remain in the repository as
-temporary migration implementations. They are not exposed to the initial Main
-Profile. This task did not create a `MainAgent` class, testing Skill, Tool,
-Context Source, child Profile, fact ledger, App task DTO, or App result DTO.
+Operation Smoke and its dedicated Failure Resolution, Compact, Parameter Patch,
+Patch Review, candidate, Finalizer, Memory, and evaluation implementations have
+been retired. Their reusable methodology now lives in the standard
+`resolve-operation-failures` and `apply-parameter-patch` Skills. Neither Skill
+is exposed to the initial Main Profile. There is still no `MainAgent` class,
+production child Profile, fact ledger, App task DTO, or App result DTO.
 
 Later activation work must separately design and approve:
 
-1. bounded OpenAPI Operation discovery, including `openapi.list_operations`;
-2. the ordered standard testing Skills selected by `main`;
-3. every Tool and Context Source required by those Skills;
-4. task-shaped child Profiles only where a selected method needs delegation;
-5. any deterministic evidence-reference ledger required by a future external
+1. the ordered standard testing Skills selected by `main`;
+2. every Tool and Context Source granted to satisfy those Skills;
+3. a bounded Patch child Profile selecting `apply-parameter-patch` if Failure
+   Resolution is activated;
+4. any deterministic evidence-reference ledger required by a future external
    product surface.
 
 No future addition may infer Tool authorization from Skill discovery. The
@@ -111,6 +112,6 @@ explicit grant.
 Implementation verification is offline. It covers bounded Profile guidance,
 stable prompt placement, taskless Main startup, child rejection of taskless
 startup, exact production Profile grants, App initialization/start/close,
-trace hierarchy, removal of old public run types, package boundaries, and the
-unchanged focused workflow behavior. No real model, target API, MCP service,
+trace hierarchy, removal of old public run types, Profile isolation from newly
+bound testing Tools, and package boundaries. No real model, target API, MCP service,
 Phoenix service, or other external system is called.

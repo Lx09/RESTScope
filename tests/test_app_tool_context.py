@@ -32,7 +32,6 @@ def _app(tmp_path):
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.config import RESTScopeConfig
-    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     class Provider:
         """Complete the blocking Main loop locally without external I/O."""
@@ -68,7 +67,6 @@ def _app(tmp_path):
     )
     return RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
         harness_runtime=runtime,
     )
 
@@ -136,6 +134,60 @@ def test_production_main_profile_is_thinking_and_capability_light(
         "single long-lived Main Agent" in message.content
         for message in request.messages
     )
+
+
+def test_harness_binds_new_domain_tools_without_granting_them_to_main() -> None:
+    """A caller Profile can resolve every new binding, while production Main stays unchanged."""
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.llm import LLMClient, LLMModelConfig
+    from restscope.llm.registry import LLMProviderRegistry
+    from restscope.request_generation import RequestGenerationConfigStore
+
+    class UnusedProvider:
+        """Satisfy Profile validation; this binding test never invokes a model."""
+
+        name = "unused"
+
+        def invoke(self, _request):
+            raise AssertionError("Model invocation is outside this test")
+
+    store = RequestGenerationConfigStore()
+    registry = LLMProviderRegistry()
+    registry.register(UnusedProvider())
+    profile = AgentProfile(
+        name="binding-check",
+        model_config_name="thinking",
+        tool_names=(
+            "openapi.list_operations",
+            "request_generation.get_input_state",
+            "request_generation.validate_patch",
+            "parameter_patch.apply",
+            "test_case.run_batch",
+        ),
+    )
+    runtime = build_harness(
+        request_generation_store=store,
+        operation_testing_service=OperationTestingService(config_store=store),
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(profile,),
+            models=(
+                LLMModelConfig(
+                    role="thinking",
+                    provider="unused",
+                    model="unused",
+                    max_tokens=128,
+                    context_window_tokens=4_096,
+                ),
+            ),
+            client=LLMClient(registry),
+        ),
+    )
+
+    agent = runtime.start_main_agent("binding-check")
+    assert tuple(tool.name for tool in agent.toolbox.specs()) == profile.tool_names
+    agent.close()
 
 
 def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp_path) -> None:

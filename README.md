@@ -78,13 +78,12 @@ uv run pytest
 
 ## Database
 
-The database is one audit artifact for one App. It contains exactly 19 business
-tables: the complete current normalized OpenAPI and response-change events,
-current per-input Generators and Constraints, narrow Resource Identifier and
-bounded Response Value evidence, stable Failures, terminal Resolution Attempts,
-validated input attribution, and accepted Generator/Constraint change events.
-It never stores raw responses, Test Cases, Batches, Patch samples, model
-conversations, plans, queues, scheduler progress, or authentication material.
+The database is one audit artifact for one App. It contains exactly 13 business
+tables: the complete current normalized OpenAPI and response-change events plus
+narrow Resource Identifier and bounded Response Value evidence. Request
+Generation state is revisioned App-lifetime memory. The database never stores
+Generators, Constraints, Patches, Failures, Batches, model conversations,
+plans, queues, scheduler progress, or authentication material.
 
 Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
@@ -133,26 +132,24 @@ Prompt object that callers could use to assemble a broader Agent. Unit tests
 provide their own local stub providers; the runtime package does not register
 an offline fake provider.
 
-The project currently ships two built-in standard Skills. The low-risk
-`build-parameter-patch` Skill owns detailed Generator, Constraint,
-compiler/sampling, proposal-correction, and semantic-Review methods. The
-medium-risk `resolve-operation-failures` Skill owns one-operation Failure
-grouping, evidence-driven diagnosis, controlled HTTP Probe guidance, Worklist
-method, and delegation of a confirmed Parameter repair to an authorized child
-Profile that selects `build-parameter-patch`. The parent Skill deliberately has
-no direct Patch-generation Tool. A generic child completion remains advice
-until a future deterministic bridge compiles, samples, reviews, and registers a
-real candidate.
+The project currently ships two built-in standard Skills. The medium-risk
+`apply-parameter-patch` Skill reads current generation state, builds a complete
+Generator/Constraint replacement, validates and samples it, performs value-level
+semantic review, atomically applies it, and confirms the new revision. The
+medium-risk `resolve-operation-failures` Skill owns evidence-driven diagnosis
+for one operation and delegates a confirmed Parameter repair to an authorized
+child Profile that selects `apply-parameter-patch`. The parent confirms the
+applied revision from the Store and uses a later complete Batch to measure the
+real target effect.
 
 Each standard `SKILL.md` frontmatter contains only `name` and `description`,
 while `restscope.yaml` declares version, risk, required Tools, and bounded
 Context Sources. `restscope.skills` automatically discovers these packaged
 files and exposes an immutable built-in Catalog; callers may add test
-definitions but cannot replace a built-in. The transitional specialized Patch
-Agent reads `build-parameter-patch`'s proposal Reference through that Catalog
-without offering `file.read` to its model. No production generic Profile
-selects either complete Skill yet, so the specialized Failure Resolution and
-Patch/Review runtime below remains unchanged.
+definitions but cannot replace a built-in. No production Profile selects these
+Skills yet: the initial Main Profile still grants only its private Plan pair.
+The retired specialized Failure Resolution, Patch, Review, and Compact Agents
+are not runtime fallbacks.
 
 The same generic `Agent` class runs the reusable Main Agent and task-scoped
 Subagents. A child receives its own Profile and objective, never its parent's
@@ -166,8 +163,7 @@ A Profile may also select the paired `plan.read` and `plan.update` Tools. The
 Harness gives each selected Main Agent or Subagent a separate session-memory
 Plan containing an optional update explanation and up to 100 ordered
 `pending`, `in_progress`, or `completed` steps. At most one step may be active.
-The Plan is neither shared nor persisted and does not replace the richer
-Failure Resolution Worklist.
+The Plan is neither shared nor persisted.
 
 Provider calls are routed through `LLMClient`; providers normalize responses but
 do not execute tools or write database rows.
@@ -186,10 +182,8 @@ keeps stable system/developer guidance, sends only changed Context replacements
 after their first full value, and reserves the immutable Tool and output
 schemas. It compacts at 80% using the same model with Tools disabled, then
 re-anchors every current Context Source but not reloadable Skill bodies; two
-invalid summaries fail safely without deleting history. The transitional
-Failure Resolution flow still uses its existing nested FAST Compact Agent until
-that named Agent is migrated. Strict Agent outputs and provider tool protocols
-remain JSON.
+invalid summaries fail safely without deleting history. Strict Agent outputs
+and provider tool protocols remain JSON.
 
 ## Local live run observer
 
@@ -229,18 +223,17 @@ Ordinary Tools appear as compact no-chevron rows that are collapsed by default
 and open their complete detail in place. Subagent lifecycle calls are aggregated
 by child session and display the child Profile name instead of protocol names;
 clicking opens the child's same-style conversation in a focus-trapped Drawer
-with navigation through at most three levels. Smoke Batches and other run
-notifications remain in schema-v2 but do not enter the conversation.
+with navigation through at most three levels. Schema-v3 contains only Agent-turn
+and ordinary Tool-call events; Batch and Patch Apply therefore render as Tool
+cards. Older browser snapshots are ignored.
 
 The floating page state is Todo, sourced only from a successful `plan.update`
 owned by the explicit Main Agent. It shows completed/total counts, explanation,
 and every generic Plan step in a focus-trapped right Drawer. The in-progress
 item is evident from its row status and is not repeated in a “当前” summary.
-Failure Resolution's domain-specific Worklist is never promoted to Todo; its
-read/write calls remain ordinary collapsed Tool detail. Historical Todo state
-is labeled read only. Search, status filtering, detail expansion, copying,
-theme switching, and auto-follow are viewer-only; the service exposes no
-mutation route.
+Historical Todo state is labeled read only. Search, status filtering, detail
+expansion, copying, theme switching, and auto-follow are viewer-only; the
+service exposes no mutation route.
 
 Observer data lives only in the RESTScope process and browser memory. A new run
 replaces the previous run, and App shutdown clears it. Details are deliberately
@@ -330,29 +323,6 @@ data, non-sensitive tool parameters, and model-visible reasoning, so anyone
 with local Phoenix access can inspect those values even though target
 credentials are redacted.
 
-## Phoenix Evals for Operation Smoke Agents
-
-The developer-only [`evaluations/`](evaluations/README.md) directory evaluates
-the continuous Failure Resolution flow with one native Phoenix Dataset,
-Experiments, and independent code evaluators. Repository YAML Scenarios cover
-semantic merge, semantic split, and a real nested Parameter Patch/Review flow.
-Each repetition receives fresh session registries and a storage-free finalizer.
-Experiment runs call the configured model and record linked traces, but never
-open the RESTScope database or request a target API. This is LLM evaluation,
-not part of the runtime test suite.
-
-```bash
-uv sync --group evaluation
-uv run --group evaluation python -m evaluations list
-uv run --group evaluation python -m evaluations run resolution \
-  --scenario resolution-patch-bounded-identifier --prompt current \
-  --repetitions 1 --seed 0
-```
-
-Use one repetition while exploring and three when comparing complete prompt
-variants. Semantic scores are intentionally independent; there is no aggregate
-pass/fail and no LLM Judge.
-
 ## MCP Tools
 
 RESTScope retains a generic lightweight MCP Host for caller-owned integrations.
@@ -401,78 +371,37 @@ target HTTP implementation and no external model-visible toolbox.
 translate annotations into a hidden permission policy. The Agent Profile decides
 which discovered Tools, if any, the Harness may bind.
 
-## Operation Smoke testing
+## Generic request generation and Batch Tools
 
-Every default `RESTScopeApp` runtime includes the Operation Smoke testing path:
+During `RESTScopeApp.initialize()`, every OpenAPI operation becomes an
+App-lifetime request-generation snapshot. The in-memory
+`RequestGenerationConfigStore` starts each operation at revision `0` with its
+default Generator and complete active Constraint state. It exposes snapshots
+by semantic input handle; internal node IDs never cross the Tool boundary.
 
-There are no model-callable Testing or Generator-configuration tools.
-`OperationSmokeCoordinator` reaches complete batch execution through the narrower
-internal `SmokeBatchRunner` interface, so other Agent roles cannot bypass
-Smoke's round ordering, budgets, shared seed, or direct Patch transaction.
+`openapi.list_operations` discovers the initialized operations.
+`request_generation.get_input_state` returns the complete directly and
+transitively intersecting state for selected inputs.
+`request_generation.validate_patch` compiles a full replacement, validates
+schema and reference compatibility, solves Constraints, generates deterministic
+samples, and returns a validation digest without changing state.
+`parameter_patch.apply` revalidates the exact request under the operation lock,
+registers response-value sources transactionally, and atomically advances the
+revision. A failed or stale application changes nothing.
 
-During the first successful `RESTScopeApp.initialize()`, every OpenAPI operation
-becomes an App-lifetime request snapshot. Each parameter, body, media type,
-property, array item, and composition branch has a deterministic
-`input_node_id` and exactly one current generator row. Method, path,
-serialization rules, media type, and enabled or disabled state remain derived
-from the in-memory OpenAPI representation instead of being copied into the
-database. The complete normalized OpenAPI document is persisted once as the
-current audit document. One default App owns one fresh database and one
-initialization; starting another App against the retained file is rejected.
-Testing another API requires a new database URL or an explicit operational
-deletion of the old run artifact; there is no runtime reset or delete tool.
+`test_case.run_batch` freezes one complete generation revision before it
+preflights and executes 1–5 cases. The result contains bounded inline canonical
+requests and HTTP or transport outcomes plus the frozen revision. It creates no
+`TC*`, `E*`, Test Case registry, Failure memory, candidate, or database row.
+An already-running Batch is unaffected by a later Patch; a later Batch sees the
+new revision. Batch execution can mutate the target API and does not retry,
+follow redirects, or roll back effects.
 
-Initial generators treat the OpenAPI document as the source for their defaults.
-For concrete values the precedence is `enum`, `const`, `default`, then
-`example`; a non-empty enum becomes an equal-weight choice containing every
-declared value. Later Generator changes can enter only through a validated,
-directly accepted Patch and may deliberately generate values that do not match
-the initialized Schema. Required and structural nodes must still use inclusion
-probability `1.0`, and every generated case must still serialize under the
-parameter and request-body contract before any request is sent. An accepted
-Patch clears recoverable default-generation failures attributed to the nodes
-it updates and enables the operation once no blocking reason remains.
-
-The internal Smoke batch runner accepts an initialized Catalog `operation_key`
-such as `POST /orders`. It combines the App-lifetime operation snapshot with
-the current input Generator rows and reads the operation's current Constraints
-from the database before every complete Batch. It generates all requested
-cases in preflight and only then sends requests serially to the current
-App-bound target. It supports at most 20 cases, does not follow redirects or
-retry, and creates an isolated HTTP client per case. When the default API
-Behavior Monitor is present, it reads at most 1 MiB from each response before
-returning. Every first `operation + exact status + normalized media type`
-observation is compared with the current OpenAPI representation. A real
-contract change updates the in-memory response, the complete current audit
-document, and one append-only change event in one critical section. A database
-failure restores the in-memory response and Tracker state. Invalid or
-truncated JSON stays pending for the next matching response and writes no
-event.
-
-Only valid 2xx JSON bodies continue into Resource Identifier and Response Value
-tracking. Batch execution returns concrete Test Cases instead of building a
-parallel report. Every attempted case enters one run-local `TestCaseCatalog`
-with its actually sent inputs as structured `path`, `query`, `header`,
-`cookie`, and optional `body` JSON. Direct JSON keys such as `sort` remain
-distinct from the unique cross-tool handle `query.sort`. Successful responses
-keep no body. A 4xx/5xx response keeps a decoded body up to 10 MiB plus its
-separately normalized Failure; redirects and transport errors keep only bounded
-Failure facts. The Catalog is released when the operation's Smoke run ends and
-is never persisted.
-
-`restscope.http.request` is a high-risk, non-read-only model capability that
-can trigger side effects on the bound target. Failure Resolution receives a further
-operation-scoped wrapper around it. Generated batch execution remains internal
-to Operation Smoke and can execute only an initialized operation using its
-complete current Generator and Constraint configuration.
-The raw HTTP result includes all response headers, including authentication and
-Cookie headers, plus its bounded JSON or text body.
-
-The product entry path is `RESTScopeApp.start → Agent.start → model/Tool loop`.
-The first Main Profile grants only `plan.read` and `plan.update`; existing Smoke,
-Failure Resolution, and Patch Modules remain transitional internal capabilities
-and are not selected by that Profile. The default App does not start MCP
-processes.
+These capabilities are bound by the production Harness but are not thereby
+authorized to an Agent. The initial Main Profile still grants only
+`plan.read` and `plan.update`; it selects neither testing Skill and cannot call
+the new Tools until a later Profile decision explicitly grants them. The
+default App does not start MCP processes.
 
 ## API Behavior Monitor Coordinator
 
@@ -491,10 +420,11 @@ The Monitor coordinates three bounded responsibilities:
 - Resource Identifier reuses the exact-`id` heuristic and bounded FAST
   classification. Learned selectors, typed identifiers, resource aliases,
   operation usage, and errors remain in the App database.
-- Response Value registers a stable value pool when Operation Smoke selects a
-  system-provided `response_value` option. Candidate producer fields come from
-  the latest IR; exact normalized names are selected locally and an optional
-  bounded FAST choice handles semantic names such as `commitId` and `sha`.
+- Response Value registers a stable value pool when `parameter_patch.apply`
+  atomically accepts a validated `response_value` Generator. Candidate producer
+  fields come from the latest IR; exact normalized names are selected locally
+  and an optional bounded FAST choice handles semantic names such as `commitId`
+  and `sha`.
   Every valid, non-truncated 2xx JSON response contributes flattened scalar
   evidence. The latest 100 observations per operation and the 100 most recently
   active values per pool are retained, allowing a later monitor registration
@@ -510,94 +440,42 @@ state are never persisted. The current normalized OpenAPI and append-only
 contract change events are the audit exception; bounded flattened response
 scalar evidence is another narrow exception, and all non-null scalar fields,
 including sensitive-looking names, may be retained. The public read-only
-Capability exposes `resource.list_resources`, `resource.list_ids`, and
-`openapi.find_observed_response_fields`. Only Parameter Patch receives these
-tools, and only for its short-lived proposal session. Response Value pools are
-read without registration while a candidate is sampled; applying the selected
-Patch performs the first producer-to-consumer pool registration.
+Tool Backend exposes `resource.list_resources`, `resource.list_ids`, and
+`openapi.find_observed_response_fields`. Response Value pools are read without
+registration during Patch validation; `parameter_patch.apply` performs the
+producer-to-consumer registration before publishing the new Store state.
 
-## Operation Smoke workflow
+## Failure Resolution and Parameter Patch workflow
 
-`OperationSmokeCoordinator` owns deterministic Batch ordering around one
-continuous `FailureResolutionAgent` session:
+The standard Skills define the future generic parent/child method without
+granting it to the current Main Profile:
 
-1. A complete generated Batch establishes the current evidence and 2xx rate.
-   The App-wide `RANDOM_SEED` is reused by Batch inputs, Constraint solving, and
-   candidate samples. Every sent case enters the run-local Test Case Catalog.
-2. Runtime folds completely identical Failure messages and assigns deterministic
-   `E*` references while retaining every original `E* → TC*` association. The
-   initial Agent prompt contains only the operation key, exact messages, and
-   those associations. Semantic Parameter handles, OpenAPI details, Test Cases,
-   Memory, and Generator state are available only through tools.
-3. The Agent creates and maintains one revisioned, reference-only worklist. It
-   may freely merge, split, overlap, reorder, reopen, or leave items undecided;
-   `active_item_id` expresses its own investigation order. A whole-list write is
-   accepted atomically only when its expected revision and every `E*`, `TC*`,
-   `P*`, and Parameter handle are real. The harness does not judge the Agent's
-   grouping, diagnosis, progress text, or decision quality.
-4. OpenAPI and Test Case tools provide bounded exact evidence. Failure messages
-   are already in the initial prompt, so Resolution has no duplicate
-   Failure-message lookup. If a message is unclear, it can list candidate paths
-   for that HTTP status with `openapi.list_response_fields`, then inspect one
-   associated failed response with `test_case.get_response_field_value`.
-   Parameter Memory is read only and queried on demand. The operation-scoped
-   HTTP Probe supports GET, HEAD, OPTIONS, POST, PUT, PATCH, and DELETE; every
-   invocation sends a fresh request and creates a fresh `TC*`, even when the
-   call repeats or can mutate the target. An exact reproduced Failure message
-   becomes optional evidence for its existing `E*`, but does not enlarge
-   initial coverage.
-5. `generate_parameter_patch` creates a fresh production Patch/Review flow for
-   the active item. Deterministic code checks scope, Schema, references,
-   Constraints, compilation, and samples; a separate Review Agent sees only
-   normalized requirement and candidate facts. The complete reviewed object is
-   held exclusively in a session registry. Resolution receives a short `P*`
-   plus a bounded summary and can recover that summary with
-   `parameter_patch.read_candidate`; executable DTOs and sample values never
-   enter the worklist.
-6. When the Agent returns `FailureResolutionFinish`, the harness requires every
-   original `(E*, TC*)` association to appear at least once, then mechanically
-   validates only decided items. `no_patch` derives real source messages and
-   input node IDs from registries. `apply_patch` dereferences its selected `P*`;
-   Agent text cannot alter Generator/Constraint changes, samples, affected
-   inputs, or candidate provenance. Selected candidates must be unique,
-   baseline-current, non-overlapping, compilable, and freshly sampleable as one
-   combined state.
-7. All decided stable Failures, terminal Attempts, compatible selected
-   candidates, and per-candidate change events commit in one database
-   transaction. Any validation, optimistic-state, or write failure returns to
-   the same Agent session without a partial write. Items without a decision,
-   unselected candidates, worklist drafts, progress, and conversation history
-   disappear when the session ends.
+1. A parent using `resolve-operation-failures` receives bounded inline Batch
+   evidence for one operation, separates Parameter from non-Parameter causes,
+   and establishes a root cause, atomic value predicates, and the minimum
+   complete affected-input scope.
+2. It delegates the bounded repair to one authorized child Profile that
+   explicitly selects `apply-parameter-patch`. The parent does not generate,
+   rewrite, or apply the Patch itself.
+3. The child reads the current revision and complete intersecting Constraint
+   closure, constructs a full replacement, and calls
+   `request_generation.validate_patch`.
+4. The child reviews every value predicate against the final Generator domain,
+   inclusion and variant rules, reference-source identity and non-emptiness,
+   full Constraint closure, and sample witnesses. Compilation, finite samples,
+   HTTP success, or a missing Failure is never a substitute for that proof.
+5. Only the exact reviewed Patch and validation digest may be sent to
+   `parameter_patch.apply`. A conflict requires a fresh state read and a new
+   validation; it must not blindly replay the stale request.
+6. After success, the child reads the state again and reports the applied
+   revision and digest. The parent independently repeats that state read before
+   trusting the completion, then runs a new complete Batch to measure the target
+   effect.
 
-If no Patch was applied, Smoke stops with `no_patch_applied`. Otherwise the next
-complete Batch measures all applied changes together, and
-`success_rate_reached` stops at the configured threshold (80% by default).
-There is no Effect Agent, candidate Batch, rollback snapshot, fixed Failure todo
-queue, or permanent `resolved` flag.
-
-Resolution, Compact, Parameter Patch, and Review share one hard limit of 1000
-model outputs for the entire Operation Smoke run. There are no smaller per-Agent
-budgets, repeated-output fingerprints, or repeated-tool stopping rules. From
-the eleventh non-terminal output for the current active item, the harness adds a
-budget reminder; the Agent still owns whether to gather more evidence, record
-`no_patch`, form a candidate, or switch items. Hitting the hard limit returns
-`failure_resolution_limit_exceeded` and writes none of the unfinalized session.
-
-The database keeps stable structured Failures, append-only terminal Attempts,
-current input Generators and Constraints, and append-only deterministic change
-events. Rejected or unselected candidates, worklists, Patch samples, raw
-Batches/responses, HTTP transcripts, and LLM transcripts are not persisted.
-Public results contain Batch run IDs plus bounded Resolution item and Generator
-change-event summaries; request/response reports are intentionally absent.
-
-Reference-backed generators fail closed. Empty pools are never exposed as
-candidate options and therefore cannot create a reference-backed Generator.
-If an existing reference Generator nevertheless points to an empty pool, that
-is an `operation_error`, not a wait state. The default API Behavior Monitor
-adapter resolves both persistent Resource Identifier and Response Value pools.
-Its ambiguous identifier and semantic producer-field decisions use the same
-task-focused boundary with request-local `G*/I*` and `P*/S*` aliases.
-Deterministic exact matches do not call the model.
+Apply changes only future RESTScope request generation. It does not send HTTP,
+prove that the API Failure is fixed, create a candidate `P*`, or persist Patch
+history. A later Batch failure does not roll back the Patch; it becomes new
+evidence for another explicit diagnosis and replacement.
 
 ## Program Startup
 

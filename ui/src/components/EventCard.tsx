@@ -1,4 +1,4 @@
-/** Read-only cards for Agent turns, Tool executions, and complete Smoke Batches. */
+/** Read-only cards for Agent turns and Tool executions. */
 
 import {
   ApiOutlined,
@@ -6,7 +6,6 @@ import {
   CloseCircleOutlined,
   CodeOutlined,
   DeploymentUnitOutlined,
-  ExperimentOutlined,
   FileSearchOutlined,
   GlobalOutlined,
   LoadingOutlined,
@@ -51,18 +50,6 @@ function compactMessagePreview(value: unknown): string {
   return (text ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
 }
 
-interface SmokeCase extends UnknownRecord {
-  case_index: number;
-  case_id: string;
-  method: string;
-  url: string;
-  status: string;
-  duration_ms: number | null;
-  request: UnknownRecord;
-  response: UnknownRecord | null;
-  transport_error: UnknownRecord | null;
-}
-
 const STATUS_ICONS: Record<string, ReactNode> = {
   running: <LoadingOutlined spin />,
   succeeded: <CheckCircleOutlined />,
@@ -91,7 +78,6 @@ const TOOL_ICONS: Record<string, ReactNode> = {
 
 function eventIcon(event: TimelineEvent): ReactNode {
   if (event.kind === "agent_turn") return <RobotOutlined />;
-  if (event.kind === "smoke_batch") return <ExperimentOutlined />;
   const family = toolFamily(event);
   return family ? TOOL_ICONS[family] ?? <QuestionCircleOutlined /> : <ToolOutlined />;
 }
@@ -478,113 +464,6 @@ function ToolDetail({ event }: { event: TimelineEvent }) {
   );
 }
 
-function caseResult(caseItem: SmokeCase): ReactNode {
-  const label = caseItem.stopped
-    ? "已停止"
-    : caseItem.status === "succeeded"
-      ? "成功"
-      : caseItem.status === "running"
-        ? "运行中"
-        : "失败";
-  const icon = caseItem.stopped
-    ? <WarningOutlined />
-    : STATUS_ICONS[caseItem.status] ?? <QuestionCircleOutlined />;
-  return <Tag className={`status-${caseItem.status}`} icon={icon}>{label}</Tag>;
-}
-
-function SmokeCaseDetail({ caseItem }: { caseItem: SmokeCase }) {
-  return (
-    <Tabs
-      items={[
-        {
-          key: "request",
-          label: "Request",
-          children: <RequestView request={caseItem.request} />,
-        },
-        {
-          key: "response",
-          label: "Response",
-          children: (
-            <ResponseView
-              response={caseItem.response}
-              transportError={caseItem.transport_error}
-            />
-          ),
-        },
-      ]}
-      size="small"
-    />
-  );
-}
-
-const SMOKE_COLUMNS: TableColumnsType<SmokeCase> = [
-  { title: "TC", dataIndex: "case_id", key: "case_id", width: 76 },
-  {
-    title: "方法",
-    dataIndex: "method",
-    key: "method",
-    width: 82,
-    render: (method: string) => (
-      <Tag className={`method-tag method-${String(method).toLowerCase()}`}>{method}</Tag>
-    ),
-  },
-  {
-    title: "URL",
-    dataIndex: "url",
-    key: "url",
-    ellipsis: { showTitle: true },
-    render: (url: string) => <Text className="mono smoke-url">{url}</Text>,
-  },
-  {
-    title: "HTTP",
-    key: "http_status",
-    width: 86,
-    render: (_value, record) => record.response?.status_code ?? "—",
-  },
-  {
-    title: "耗时",
-    dataIndex: "duration_ms",
-    key: "duration_ms",
-    width: 100,
-    render: (duration: number | null) => duration === null ? "—" : `${duration.toLocaleString()} ms`,
-  },
-  {
-    title: "结果",
-    key: "result",
-    width: 98,
-    render: (_value, record) => caseResult(record),
-  },
-];
-
-function SmokeBatchDetail({ event }: { event: TimelineEvent }) {
-  const detail = event.detail;
-  const cases = (Array.isArray(detail.cases) ? detail.cases : []) as SmokeCase[];
-  return (
-    <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      <Flex gap={8} wrap>
-        <Tag>Run · {String(detail.run_id ?? "—")}</Tag>
-        <Tag>Seed · {String(detail.seed ?? "—")}</Tag>
-        <Tag>约束 · {String(detail.constraint_count ?? 0)}</Tag>
-        <Tag color={Number(detail.success_count) === cases.length ? "green" : "gold"}>
-          {String(detail.success_count ?? 0)} / {cases.length} 成功
-        </Tag>
-      </Flex>
-      <Table<SmokeCase>
-        className="smoke-table"
-        columns={SMOKE_COLUMNS}
-        dataSource={cases}
-        expandable={{
-          expandedRowRender: (record) => <SmokeCaseDetail caseItem={record} />,
-        }}
-        pagination={false}
-        rowKey={(record) => `${record.case_index}-${record.case_id}`}
-        scroll={{ x: 760 }}
-        size="small"
-      />
-    </Space>
-  );
-}
-
 /** Render complete read-only detail inside an expanded conversation row. */
 export function EventDetail({
   event,
@@ -594,8 +473,7 @@ export function EventDetail({
   defaultTab?: "input" | "output";
 }): ReactNode {
   if (event.kind === "agent_turn") return <AgentTurnDetail event={event} defaultTab={defaultTab} />;
-  if (event.kind === "tool_call") return <ToolDetail event={event} />;
-  return <SmokeBatchDetail event={event} />;
+  return <ToolDetail event={event} />;
 }
 
 export function EventCard({ event }: { event: TimelineEvent }) {

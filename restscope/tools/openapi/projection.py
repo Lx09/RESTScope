@@ -57,7 +57,7 @@ def _schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
 def _input_schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
     """Add request-input guidance to one exact, bounded Schema summary.
 
-    Descriptions and examples help Failure Resolution interpret an otherwise terse
+    Descriptions and examples help an Agent diagnose an otherwise terse
     contract. They remain bounded because both fields originate in the
     caller-supplied OpenAPI document and may contain large or hostile values.
     """

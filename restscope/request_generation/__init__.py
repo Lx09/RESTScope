@@ -10,10 +10,12 @@ from .store import (
     RequestGenerationConfigStore,
     GeneratorConfigError,
     GeneratorConfigStateConflict,
+    RequestGenerationState,
     expand_generator_patch_presence,
     preview_generator_patch,
     prepare_accepted_generator_patch,
     rebuild_generator_config,
+    generation_state_digest,
 )
 from .constraints import (
     AndConstraint,
@@ -60,6 +62,21 @@ from .models import (
 )
 from .generation import generate_strategy_value, project_generated_input_value
 from .ports import ReferenceValueProvider
+from .reference_values import BehaviorMonitorReferenceValues
+from .patch_models import (
+    CompiledConstraintPatch,
+    CompiledParameterPatch,
+    SelectedReferenceProvenance,
+    SemanticParameterPatch,
+)
+from .patch_validation import (
+    ParameterPatchRuntime,
+    ParameterPatchValidationError,
+    ValidatedPatch,
+    constraint_closure,
+    semantic_state_payload,
+    validation_payload,
+)
 from .randomness import SeededRandom
 from .semantics import (
     build_semantic_input_map,
@@ -76,6 +93,7 @@ __all__ = [
     "RequestGenerationConfigStore",
     "GeneratorConfigError",
     "GeneratorConfigStateConflict",
+    "RequestGenerationState",
     "GeneratorDisabledReason",
     "GeneratedNodeValue",
     "GeneratedTestCase",
@@ -96,6 +114,14 @@ __all__ = [
     "SchemaSnapshot",
     "PreparedTestRequest",
     "ReferenceValueProvider",
+    "BehaviorMonitorReferenceValues",
+    "CompiledConstraintPatch",
+    "CompiledParameterPatch",
+    "SelectedReferenceProvenance",
+    "SemanticParameterPatch",
+    "ParameterPatchRuntime",
+    "ParameterPatchValidationError",
+    "ValidatedPatch",
     "ResourceIdentifierGenerator",
     "ResponseValueGenerator",
     "OrConstraint",
@@ -111,6 +137,10 @@ __all__ = [
     "preview_generator_patch",
     "prepare_accepted_generator_patch",
     "rebuild_generator_config",
+    "generation_state_digest",
+    "constraint_closure",
+    "semantic_state_payload",
+    "validation_payload",
     "project_generated_input_value",
     "referenced_input_node_ids",
     "solve_input_overrides",

@@ -31,12 +31,6 @@ ui = [
 dev = [
     "pytest>=9.0.2",
 ]
-evaluation = [
-    "arize-phoenix-client>=2.13,<3",
-    "arize-phoenix-evals>=3,<4",
-    "arize-phoenix-otel>=0.16.1,<0.17",
-]
-
 [tool.setuptools.packages.find]
 include = ["restscope*"]
 

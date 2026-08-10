@@ -1,8 +1,8 @@
-"""Build the schema-v2 semantic narrative for the current RESTScope run.
+"""Build the schema-v3 semantic narrative for the current RESTScope run.
 
 The :class:`LiveRunObserver` receives the App's existing trace and target HTTP
-activity. It folds that lower-level evidence into model turns, executed tools,
-and complete Smoke Batches. Generic ``Agent.start`` and ``Agent.run`` scopes add
+activity. It folds that lower-level evidence into model turns and executed
+tools. Generic ``Agent.start`` and ``Agent.run`` scopes add
 stable Main or Subagent identities and the authoritative final-response phase
 used by the conversation projector. Browser adapters read JSON-safe snapshots
 and cursor-addressed changes; workflow code never depends on UI DTOs.
@@ -39,7 +39,6 @@ from .projection import (
     utc_now as _utc_now,
 )
 
-_SMOKE_BATCH_SPAN = "OperationTestingService.run_smoke_batch"
 _IGNORED_TOOL_SPANS = {"RESTScopeTestCase.execute"}
 _PLAN_UPDATE_TOOL = "plan.update"
 _HTTP_TOOL = HTTP_TOOL_NAME
@@ -252,9 +251,8 @@ class LiveRunObserver:
         """Open one semantic event or an invisible aggregation context.
 
         Agent and helper spans provide ownership only. An LLM span under an
-        Agent becomes one Agent-turn card, a real tool span becomes a Tool card,
-        and the testing Batch span becomes a Smoke Batch card. Every other span
-        stays invisible while still forwarding operation, round, and case scope.
+        Agent becomes one Agent-turn card and a real tool span becomes a Tool
+        card. Every other span stays invisible while forwarding semantic scope.
         """
         from .span import LiveSpan
 
@@ -338,24 +336,6 @@ class LiveRunObserver:
                 )
                 self._upsert(event)
                 visible_parent_id = event_id
-            elif name == _SMOKE_BATCH_SPAN:
-                event_id = f"event_{uuid4().hex}"
-                event = self._new_event(
-                    event_id=event_id,
-                    kind="smoke_batch",
-                    name=name,
-                    parent_event_id=visible_parent_id,
-                    agent=agent,
-                    scope=scope,
-                    input_value=None,
-                    attributes=safe_attributes,
-                )
-                safe_input = self._safe(input_value) if input_value is not None else {}
-                initial = safe_input if isinstance(safe_input, dict) else {"input": safe_input}
-                event["detail"] = {**initial, "cases": []}
-                self._upsert(event)
-                visible_parent_id = event_id
-
             token = _CURRENT_CONTEXT.set(
                 _ActiveContext(
                     event_id=visible_parent_id,
@@ -392,9 +372,9 @@ class LiveRunObserver:
     ) -> "LiveHTTPExchange | None":
         """Attach one final prepared target request to its semantic owner.
 
-        A request under ``restscope.http.request`` enriches that Tool card. A
-        generated Test Case appends one row to its Smoke Batch. Requests outside
-        either semantic context intentionally remain absent from the timeline.
+        A request under ``restscope.http.request`` enriches that Tool card.
+        Requests inside another Tool remain represented by that Tool's bounded
+        result instead of becoming duplicate timeline events.
         """
         from .http_exchange import LiveHTTPExchange
 
@@ -433,45 +413,16 @@ class LiveRunObserver:
                 return LiveHTTPExchange(
                     observer=self,
                     event_id=str(owner["event_id"]),
-                    target="tool",
-                )
-            if owner.get("kind") == "smoke_batch":
-                case_index = parent.scope.get("case_index")
-                if not isinstance(case_index, int):
-                    case_index = len(owner.get("detail", {}).get("cases", []))
-                case_id = parent.scope.get("case_id")
-                case = {
-                    "case_index": case_index,
-                    "case_id": str(case_id or f"TC{case_index + 1}"),
-                    "run_id": parent.scope.get("test_run_id"),
-                    "method": method.upper(),
-                    "url": url,
-                    "status": "running",
-                    "duration_ms": None,
-                    "request": request,
-                    "response": None,
-                    "transport_error": None,
-                }
-                self._replace_batch_case(
-                    event_id=str(owner["event_id"]),
-                    case_index=case_index,
-                    case=case,
-                )
-                return LiveHTTPExchange(
-                    observer=self,
-                    event_id=str(owner["event_id"]),
-                    target="smoke_batch",
-                    case_index=case_index,
                 )
             return None
         except Exception:
             return None
 
     def snapshot(self) -> dict[str, Any]:
-        """Return one atomic schema-v2 browser snapshot of the current run."""
+        """Return one atomic schema-v3 browser snapshot of the current run."""
         with self._lock:
             return {
-                "schema_version": 2,
+                "schema_version": 3,
                 "run": deepcopy(self._run),
                 "events": [
                     deepcopy(self._events[event_id])
@@ -792,31 +743,6 @@ class LiveRunObserver:
             return
         detail = deepcopy(event.get("detail", {}))
         detail[name] = self._safe(value)
-        self._update_event(event_id, detail=detail)
-
-    def _replace_batch_case(
-        self,
-        *,
-        event_id: str,
-        case_index: int,
-        case: Mapping[str, Any],
-    ) -> None:
-        """Insert or update one case by stable Batch index and keep row order."""
-        event = self._event_copy(event_id)
-        if event is None or event.get("kind") != "smoke_batch":
-            return
-        detail = deepcopy(event.get("detail", {}))
-        cases = [item for item in detail.get("cases", []) if isinstance(item, dict)]
-        replaced = False
-        for index, current in enumerate(cases):
-            if current.get("case_index") == case_index:
-                cases[index] = self._safe(case)
-                replaced = True
-                break
-        if not replaced:
-            cases.append(self._safe(case))
-        cases.sort(key=lambda item: int(item.get("case_index", 0)))
-        detail["cases"] = cases
         self._update_event(event_id, detail=detail)
 
     def _record_todo(self, tool_event: dict[str, Any]) -> None:

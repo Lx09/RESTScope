@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,10 +15,10 @@ from restscope.tools.external.mcp import (
     MCPSourceBuilder,
     load_mcp_server_configs,
 )
-from restscope.tools.runtime import AgentToolbox
-from restscope.tools.http import TargetHTTPRequestTool
-from restscope.tools.openapi import OpenAPIToolBackend
-from restscope.tools.resource import ResourceToolBackend
+from restscope.tools.runtime import AgentToolbox, ToolBinding
+from restscope.tools.http import HTTP_REQUEST_TOOL_NAME, TargetHTTPRequestTool
+from restscope.tools.openapi import OpenAPIToolBackend, openapi_tool_bindings
+from restscope.tools.resource import ResourceToolBackend, resource_tool_bindings
 from restscope.tools.context import ToolContext, ToolContextError
 from restscope.tools.external import register_tool_source
 from restscope.tools import (
@@ -31,6 +31,14 @@ from restscope.observability import TracingRuntime
 from restscope.openapi_parser.ir import OperationIR
 
 from .agent_runtime import AgentRuntimeDefinition, AgentRuntimeResolver
+from .agent_runtime import ToolBindingFactory
+
+if TYPE_CHECKING:
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.request_generation import (
+        BehaviorMonitorReferenceValues,
+        RequestGenerationConfigStore,
+    )
 
 
 class AgentRuntimeNotConfiguredError(RuntimeError):
@@ -135,6 +143,9 @@ def build_harness(
     target_http_transport: TargetHTTPTransport | None = None,
     observed_response_fields_provider: Callable[..., Any] | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
+    request_generation_store: "RequestGenerationConfigStore | None" = None,
+    operation_testing_service: "OperationTestingService | None" = None,
+    reference_values: "BehaviorMonitorReferenceValues | None" = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Build shared App implementations and optional explicit integrations.
@@ -174,6 +185,30 @@ def build_harness(
         resource_tool_backend=resource_tool_backend,
     )
     if agent_runtime is not None:
+        production_factories = _production_tool_binding_factories(
+            runtime,
+            include_http=target_http_transport is not None,
+            include_openapi=any(
+                item is not None
+                for item in (
+                    observed_response_fields_provider,
+                    resource_tool_backend,
+                    request_generation_store,
+                    operation_testing_service,
+                    reference_values,
+                )
+            ),
+            request_generation_store=request_generation_store,
+            operation_testing_service=operation_testing_service,
+            reference_values=reference_values,
+        )
+        agent_runtime = replace(
+            agent_runtime,
+            tool_binding_factories=(
+                *agent_runtime.tool_binding_factories,
+                *production_factories,
+            ),
+        )
         runtime.agent_runtime = AgentRuntimeResolver(
             agent_runtime,
             built_in_catalog=runtime.built_in_tool_catalog,
@@ -181,6 +216,98 @@ def build_harness(
             tracing_runtime=runtime_tracing,
         )
     return runtime
+
+
+def _production_tool_binding_factories(
+    runtime: HarnessRuntime,
+    *,
+    include_http: bool,
+    include_openapi: bool,
+    request_generation_store: "RequestGenerationConfigStore | None",
+    operation_testing_service: "OperationTestingService | None",
+    reference_values: "BehaviorMonitorReferenceValues | None",
+) -> tuple[ToolBindingFactory, ...]:
+    """Create implementations for every App-owned built-in domain Tool.
+
+    Factories make Tools executable when a Profile grants them; they do not add
+    names to any Profile and therefore confer no model permission by themselves.
+    """
+    bindings: list[ToolBinding] = []
+    if include_http:
+        bindings.append(
+            ToolBinding(
+                name=HTTP_REQUEST_TOOL_NAME,
+                execute=lambda **arguments: runtime.target_http_tool.execute(
+                    runtime.require_context(),
+                    **arguments,
+                ),
+            )
+        )
+    if include_openapi:
+        bindings.extend(openapi_tool_bindings(runtime.openapi_backend))
+    if runtime.resource_tool_backend is not None:
+        bindings.extend(
+            resource_tool_bindings(
+                runtime.resource_tool_backend,
+                unavailable=_unavailable_tool,
+            )
+        )
+    if request_generation_store is not None:
+        from restscope.request_generation import ParameterPatchRuntime
+        from restscope.tools.parameter_patch import (
+            ParameterPatchApplyBackend,
+            parameter_patch_apply_tool_binding,
+        )
+        from restscope.tools.request_generation import (
+            RequestGenerationToolBackend,
+            request_generation_tool_bindings,
+        )
+
+        patch_runtime = ParameterPatchRuntime(
+            store=request_generation_store,
+            ir_provider=lambda: runtime.require_context().ir,
+            reference_values=reference_values,
+            openapi_backend=runtime.openapi_backend,
+            resource_backend=runtime.resource_tool_backend,
+        )
+        bindings.extend(
+            request_generation_tool_bindings(
+                RequestGenerationToolBackend(patch_runtime)
+            )
+        )
+        bindings.append(
+            parameter_patch_apply_tool_binding(
+                ParameterPatchApplyBackend(patch_runtime)
+            )
+        )
+    if operation_testing_service is not None:
+        from restscope.tools.test_case import (
+            TestCaseBatchToolBackend,
+            test_case_run_batch_tool_binding,
+        )
+
+        bindings.append(
+            test_case_run_batch_tool_binding(
+                TestCaseBatchToolBackend(
+                    service=operation_testing_service,
+                    context_provider=runtime.require_context,
+                )
+            )
+        )
+    return tuple(
+        ToolBindingFactory(name=binding.name, create=lambda item=binding: item)
+        for binding in bindings
+    )
+
+
+def _unavailable_tool(**_arguments: Any) -> dict[str, Any]:
+    """Fail closed when an optional production Tool backend is absent."""
+    from restscope.tools import ToolFailure
+
+    raise ToolFailure(
+        code="tool_backend_unavailable",
+        message="The Tool backend is unavailable in this App runtime",
+    )
 
 
 def build_harness_with_mcp_host(
@@ -192,6 +319,9 @@ def build_harness_with_mcp_host(
     target_http_transport: TargetHTTPTransport | None = None,
     observed_response_fields_provider: Callable[..., Any] | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
+    request_generation_store: "RequestGenerationConfigStore | None" = None,
+    operation_testing_service: "OperationTestingService | None" = None,
+    reference_values: "BehaviorMonitorReferenceValues | None" = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Discover selected MCP servers into the isolated external toolbox.
@@ -216,6 +346,9 @@ def build_harness_with_mcp_host(
             target_http_transport=target_http_transport,
             observed_response_fields_provider=observed_response_fields_provider,
             resource_tool_backend=resource_tool_backend,
+            request_generation_store=request_generation_store,
+            operation_testing_service=operation_testing_service,
+            reference_values=reference_values,
             agent_runtime=agent_runtime,
         )
         runtime.mcp_host = host

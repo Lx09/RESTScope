@@ -3,7 +3,7 @@
  *
  * The live backend remains the authority for a running test. This module only
  * gives the loopback UI a browser-local history: it converts normalized React
- * state back to the schema-v2 snapshot, stores at most five complete runs in
+ * state back to the schema-v3 snapshot, stores at most five complete runs in
  * IndexedDB, and rejects incompatible records before they reach render code.
  */
 
@@ -15,10 +15,10 @@ import type {
 } from "./types";
 
 export const RUN_HISTORY_DATABASE_NAME = "restscope-live-observer";
-export const RUN_HISTORY_DATABASE_VERSION = 2;
+export const RUN_HISTORY_DATABASE_VERSION = 3;
 const RUN_HISTORY_STORE_NAME = "runs";
 const RUN_HISTORY_INDEX_NAME = "saved_at";
-const RUN_HISTORY_RECORD_VERSION = 2;
+const RUN_HISTORY_RECORD_VERSION = 3;
 const MAX_SAVED_RUNS = 5;
 
 export type HistoryViewMode = "auto" | "live" | "history";
@@ -27,7 +27,7 @@ export type RunHistoryStorageStatus = "loading" | "ready" | "saving" | "saved" |
 
 /** A complete browser-local record for one observer Run. */
 export interface StoredRunRecord {
-  storage_schema_version: 2;
+  storage_schema_version: 3;
   run_id: string;
   saved_at: string;
   snapshot: ObserverSnapshot;
@@ -109,7 +109,7 @@ function isTimelineEvent(value: unknown): value is TimelineEvent {
     typeof value.event_id === "string"
     && typeof value.order === "number"
     && typeof value.started_at === "string"
-    && ["agent_turn", "tool_call", "smoke_batch"].includes(String(value.kind))
+    && ["agent_turn", "tool_call"].includes(String(value.kind))
     && ["running", "succeeded", "warning", "failed"].includes(String(value.status))
   );
 }
@@ -121,7 +121,7 @@ function isTodo(value: unknown): value is TodoState | null {
 }
 
 function isObserverSnapshot(value: unknown): value is ObserverSnapshot {
-  if (!isObject(value) || value.schema_version !== 2) return false;
+  if (!isObject(value) || value.schema_version !== 3) return false;
   if (!Array.isArray(value.events) || !value.events.every(isTimelineEvent)) return false;
   if (typeof value.latest_cursor !== "number" || !isTodo(value.todo)) return false;
   if (value.run === null) return true;
@@ -137,7 +137,7 @@ function isObserverSnapshot(value: unknown): value is ObserverSnapshot {
 /**
  * Return whether an unknown IndexedDB value is safe to pass into the UI.
  * Validation is intentionally structural rather than semantic: the backend
- * still owns schema-v2 meaning, while this guard prevents malformed local data
+ * still owns schema-v3 meaning, while this guard prevents malformed local data
  * from crashing the browser after a deployment or manual database edit.
  */
 export function isStoredRunRecord(value: unknown): value is StoredRunRecord {
@@ -171,10 +171,10 @@ function listingFor(values: unknown[]): RunHistoryListing {
   };
 }
 
-/** Convert the live reducer's normalized maps back into the schema-v2 wire shape. */
+/** Convert the live reducer's normalized maps back into the schema-v3 wire shape. */
 export function observerStateToSnapshot(state: ObserverState): ObserverSnapshot {
   return {
-    schema_version: 2,
+    schema_version: 3,
     run: state.run,
     events: state.eventIds.map((eventId) => state.eventById[eventId]),
     todo: state.todo,
@@ -253,10 +253,10 @@ export class RunHistoryStore implements RunHistoryPersistence {
         if (!database.objectStoreNames.contains(RUN_HISTORY_STORE_NAME)) {
           const store = database.createObjectStore(RUN_HISTORY_STORE_NAME, { keyPath: "run_id" });
           store.createIndex(RUN_HISTORY_INDEX_NAME, "saved_at");
-        } else if (event.oldVersion < 2) {
-          // Canvas-era records do not have the explicit Main/Subagent
-          // conversation contract. The approved v2 migration clears them in
-          // the upgrade transaction instead of presenting ambiguous history.
+        } else if (event.oldVersion < 3) {
+          // Schema-v2 records include a retired Smoke Batch event kind. Clear
+          // them in the upgrade transaction rather than presenting an obsolete
+          // card shape or mixing incompatible event contracts.
           request.transaction?.objectStore(RUN_HISTORY_STORE_NAME).clear();
         }
       };

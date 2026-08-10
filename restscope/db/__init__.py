@@ -8,11 +8,9 @@ from .bootstrap import (
 )
 from .session import create_engine_from_config, create_engine_from_url, make_session_factory
 from .adapters import (
-    SqlAlchemyGeneratorConfigUnitOfWork,
     SqlAlchemyResourceCatalogUnitOfWork,
     SqlAlchemyResponseValueCatalogUnitOfWork,
     SqlAlchemyOpenAPIUnitOfWork,
-    SqlAlchemySmokeMemoryUnitOfWork,
 )
 
 __all__ = [
@@ -20,10 +18,8 @@ __all__ = [
     "DatabaseAlreadyExistsError",
     "DatabaseBootstrapError",
     "SqlAlchemyOpenAPIUnitOfWork",
-    "SqlAlchemyGeneratorConfigUnitOfWork",
     "SqlAlchemyResourceCatalogUnitOfWork",
     "SqlAlchemyResponseValueCatalogUnitOfWork",
-    "SqlAlchemySmokeMemoryUnitOfWork",
     "UnsupportedDatabaseURLError",
     "create_engine_from_config",
     "create_engine_from_url",

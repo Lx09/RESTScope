@@ -88,7 +88,7 @@ describe("conversation projector", () => {
       event_id: "worklist",
       order: 2,
       kind: "tool_call",
-      name: "failure_resolution.write_worklist",
+      name: "diagnosis.record",
       agent: mainAgent,
     });
     const items = projectConversation([start, worklist], "main-1");

@@ -95,7 +95,6 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     from restscope.observability import build_tracing_runtime
     from restscope.observability import Redactor
     from restscope.config import RESTScopeConfig, TracingConfig
-    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     _wait_for_phoenix()
     project_name = f"restscope-contract-{uuid4().hex}"
@@ -167,9 +166,6 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
     )
     app = RESTScopeApp.from_config(
         config,
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(
-            tracing_runtime=runtime
-        ),
         harness_runtime=capabilities,
         tracing_runtime=runtime,
     )

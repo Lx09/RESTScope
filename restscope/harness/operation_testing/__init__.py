@@ -1,28 +1,22 @@
-"""Execute generated request batches and retain their run-local Test Cases.
+"""Execute generated request Batches and return bounded inline outcomes.
 
 Request generation produces complete requests before this package performs
-network effects. The service then executes each request in a stable order and
-returns immutable Test Case evidence for Operation Smoke and Tool backends.
+network effects. The service executes each request in stable order without a
+Test Case Catalog, Worklist, Failure identity, or persistence record.
 """
 
 from .service import BatchExecutionResult, OperationTestingService, TestingExecutionError
-from .probe_evidence import record_probe_result
-from .test_case_catalog import (
-    CatalogTestCase,
-    CatalogTestCaseDraft,
+from .outcomes import (
+    BatchCaseOutcome,
     HTTPFailure,
-    TestCaseCatalog,
     TransportFailure,
 )
 
 __all__ = [
     "BatchExecutionResult",
-    "CatalogTestCase",
-    "CatalogTestCaseDraft",
+    "BatchCaseOutcome",
     "HTTPFailure",
     "OperationTestingService",
-    "TestCaseCatalog",
     "TestingExecutionError",
     "TransportFailure",
-    "record_probe_result",
 ]

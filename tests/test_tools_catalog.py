@@ -15,22 +15,17 @@ EXPECTED_BUILTIN_TOOLS = {
     "openapi.find_observed_response_fields": "openapi",
     "openapi.get_input_schema": "openapi",
     "openapi.get_response_field_schema": "openapi",
+    "openapi.list_operations": "openapi",
     "resource.list_resources": "resource",
     "resource.list_ids": "resource",
-    "test_case.get_parameter_value": "test_case",
-    "test_case.find_parameters_by_value": "test_case",
-    "test_case.get_response_field_value": "test_case",
-    "test_case.find_response_fields_by_value": "test_case",
-    "test_case.get_failure_messages": "test_case",
-    "failure_resolution.read_worklist": "worklist",
-    "failure_resolution.write_worklist": "worklist",
+    "test_case.run_batch": "test_case",
+    "request_generation.get_input_state": "request_generation",
+    "request_generation.validate_patch": "request_generation",
+    "parameter_patch.apply": "parameter_patch",
     "plan.read": "plan",
     "plan.update": "plan",
     "skill.read": "skill",
     "file.read": "file",
-    "lookup_parameter_history": "parameter",
-    "generate_parameter_patch": "parameter",
-    "parameter_patch.read_candidate": "parameter",
     "subagent.start": "subagent",
     "subagent.wait": "subagent",
     "subagent.cancel": "subagent",
@@ -209,8 +204,8 @@ def test_skill_catalog_exposes_one_closed_read_contract() -> None:
     assert spec.output_schema["additionalProperties"] is False
 
 
-def test_global_http_contract_covers_generic_requests_and_scoped_probes() -> None:
-    """Scenario: one Catalog contract owns both Harness bindings of HTTP."""
+def test_global_http_contract_covers_only_generic_requests() -> None:
+    """Scenario: the retired operation-scoped Probe shape is rejected."""
     from restscope.tools import builtin_tool_catalog
 
     schema = builtin_tool_catalog().get("restscope.http.request").spec.output_schema
@@ -228,16 +223,5 @@ def test_global_http_contract_covers_generic_requests_and_scoped_probes() -> Non
         },
         schema,
     )
-    validate(
-        {
-            "case_id": "TC1",
-            "status_code": 400,
-            "failure": {
-                "kind": "http",
-                "status_code": 400,
-                "messages": ["HTTP 400: invalid item"],
-                "body_truncated": False,
-            },
-        },
-        schema,
-    )
+    with pytest.raises(Exception):
+        validate({"case_id": "TC1", "status_code": 400}, schema)

@@ -6,8 +6,8 @@ Create Date: 2026-07-29
 
 RESTScope deliberately rejects pre-existing database files during App startup.
 There is therefore no supported upgrade path from the exploratory 0001–0006
-chain.  This single baseline creates OpenAPI, Generator, API Behavior Monitor,
-and Operation Smoke Memory tables exactly as the current ORM declares them.
+chain. This single baseline creates OpenAPI Audit and API Behavior Monitor
+tables exactly as the current ORM declares them.
 """
 
 from __future__ import annotations
@@ -28,7 +28,8 @@ def upgrade() -> None:
     """Create every current table in dependency order.
 
     Alembic already owns the ``alembic_version`` table.  SQLAlchemy metadata
-    contains only application tables, so ``create_all`` does not alter
+contains only the thirteen OpenAPI Audit and API Behavior Monitor tables, so
+``create_all`` does not alter
     Alembic's bookkeeping.
     """
     Base.metadata.create_all(bind=op.get_bind())

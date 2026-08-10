@@ -1,0 +1,11 @@
+version: "1.0"
+risk_level: medium
+required_tools:
+  - file.read
+  - resource.list_resources
+  - resource.list_ids
+  - openapi.find_observed_response_fields
+  - request_generation.get_input_state
+  - request_generation.validate_patch
+  - parameter_patch.apply
+required_context_sources: []

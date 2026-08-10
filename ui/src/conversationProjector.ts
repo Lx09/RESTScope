@@ -1,11 +1,10 @@
-/** Convert schema-v2 Agent turns into a quiet prompt-and-response document flow.
+/** Convert schema-v3 Agent turns into a quiet prompt-and-response document flow.
  *
  * The backend remains authoritative for event order and revisions. This pure
  * frontend projector shows incremental LLM prompt messages and responses as
  * document text. Model messages that represent Tool calls or Tool results are
  * excluded from that text because the matching Tool event owns their complete
- * collapsed detail. Smoke Batches remain outside the conversation. Resolution
- * Worklist calls stay ordinary Tool rows; only the generic Main Agent Plan is
+ * collapsed detail. Only the generic Main Agent Plan is
  * promoted to the page-level floating Todo.
  */
 

@@ -1,4 +1,4 @@
-"""Behavioral contracts for the five-tool global OpenAPI Capability."""
+"""Behavioral contracts for the six-tool global OpenAPI backend."""
 
 from __future__ import annotations
 
@@ -325,7 +325,7 @@ def _grouped_observed_ir():
 
 
 def _toolbox():
-    """Register all four tools through the same production Interface."""
+    """Register the five schema-document Tools through one Interface."""
     from restscope.tools import (
         AgentToolbox,
     )
@@ -333,11 +333,16 @@ def _toolbox():
         openapi_get_input_schema_tool_spec,
         openapi_get_response_field_schema_tool_spec,
         openapi_list_inputs_tool_spec,
+        openapi_list_operations_tool_spec,
         openapi_list_response_fields_tool_spec,
     )
 
     capability = _capability()
     toolbox = AgentToolbox()
+    toolbox.register(
+        spec=openapi_list_operations_tool_spec(),
+        execute=capability.list_operations,
+    )
     toolbox.register(
         spec=openapi_list_inputs_tool_spec(),
         execute=capability.list_inputs,
@@ -538,6 +543,26 @@ def test_list_inputs_returns_only_one_bounded_page_of_handles() -> None:
     assert result.structured["next_offset"] == 2
     assert len(result.structured["inputs"]) == 2
     assert "schema" not in repr(result.structured)
+
+
+def test_list_operations_returns_stable_exact_operation_identities() -> None:
+    """Operation discovery is sorted, paginated, and does not invent aliases."""
+    result = _execute("openapi.list_operations", {"offset": 0, "limit": 1})
+
+    assert result.status == "succeeded"
+    assert result.structured == {
+        "operations": [
+            {
+                "operation_key": "GET /health",
+                "method": "GET",
+                "path": "/health",
+                "deprecated": False,
+            }
+        ],
+        "total": 2,
+        "offset": 0,
+        "next_offset": 1,
+    }
 
 
 def test_list_inputs_filters_body_media_but_keeps_ordinary_parameters() -> None:

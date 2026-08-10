@@ -104,7 +104,7 @@ class TraceSpan:
             value: JSON-compatible evidence owned by the current workflow.
 
         This narrow outlet is used when the semantic UI needs a value, such as
-        the generated Smoke Batch seed, that was deliberately absent from the
+        a generated Batch seed, that was deliberately absent from the
         established exported span contract. Observer failure remains fail-open.
         """
         if self._live_span is None:

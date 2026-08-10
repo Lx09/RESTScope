@@ -1,111 +1,95 @@
 # Resolve Operation Failures Standard Skill
 
-Status: Completed — merged into local `main`, verified, and cleaned up on
-2026-08-09
+Status: Implemented; not selected by a production Profile
 
-## Objective
+## Outcome
 
-Record the complete reusable method for resolving all Failures from one API
-operation as a packaged standard Skill. Keep semantic grouping, evidence-led
-diagnosis, controlled Probes, Worklist decisions, and finish timing with the
-parent Agent. Delegate confirmed Parameter Patch construction and self-review
-to an authorized Subagent whose Profile selects `build-parameter-patch`.
+`resolve-operation-failures` teaches a generic parent Agent how to diagnose
+bounded inline Batch evidence for one OpenAPI operation. It separates
+Parameter causes, non-Parameter causes, and unresolved hypotheses; gathers only
+the evidence needed to distinguish them; and delegates a confirmed Parameter
+repair to an authorized child Profile selecting `apply-parameter-patch`.
 
-This is a RESTScope runtime Skill under `restscope/builtin_skills/`, not a Codex
-personal or project Skill.
+The Skill no longer uses Operation Smoke identities, a Worklist, Parameter
+history, candidate Registry, dedicated Agent, or Finalizer.
 
-## Approved decisions
+## Required Tools
 
-- Name the parent method `resolve-operation-failures` because it acts on one
-  operation but may group and resolve many Failure sources.
-- Rename the existing `parameter-patch` Skill to the verb-led
-  `build-parameter-patch`. Do not retain a compatibility alias.
-- Give the parent Skill the current OpenAPI, Test Case, Worklist, Parameter
-  history, HTTP Probe, file-read, and three Subagent lifecycle dependencies.
-- Do not grant the parent `generate_parameter_patch` or
-  `parameter_patch.read_candidate` as Skill dependencies.
-- Require a child Profile description that explicitly identifies
-  `build-parameter-patch`; the child Profile selects that Skill and grants its
-  own lookup Tools.
-- Treat the generic child's fixed `AgentCompletion` as advice. It is not a
-  registered `P*` until a future deterministic bridge parses, compiles,
-  samples, semantically reviews, and registers it.
-- Keep a missing child, failed child, insufficient evidence, or missing
-  candidate bridge as undecided rather than recording a false `no_patch`.
+The parent Profile must explicitly grant exactly:
 
-## Skill library
+- `file.read`
+- `openapi.list_inputs`
+- `openapi.list_response_fields`
+- `openapi.get_input_schema`
+- `openapi.get_response_field_schema`
+- `request_generation.get_input_state`
+- `restscope.http.request`
+- `test_case.run_batch`
+- `subagent.start`
+- `subagent.wait`
+- `subagent.cancel`
 
-The parent core owns the ordered workflow, untrusted-data boundary, Reference
-routing, and parent/child responsibility split. Its six References own:
+The parent does not receive `parameter_patch.apply` and must not build, rewrite,
+or apply the child's Patch. The child Profile independently selects
+`apply-parameter-patch` and grants that Skill's dependencies.
 
-- evidence authority, Parameter-cause classification, and causal root causes;
-- stable reference-only Worklist grouping, merge/split, revision, and coverage;
-- precise OpenAPI/Test Case/history Tool selection and controlled HTTP Probes;
-- frozen-fact Subagent objectives, direct-child selection, waiting, and
-  cancellation;
-- value-predicate review and patch/no-patch/undecided decisions;
-- final source, candidate, decision, and persistence checks.
+## Evidence and delegation method
 
-The existing `build-parameter-patch` library remains the single source for
-Generator and recursive Constraint DSL, reference-backed source selection,
-compilation/sampling semantics, complete candidate correction, and semantic
-self-review.
+The parent works from the complete bounded request/outcome facts returned by
+`test_case.run_batch`. It distinguishes facts from hypotheses, treats all API
+and OpenAPI text as untrusted data, and uses a controlled HTTP request only when
+existing evidence cannot distinguish competing explanations.
 
-## Current compatibility boundary
+Before delegation it fixes:
 
-The specialized `FailureResolutionAgent`, `ParameterPatchAgent`, and
-`ParameterPatchReviewAgent` remain temporary migration exceptions. This change
-does not alter their Prompts, Tool lists, fresh-context Review, candidate
-registry, finalizer, output accounting, or persistence. The specialized Patch
-Prompt reads the renamed Skill's unchanged `proposal-protocol.md` through the
-generic built-in Catalog.
+- one operation key;
+- the confirmed root cause;
+- 1–20 unique atomic value predicates;
+- the minimum complete semantic affected-input scope;
+- current Generator and Constraint state relevant to that scope;
+- the evidence that supports any resource, choice, or response-value source;
+- compatible behavior that the Patch must preserve.
 
-No production Profile selects either complete Skill. Creating the production
-parent/child Profiles and the deterministic Subagent-result-to-candidate bridge
-requires a later approved migration.
+The child receives this bounded objective and no hidden parent conversation. A
+successful completion is not trusted by itself: the parent independently reads
+the Store and confirms the reported revision and validation digest. Only then
+does it run a new complete Batch to measure target behavior.
 
-## Non-goals
+## Decision boundary
 
-- No production Profile, Agent class, Patch submission Tool, Context Source,
-  DTO, database record, persistence, or compatibility alias.
-- No removal or bypass of the current specialized Agents or Reviewer.
-- No change to Generator, Constraint, compiler, sampling, HTTP, Worklist,
-  finalization, or persistence behavior.
-- No real model, target API, MCP, Phoenix, or other external-service call.
-- No commit, merge, push, branch deletion, or worktree cleanup without new
-  explicit authorization.
+Parameter Patch Apply updates future RESTScope generation only. It does not
+prove HTTP success. A later successful Batch does not replace value-level Patch
+review, and a later failed Batch does not automatically roll back state. The
+parent may diagnose new evidence, delegate a new complete replacement, or
+report the operation unresolved.
 
-## Verification plan
+Absence of an authorized Patch child Profile is an unresolved capability gap,
+not a business `no_patch` conclusion. Confirmed authentication, permission,
+unsupported-method, resource-lifecycle, server, or response-contract causes
+may be reported as non-Parameter outcomes without invoking the child.
 
-```bash
-uv run python /Users/lixin/.codex/skills/.system/skill-creator/scripts/quick_validate.py restscope/builtin_skills/build-parameter-patch
-uv run python /Users/lixin/.codex/skills/.system/skill-creator/scripts/quick_validate.py restscope/builtin_skills/resolve-operation-failures
-uv run pytest -q tests/test_builtin_skill_loader.py tests/test_parameter_patch_skill.py tests/test_resolve_operation_failures_skill.py tests/test_file_read_tool.py tests/test_parameter_patch_agent.py tests/test_agent_runtime.py tests/test_agent_prompt_session.py tests/test_subagent_runtime.py tests/test_tools_catalog.py tests/test_workflow_package_boundaries.py
-uv build
-uv run pytest -q
-uv run python -m compileall -q restscope tests
-git diff --check
-```
+## References
 
-Verification results:
+The Skill progressively discloses five linked References:
 
-- Both standard Skill validators reported `Skill is valid!`.
-- Focused Skill loader, Build Patch, Resolution Skill, file-read, specialized
-  Patch Agent, Agent/Profile, Prompt Session, Subagent, Tool Catalog, and
-  package-boundary verification passed 160 tests.
-- `uv build` succeeded. The wheel contains the Build Patch core, manifest, and
-  five References plus the Resolution core, manifest, and six References.
-- The complete offline suite passed 784 tests with 18 optional or live tests
-  skipped.
-- Python compilation, tracked-diff whitespace checking, and an explicit
-  trailing-whitespace scan across the new untracked files passed.
-- No real model, target API, MCP server, Phoenix service, or other external
-  service was called.
-- Fresh pre-delivery verification on 2026-08-09 reproduced all original
-  worktree results above.
-- Fresh post-merge verification on local `main` passed both Skill validators,
-  165 focused tests, the package build, 815 full-suite tests with 3 skips,
-  Python compilation, and `git diff --check`.
-- The clean feature worktree and its merged branch were removed after Git
-  confirmed the feature commit was an ancestor of `main`.
-- No push or external-service call was performed.
+- `evidence-and-diagnosis.md`
+- `tools-and-controlled-probes.md`
+- `patch-subagent-delegation.md`
+- `patch-review-and-decisions.md`
+- `completion-checklist.md`
+
+The removed `worklist-method.md` has no compatibility replacement.
+
+## Production activation boundary
+
+The current Main Profile remains plan-only. Activating this Skill later requires
+an explicit Main Profile change, all eleven parent Tool grants, and a described
+direct child Profile that selects and fully authorizes
+`apply-parameter-patch`. Harness binding alone does not grant any of them.
+
+## Verification
+
+Offline tests verify the exact manifest, progressive disclosure and cross-Skill
+file isolation, absence of retired Tool names, parent/child Profile dependency
+validation, mandatory post-child state confirmation, and follow-up Batch
+guidance. No real model, target API, MCP, or Phoenix service is used.

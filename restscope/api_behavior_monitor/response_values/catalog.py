@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 
@@ -250,6 +250,69 @@ class ResponseValueCatalog:
                 )
             uow.commit()
             return monitor, persisted
+
+    def register_many_with_backfill(
+        self,
+        registrations: list[
+            tuple[ResponseValueCatalogRegistration, list[ResponseValueSource]]
+        ],
+    ) -> list[
+        tuple[ResponseValueMonitorRecord, list[PersistedResponseValueSource]]
+    ]:
+        """Register several consumer pools in one all-or-nothing transaction.
+
+        Parameter Patch uses this Interface so a multi-input Patch cannot leave
+        only some response-value sources durable when a later source has lost
+        its compatible historical values.
+        """
+        with self.unit_of_work_factory() as uow:
+            now = _utc_now()
+            results: list[
+                tuple[ResponseValueMonitorRecord, list[PersistedResponseValueSource]]
+            ] = []
+            for offset, (registration, sources) in enumerate(registrations):
+                item_now = now + timedelta(microseconds=offset)
+                monitor = uow.response_values.ensure_monitor(
+                    registration,
+                    now=item_now,
+                )
+                persisted = uow.response_values.add_sources(
+                    monitor.value_name,
+                    sources,
+                    now=item_now,
+                )
+                historical_values: list[object] = []
+                for source in sources:
+                    historical_values.extend(
+                        uow.response_values.historical_values_for_source(
+                            source,
+                            limit=100,
+                        )
+                    )
+                compatible = [
+                    value
+                    for value in historical_values
+                    if _value_matches_expected_type(
+                        registration.expected_type,
+                        value,
+                    )
+                ]
+                if not compatible:
+                    raise ValueError(
+                        "Selected response sources have no compatible values"
+                    )
+                uow.response_values.record_values(
+                    monitor.value_name,
+                    compatible,
+                    now=item_now,
+                )
+                if not uow.response_values.values_for(monitor.value_name, limit=1):
+                    raise ValueError(
+                        "Response-value registration produced an empty pool"
+                    )
+                results.append((monitor, persisted))
+            uow.commit()
+            return results
 
     def list_sources_for_operation(
         self,

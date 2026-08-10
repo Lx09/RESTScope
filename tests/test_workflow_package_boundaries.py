@@ -12,7 +12,6 @@ import sys
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "restscope"
-OPERATION_SMOKE_ROOT = SOURCE_ROOT / "operation_smoke"
 REPOSITORY_ROOT = SOURCE_ROOT.parent
 CURRENT_DOCUMENTS = (
     REPOSITORY_ROOT / "AGENTS.md",
@@ -84,6 +83,7 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
     )
     assert all(not (SOURCE_ROOT / name).exists() for name in retired)
     assert not (SOURCE_ROOT / "catalog").exists()
+    assert not (SOURCE_ROOT / "operation_smoke").exists()
     assert not (SOURCE_ROOT / "harness" / "testing").exists()
     assert not (SOURCE_ROOT / "skills" / "registry.py").exists()
     assert not (SOURCE_ROOT / "api_behavior_monitor" / "prompts.py").exists()
@@ -96,9 +96,7 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
         SOURCE_ROOT / "tools" / "openapi" / "input_queries.py",
         SOURCE_ROOT / "tools" / "openapi" / "response_queries.py",
         SOURCE_ROOT / "tools" / "openapi" / "observed_queries.py",
-        SOURCE_ROOT / "tools" / "test_case" / "parameter_queries.py",
-        SOURCE_ROOT / "tools" / "test_case" / "response_queries.py",
-        SOURCE_ROOT / "tools" / "test_case" / "failure_query.py",
+        SOURCE_ROOT / "tools" / "test_case" / "run_batch.py",
         SOURCE_ROOT
         / "api_behavior_monitor"
         / "resource_identifiers"
@@ -194,8 +192,8 @@ def test_core_runtime_language_has_explicit_global_packages() -> None:
         assert importlib.util.find_spec(f"restscope.{retired_package}") is None
 
 
-def test_only_the_documented_transitional_named_agents_remain() -> None:
-    """Scenario: this migration cannot accidentally add another domain Agent."""
+def test_only_the_generic_agent_remains() -> None:
+    """Scenario: retired workflow roles cannot recreate named Agent classes."""
     found: set[str] = set()
     for path in SOURCE_ROOT.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -204,27 +202,7 @@ def test_only_the_documented_transitional_named_agents_remain() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.ClassDef) and node.name.endswith("Agent")
         )
-    assert found == {
-        "FailureResolutionAgent",
-        "FailureResolutionCompactAgent",
-        "ParameterPatchAgent",
-        "ParameterPatchReviewAgent",
-        "Agent",
-    }
-
-
-def test_transitional_agents_declare_explicit_profiles() -> None:
-    """Scenario: every temporary named Agent makes its current access explicit."""
-    agent_modules = (
-        OPERATION_SMOKE_ROOT / "failure_resolution" / "agent.py",
-        OPERATION_SMOKE_ROOT / "failure_resolution" / "compact" / "agent.py",
-        OPERATION_SMOKE_ROOT / "parameter_patch" / "agent.py",
-        OPERATION_SMOKE_ROOT / "parameter_patch" / "review" / "agent.py",
-    )
-
-    for path in agent_modules:
-        source = path.read_text(encoding="utf-8")
-        assert "AgentProfile(" in source, f"missing Agent Profile: {path}"
+    assert found == {"Agent"}
 
 
 def test_owned_tool_specs_live_only_in_global_tool_modules() -> None:
@@ -324,19 +302,8 @@ def test_main_agent_replacement_removes_run_harness_and_graph_dependencies() -> 
 def test_workflow_facades_export_only_the_approved_interfaces() -> None:
     """Scenario: callers see workflow interfaces rather than implementation roles."""
     import restscope.api_behavior_monitor as behavior_monitor
-    import restscope.operation_smoke as operation_smoke
 
-    assert set(operation_smoke.__all__) == {
-        "BehaviorMonitorReferenceValues",
-        "OperationSmokeCoordinator",
-        "OperationSmokeRequest",
-        "OperationSmokeResult",
-        "ResolutionItemSummary",
-        "ResolutionPatchSummary",
-        "SmokeBatchRunner",
-        "SmokeRoundSummary",
-        "build_operation_smoke_coordinator",
-    }
+    assert importlib.util.find_spec("restscope.operation_smoke") is None
     assert set(behavior_monitor.__all__) == {
         "APIBehaviorMonitorCoordinator",
         "APIBehaviorMonitorError",
@@ -390,28 +357,6 @@ def test_new_subject_facades_expose_only_the_approved_shared_interfaces() -> Non
         "ToolSubject",
         "builtin_tool_catalog",
     }
-
-
-def test_cross_role_imports_use_the_target_role_facade() -> None:
-    """Scenario: one Agent never reaches into another Agent's implementation file."""
-    role_names = {
-        "failure_resolution",
-        "parameter_patch",
-    }
-    violations: list[str] = []
-
-    for path in OPERATION_SMOKE_ROOT.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or not node.module:
-                continue
-            parts = node.module.split(".")
-            if parts[:2] != ["restscope", "operation_smoke"]:
-                continue
-            if len(parts) > 3 and parts[2] in role_names:
-                violations.append(f"{path.name}:{node.lineno} imports {node.module}")
-
-    assert violations == []
 
 
 def test_retired_operation_test_contracts_remain_absent() -> None:

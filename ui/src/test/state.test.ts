@@ -19,7 +19,7 @@ describe("observerReducer", () => {
     let state = observerReducer(initialObserverState, {
       type: "snapshot",
       snapshot: {
-        schema_version: 2,
+        schema_version: 3,
         run: null,
         events: [],
         todo: todo(6, "Probe endpoint"),
@@ -30,7 +30,7 @@ describe("observerReducer", () => {
     state = observerReducer(state, {
       type: "snapshot",
       snapshot: {
-        schema_version: 2,
+        schema_version: 3,
         run: null,
         events: [],
         todo: todo(5, "Read schema"),
@@ -74,7 +74,7 @@ describe("observerReducer", () => {
     const hydrated = observerReducer(state, {
       type: "snapshot",
       snapshot: {
-        schema_version: 2,
+        schema_version: 3,
         run,
         events: [],
         todo: { ...currentTodo, revision: 5 },
@@ -142,7 +142,7 @@ describe("observerReducer", () => {
     let state = observerReducer(initialObserverState, {
       type: "snapshot",
       snapshot: {
-        schema_version: 2,
+        schema_version: 3,
         run: null,
         events: [later, earlier],
         todo: null,

@@ -1,45 +1,19 @@
 # Completion checklist
 
-Before requesting finalization, verify every item below.
+Before completing, confirm:
 
-## Source and worklist integrity
-
-- Every initial `E* -> TC*` association appears in at least one worklist item.
-- Every reference was issued by the current session.
-- Stable `WI-*` identities survived merges, splits, reopening, and reordering.
-- Every decided item has one causal root cause.
-- Undecided items remain explicitly undecided and are not persisted as terminal
-  results.
-
-## Parameter repair integrity
-
-- Every Parameter root cause has 1–20 unique atomic value or presence
-  predicates.
-- Every Patch delegation fixed the root cause and smallest complete affected
-  input scope before the child started.
-- Each affected input has relevant Parameter history evidence.
-- Every selected Patch is a real registered `P*`, not Subagent text.
-- Selected candidates are unique and their direct or transitive Constraint
-  scopes do not overlap.
-- Final Generator and Constraint state satisfies every predicate while
-  preserving compatible unaffected behavior.
-- Samples are only witnesses and contain no counterexample.
-
-## Decision and persistence integrity
-
-- Every `apply_patch` item lists and selects the same registered candidate.
-- Every `no_patch` item selects no candidate and states a proven terminal
-  reason.
-- Lack of evidence, child access, or candidate-registration capability remains
-  undecided.
-- Worklist text contains no request, response, Schema, Generator, Constraint,
-  candidate, sample, history DTO, Tool result, database row, or Subagent
-  completion.
-- Drafts, rejected or unselected candidates, samples, probes, and conversation
-  history are not treated as persisted evidence.
-
-The Harness owns final reference validation, candidate compatibility checks,
-fresh compilation and sampling, and atomic persistence. If it rejects
-finalization, continue in the same Agent session and revise the worklist; do not
-assume any partial write occurred. Only a later complete Smoke Batch measures
-the applied Patch against the target API.
+- every original inline Batch case is accounted for;
+- every decided cause is explicit and evidence-backed;
+- every parameter cause has 1–20 atomic value predicates;
+- every Patch delegation fixed the operation, root cause, predicates, and
+  complete affected-input boundary before the child started;
+- no overlapping Patch Subagents ran concurrently;
+- no child completion was accepted without a fresh Store read;
+- a confirmed Apply was followed by a new complete Batch;
+- Apply success was not described as target success;
+- Batch success was not substituted for Generator-domain/Constraint proof;
+- no Test Case, Failure, Worklist, candidate, sample, Probe, Plan, conversation,
+  or request-generation history was persisted;
+- insufficient capability or evidence remains `unresolved`, not disguised as
+  `no safe parameter patch`;
+- mutating Probes and Batches are reported as possible target state changes.

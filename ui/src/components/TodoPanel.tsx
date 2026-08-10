@@ -1,6 +1,6 @@
 /** Render the Main Agent's latest generic Plan as a read-only Todo list.
  *
- * The panel receives the already-redacted schema-v2 Todo projection and never
+ * The panel receives the already-redacted schema-v3 Todo projection and never
  * mutates Agent state. It is shared by the live and historical Drawers; the
  * historical label makes frozen browser data explicit to keyboard and visual
  * users.

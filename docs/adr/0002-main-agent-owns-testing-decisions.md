@@ -4,6 +4,11 @@ status: accepted
 
 # Let the Main Agent own API-testing decisions
 
+The ownership decision remains active. Its final paragraph's run-local Test
+Case/Probe description is superseded by
+[ADR 0003](0003-retire-operation-smoke-and-apply-parameter-patches.md), which
+uses inline Batch evidence and an App-lifetime generation Store.
+
 RESTScope's product entry uses its single long-lived Main Agent to decide which
 Skills, Tools, or Subagents to use, including ordering, retries, and completion.
 The Main Profile supplies the App-lifetime mission; startup does not create a

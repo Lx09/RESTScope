@@ -139,43 +139,26 @@ explicit project decision:
   OpenAPI and append-only response change events. The response check registry
   remains App-lifetime only. It must not persist raw responses, LLM reasoning,
   plans, queues, general Agent memory, or recovery snapshots.
-- Operation Smoke Memory is a second narrow exception approved for the current
-  App lifecycle. It may persist stable per-operation Failures, append-only
-  terminal Resolution Attempts, validated input attribution, current Constraints,
-  and deterministic Generator/Constraint change events. It must not persist raw Batches,
-  response bodies, HTTP or LLM transcripts, rejected Patch candidates, plans,
-  queues, or a permanent `resolved` flag. Failure Resolution receives a
-  read-only Parameter memory tool. Deterministic runtime folds exact duplicate
-  messages into session-local `E*` sources; one continuous Agent then owns
-  semantic grouping, investigation, worklist rewrites, root cause, candidate
-  selection, and completion. Its reference-only worklist, draft progress, and
-  unselected candidates are never persisted. The Test Case Catalog stores every
-  Batch and Resolution Probe case only until `OperationSmokeCoordinator.run`
-  returns; it must never be persisted.
-- The Live Observer browser history is a third narrow exception approved only
+- Request Generation configuration is an App-lifetime in-memory store, not a
+  persistence exception. It keeps one revisioned Generator/Constraint state per
+  operation. A validated Parameter Patch replaces that state atomically, and a
+  Batch freezes one complete revision before generating requests. It must not
+  persist Patch history, samples, Failures, Agent reasoning, or rollback state.
+- The Live Observer browser history is a second narrow exception approved only
   for local UI testing and recovery. The React page may persist the latest five
-  complete schema-v2 snapshots in same-origin IndexedDB, including the
+  complete schema-v3 snapshots in same-origin IndexedDB, including the
   already-redacted raw Provider Reasoning, Agent messages, target
-  Authorization/Cookie values, Tool details, HTTP exchanges, Smoke Batches,
-  Subagent relationships, and the Main Agent's generic Plan projection as Todo
-  delivered to that browser. Failure Resolution's private Worklist remains
-  ordinary Tool detail and is not promoted into floating page state.
+  Authorization/Cookie values, Tool details, HTTP exchanges, Subagent
+  relationships, and the Main Agent's generic Plan projection as Todo delivered
+  to that browser. Batch execution and Parameter Patch application appear as
+  ordinary Tool cards rather than special workflow events.
   It must not add a backend write API, SQLite record, cross-origin sync, or
   runtime input. Clearing browser site data removes this history; the App and
   workflows never read it, so it cannot resume or influence a test.
-- Failure Resolution's current-operation HTTP Probe is an operation-scoped view of
-  the global `restscope.http.request` tool. It remains available for every
-  supported method, including POST, PUT, PATCH, and DELETE. The Probe must use
-  the exact current operation method and a concrete path matching that
-  operation's template; runtime code owns authentication and records every
-  attempted Probe in the run-local Test Case Catalog. Mutating Probe effects
-  are not rolled back and must be reported as target state changes. Tool
-  availability does not replace the required authorization for a live external
-  action.
 - Do not reintroduce a database-backed Planner, static operation graph, or
-  plan-first execution flow without a new explicit user decision supported by
-  current evidence. Operation Smoke Memory is evidence available on demand to
-  Resolution, not a persisted test plan or an input to exact message folding.
+  plan-first execution flow, persistent Operation Smoke Memory, Patch candidate
+  registry, or domain-specific Agent class without a new explicit user decision
+  supported by current evidence.
 
 This architecture is deliberately revisable, not a claim that the present MVP
 is final. Exploration should change the system through small, evidence-backed
@@ -205,9 +188,8 @@ These five terms are RESTScope's core runtime language and hard constraints:
   complete Profile graph once and constructs Agents through
   `start_main_agent`; do not expose a separate resolve-and-assemble seam.
   A Subagent receives no hidden Main-Agent state and returns only a structured,
-  bounded result. The current Failure Resolution, Compact, Parameter Patch,
-  and Patch Review Agent classes are temporary migration exceptions; do not
-  copy their class-per-role structure into new code. Bounded Profile
+  bounded result. Failure Resolution and Parameter Patch methods now live in
+  standard Skills; do not reintroduce the retired class-per-role Agents. Bounded Profile
   `instructions` are stable guidance for the Agent itself and remain distinct
   from the parent-visible `description`.
 - **Skill** is reusable instruction and method knowledge. It does not execute
@@ -218,7 +200,8 @@ These five terms are RESTScope's core runtime language and hard constraints:
   `skill.read` call.
 - **Tool** is one model-callable domain behavior. Every RESTScope-owned Tool
   lives under `restscope.tools`, grouped by the thing it handles, such as HTTP,
-  OpenAPI, Resource, Test Case, Worklist, or Parameter. Its Tool Module owns the
+  OpenAPI, Resource, Test Case, Request Generation, Parameter Patch, Plan, or
+  Skill. Its Tool Module owns the
   complete ToolSpec, execution Adapter, safe failure translation, output
   bounding, and directly supporting presentation code. Workflows and Harnesses
   may inject state but must not define private Tool contracts.
@@ -226,10 +209,11 @@ These five terms are RESTScope's core runtime language and hard constraints:
   validation, dependency injection, session state, Tool execution, output
   validation, tracing, and logs. A Harness must not make an LLM-owned domain
   decision. The Generator and Constraint language, compilation, solving,
-  schema snapshots, serialization, and mutable generation configuration belong
-  to `restscope.request_generation`. The Harness owns deterministic operation
-  execution, run-local Test Cases, Probe evidence, and the mechanical injection
-  of those capabilities into authorized Tools. The retired run-scoped FIFO and
+  schema snapshots, serialization, validation, and mutable generation
+  configuration belong to `restscope.request_generation`. The Harness owns
+  deterministic operation execution and the mechanical injection of those
+  capabilities into authorized Tools. `test_case.run_batch` returns bounded
+  inline evidence and creates no run-local registry. The retired run-scoped FIFO and
   retry scheduler must not be restored; the blocking Main loop owns any future
   semantic scheduling through explicitly granted Skills and Tools.
 - Built-in Tools form one immutable global Catalog. Runtime-discovered MCP Tools
@@ -246,8 +230,7 @@ These five terms are RESTScope's core runtime language and hard constraints:
 - `plan.read` and `plan.update` are an optional paired Profile grant for one
   Agent's private task Plan. The Harness creates a separate in-memory Plan for
   every Main Agent and Subagent session. Plans are not shared between Agents,
-  persisted, exposed as scheduler state, or substituted for the domain-specific
-  Failure Resolution Worklist.
+  persisted, or exposed as scheduler state.
 - Main and child Agents share only deterministic tree control: weighted model
   budget, open/active slots, cancellation, tracing parentage, and bounded
   results. They do not share hidden conversation history. Model input is

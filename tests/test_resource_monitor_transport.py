@@ -26,12 +26,6 @@ def _testing_service(
 ):
     import httpx
 
-    from restscope.db import (
-        Base,
-        SqlAlchemyGeneratorConfigUnitOfWork,
-        create_engine_from_url,
-        make_session_factory,
-    )
     from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import RequestGenerationConfigStore
@@ -70,11 +64,7 @@ def _testing_service(
             },
         }
     )
-    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'transport.sqlite'}")
-    Base.metadata.create_all(engine)
-    catalog = RequestGenerationConfigStore(
-        lambda: SqlAlchemyGeneratorConfigUnitOfWork(make_session_factory(engine))
-    )
+    catalog = RequestGenerationConfigStore()
     assert catalog.initialize_once(ir) is True
     transport = TargetHTTPTransport(
         client_factory=lambda **kwargs: httpx.Client(
@@ -105,7 +95,7 @@ def test_operation_testing_supplies_known_operation_and_body_to_processor(
         response_content=b'{"id":7}',
     )
 
-    batch = service.run_smoke_batch(
+    batch = service.run_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -204,129 +194,6 @@ def test_processor_warning_does_not_replace_raw_http_result(tmp_path: Path) -> N
     assert processor.calls[0][1].ir is ir
 
 
-def test_operation_smoke_probe_pins_exact_operation_context_without_leaking(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that operation smoke probe pins exact operation context without leaking."""
-    del tmp_path
-    import httpx
-
-    from restscope.tools.http import CurrentOperationHTTPProbe
-    from restscope.harness.operation_testing.test_case_catalog import TestCaseCatalog
-    from restscope.harness import build_harness
-    from restscope.tools.context import ToolContext
-    from restscope.tools.http import http_request_tool_spec
-    from restscope.target_http import TargetHTTPTransport
-    from restscope.llm import ToolCall
-    from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation.snapshot import build_initial_operation_config
-    from restscope.request_generation import build_semantic_input_map
-
-    processor = CapturingProcessor()
-    transport = TargetHTTPTransport(
-        client_factory=lambda **kwargs: httpx.Client(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(
-                    200,
-                    headers={"Content-Type": "application/json"},
-                    content=b'{"id":7}',
-                )
-            ),
-            **kwargs,
-        ),
-        response_processor=processor,
-    )
-    runtime = build_harness(target_http_transport=transport)
-    spec = http_request_tool_spec()
-    ir = OpenAPIParser.parse(
-        {
-            "openapi": "3.0.3",
-            "info": {"title": "route collision", "version": "1"},
-            "paths": {
-                "/users/me": {
-                    "get": {"responses": {"200": {"description": "ok"}}}
-                },
-                "/users/{userId}": {
-                    "get": {
-                        "parameters": [
-                            {
-                                "name": "userId",
-                                "in": "path",
-                                "required": True,
-                                "schema": {"type": "string"},
-                            }
-                        ],
-                        "responses": {"200": {"description": "ok"}},
-                    }
-                },
-            },
-        }
-    )
-    runtime.bind_context(
-        ToolContext(
-            ir=ir,
-            baseline_schema_source={
-                "kind": "inline",
-                "format": "json",
-                "content": "{}",
-            },
-            base_url="https://api.example.test",
-        )
-    )
-    config = build_initial_operation_config(
-        ir.operations["GET /users/{userId}"]
-    )
-    probe = CurrentOperationHTTPProbe(
-        http_tool=runtime.target_http_tool,
-        context_provider=runtime.require_context,
-    )
-
-    result = probe.execute(
-        config=config,
-        tool_call=ToolCall(
-            id="scoped",
-            name="restscope.http.request",
-            arguments={"method": "GET", "path": "/users/me"},
-        ),
-    )
-    unscoped = runtime.target_http_tool.execute(
-        runtime.require_context(),
-        method="GET",
-        path="/users/me",
-    )
-
-    assert result.status == "succeeded"
-    assert unscoped["structured"]["status_code"] == 200
-    scoped_context = processor.calls[0][1]
-    assert scoped_context.operation_key == "GET /users/{userId}"
-    assert scoped_context.operation_method == "GET"
-    assert scoped_context.operation_path == "/users/{userId}"
-    assert processor.calls[1][1].operation_key is None
-    assert "operation_key" not in spec.input_schema["properties"]
-
-
-def test_target_operation_scope_resets_after_exception() -> None:
-    """Scenario: verify that target operation scope resets after exception."""
-    from restscope.target_http import (
-        TargetOperationIdentity,
-        current_target_operation_identity,
-        target_operation_scope,
-    )
-
-    identity = TargetOperationIdentity(
-        operation_key="GET /users/{userId}",
-        method="GET",
-        path="/users/{userId}",
-    )
-
-    with pytest.raises(RuntimeError, match="probe failed"):
-        with target_operation_scope(identity):
-            assert current_target_operation_identity() == identity
-            raise RuntimeError("probe failed")
-
-    assert current_target_operation_identity() is None
-
-
 def test_operation_testing_truncates_monitor_body_at_one_mib(
     tmp_path: Path,
 ) -> None:
@@ -347,7 +214,7 @@ def test_operation_testing_truncates_monitor_body_at_one_mib(
         response_content=content,
     )
 
-    batch = service.run_smoke_batch(
+    batch = service.run_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -382,7 +249,7 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
         status_code=404,
     )
 
-    batch = service.run_smoke_batch(
+    batch = service.run_batch(
         ToolContext(
             ir=ir,
             baseline_schema_source={
@@ -398,7 +265,8 @@ def test_operation_testing_buffers_and_monitors_non_2xx_response_once(
 
     assert batch.cases[0].failure is not None
     assert batch.cases[0].failure.status_code == 404
-    assert batch.cases[0].response_body == {"error": "missing"}
+    assert not hasattr(batch.cases[0], "response_body")
+    assert batch.cases[0].failure.messages == ["HTTP 404: missing"]
     assert len(processor.calls) == 1
     observation, context = processor.calls[0]
     assert observation.status_code == 404
@@ -811,7 +679,6 @@ def test_default_app_uses_one_monitored_transport_without_global_model_tools(
     """The App shares transport code but creates no global model tool box."""
     from restscope import RESTScopeApp
     from restscope.config import RESTScopeConfig
-    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -820,7 +687,6 @@ def test_default_app_uses_one_monitored_transport_without_global_model_tools(
     )
     app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
     )
     try:
         runtime = app.harness_runtime

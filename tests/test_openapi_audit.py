@@ -34,16 +34,12 @@ def test_app_exports_full_current_document_and_filterable_change_events(
     from restscope import RESTScopeApp
     from restscope.openapi_parser import OpenAPIParser
     from restscope.config import DBConfig, RESTScopeConfig
-    from tests._operation_smoke_coordinator_stub import PassingOperationSmokeCoordinator
 
     config = replace(
         RESTScopeConfig.from_environment(),
         db=DBConfig(url=f"sqlite:///{tmp_path / 'audit.sqlite'}"),
     )
-    app = RESTScopeApp.from_config(
-        config,
-        operation_smoke_coordinator=PassingOperationSmokeCoordinator(),
-    )
+    app = RESTScopeApp.from_config(config)
     try:
         context = app.initialize(
             schema_source={

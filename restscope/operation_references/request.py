@@ -1,9 +1,9 @@
 """Define semantic request-input references shared across runtime workflows.
 
-OpenAPI lookup and deterministic testing build references from different
-representations of the same operation.  The Test Case Catalog then uses those
-references to read structured request JSON and return small evidence fragments.
-This pure in-memory Module owns that common handle grammar and JSON traversal;
+OpenAPI lookup, Request Generation, and deterministic Batch execution build
+references from different representations of the same operation. Tool results
+use those handles to return bounded semantic state and inline request evidence.
+This pure in-memory Module owns the common handle grammar and JSON traversal;
 it does not own an OpenAPI document, Generator configuration, Catalog, Agent,
 tool registration, or persistent state.
 """

@@ -17,7 +17,7 @@ import { makeEvent } from "./fixtures";
 
 function makeSnapshot(runId: string, cursor = 1): ObserverSnapshot {
   return {
-    schema_version: 2,
+    schema_version: 3,
     run: {
       run_id: runId,
       status: "running",
@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 describe("RunHistoryStore", () => {
-  it("clears every canvas-era v1 record during the v2 database upgrade", async () => {
+  it("clears every pre-v3 record during the database upgrade", async () => {
     const factory = new FakeIDBFactory();
     const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = factory.open(RUN_HISTORY_DATABASE_NAME, 1);

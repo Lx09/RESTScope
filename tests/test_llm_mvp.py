@@ -39,8 +39,8 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
     assert request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
 
 
-def test_operation_smoke_phases_select_independent_models() -> None:
-    """Scenario: verify that operation smoke phases select independent models."""
+def test_model_selector_exposes_only_generic_thinking_and_fast_roles() -> None:
+    """Retired named Agent roles no longer influence model selection."""
     from restscope.llm import LLMModelConfig, ModelSelector
 
     selector = ModelSelector(
@@ -59,16 +59,13 @@ def test_operation_smoke_phases_select_independent_models() -> None:
     )
 
     for role, expected_model in (
-        ("operation_smoke_failure_resolution", "thinking-model"),
-        ("operation_smoke_failure_resolution_compact", "fast-model"),
-        ("parameter_patch_agent", "fast-model"),
-        ("parameter_patch_review_agent", "fast-model"),
+        ("planner", "thinking-model"),
+        ("api_behavior_monitor", "fast-model"),
     ):
         selected = selector.select(role)
         assert selected.model == expected_model
-        assert selected.temperature == 0
     with pytest.raises(ValueError, match="Unsupported LLM role"):
-        selector.select("operation_smoke_patch_grouping")
+        selector.select("parameter_patch_agent")
 
 
 def test_llm_model_config_uses_large_context_defaults() -> None:
@@ -76,7 +73,7 @@ def test_llm_model_config_uses_large_context_defaults() -> None:
     from restscope.llm import LLMModelConfig
 
     model = LLMModelConfig(
-        role="operation_smoke_failure_resolution",
+        role="thinking",
         provider="stub",
         model="think",
     )

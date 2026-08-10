@@ -536,8 +536,6 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
     """Every current decision site shares one safe message-construction path."""
     root = Path(__file__).parents[1]
     callers = (
-        root / "restscope/operation_smoke/failure_resolution/agent.py",
-        root / "restscope/operation_smoke/parameter_patch/agent.py",
         root / "restscope/api_behavior_monitor/resource_identifiers/tracker.py",
         root / "restscope/api_behavior_monitor/response_values/tracker.py",
     )
@@ -548,14 +546,6 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
         assert "messages_for_request(" in source, caller
         assert "fit_prompt_context" not in source, caller
         assert "fit_message_context" not in source, caller
-
-    compact_agent = (
-        root
-        / "restscope/operation_smoke/failure_resolution/compact/agent.py"
-    ).read_text(encoding="utf-8")
-    assert "AgentContext" in compact_agent
-    assert "messages_for_compaction(" in compact_agent
-
 
 def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:
     """OpenAPI descriptions stay encoded inside one explicitly untrusted section."""

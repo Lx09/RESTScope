@@ -2,6 +2,10 @@
 
 Status: Implemented and verified
 
+Subsequent change: ADR 0003 retires the temporary Operation Smoke and named
+Agent Modules that this audit intentionally left in place. Counts and dependency
+observations below describe the recorded audit baseline, not the current tree.
+
 Baseline commit: `9f3e50e55f48a7fda85d9d4e7f89304efa33989c`
 
 ## Objective
