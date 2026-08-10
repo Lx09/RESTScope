@@ -31,9 +31,12 @@ The deterministic validator:
 8. Replaces every old Constraint directly or transitively intersecting
    `affected_inputs`, even when the new Constraint list is empty, while
    preserving unrelated Constraints.
-9. Generates deterministic samples and returns a digest binding the revision,
-   state digest, semantic Patch, reference provenance, final state, seed,
-   sample count, and witnesses.
+9. Derives the complete final reference bindings. Exact response producer
+   identity participates in final state identity, so a source-only replacement
+   is a real revision change.
+10. Generates deterministic samples and returns a digest binding the revision,
+    state digest, semantic Patch, reference provenance, final state, seed,
+    sample count, and witnesses.
 
 ## How values are generated
 

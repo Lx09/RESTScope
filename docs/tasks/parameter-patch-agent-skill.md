@@ -43,7 +43,8 @@ predicates, and minimum complete affected-input scope. It then:
    variants, references, Constraint closure, and sample witnesses;
 5. applies only the exact validated request and digest;
 6. reads state again to confirm the revision, digest, Generators, and
-   Constraints.
+   Constraints, exact reference bindings, and intentional response-pool
+   removals.
 
 Compilation success and finite samples are necessary checks, not semantic
 proof. HTTP success and Failure disappearance are also not substitutes for
@@ -72,12 +73,13 @@ Python adapter, `generate_parameter_patch`, `parameter_patch.read_candidate`,
 candidate `P*` registry, Finalizer, or database-backed Generator state. The
 generic Subagent using this Skill is responsible for the complete bounded
 workflow, while deterministic Tools own compilation, sampling, locking,
-reference registration, and state mutation.
+exact response-pool replacement, and state mutation.
 
 ## Verification
 
 Offline tests cover standard Skill discovery and progressive disclosure,
 semantic state closure, deterministic validation and digests, no-op and stale
 rejection, zero mutation on failure, concurrent apply conflicts, atomic
-reference registration, and post-apply state confirmation. No real model,
+reference replacement, rollback after durable commit failure, and post-apply
+state confirmation. No real model,
 target API, MCP, or Phoenix service is used.

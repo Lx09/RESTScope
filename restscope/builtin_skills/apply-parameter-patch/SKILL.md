@@ -67,7 +67,9 @@ runtime evidence.
    validated Patch, affected inputs, revision, digest, seed, and sample count.
 8. On a state conflict, read current state and reconsider; never replay an old
    digest. After success, read state again and verify the new revision, last
-   applied digest, complete Generators, and Constraints.
+   applied digest, complete Generators, Constraints, and exact reference
+   bindings. A changed `response_value` source is a complete replacement, not
+   an additional fallback source.
 
 Application changes only RESTScope's App-lifetime request-generation state. It
 does not send an HTTP request, validate the target API, or prove a business

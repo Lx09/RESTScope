@@ -36,6 +36,8 @@ from restscope.request_generation.generation import generate_test_case
 from restscope.request_generation.models import (
     GeneratedTestCase,
     PreparedTestRequest,
+    ResourceIdentifierGenerator,
+    ResponseValueGenerator,
 )
 from restscope.request_generation.ports import ReferenceValueProvider
 from restscope.request_generation.serialization import serialize_test_case
@@ -73,6 +75,20 @@ class TestingExecutionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class _FrozenReferenceValues:
+    """Serve immutable value pools captured with one Generation revision."""
+
+    def __init__(self, values: dict[str, tuple[object, ...]]) -> None:
+        self._values = values
+
+    def values_for(
+        self,
+        strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
+    ) -> tuple[object, ...]:
+        """Return the pool captured for this exact Generator identity."""
+        return self._values.get(_reference_key(strategy), ())
 
 
 class OperationTestingService:
@@ -184,7 +200,10 @@ class OperationTestingService:
                 "invalid_case_count",
                 "case_count must be between 1 and 5",
             )
-        generation_state = self.config_store.require_state(operation_key)
+        generation_state, frozen_references = self.config_store._snapshot_with(
+            operation_key,
+            self._capture_reference_values,
+        )
         config = generation_state.config
         operation = config.snapshot
         expressions = [
@@ -211,7 +230,7 @@ class OperationTestingService:
                     config,
                     run_seed=run_seed,
                     case_index=case_index,
-                    reference_values=self.reference_values,
+                    reference_values=frozen_references,
                     constraints=constraints,
                 )
                 request = serialize_test_case(operation, generated)
@@ -266,6 +285,23 @@ class OperationTestingService:
             seed=run_seed,
             cases=tuple(cases),
         )
+
+    def _capture_reference_values(self, state) -> _FrozenReferenceValues | None:
+        """Read every pool named by the frozen config once under its Store lock."""
+        if self.reference_values is None:
+            return None
+        captured: dict[str, tuple[object, ...]] = {}
+        for item in state.config.configs:
+            strategy = item.strategy
+            if not isinstance(
+                strategy,
+                ResourceIdentifierGenerator | ResponseValueGenerator,
+            ):
+                continue
+            key = _reference_key(strategy)
+            if key not in captured:
+                captured[key] = tuple(self.reference_values.values_for(strategy))
+        return _FrozenReferenceValues(captured)
 
     def _execute_case(
         self,
@@ -373,6 +409,15 @@ class OperationTestingService:
             request=catalog_request,
             failure=failure,
         )
+
+
+def _reference_key(
+    strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
+) -> str:
+    """Return a stable identity for a resource or response-value pool."""
+    if isinstance(strategy, ResourceIdentifierGenerator):
+        return f"resource:{strategy.resource}"
+    return f"response:{strategy.value_name}"
 
 
 def _catalog_request(generated: GeneratedTestCase) -> dict[str, Any]:

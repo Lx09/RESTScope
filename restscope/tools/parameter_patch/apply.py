@@ -14,10 +14,10 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from restscope.llm import ToolSpec
-from restscope.request_generation.patch_models import SemanticParameterPatch
-from restscope.request_generation.patch_validation import (
-    ParameterPatchRuntime,
+from restscope.request_generation.parameter_patch import (
+    RequestGenerationPatchRuntime,
     ParameterPatchValidationError,
+    SemanticParameterPatch,
 )
 from restscope.request_generation.store import GeneratorConfigError
 from restscope.tools.runtime import ToolBinding, ToolFailure
@@ -25,7 +25,7 @@ from restscope.tools.runtime import ToolBinding, ToolFailure
 
 PARAMETER_PATCH_APPLY_TOOL_NAME = "parameter_patch.apply"
 
-_ReferenceSummary = Annotated[
+_ReferenceBinding = Annotated[
     dict[str, Any],
     Field(description="One bounded canonical resource or response-value source summary."),
 ]
@@ -66,23 +66,23 @@ class ApplyParameterPatchOutput(BaseModel):
     affected_inputs: list[str]
     generator_change_count: int = Field(ge=0)
     constraint_change_count: int = Field(ge=0)
-    registered_reference_sources: list[_ReferenceSummary] = Field(
-        description="Bounded summaries of canonical or response-value sources registered during Apply."
+    final_reference_bindings: list[_ReferenceBinding] = Field(
+        description="Exact canonical-resource or response-producer bindings in the applied state."
     )
+    removed_response_value_inputs: list[str]
 
 
 class ParameterPatchApplyBackend:
     """Translate the mutating Tool call to the trusted Patch runtime."""
 
-    def __init__(self, runtime: ParameterPatchRuntime) -> None:
+    def __init__(self, runtime: RequestGenerationPatchRuntime) -> None:
         self.runtime = runtime
 
     def apply(self, **arguments: Any) -> dict[str, Any]:
         """Revalidate and apply one exact Patch or return a correctable error."""
         try:
             request = ApplyParameterPatchInput.model_validate(arguments)
-            previous = self.runtime.store.require_state(request.operation_key)
-            applied, validated, references = self.runtime.apply(
+            result = self.runtime.apply(
                 operation_key=request.operation_key,
                 expected_revision=request.expected_revision,
                 validation_digest=request.validation_digest,
@@ -91,32 +91,36 @@ class ParameterPatchApplyBackend:
                 seed=request.seed,
                 sample_count=request.sample_count,
             )
-            previous_configs = {
-                item.input_node_id: item for item in previous.config.configs
-            }
-            generator_changes = sum(
-                previous_configs.get(item.input_node_id) != item
-                for item in applied.config.configs
-            )
-            previous_constraints = {item.id: item for item in previous.constraints}
-            current_constraints = {item.id: item for item in applied.constraints}
-            constraint_changes = len(
-                {
-                    key
-                    for key in previous_constraints.keys() | current_constraints.keys()
-                    if previous_constraints.get(key) != current_constraints.get(key)
-                }
-            )
+            applied = result.state
+            validated = result.validated
             output = ApplyParameterPatchOutput(
                 operation_key=applied.config.operation_key,
-                previous_revision=previous.revision,
+                previous_revision=result.previous_revision,
                 current_revision=applied.revision,
                 validation_digest=validated.validation_digest,
                 state_digest=applied.state_digest,
                 affected_inputs=list(validated.affected_inputs),
-                generator_change_count=generator_changes,
-                constraint_change_count=constraint_changes,
-                registered_reference_sources=references,
+                generator_change_count=result.generator_change_count,
+                constraint_change_count=result.constraint_change_count,
+                final_reference_bindings=[
+                    {
+                        key: value
+                        for key, value in {
+                            "input": item.input,
+                            "kind": item.kind,
+                            "canonical_resource": item.canonical_resource,
+                            "producer_operation_key": item.producer_operation_key,
+                            "producer_status_code": item.producer_status_code,
+                            "producer_media_type": item.producer_media_type,
+                            "source_field": item.source_field,
+                        }.items()
+                        if value is not None
+                    }
+                    for item in result.final_reference_bindings
+                ],
+                removed_response_value_inputs=list(
+                    result.removed_response_value_inputs
+                ),
             )
         except ValidationError as exc:
             raise ToolFailure(

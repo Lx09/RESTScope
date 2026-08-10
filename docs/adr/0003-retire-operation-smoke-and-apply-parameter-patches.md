@@ -36,3 +36,7 @@ remains plan-only, so the new bindings do not activate testing authority.
 Patch application changes only RESTScope's future request generation. It does
 not send HTTP or prove a target Failure resolved. A later complete Batch supplies
 new target evidence, and a failed Batch does not roll back the applied revision.
+
+[ADR 0004](0004-atomic-generation-state-and-response-pools.md) subsequently
+defines response-source replacement, cross-owner transaction rollback, and
+the Batch reference-pool snapshot boundary.

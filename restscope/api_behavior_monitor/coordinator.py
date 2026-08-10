@@ -264,11 +264,6 @@ class APIBehaviorMonitorCoordinator:
                 )
 
         try:
-            if contract.status == "updated":
-                self.response_value_tracker.refresh_sources(
-                    ir=context.ir,
-                    producer_operation_key=operation.operation_key,
-                )
             value_result = self.response_value_tracker.observe(
                 producer_operation_key=operation.operation_key,
                 status_code=observation.status_code,
@@ -389,12 +384,17 @@ class APIBehaviorMonitorCoordinator:
             sources=sources,
         )
 
-    def register_response_value_source_batches(
+    def stage_response_value_source_batches(
         self,
         requests: list[ResponseValueRegistrationRequest],
-    ) -> list[ResponseValueRegistrationResult]:
-        """Register all Patch-selected response sources transactionally."""
-        return self.response_value_tracker.register_selected_source_batches(requests)
+        *,
+        removed_value_names: tuple[str, ...],
+    ):
+        """Return one staged exact-replacement transaction for Parameter Patch."""
+        return self.response_value_tracker.stage_selected_source_batches(
+            requests,
+            removed_value_names=removed_value_names,
+        )
 
     def preview_response_value(
         self,

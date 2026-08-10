@@ -14,9 +14,9 @@ BUSINESS_TABLES = {
     "resource_identifiers",
     "resource_operation_usages",
     "resource_monitor_errors",
-    "response_value_monitors",
-    "response_value_sources",
-    "response_values",
+    "response_value_pools",
+    "response_value_pool_sources",
+    "response_value_pool_values",
     "response_observations",
     "response_observation_scalars",
 }
@@ -42,6 +42,37 @@ def test_orm_metadata_contains_exactly_thirteen_business_tables() -> None:
     assert all(
         not name.startswith(("smoke_", "generator_", "input_generator"))
         for name in Base.metadata.tables
+    )
+    assert {
+        "response_value_monitors",
+        "response_value_sources",
+        "response_values",
+    }.isdisjoint(Base.metadata.tables)
+
+
+def test_evidence_tables_enforce_scalar_status_position_and_rule_shapes() -> None:
+    """Database constraints reject impossible evidence even if an Adapter regresses."""
+    from sqlalchemy import CheckConstraint
+
+    from restscope.db import Base
+
+    check_names = {
+        constraint.name
+        for table in Base.metadata.tables.values()
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    expected_suffixes = {
+        "resource_rule_shape",
+        "resource_identifier_scalar_type",
+        "response_pool_scalar_type",
+        "response_observation_http_status",
+        "response_observation_scalar_type",
+        "response_observation_scalar_position",
+    }
+    assert all(
+        any(name.endswith(suffix) for name in check_names)
+        for suffix in expected_suffixes
     )
 
 

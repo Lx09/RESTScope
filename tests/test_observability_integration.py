@@ -686,7 +686,9 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> N
     from restscope.target_http import TargetHTTPTransport
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
+        RequestGenerationPatchRuntime,
         RequestGenerationConfigStore,
+        SemanticParameterPatch,
     )
     from restscope.harness.operation_testing import OperationTestingService
 
@@ -711,30 +713,32 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> N
         }
     )
     operation = ir.operations["GET /search"]
-    node = next(iter(operation.input_nodes.values()))
     catalog = RequestGenerationConfigStore()
     assert catalog.initialize_once(ir) is True
-    from restscope.request_generation import prepare_accepted_generator_patch
-
-    current = catalog.require_operation(operation.operation_key)
-    updated = prepare_accepted_generator_patch(
-        current,
-        [
-            {
-                "input_node_id": node.input_node_id,
-                "inclusion_probability": 1,
-                "strategy": {"type": "constant", "value": "generated-secret"},
-            }
-        ],
+    patch_runtime = RequestGenerationPatchRuntime(store=catalog, ir_provider=lambda: ir)
+    patch = SemanticParameterPatch.model_validate(
+        {
+            "changes": [
+                {
+                    "input": "query.token",
+                    "inclusion_probability": 1,
+                    "strategy": {"type": "constant", "value": "generated-secret"},
+                }
+            ]
+        }
     )
-    state = catalog.require_state(operation.operation_key)
-    catalog.apply(
+    validated = patch_runtime.validate(
         operation_key=operation.operation_key,
-        expected_revision=state.revision,
-        expected_state_digest=state.state_digest,
-        config=updated,
-        constraints=(),
-        validation_digest="test-setup",
+        expected_revision=0,
+        affected_inputs=("query.token",),
+        patch=patch,
+    )
+    patch_runtime.apply(
+        operation_key=operation.operation_key,
+        expected_revision=0,
+        validation_digest=validated.validation_digest,
+        affected_inputs=("query.token",),
+        patch=patch,
     )
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(

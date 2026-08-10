@@ -78,6 +78,10 @@ as the active project direction.
   solving, schema snapshots, serialization, validation, and App-lifetime
   revisioned configuration. `request_generation.validate_patch` is read only;
   `parameter_patch.apply` is the sole Tool that atomically changes that state.
+  Exact response-value producer bindings participate in state identity. Apply
+  replaces their complete durable pool source set and rolls back an in-memory
+  publication if the database commit fails. Batch execution freezes all named
+  reference pools with the selected revision.
   The Harness owns deterministic operation execution and mechanical Tool
   bindings. `test_case.run_batch` returns bounded inline evidence without a Test
   Case registry. Neither Module owns semantic test selection or retry decisions.

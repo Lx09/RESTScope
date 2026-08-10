@@ -1,15 +1,16 @@
-"""Transactional response-value monitor registration and typed value pools."""
+"""Transactional response-value pool registration and typed value pools."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Iterator, Protocol
 
 
 @dataclass(frozen=True, slots=True)
-class ResponseValueCatalogRegistration:
-    """Return the monitor and sources created or reused by one registration transaction."""
+class ResponseValuePoolRegistration:
+    """Return the pool and sources created or reused by one registration transaction."""
     value_name: str
     consumer_operation_key: str
     consumer_input_node_id: str
@@ -18,7 +19,7 @@ class ResponseValueCatalogRegistration:
 
 
 @dataclass(frozen=True, slots=True)
-class ResponseValueMonitorRecord:
+class ResponseValuePoolRecord:
     """Identify one registered request input and the response sources allowed to supply its values."""
     value_name: str
     consumer_operation_key: str
@@ -60,15 +61,15 @@ class ObservedResponseField:
 
 
 class _ResponseValueRepository(Protocol):
-    """Define the exact monitor, source, observation, and typed-value persistence operations required by ResponseValueCatalog."""
-    def ensure_monitor(
+    """Define the exact pool, source, observation, and typed-value persistence operations required by ResponseValueCatalog."""
+    def ensure_pool(
         self,
-        registration: ResponseValueCatalogRegistration,
+        registration: ResponseValuePoolRegistration,
         *,
         now: datetime,
-    ) -> ResponseValueMonitorRecord: ...
+    ) -> ResponseValuePoolRecord: ...
 
-    def add_sources(
+    def replace_pool_sources(
         self,
         value_name: str,
         sources: list[ResponseValueSource],
@@ -76,12 +77,14 @@ class _ResponseValueRepository(Protocol):
         now: datetime,
     ) -> list[PersistedResponseValueSource]: ...
 
+    def delete_pool(self, value_name: str) -> None: ...
+
     def list_sources_for_operation(
         self,
         producer_operation_key: str,
     ) -> list[PersistedResponseValueSource]: ...
 
-    def list_monitors(self) -> list[ResponseValueMonitorRecord]: ...
+    def list_pools(self) -> list[ResponseValuePoolRecord]: ...
 
     def list_observed_response_fields(self) -> list[ObservedResponseField]: ...
 
@@ -140,13 +143,13 @@ class ResponseValueCatalog:
     def __init__(self, unit_of_work_factory) -> None:
         self.unit_of_work_factory = unit_of_work_factory
 
-    def ensure_monitor(
+    def ensure_pool(
         self,
-        registration: ResponseValueCatalogRegistration,
-    ) -> ResponseValueMonitorRecord:
-        """Return the existing monitor for a response field or create it atomically."""
+        registration: ResponseValuePoolRegistration,
+    ) -> ResponseValuePoolRecord:
+        """Return the existing pool for a response field or create it atomically."""
         with self.unit_of_work_factory() as uow:
-            result = uow.response_values.ensure_monitor(
+            result = uow.response_values.ensure_pool(
                 registration,
                 now=_utc_now(),
             )
@@ -181,14 +184,14 @@ class ResponseValueCatalog:
             uow.commit()
             return recorded
 
-    def add_sources(
+    def replace_sources(
         self,
         value_name: str,
         sources: list[ResponseValueSource],
     ) -> list[PersistedResponseValueSource]:
-        """Attach new validated producers to an existing response-value monitor."""
+        """Replace the complete producer set and discard values from old sources."""
         with self.unit_of_work_factory() as uow:
-            result = uow.response_values.add_sources(
+            result = uow.response_values.replace_pool_sources(
                 value_name,
                 sources,
                 now=_utc_now(),
@@ -198,21 +201,21 @@ class ResponseValueCatalog:
 
     def register_with_backfill(
         self,
-        registration: ResponseValueCatalogRegistration,
+        registration: ResponseValuePoolRegistration,
         sources: list[ResponseValueSource],
     ) -> tuple[
-        ResponseValueMonitorRecord,
+        ResponseValuePoolRecord,
         list[PersistedResponseValueSource],
     ]:
-        """Create a monitor, add its sources, and backfill values in one transaction."""
+        """Create a pool, add its sources, and backfill values in one transaction."""
         with self.unit_of_work_factory() as uow:
             now = _utc_now()
-            monitor = uow.response_values.ensure_monitor(
+            pool = uow.response_values.ensure_pool(
                 registration,
                 now=now,
             )
-            persisted = uow.response_values.add_sources(
-                monitor.value_name,
+            persisted = uow.response_values.replace_pool_sources(
+                pool.value_name,
                 sources,
                 now=now,
             )
@@ -237,27 +240,27 @@ class ResponseValueCatalog:
                     "Selected response sources have no compatible values"
                 )
             uow.response_values.record_values(
-                monitor.value_name,
+                pool.value_name,
                 historical_values,
                 now=now,
             )
             if not uow.response_values.values_for(
-                monitor.value_name,
+                pool.value_name,
                 limit=1,
             ):
                 raise ValueError(
                     "Response-value registration produced an empty pool"
                 )
             uow.commit()
-            return monitor, persisted
+            return pool, persisted
 
     def register_many_with_backfill(
         self,
         registrations: list[
-            tuple[ResponseValueCatalogRegistration, list[ResponseValueSource]]
+            tuple[ResponseValuePoolRegistration, list[ResponseValueSource]]
         ],
     ) -> list[
-        tuple[ResponseValueMonitorRecord, list[PersistedResponseValueSource]]
+        tuple[ResponseValuePoolRecord, list[PersistedResponseValueSource]]
     ]:
         """Register several consumer pools in one all-or-nothing transaction.
 
@@ -265,19 +268,43 @@ class ResponseValueCatalog:
         only some response-value sources durable when a later source has lost
         its compatible historical values.
         """
+        with self.stage_pool_replacements(registrations, removals=()) as results:
+            return results
+
+    @contextmanager
+    def stage_pool_replacements(
+        self,
+        registrations: list[
+            tuple[ResponseValuePoolRegistration, list[ResponseValueSource]]
+        ],
+        *,
+        removals: tuple[str, ...] | list[str],
+    ) -> Iterator[
+        list[tuple[ResponseValuePoolRecord, list[PersistedResponseValueSource]]]
+    ]:
+        """Stage exact pool replacements and commit only after the caller publishes.
+
+        Each listed source set is the complete final set, not an append.  Pool
+        values are rebuilt solely from retained observations matching that set.
+        The surrounding Parameter Patch runtime publishes its in-memory state
+        while this context is open; a commit failure then raises back through
+        the Store transaction so that publication is rolled back before unlock.
+        """
         with self.unit_of_work_factory() as uow:
             now = _utc_now()
+            for value_name in removals:
+                uow.response_values.delete_pool(value_name)
             results: list[
-                tuple[ResponseValueMonitorRecord, list[PersistedResponseValueSource]]
+                tuple[ResponseValuePoolRecord, list[PersistedResponseValueSource]]
             ] = []
             for offset, (registration, sources) in enumerate(registrations):
                 item_now = now + timedelta(microseconds=offset)
-                monitor = uow.response_values.ensure_monitor(
+                pool = uow.response_values.ensure_pool(
                     registration,
                     now=item_now,
                 )
-                persisted = uow.response_values.add_sources(
-                    monitor.value_name,
+                persisted = uow.response_values.replace_pool_sources(
+                    pool.value_name,
                     sources,
                     now=item_now,
                 )
@@ -302,17 +329,17 @@ class ResponseValueCatalog:
                         "Selected response sources have no compatible values"
                     )
                 uow.response_values.record_values(
-                    monitor.value_name,
+                    pool.value_name,
                     compatible,
                     now=item_now,
                 )
-                if not uow.response_values.values_for(monitor.value_name, limit=1):
+                if not uow.response_values.values_for(pool.value_name, limit=1):
                     raise ValueError(
                         "Response-value registration produced an empty pool"
                     )
-                results.append((monitor, persisted))
+                results.append((pool, persisted))
+            yield results
             uow.commit()
-            return results
 
     def list_sources_for_operation(
         self,
@@ -327,10 +354,10 @@ class ResponseValueCatalog:
                 producer_operation_key
             )
 
-    def list_monitors(self) -> list[ResponseValueMonitorRecord]:
-        """List every active response-value monitor with its currently registered sources."""
+    def list_pools(self) -> list[ResponseValuePoolRecord]:
+        """List every active response-value pool with its currently registered sources."""
         with self.unit_of_work_factory() as uow:
-            return uow.response_values.list_monitors()
+            return uow.response_values.list_pools()
 
     def list_observed_response_fields(self) -> list[ObservedResponseField]:
         """Return distinct retained scalar field identities without values.
@@ -391,7 +418,7 @@ class ResponseValueCatalog:
             )
 
     def values_for(self, value_name: str, *, limit: int = 100) -> list[object]:
-        """Return the bounded current value pool for one registered monitor."""
+        """Return the bounded current value pool for one registered pool."""
         with self.unit_of_work_factory() as uow:
             return uow.response_values.values_for(value_name, limit=limit)
 

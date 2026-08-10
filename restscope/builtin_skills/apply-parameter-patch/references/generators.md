@@ -92,7 +92,11 @@ For `response_value`, copy all four source fields exactly from a successful
 `openapi.find_observed_response_fields` result. Compilation re-runs current
 observation lookup, resolves the private pool name, checks complete provenance,
 and requires non-empty type-compatible scalar values. Never emit the private
-pool name. Prefer `resource_identifier` when it represents the same entity.
+pool name. The selected source is the complete final source identity for that
+input. Replacing it removes the old source and values derived only from that
+source; it never appends another alternative. Changing the Generator away from
+`response_value` removes the old response pool. Prefer `resource_identifier`
+when it represents the same entity.
 
 ## Presence and minimal repair
 

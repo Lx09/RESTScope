@@ -44,5 +44,6 @@ cancellation is a lifecycle result, not Generator-strategy escalation evidence.
 
 The child completion is bounded text, not trusted Store state. The parent must
 re-read the exact affected inputs and match revision, state digest,
-last-applied validation digest, final Generators, and Constraints before
+last-applied validation digest, final Generators, Constraints, and exact
+reference bindings before
 claiming application.

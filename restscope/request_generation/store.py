@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
 from threading import RLock
-from typing import TypeVar
+from typing import Iterator, Literal, TypeVar
 
 from restscope.openapi_parser import OpenAPISpecIR
 
@@ -48,6 +49,27 @@ _T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
+class ReferenceValueBinding:
+    """Bind one Generator input to the exact external value identity it uses.
+
+    Response bindings include the complete producer selector because a stable
+    pool name alone cannot distinguish replacement of one source by another.
+    Resource bindings retain the canonical resource name.  These immutable
+    facts participate in the Generation State digest and are safe to project
+    through request-generation Tools.
+    """
+
+    input_node_id: str
+    kind: Literal["resource_identifier", "response_value"]
+    value_name: str
+    producer_operation_key: str | None = None
+    producer_status_code: str | None = None
+    producer_media_type: str | None = None
+    source_field: str | None = None
+    source_selector: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RequestGenerationState:
     """Freeze one complete operation revision for readers and Batch execution.
 
@@ -62,6 +84,7 @@ class RequestGenerationState:
     revision: int
     state_digest: str
     last_applied_validation_digest: str | None
+    reference_bindings: tuple[ReferenceValueBinding, ...] = ()
 
 
 @dataclass(slots=True)
@@ -73,7 +96,63 @@ class _MutableOperationState:
     revision: int
     state_digest: str
     last_applied_validation_digest: str | None
+    reference_bindings: tuple[ReferenceValueBinding, ...]
     lock: RLock
+
+
+class _OperationReplacement:
+    """Publish one reversible in-memory replacement while its lock is held."""
+
+    def __init__(self, state: _MutableOperationState) -> None:
+        self._state = state
+        self.before = _freeze_state(state)
+        self._published = False
+
+    def publish(
+        self,
+        *,
+        config: OperationGeneratorConfig,
+        constraints: Sequence[OperationConstraintRecord],
+        reference_bindings: Sequence[ReferenceValueBinding],
+        validation_digest: str,
+    ) -> RequestGenerationState:
+        """Replace live content, retaining enough state for automatic rollback."""
+        next_config = config.model_copy(deep=True)
+        next_constraints = tuple(item.model_copy(deep=True) for item in constraints)
+        next_bindings = tuple(reference_bindings)
+        next_digest = generation_state_digest(
+            next_config,
+            next_constraints,
+            next_bindings,
+        )
+        if next_digest == self._state.state_digest:
+            raise GeneratorConfigError(
+                "generator_patch_no_change",
+                "The validated Patch does not change Generator, Constraint, or reference state",
+            )
+        self._state.config = next_config
+        self._state.constraints = next_constraints
+        self._state.reference_bindings = next_bindings
+        self._state.revision += 1
+        self._state.state_digest = next_digest
+        self._state.last_applied_validation_digest = validation_digest
+        self._published = True
+        return _freeze_state(self._state)
+
+    def rollback(self) -> None:
+        """Restore the exact prior revision after a later durable commit fails."""
+        if not self._published:
+            return
+        self._state.config = self.before.config.model_copy(deep=True)
+        self._state.constraints = tuple(
+            item.model_copy(deep=True) for item in self.before.constraints
+        )
+        self._state.reference_bindings = self.before.reference_bindings
+        self._state.revision = self.before.revision
+        self._state.state_digest = self.before.state_digest
+        self._state.last_applied_validation_digest = (
+            self.before.last_applied_validation_digest
+        )
 
 
 class GeneratorConfigError(ValueError):
@@ -166,28 +245,19 @@ class RequestGenerationConfigStore:
             )
         return state
 
-    def apply_validated(
+    @contextmanager
+    def _replacement_transaction(
         self,
         *,
         operation_key: str,
         expected_revision: int,
-        prepare: Callable[
-            [RequestGenerationState],
-            tuple[
-                OperationGeneratorConfig,
-                Sequence[OperationConstraintRecord],
-                str,
-                _T,
-            ],
-        ],
-    ) -> tuple[RequestGenerationState, _T | None]:
-        """Validate and atomically replace one operation under its write lock.
+    ) -> Iterator[_OperationReplacement]:
+        """Hold one operation lock across staging, publication, and commit.
 
-        ``prepare`` receives a detached snapshot while the operation lock is
-        already held. It must recompile the Patch, reproduce deterministic
-        samples, compare the caller's validation digest, and complete any
-        fallible reference registration. Only its successful return reaches the
-        no-fail assignment below, so readers never observe half-updated state.
+        This private seam lets the Parameter Patch runtime coordinate its
+        in-memory revision with a separately owned database transaction.  If
+        anything fails after publication, the old in-memory state is restored
+        before the lock becomes visible to Batch readers.
         """
         with self._catalog_lock:
             state = self._states.get(operation_key)
@@ -199,25 +269,34 @@ class RequestGenerationConfigStore:
         with state.lock:
             if state.revision != expected_revision:
                 raise GeneratorConfigStateConflict()
-            config, constraints, validation_digest, callback_result = prepare(
-                _freeze_state(state)
+            replacement = _OperationReplacement(state)
+            try:
+                yield replacement
+            except BaseException:
+                replacement.rollback()
+                raise
+
+    def _snapshot_with(
+        self,
+        operation_key: str,
+        capture: Callable[[RequestGenerationState], _T],
+    ) -> tuple[RequestGenerationState, _T]:
+        """Capture related volatile evidence under the operation read lock.
+
+        Batch execution uses this seam to freeze reference pools together with
+        the revision whose Generators name them.  ``capture`` must perform only
+        bounded reads and must not call back into Patch mutation.
+        """
+        with self._catalog_lock:
+            state = self._states.get(operation_key)
+        if state is None:
+            raise GeneratorConfigError(
+                "generator_config_not_found",
+                f"No generator configuration exists for {operation_key}",
             )
-            frozen_constraints = tuple(
-                item.model_copy(deep=True) for item in constraints
-            )
-            next_config = config.model_copy(deep=True)
-            next_digest = generation_state_digest(next_config, frozen_constraints)
-            if next_digest == state.state_digest:
-                raise GeneratorConfigError(
-                    "generator_patch_no_change",
-                    "The validated Patch does not change Generator or Constraint state",
-                )
-            state.config = next_config
-            state.constraints = frozen_constraints
-            state.revision += 1
-            state.state_digest = next_digest
-            state.last_applied_validation_digest = validation_digest
-            return _freeze_state(state), callback_result
+        with state.lock:
+            frozen = _freeze_state(state)
+            return frozen, capture(frozen)
 
     def _require_existing(self, operation_key: str) -> OperationGeneratorConfig:
         current = self.get_operation(operation_key)
@@ -232,13 +311,27 @@ class RequestGenerationConfigStore:
 def generation_state_digest(
     config: OperationGeneratorConfig,
     constraints: Sequence[OperationConstraintRecord],
+    reference_bindings: Sequence[ReferenceValueBinding] = (),
 ) -> str:
-    """Return a stable SHA-256 digest for mutable generation content."""
+    """Return a stable SHA-256 digest for all mutable generation content."""
     payload = {
         "operation_key": config.operation_key,
         "active_media_type": config.active_media_type,
         "configs": [item.model_dump(mode="json") for item in config.configs],
         "constraints": [item.model_dump(mode="json") for item in constraints],
+        "reference_bindings": [
+            {
+                "input_node_id": item.input_node_id,
+                "kind": item.kind,
+                "value_name": item.value_name,
+                "producer_operation_key": item.producer_operation_key,
+                "producer_status_code": item.producer_status_code,
+                "producer_media_type": item.producer_media_type,
+                "source_field": item.source_field,
+                "source_selector": item.source_selector,
+            }
+            for item in reference_bindings
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -253,6 +346,7 @@ def _new_operation_state(config: OperationGeneratorConfig) -> _MutableOperationS
         revision=0,
         state_digest=generation_state_digest(detached, ()),
         last_applied_validation_digest=None,
+        reference_bindings=(),
         lock=RLock(),
     )
 
@@ -265,6 +359,7 @@ def _freeze_state(state: _MutableOperationState) -> RequestGenerationState:
         revision=state.revision,
         state_digest=state.state_digest,
         last_applied_validation_digest=state.last_applied_validation_digest,
+        reference_bindings=state.reference_bindings,
     )
 
 def _apply_patches(

@@ -309,12 +309,12 @@ def test_response_value_pool_keeps_only_100_most_recent_typed_values() -> None:
     """A pool deterministically removes its oldest active value at capacity 101."""
 
     from restscope.api_behavior_monitor.response_values.catalog import (
-        ResponseValueCatalogRegistration,
+        ResponseValuePoolRegistration,
     )
 
     catalog = _catalog()
-    catalog.ensure_monitor(
-        ResponseValueCatalogRegistration(
+    catalog.ensure_pool(
+        ResponseValuePoolRegistration(
             value_name="response_recent",
             consumer_operation_key="GET /consumer",
             consumer_input_node_id="query/token",
@@ -338,7 +338,7 @@ def test_1001_scalars_skip_the_whole_response_and_every_pool_update() -> None:
 
     from restscope.api_behavior_monitor.response_values.tracker import ResponseValueTracker
     from restscope.api_behavior_monitor.response_values.catalog import (
-        ResponseValueCatalogRegistration,
+        ResponseValuePoolRegistration,
         ResponseValueSource,
     )
 
@@ -350,8 +350,8 @@ def test_1001_scalars_skip_the_whole_response_and_every_pool_update() -> None:
         media_type="application/json",
         body={f"field{index}": index for index in range(1000)},
     )
-    catalog.ensure_monitor(
-        ResponseValueCatalogRegistration(
+    catalog.ensure_pool(
+        ResponseValuePoolRegistration(
             value_name="response_large_field",
             consumer_operation_key="GET /consumer",
             consumer_input_node_id="query/value",
@@ -359,7 +359,7 @@ def test_1001_scalars_skip_the_whole_response_and_every_pool_update() -> None:
             expected_type="integer",
         )
     )
-    catalog.add_sources(
+    catalog.replace_sources(
         "response_large_field",
         [
             ResponseValueSource(
@@ -403,7 +403,7 @@ def test_response_observation_and_pool_updates_roll_back_as_one_transaction(
 
     from restscope.api_behavior_monitor.response_values.tracker import ResponseValueTracker
     from restscope.api_behavior_monitor.response_values.catalog import (
-        ResponseValueCatalogRegistration,
+        ResponseValuePoolRegistration,
         ResponseValueSource,
     )
     from restscope.db.adapters.response_values import (
@@ -412,8 +412,8 @@ def test_response_observation_and_pool_updates_roll_back_as_one_transaction(
 
     catalog = _catalog()
     tracker = ResponseValueTracker(catalog=catalog)
-    catalog.ensure_monitor(
-        ResponseValueCatalogRegistration(
+    catalog.ensure_pool(
+        ResponseValuePoolRegistration(
             value_name="response_atomic",
             consumer_operation_key="GET /consumer",
             consumer_input_node_id="query/value",
@@ -428,7 +428,7 @@ def test_response_observation_and_pool_updates_roll_back_as_one_transaction(
         selector="$.value",
         field_name="value",
     )
-    catalog.add_sources("response_atomic", [source])
+    catalog.replace_sources("response_atomic", [source])
 
     def fail_pool_write(self, value_name, values, *, now):
         del self, value_name, values, now
@@ -514,20 +514,20 @@ def test_registration_rejects_sources_without_observed_values() -> None:
     with pytest.raises(ResponseValueUnavailableError) as raised:
         tracker.register(**arguments)
     assert raised.value.code == "response_value_pool_unavailable"
-    assert catalog.list_monitors() == []
+    assert catalog.list_pools() == []
 
 
 def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
-    """Scenario: verify that empty backfill rolls back monitor and source atomically."""
+    """Scenario: verify that empty backfill rolls back pool and source atomically."""
     import pytest
 
-    from restscope.api_behavior_monitor.response_values.catalog import ResponseValueCatalogRegistration
+    from restscope.api_behavior_monitor.response_values.catalog import ResponseValuePoolRegistration
     from restscope.api_behavior_monitor import ResponseValueSource
 
     catalog = _catalog()
     with pytest.raises(ValueError, match="compatible values"):
         catalog.register_with_backfill(
-            ResponseValueCatalogRegistration(
+            ResponseValuePoolRegistration(
                 value_name="response_empty",
                 consumer_operation_key="GET /consumer",
                 consumer_input_node_id="query/value",
@@ -545,7 +545,7 @@ def test_empty_backfill_rolls_back_monitor_and_source_atomically() -> None:
             ],
         )
 
-    assert catalog.list_monitors() == []
+    assert catalog.list_pools() == []
     assert catalog.list_sources_for_operation("GET /producer") == []
 
 
@@ -555,7 +555,7 @@ def test_multi_source_registration_rolls_back_every_pool_when_one_is_empty() -> 
 
     from restscope.api_behavior_monitor import ResponseValueSource
     from restscope.api_behavior_monitor.response_values.catalog import (
-        ResponseValueCatalogRegistration,
+        ResponseValuePoolRegistration,
     )
 
     catalog = _catalog()
@@ -584,7 +584,7 @@ def test_multi_source_registration_rolls_back_every_pool_when_one_is_empty() -> 
         catalog.register_many_with_backfill(
             [
                 (
-                    ResponseValueCatalogRegistration(
+                    ResponseValuePoolRegistration(
                         value_name="response_available",
                         consumer_operation_key="GET /consumer",
                         consumer_input_node_id="query/available",
@@ -594,7 +594,7 @@ def test_multi_source_registration_rolls_back_every_pool_when_one_is_empty() -> 
                     [available],
                 ),
                 (
-                    ResponseValueCatalogRegistration(
+                    ResponseValuePoolRegistration(
                         value_name="response_missing",
                         consumer_operation_key="GET /consumer",
                         consumer_input_node_id="query/missing",
@@ -606,8 +606,54 @@ def test_multi_source_registration_rolls_back_every_pool_when_one_is_empty() -> 
             ]
         )
 
-    assert catalog.list_monitors() == []
+    assert catalog.list_pools() == []
     assert catalog.list_sources_for_operation("GET /producer") == []
+
+
+def test_staged_pool_replacement_removes_old_source_and_rebuilds_values() -> None:
+    """A Parameter Patch source is a complete replacement, never an append."""
+    from restscope.api_behavior_monitor import ResponseValueSource
+    from restscope.api_behavior_monitor.response_values.catalog import (
+        ResponseValuePoolRegistration,
+    )
+
+    catalog = _catalog()
+    catalog.record_observation(
+        operation_key="GET /producer",
+        status_code=200,
+        media_type="application/json",
+        scalars=[("$.old", "old-value"), ("$.new", "new-value")],
+    )
+    registration = ResponseValuePoolRegistration(
+        value_name="response_consumer_value",
+        consumer_operation_key="GET /consumer",
+        consumer_input_node_id="query/value",
+        parameter_name="value",
+        expected_type="string",
+    )
+    old_source = ResponseValueSource(
+        producer_operation_key="GET /producer",
+        status_code="200",
+        media_type="application/json",
+        selector="$.old",
+        field_name="old",
+    )
+    new_source = ResponseValueSource(
+        producer_operation_key="GET /producer",
+        status_code="200",
+        media_type="application/json",
+        selector="$.new",
+        field_name="new",
+    )
+
+    catalog.register_many_with_backfill([(registration, [old_source])])
+    assert catalog.values_for(registration.value_name) == ["old-value"]
+
+    catalog.register_many_with_backfill([(registration, [new_source])])
+
+    sources = catalog.list_sources_for_operation("GET /producer")
+    assert [source.selector for source in sources] == ["$.new"]
+    assert catalog.values_for(registration.value_name) == ["new-value"]
 
 
 def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> None:
@@ -637,13 +683,13 @@ def test_preview_rejects_observed_values_incompatible_with_consumer_type() -> No
 def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
     """Scenario: verify that response values are typed and boolean is not an integer."""
     from restscope.api_behavior_monitor.response_values.catalog import (
-        ResponseValueCatalogRegistration,
+        ResponseValuePoolRegistration,
         ResponseValueSource,
     )
 
     catalog = _catalog()
-    monitor = catalog.ensure_monitor(
-        ResponseValueCatalogRegistration(
+    pool = catalog.ensure_pool(
+        ResponseValuePoolRegistration(
             value_name="response_types",
             consumer_operation_key="GET /consumer",
             consumer_input_node_id="node",
@@ -651,8 +697,8 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
             expected_type=None,
         )
     )
-    catalog.add_sources(
-        monitor.value_name,
+    catalog.replace_sources(
+        pool.value_name,
         [
             ResponseValueSource(
                 producer_operation_key="GET /producer",
@@ -665,7 +711,7 @@ def test_response_values_are_typed_and_boolean_is_not_an_integer() -> None:
     )
 
     assert catalog.record_values(
-        monitor.value_name,
+        pool.value_name,
         ["1", 1, True, 1.5, None, {"nested": "ignored"}],
     ) == 4
     assert catalog.values_for("response_types") == ["1", 1, True, 1.5]

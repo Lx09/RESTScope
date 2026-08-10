@@ -11,8 +11,8 @@ from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .constraints import ConstraintSet
-from .models import (
+from ..constraints import ConstraintSet
+from ..models import (
     ArrayGenerator,
     BooleanGenerator,
     ChoiceGenerator,

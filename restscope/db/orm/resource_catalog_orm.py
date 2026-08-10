@@ -10,7 +10,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base, CreatedAtMixin, UpdatedAtMixin
@@ -46,6 +55,13 @@ class OperationResourceRuleORM(CreatedAtMixin, UpdatedAtMixin, Base):
     __tablename__ = "operation_resource_rules"
     __table_args__ = (
         UniqueConstraint("operation_key", "group_path", name="operation_group"),
+        CheckConstraint(
+            "(has_resource AND resource_id IS NOT NULL "
+            "AND id_field_name IS NOT NULL AND id_selector IS NOT NULL) OR "
+            "((NOT has_resource) AND resource_id IS NULL "
+            "AND id_field_name IS NULL AND id_selector IS NULL)",
+            name="resource_rule_shape",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -69,6 +85,10 @@ class ResourceIdentifierORM(Base):
     __tablename__ = "resource_identifiers"
     __table_args__ = (
         UniqueConstraint("resource_id", "value_type", "value_text", name="resource_typed_value"),
+        CheckConstraint(
+            "value_type IN ('string', 'integer', 'number', 'boolean')",
+            name="resource_identifier_scalar_type",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)

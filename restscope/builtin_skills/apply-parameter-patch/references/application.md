@@ -16,11 +16,21 @@ and result:
 
 Apply obtains the operation write lock, checks revision and state digest,
 recompiles the Patch, revalidates reference evidence, regenerates the same
-samples, and recomputes the validation digest. It then registers all response
-sources in one transaction and replaces Generator, Constraint, revision, state
-digest, and last-applied digest as one in-memory state change. Any failure
-leaves Generation Store state unchanged. Two concurrent calls using the same
-old revision cannot both succeed.
+samples, and recomputes the validation digest. It stages complete response-pool
+source replacements, publishes Generator, Constraint, reference-binding,
+revision, state-digest, and last-applied-digest state, then commits the durable
+pool transaction while still holding the Operation lock. If that commit fails,
+the previous in-memory state is restored before the lock is released. Any
+failure therefore leaves both visible Generation State and durable pool state
+unchanged. Two concurrent calls using the same old revision cannot both
+succeed.
+
+For every changed `response_value` input, the submitted source is the entire
+final source set. The runtime removes its previous sources and rebuilds values
+only from retained observations matching the new source. Changing away from
+`response_value` deletes that input's pool; mentioning an input only through a
+Constraint leaves its pool unchanged. An exact no-op is rejected before the
+durable write transaction opens.
 
 ## Handle conflicts and failures
 
@@ -46,8 +56,11 @@ affected boundary. Require:
 2. `state_digest` equals the Apply result's `state_digest`.
 3. `last_applied_validation_digest` equals the validated digest.
 4. Every final Generator and active Constraint matches the reviewed state.
+5. Every final reference binding matches the reviewed canonical resource or
+   exact response producer, and `removed_response_value_inputs` contains only
+   inputs intentionally changed away from a response source.
 
 Report the applied revision and digests, complete semantic changes, predicates
-satisfied, reference-source summary, and self-review findings. Do not report a
+satisfied, final reference bindings, removals, and self-review findings. Do not report a
 target API repair until a later `test_case.run_batch` supplies new HTTP
 evidence. Application is App-lifetime only and disappears when RESTScope exits.

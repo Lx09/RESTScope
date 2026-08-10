@@ -76,6 +76,9 @@ def test_patch_skill_requires_state_validate_review_apply_and_confirmation() -> 
     assert positions == sorted(positions)
     assert "value predicate" in combined.lower()
     assert "state conflict" in combined.lower()
+    assert "complete replacement" in combined.lower()
+    assert "commit fails" in combined.lower()
+    assert "reference binding" in combined.lower()
     assert "HTTP success" in combined
     assert "prove" in combined.lower()
     assert "build-parameter-patch" not in combined

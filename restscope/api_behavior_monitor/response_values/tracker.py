@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from restscope.context import AgentContext, ContextLimits
 from restscope.llm import (
@@ -30,7 +31,7 @@ from .prompts import (
 from .catalog import (
     PersistedResponseValueSource,
     ResponseValueCatalog,
-    ResponseValueCatalogRegistration,
+    ResponseValuePoolRegistration,
     ResponseValueSource,
 )
 
@@ -39,7 +40,7 @@ _MAX_AVAILABLE_SOURCE_OPTIONS = 10
 
 @dataclass(frozen=True, slots=True)
 class ResponseValueRegistrationResult:
-    """Report whether one response-value monitor was registered and which sources were accepted."""
+    """Report whether one response-value pool was registered and which sources were accepted."""
     status: Literal["registered", "existing"]
     value_name: str
     sources: list[PersistedResponseValueSource]
@@ -174,7 +175,7 @@ class ResponseValueTracker:
             consumer_operation_key,
             consumer_input_node_id,
         )
-        registration = ResponseValueCatalogRegistration(
+        registration = ResponseValuePoolRegistration(
             value_name=value_name,
             consumer_operation_key=consumer_operation_key,
             consumer_input_node_id=consumer_input_node_id,
@@ -182,26 +183,29 @@ class ResponseValueTracker:
             expected_type=expected_type,
         )
         try:
-            monitor, sources = self.catalog.register_with_backfill(
+            pool, sources = self.catalog.register_with_backfill(
                 registration,
                 sources,
             )
         except ValueError as exc:
             raise ResponseValueUnavailableError(str(exc)) from exc
         return ResponseValueRegistrationResult(
-            status="registered" if monitor.created else "existing",
-            value_name=monitor.value_name,
+            status="registered" if pool.created else "existing",
+            value_name=pool.value_name,
             sources=sources,
         )
 
-    def register_selected_source_batches(
+    @contextmanager
+    def stage_selected_source_batches(
         self,
         requests: list[ResponseValueRegistrationRequest],
-    ) -> list[ResponseValueRegistrationResult]:
-        """Register all requested consumer pools in one Catalog transaction."""
+        *,
+        removed_value_names: tuple[str, ...],
+    ) -> Iterator[list[ResponseValueRegistrationResult]]:
+        """Stage exact source replacements until Generation State is published."""
         registrations = [
             (
-                ResponseValueCatalogRegistration(
+                ResponseValuePoolRegistration(
                     value_name=_value_name(
                         request.consumer_operation_key,
                         request.consumer_input_node_id,
@@ -216,17 +220,20 @@ class ResponseValueTracker:
             for request in requests
         ]
         try:
-            persisted = self.catalog.register_many_with_backfill(registrations)
+            with self.catalog.stage_pool_replacements(
+                registrations,
+                removals=removed_value_names,
+            ) as persisted:
+                yield [
+                    ResponseValueRegistrationResult(
+                        status="registered" if pool.created else "existing",
+                        value_name=pool.value_name,
+                        sources=sources,
+                    )
+                    for pool, sources in persisted
+                ]
         except ValueError as exc:
             raise ResponseValueUnavailableError(str(exc)) from exc
-        return [
-            ResponseValueRegistrationResult(
-                status="registered" if monitor.created else "existing",
-                value_name=monitor.value_name,
-                sources=sources,
-            )
-            for monitor, sources in persisted
-        ]
 
     def available_source_options(
         self,
@@ -312,7 +319,7 @@ class ResponseValueTracker:
 
         Returns:
             Current non-empty typed provenance, or ``None`` when retained
-            evidence disappeared or became incompatible. No monitor or value
+            evidence disappeared or became incompatible. No pool or value
             pool is registered by this read.
         """
         values = [
@@ -379,27 +386,6 @@ class ResponseValueTracker:
             value_count=len(deduplicated),
             sources=backed_sources,
         )
-
-    def refresh_sources(
-        self,
-        *,
-        ir: OpenAPISpecIR,
-        producer_operation_key: str,
-    ) -> int:
-        """Discover newly compatible producer fields for every active monitor."""
-        selected_count = 0
-        for monitor in self.catalog.list_monitors():
-            sources = self._select_sources(
-                ir,
-                parameter_name=monitor.parameter_name,
-                expected_type=monitor.expected_type,
-                producer_operation_key=producer_operation_key,
-            )
-            if not sources:
-                continue
-            self.catalog.add_sources(monitor.value_name, sources)
-            selected_count += len(sources)
-        return selected_count
 
     def _select_sources(
         self,

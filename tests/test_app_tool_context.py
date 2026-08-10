@@ -143,7 +143,10 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main() -> None:
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.llm import LLMClient, LLMModelConfig
     from restscope.llm.registry import LLMProviderRegistry
-    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.request_generation import (
+        RequestGenerationConfigStore,
+        RequestGenerationPatchRuntime,
+    )
 
     class UnusedProvider:
         """Satisfy Profile validation; this binding test never invokes a model."""
@@ -168,7 +171,10 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main() -> None:
         ),
     )
     runtime = build_harness(
-        request_generation_store=store,
+        request_generation_patch_runtime=RequestGenerationPatchRuntime(
+            store=store,
+            ir_provider=lambda: None,
+        ),
         operation_testing_service=OperationTestingService(config_store=store),
         agent_runtime=AgentRuntimeDefinition(
             profiles=(profile,),

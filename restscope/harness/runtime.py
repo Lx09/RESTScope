@@ -35,10 +35,7 @@ from .agent_runtime import ToolBindingFactory
 
 if TYPE_CHECKING:
     from restscope.harness.operation_testing import OperationTestingService
-    from restscope.request_generation import (
-        BehaviorMonitorReferenceValues,
-        RequestGenerationConfigStore,
-    )
+    from restscope.request_generation import RequestGenerationPatchRuntime
 
 
 class AgentRuntimeNotConfiguredError(RuntimeError):
@@ -143,9 +140,8 @@ def build_harness(
     target_http_transport: TargetHTTPTransport | None = None,
     observed_response_fields_provider: Callable[..., Any] | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
-    request_generation_store: "RequestGenerationConfigStore | None" = None,
+    request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
-    reference_values: "BehaviorMonitorReferenceValues | None" = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Build shared App implementations and optional explicit integrations.
@@ -193,14 +189,12 @@ def build_harness(
                 for item in (
                     observed_response_fields_provider,
                     resource_tool_backend,
-                    request_generation_store,
+                    request_generation_patch_runtime,
                     operation_testing_service,
-                    reference_values,
                 )
             ),
-            request_generation_store=request_generation_store,
+            request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,
-            reference_values=reference_values,
         )
         agent_runtime = replace(
             agent_runtime,
@@ -223,9 +217,8 @@ def _production_tool_binding_factories(
     *,
     include_http: bool,
     include_openapi: bool,
-    request_generation_store: "RequestGenerationConfigStore | None",
+    request_generation_patch_runtime: "RequestGenerationPatchRuntime | None",
     operation_testing_service: "OperationTestingService | None",
-    reference_values: "BehaviorMonitorReferenceValues | None",
 ) -> tuple[ToolBindingFactory, ...]:
     """Create implementations for every App-owned built-in domain Tool.
 
@@ -252,8 +245,7 @@ def _production_tool_binding_factories(
                 unavailable=_unavailable_tool,
             )
         )
-    if request_generation_store is not None:
-        from restscope.request_generation import ParameterPatchRuntime
+    if request_generation_patch_runtime is not None:
         from restscope.tools.parameter_patch import (
             ParameterPatchApplyBackend,
             parameter_patch_apply_tool_binding,
@@ -263,21 +255,14 @@ def _production_tool_binding_factories(
             request_generation_tool_bindings,
         )
 
-        patch_runtime = ParameterPatchRuntime(
-            store=request_generation_store,
-            ir_provider=lambda: runtime.require_context().ir,
-            reference_values=reference_values,
-            openapi_backend=runtime.openapi_backend,
-            resource_backend=runtime.resource_tool_backend,
-        )
         bindings.extend(
             request_generation_tool_bindings(
-                RequestGenerationToolBackend(patch_runtime)
+                RequestGenerationToolBackend(request_generation_patch_runtime)
             )
         )
         bindings.append(
             parameter_patch_apply_tool_binding(
-                ParameterPatchApplyBackend(patch_runtime)
+                ParameterPatchApplyBackend(request_generation_patch_runtime)
             )
         )
     if operation_testing_service is not None:
@@ -319,9 +304,8 @@ def build_harness_with_mcp_host(
     target_http_transport: TargetHTTPTransport | None = None,
     observed_response_fields_provider: Callable[..., Any] | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
-    request_generation_store: "RequestGenerationConfigStore | None" = None,
+    request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
-    reference_values: "BehaviorMonitorReferenceValues | None" = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Discover selected MCP servers into the isolated external toolbox.
@@ -346,9 +330,8 @@ def build_harness_with_mcp_host(
             target_http_transport=target_http_transport,
             observed_response_fields_provider=observed_response_fields_provider,
             resource_tool_backend=resource_tool_backend,
-            request_generation_store=request_generation_store,
+            request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,
-            reference_values=reference_values,
             agent_runtime=agent_runtime,
         )
         runtime.mcp_host = host

@@ -91,6 +91,8 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
     assert not (SOURCE_ROOT / "tools" / "test_case" / "runtime.py").exists()
     assert not (SOURCE_ROOT / "tools" / "test_case" / "specs.py").exists()
     assert not (SOURCE_ROOT / "tools" / "test_case" / "bindings.py").exists()
+    assert not (SOURCE_ROOT / "request_generation" / "patch_models.py").exists()
+    assert not (SOURCE_ROOT / "request_generation" / "patch_validation.py").exists()
 
     for expected in (
         SOURCE_ROOT / "tools" / "openapi" / "input_queries.py",
@@ -104,6 +106,32 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
         SOURCE_ROOT / "api_behavior_monitor" / "response_values" / "prompts.py",
     ):
         assert expected.is_file(), f"missing focused owner: {expected}"
+
+
+def test_parameter_patch_is_one_request_generation_runtime_capability() -> None:
+    """Harness and Tool adapters cannot assemble Patch state or reach its Store."""
+    patch_package = SOURCE_ROOT / "request_generation" / "parameter_patch"
+    assert {path.name for path in patch_package.glob("*.py")} == {
+        "__init__.py",
+        "compiler.py",
+        "errors.py",
+        "models.py",
+        "projection.py",
+        "runtime.py",
+    }
+    harness_source = (SOURCE_ROOT / "harness" / "runtime.py").read_text(
+        encoding="utf-8"
+    )
+    tool_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            SOURCE_ROOT / "tools" / "request_generation" / "runtime.py",
+            SOURCE_ROOT / "tools" / "parameter_patch" / "apply.py",
+        )
+    )
+    assert "RequestGenerationPatchRuntime(" not in harness_source
+    assert "runtime.store" not in tool_sources
+    assert "runtime._store" not in tool_sources
 
 
 def test_top_level_production_dependencies_are_acyclic() -> None:
