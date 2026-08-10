@@ -1,6 +1,6 @@
 # System Agent Profile Monitor Migration
 
-Status: Implementation and fresh verification complete; Git delivery pending
+Status: Delivered to local main and verified
 
 ## Objective
 
@@ -66,10 +66,14 @@ contracts, Monitor batching and persistence, and browser schema-v3 history.
   Tracker-owned LLM infrastructure type, or `is_subagent` reference. Direct
   `client.invoke` calls remain only in the generic Agent runtime.
 - `git diff --check`: passed.
+- After the feature commit was merged into local `main`, fresh verification on
+  the merged tree passed 592 Python tests with 3 skips, Python bytecode
+  compilation, 8 frontend test files / 44 tests, ESLint, the TypeScript/Vite
+  production build, and the Ant Design source check with 0 issues.
 
-## Git boundary
+## Git delivery
 
-The implementation is unstaged and uncommitted on
-`codex/system-agent-profile` in the dedicated worktree
-`/Users/lixin/Workplace/RESTScope-system-agent`. Commit, merge, push, branch
-deletion, and worktree cleanup require separate explicit authorization.
+The scoped implementation was committed as `12d2120` and merged into local
+`main` as `18fde74`. The dedicated worktree and
+`codex/system-agent-profile` branch were removed after merged-tree
+verification. Nothing was pushed.
