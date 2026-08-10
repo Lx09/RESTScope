@@ -55,7 +55,7 @@ def _app(tmp_path):
             profiles=(AgentProfile(name="main", model_config_name="thinking"),),
             models=(
                 LLMModelConfig(
-                    role="thinking",
+                    name="thinking",
                     provider="scripted",
                     model="thinking-model",
                     max_tokens=512,
@@ -180,7 +180,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main() -> None:
             profiles=(profile,),
             models=(
                 LLMModelConfig(
-                    role="thinking",
+                    name="thinking",
                     provider="unused",
                     model="unused",
                     max_tokens=128,

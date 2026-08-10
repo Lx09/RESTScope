@@ -74,6 +74,16 @@ as the active project direction.
   loop; the former FIFO Run Harness and its request/report DTOs are retired.
   The initial Main Profile intentionally has only its private Plan Tools until
   separate testing Skills and Tools are approved and connected.
+- Deterministic runtime code may synchronously start a registered System Agent
+  through `run_system_agent(profile_name, task)`. It is another lifecycle of the
+  same generic Agent, not a domain-specific Agent class. Every invocation is an
+  independent root session and tree. Its unchanged `AgentProfile` remains the
+  sole source of model, Tool, Skill, Context Source, and child-Profile grants;
+  registration binds only its bounded task adapter and result contract. System
+  usage is counted without a token budget limit. The Harness validates every
+  final output and supplies bounded specific feedback indefinitely until the
+  output is valid or cancellation, shutdown, Provider failure, or safe
+  compaction failure terminates the run.
 - Request Generation owns Generator and Constraint semantics, compilation,
   solving, schema snapshots, serialization, validation, and App-lifetime
   revisioned configuration. `request_generation.validate_patch` is read only;
@@ -104,6 +114,10 @@ as the active project direction.
   OpenAPI IR stay in memory for the current App lifetime. This exception does
   not authorize raw-response, LLM-reasoning, evolved-IR snapshot, plan, queue,
   or general Agent-memory persistence.
+  Its two ambiguous classifications—resource identifier selection and
+  response-value source selection—use registered no-Tool `fast` System Agent
+  Profiles. Dynamic `I*` and `S*` aliases are restricted by a per-invocation
+  Schema and local validation before Monitor state changes.
 - Operation Smoke, its persistent Failure/Attempt/Generator tables, specialized
   Failure/Patch/Review Agents, candidate registry, Finalizer, and evaluation
   package are retired. Standard `resolve-operation-failures` and
@@ -115,8 +129,9 @@ as the active project direction.
   The loopback React page may keep the latest five complete schema-v3 snapshots
   in same-origin IndexedDB. Those snapshots contain exactly the already-redacted
   UI payload, including raw Provider Reasoning, visible target credentials,
-  Agent prompts, Tool results, HTTP exchanges, Subagent relationships, and the
-  latest Main Agent Plan projected as Todo. Batch and Patch activity appears as
+  Agent prompts, Tool results, HTTP exchanges, Subagent relationships, System
+  Agent roots associated to their triggering HTTP Tool by `parent_event_id`,
+  and the latest Main Agent Plan projected as Todo. Batch and Patch activity appears as
   ordinary Tool detail; pre-v3 browser history is ignored. This is local testing history, not
   backend evidence or App recovery: no workflow reads it, no API, Phoenix span,
   or SQLite schema exposes the Reasoning, and clearing browser site data deletes

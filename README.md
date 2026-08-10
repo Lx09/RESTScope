@@ -115,8 +115,9 @@ transaction rules are documented in `docs/database_design.md`.
 ## LLM
 
 The MVP LLM layer lives in `restscope.llm`. It provides provider-neutral request
-and response schemas, OpenAI-compatible and DeepSeek providers, model selection,
-and structured output validation. `restscope.agent` defines explicit Profiles;
+and response schemas, OpenAI-compatible and DeepSeek providers, directly named
+model configurations, and structured output validation. `restscope.agent`
+defines explicit Profiles;
 `restscope.tools` owns the global subject-grouped Tool Catalog and execution
 runtime; `restscope.skills` owns reusable instruction metadata; and
 `restscope.harness` validates every Profile and child relationship at
@@ -130,7 +131,10 @@ Markdown References; the Harness binds that Tool only to the selected Skills'
 startup-validated in-memory files. It does not expose a separate resolution or
 Prompt object that callers could use to assemble a broader Agent. Unit tests
 provide their own local stub providers; the runtime package does not register
-an offline fake provider.
+an offline fake provider. `run_system_agent(profile_name, task)` uses that same
+resolution path for repeatable synchronous System Agent roots, but only for
+Profiles registered with a Harness-owned result contract. Each call gets an
+isolated prompt session and Agent tree and is closed after its validated result.
 
 The project currently ships two built-in standard Skills. The medium-risk
 `apply-parameter-patch` Skill reads current generation state, builds a complete
@@ -151,16 +155,21 @@ Skills yet: the initial Main Profile still grants only its private Plan pair.
 The retired specialized Failure Resolution, Patch, Review, and Compact Agents
 are not runtime fallbacks.
 
-The same generic `Agent` class runs the reusable Main Agent and task-scoped
-Subagents. A child receives its own Profile and objective, never its parent's
+The same generic `Agent` class runs the reusable Main Agent, task-scoped
+Subagents, and deterministic-caller-started System Agents. A child receives its
+own Profile and objective, never its parent's
 conversation. The global `subagent.start`, `subagent.wait`, and
 `subagent.cancel` Tools provide asynchronous direct-child control. The tree
 shares only in-memory slots, cooperative cancellation, tracing relationships,
-and weighted model budget. No Profile, task, queue, transcript, budget, or
+and weighted model budget. A System Agent instead receives a fresh unbounded
+usage accountant: usage is still recorded, but token spend never ends its
+correction loop. Provider failure, cancellation, shutdown, or safe compaction
+failure can still terminate it. No Profile, task, queue, transcript, budget, or
 compacted history is persisted.
 
 A Profile may also select the paired `plan.read` and `plan.update` Tools. The
-Harness gives each selected Main Agent or Subagent a separate session-memory
+Harness gives each selected Main Agent, Subagent, or System Agent a separate
+session-memory
 Plan containing an optional update explanation and up to 100 ordered
 `pending`, `in_progress`, or `completed` steps. At most one step may be active.
 The Plan is neither shared nor persisted.
@@ -184,6 +193,14 @@ schemas. It compacts at 80% using the same model with Tools disabled, then
 re-anchors every current Context Source but not reloadable Skill bodies; two
 invalid summaries fail safely without deleting history. Strict Agent outputs
 and provider tool protocols remain JSON.
+
+The API Behavior Monitor's ambiguous resource-identifier and response-source
+choices run through two `fast` System Agent Profiles. Stable judgment rules live
+in Profile instructions and each call supplies only bounded dynamic candidates.
+The result Schema is narrowed to that call's `I*` or `S*` aliases. The Harness
+returns specific bounded validation feedback for malformed or unauthorized
+output and keeps asking in the same session without an attempt limit. The
+Monitor updates state only after Schema and local candidate validation pass.
 
 ## Local live run observer
 
@@ -223,7 +240,10 @@ Ordinary Tools appear as compact no-chevron rows that are collapsed by default
 and open their complete detail in place. Subagent lifecycle calls are aggregated
 by child session and display the child Profile name instead of protocol names;
 clicking opens the child's same-style conversation in a focus-trapped Drawer
-with navigation through at most three levels. Schema-v3 contains only Agent-turn
+with navigation through at most three levels. System Agents triggered while an
+HTTP Tool is running remain independent root sessions, but appear as named,
+status-labelled rows inside that Tool card. A focus-trapped Drawer shows their
+complete conversation and any nested Tools. Schema-v3 contains only Agent-turn
 and ordinary Tool-call events; Batch and Patch Apply therefore render as Tool
 cards. Older browser snapshots are ignored.
 

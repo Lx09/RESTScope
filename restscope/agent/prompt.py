@@ -24,7 +24,7 @@ from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import LLMMessage, LLMModelConfig, LLMRequest, LLMResponse, ToolSpec
 from restscope.skills import SkillDefinition
 
-from .contracts import AgentTask
+from .contracts import AgentTask, SystemAgentTask
 from .profile import AgentProfile
 
 
@@ -45,7 +45,7 @@ HARNESS CONTRACT
   direct you to a registered Reference.
 - Child Profiles listed in developer guidance are the only direct children you
   may request through the Subagent Tools. They receive independent histories.
-- Return exactly one Tool Call or one final AgentCompletion result per turn.
+- Return exactly one Tool Call or one final structured result per turn.
 """
 
 _COMPACTION_INSTRUCTION = """Summarize the complete Agent history as bounded
@@ -83,6 +83,7 @@ class AgentPromptSession:
         model: LLMModelConfig,
         tool_specs: list[ToolSpec],
         output_schema: dict[str, object],
+        output_schema_name: str = "AgentCompletion",
     ) -> None:
         """Freeze resolved access until Main startup or a bounded task arrives.
 
@@ -93,7 +94,8 @@ class AgentPromptSession:
             context_sources: Harness-validated bounded Markdown readers.
             model: Fixed provider/model capacity and request settings.
             tool_specs: Complete fixed effective Tool contracts in request order.
-            output_schema: Complete fixed ``AgentCompletion`` JSON Schema.
+            output_schema: Complete fixed final-result JSON Schema.
+            output_schema_name: Provider-safe name for that result contract.
         """
         self.profile = profile
         self.model = model
@@ -101,6 +103,7 @@ class AgentPromptSession:
         self._context_sources = context_sources
         self._tool_specs = [spec.model_copy(deep=True) for spec in tool_specs]
         self._output_schema = deepcopy(output_schema)
+        self._output_schema_name = output_schema_name
         self._context: AgentContext | None = None
         self._source_fingerprints: dict[str, str] = {}
         self._startup_error: PromptSessionError | None = None
@@ -134,7 +137,7 @@ class AgentPromptSession:
             self._conversation_chars = 1
             self._startup_error = exc
 
-    def prepare_task(self, task: AgentTask) -> None:
+    def prepare_task(self, task: AgentTask | SystemAgentTask) -> None:
         """Add one task plus first or changed Context Source replacements.
 
         Source adapters already return safe bounded Markdown. This method adds
@@ -210,7 +213,7 @@ class AgentPromptSession:
             max_tokens=self.model.max_tokens,
             response_format="json_schema",
             json_schema=deepcopy(self._output_schema),
-            json_schema_name="AgentCompletion",
+            json_schema_name=self._output_schema_name,
             tools=[spec.model_copy(deep=True) for spec in self._tool_specs],
             tool_choice="auto" if self._tool_specs else "none",
             timeout_seconds=self.model.timeout_seconds,
@@ -434,7 +437,10 @@ def _conversation_budget_chars(
     return remaining
 
 
-def _render_task(task: AgentTask, sources: dict[str, str]) -> str:
+def _render_task(
+    task: AgentTask | SystemAgentTask,
+    sources: dict[str, str],
+) -> str:
     """Render the untrusted objective and changed Context replacements."""
     writer = CompactTextWriter(max_value_chars=24_000)
     writer.section("AGENT TASK", untrusted=True)

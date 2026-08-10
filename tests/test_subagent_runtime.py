@@ -45,7 +45,7 @@ def _runtime(*, release: Event | None = None, max_open_agents: int = 4):
     providers.register(provider)
     client = LLMClient(providers)
     model = LLMModelConfig(
-        role="fast",
+        name="fast",
         provider="scripted",
         model="fast-model",
         max_tokens=512,
@@ -111,7 +111,7 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
     definition = dict(
         models=(
             LLMModelConfig(
-                role="fast",
+                name="fast",
                 provider="scripted",
                 model="fast-model",
                 max_tokens=128,

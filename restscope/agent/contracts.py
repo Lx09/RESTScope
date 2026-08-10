@@ -1,14 +1,15 @@
-"""Define bounded contracts for task-scoped generic Agent executions.
+"""Define bounded contracts for generic Agent executions.
 
 Subagents and focused internal callers receive one :class:`AgentTask`; the
 taskless Main startup does not. Every model loop may finish only with
-:class:`AgentCompletion`. Runtime failures are added internally in an
-:class:`AgentResult`, so model-authored content cannot forge lifecycle state.
+:class:`AgentCompletion` unless the Harness starts a registered System Agent
+with a narrower result contract. Runtime failures are added internally, so
+model-authored content cannot forge lifecycle state.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,6 +20,31 @@ class AgentTask(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     objective: str = Field(min_length=1, max_length=12_000)
+
+
+class SystemAgentTask(BaseModel):
+    """Give one Harness-started System Agent bounded decision evidence.
+
+    ``allowed_result_aliases`` carries only the short, prompt-local identities
+    that may appear in the structured result. The registered result contract
+    decides how those aliases are represented and validated; callers cannot
+    supply an arbitrary JSON Schema.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    objective: str = Field(min_length=1, max_length=20_000)
+    allowed_result_aliases: tuple[str, ...] = Field(default=(), max_length=100)
+
+    @field_validator("allowed_result_aliases")
+    @classmethod
+    def require_bounded_unique_aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject aliases that cannot be shown safely in correction feedback."""
+        if len(values) != len(set(values)):
+            raise ValueError("System Agent result aliases must be unique")
+        if any(not value.strip() or len(value) > 20 for value in values):
+            raise ValueError("System Agent result aliases must be 1-20 characters")
+        return values
 
 
 class AgentFinding(BaseModel):
@@ -104,4 +130,33 @@ class AgentResult(BaseModel):
                 raise ValueError("Completed Agent result requires completion only")
         elif self.completion is not None or self.error is None:
             raise ValueError("Non-completed Agent result requires error only")
+        return self
+
+
+class SystemAgentResult(BaseModel):
+    """Return one Harness-validated structured System Agent decision.
+
+    The output is JSON data rather than a domain model so the generic Harness
+    does not import Monitor-owned result types. Callers may trust a completed
+    output because both the registered Pydantic model and its task-local rules
+    have already accepted it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_id: str = Field(min_length=1, max_length=160)
+    profile_name: str = Field(min_length=1, max_length=120)
+    status: AgentResultStatus
+    output: dict[str, Any] | None = None
+    error: AgentError | None = None
+    usage: AgentUsage = Field(default_factory=AgentUsage)
+
+    @model_validator(mode="after")
+    def require_matching_payload(self) -> "SystemAgentResult":
+        """Keep validated output and terminal failure mutually exclusive."""
+        if self.status == "completed":
+            if self.output is None or self.error is not None:
+                raise ValueError("Completed System Agent result requires output only")
+        elif self.output is not None or self.error is None:
+            raise ValueError("Non-completed System Agent result requires error only")
         return self

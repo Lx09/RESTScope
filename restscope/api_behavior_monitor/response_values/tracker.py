@@ -9,19 +9,14 @@ import json
 import re
 from typing import Any, Iterator, Literal
 
-from restscope.context import AgentContext, ContextLimits
-from restscope.llm import (
-    LLMClient,
-    LLMModelConfig,
-    LLMRequest,
-    OutputValidator,
-)
+from restscope.agent import SystemAgentTask
 from restscope.observability import TracingRuntime
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import SchemaIR
 from restscope.operation_references import ResponseFieldReference
 
 from ..response_contracts import normalize_media_type
+from ..system_agents import RESPONSE_SOURCE_PROFILE_NAME, SystemAgentRunner
 from .prompts import (
     ResponseSourceSelectionDecision,
     ResponseSourceView,
@@ -115,9 +110,7 @@ class ResponseValueTracker:
         self,
         *,
         catalog: ResponseValueCatalog,
-        client: LLMClient | None = None,
-        model: LLMModelConfig | None = None,
-        validator: OutputValidator | None = None,
+        system_agent_runner: SystemAgentRunner | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Bind catalogs and optional semantic-selection collaborators.
@@ -126,9 +119,7 @@ class ResponseValueTracker:
         the model-visible evidence itself remains on the existing LLM span.
         """
         self.catalog = catalog
-        self.client = client
-        self.model = model
-        self.validator = validator or OutputValidator()
+        self.system_agent_runner = system_agent_runner
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def register(
@@ -422,9 +413,7 @@ class ResponseValueTracker:
         """Convert selected model fields into validated response source identities."""
         if (
             not candidates
-            or self.client is None
-            or self.model is None
-            or not self.model.enabled
+            or self.system_agent_runner is None
         ):
             return []
         bounded = candidates[:100]
@@ -449,58 +438,37 @@ class ResponseValueTracker:
                 for index, candidate in enumerate(bounded, start=1)
             ],
         )
-        context = AgentContext(
-            system=prompt.system,
-            user=prompt.user,
-            limits=ContextLimits(
-                system_chars=1_600,
-                initial_user_chars=16_000,
-                feedback_chars=3_000,
-                conversation_chars=20_000,
-                required_output_tokens=512,
-            ),
-            metrics=prompt.metrics,
+        task = SystemAgentTask(
+            objective=prompt.user,
+            allowed_result_aliases=tuple(prompt.source_by_alias),
         )
-        messages = context.messages_for_request(self.model)
         with self.tracing_runtime.span(
             "ResponseValueTracker.select_sources",
             kind="CHAIN",
             input_value={"candidate_count": len(bounded)},
         ) as span:
-            for name, value in context.metrics.trace_attributes().items():
+            for name, value in prompt.metrics.trace_attributes().items():
                 span.set_attribute(name, value)
-            response = self.client.invoke(
-                LLMRequest(
-                    provider=self.model.provider,
-                    model=self.model.model,
-                    messages=messages,
-                    temperature=self.model.temperature,
-                    max_tokens=self.model.max_tokens,
-                    response_format="json",
-                    tool_choice="none",
-                    timeout_seconds=self.model.timeout_seconds,
-                    reasoning=self.model.reasoning,
-                    metadata={"role": "api_behavior_monitor"},
+            try:
+                result = self.system_agent_runner.run_system_agent(
+                    RESPONSE_SOURCE_PROFILE_NAME,
+                    task,
                 )
-            )
+            except Exception:
+                return []
             span.set_output(
                 {
+                    "status": result.status,
                     "selected_count": (
-                        len(response.parsed_json.get("sources", []))
-                        if isinstance(response.parsed_json, dict)
+                        len(result.output.get("sources", []))
+                        if result.output is not None
                         else 0
                     )
                 }
             )
-        validation = self.validator.validate(
-            response=response,
-            output_model=ResponseSourceSelectionDecision,
-        )
-        if not validation.valid:
+        if result.status != "completed" or result.output is None:
             return []
-        selection = ResponseSourceSelectionDecision.model_validate(
-            validation.validated_object
-        )
+        selection = ResponseSourceSelectionDecision.model_validate(result.output)
         if validate_response_source_decision(selection, prompt):
             return []
         return [

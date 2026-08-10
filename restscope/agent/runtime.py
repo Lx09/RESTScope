@@ -10,18 +10,32 @@ task-scoped callers and Subagents continue to use the bounded task protocol.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from threading import Event
+from typing import Literal
 from uuid import uuid4
+
+from pydantic import BaseModel
 
 from restscope.llm import LLMClient, OutputValidator
 
-from .contracts import AgentCompletion, AgentError, AgentResult, AgentTask, AgentUsage
+from .contracts import (
+    AgentCompletion,
+    AgentError,
+    AgentResult,
+    AgentTask,
+    AgentUsage,
+    SystemAgentResult,
+    SystemAgentTask,
+)
 from .ports import AgentToolExecutor, AgentTreeControlPort
 from .profile import AgentProfile
 from .prompt import AgentPromptSession, PromptSessionError
 
 
 _HARNESS_CONSTRUCTION_TOKEN = object()
+AgentLifecycle = Literal["main", "subagent", "system"]
+AgentLoopResult = AgentResult | SystemAgentResult
 
 
 class Agent:
@@ -37,7 +51,9 @@ class Agent:
         session_id: str | None = None,
         tree_control: AgentTreeControlPort | None = None,
         cancel_event: Event | None = None,
-        is_subagent: bool = False,
+        lifecycle: AgentLifecycle = "main",
+        output_model: type[BaseModel] = AgentCompletion,
+        validate_output: Callable[[BaseModel], tuple[str, ...]] | None = None,
         depth: int = 0,
         parent_session_id: str | None = None,
         _construction_token: object | None = None,
@@ -54,7 +70,9 @@ class Agent:
         self.session_id = session_id or f"agent_{uuid4().hex}"
         self.tree_control = tree_control
         self.cancel_event = cancel_event or Event()
-        self.is_subagent = is_subagent
+        self.lifecycle = lifecycle
+        self.output_model = output_model
+        self.validate_output = validate_output or (lambda _output: ())
         self.depth = depth
         self.parent_session_id = parent_session_id
         self._closed = False
@@ -69,7 +87,7 @@ class Agent:
             _construction_token=_HARNESS_CONSTRUCTION_TOKEN,
         )
 
-    def run(self, task: AgentTask) -> AgentResult:
+    def run(self, task: AgentTask | SystemAgentTask) -> AgentLoopResult:
         """Trace one independent session task and return only its bounded result."""
         with self.client.tracing_runtime.span(
             "Agent.run",
@@ -79,9 +97,7 @@ class Agent:
                 "restscope.agent.session_id": self.session_id,
                 "restscope.agent.profile": self.profile.name,
                 "restscope.agent.depth": self.depth,
-                "restscope.agent.lifecycle": (
-                    "subagent" if self.is_subagent else "main"
-                ),
+                "restscope.agent.lifecycle": self.lifecycle,
                 **(
                     {"restscope.agent.parent_session_id": self.parent_session_id}
                     if self.parent_session_id is not None
@@ -113,9 +129,7 @@ class Agent:
                 "restscope.agent.session_id": self.session_id,
                 "restscope.agent.profile": self.profile.name,
                 "restscope.agent.depth": self.depth,
-                "restscope.agent.lifecycle": (
-                    "subagent" if self.is_subagent else "main"
-                ),
+                "restscope.agent.lifecycle": self.lifecycle,
             },
         ) as span:
             result = self._start_main_loop()
@@ -127,11 +141,11 @@ class Agent:
                 code = result.error.code if result.error else result.status
                 raise RuntimeError(f"{code}: {message}")
 
-    def _start_main_loop(self) -> AgentResult:
+    def _start_main_loop(self) -> AgentLoopResult:
         """Prepare the taskless Main prompt before entering the shared loop."""
         if self._closed:
             raise RuntimeError("Agent is closed")
-        if self.is_subagent:
+        if self.lifecycle != "main":
             raise RuntimeError("Taskless start is available only to the Main Agent")
         if self._has_started or self._has_run:
             raise RuntimeError("Main Agent loop is already started")
@@ -144,14 +158,14 @@ class Agent:
             return self._prompt_error_result(exc)
         return self._execute_loop()
 
-    def _run_task(self, task: AgentTask) -> AgentResult:
+    def _run_task(self, task: AgentTask | SystemAgentTask) -> AgentLoopResult:
         """Execute the correction loop while retaining bounded Main history."""
         if self._closed:
             raise RuntimeError("Agent is closed")
         if self._has_started:
             raise RuntimeError("Main Agent loop is already started")
-        if self.is_subagent and self._has_run:
-            raise RuntimeError("Subagent accepts only its creation task")
+        if self.lifecycle in {"subagent", "system"} and self._has_run:
+            raise RuntimeError(f"{self.lifecycle.title()} Agent accepts only one task")
         self._has_run = True
         if self.cancel_event.is_set():
             return self._cancelled_result()
@@ -162,7 +176,7 @@ class Agent:
 
         return self._execute_loop()
 
-    def _execute_loop(self) -> AgentResult:
+    def _execute_loop(self) -> AgentLoopResult:
         """Execute the shared model, Tool, correction, and compaction loop."""
 
         prompt_tokens = cached_tokens = output_tokens = model_outputs = tool_calls = 0
@@ -233,14 +247,10 @@ class Agent:
                         compacted = True
                         break
                 if not compacted:
-                    return AgentResult(
-                        session_id=self.session_id,
-                        profile_name=self.profile.name,
+                    return self._failure_result(
                         status="context_compaction_failed",
-                        error=AgentError(
-                            code="context_compaction_failed",
-                            message="The Agent context could not be compacted safely.",
-                        ),
+                        code="context_compaction_failed",
+                        message="The Agent context could not be compacted safely.",
                         usage=self._usage(
                             prompt_tokens=prompt_tokens,
                             cached_input_tokens=cached_tokens,
@@ -349,34 +359,56 @@ class Agent:
             self.prompt_session.append_assistant(response)
             validated = OutputValidator().validate(
                 response=response,
-                output_model=AgentCompletion,
+                output_model=self.output_model,
             )
             if not validated.valid:
                 self.prompt_session.append_feedback(
-                    "CORRECTION: Return one final result matching the supplied "
-                    "AgentCompletion JSON Schema."
+                    self._validation_feedback(
+                        tuple(
+                            f"{issue.location or 'result'}: {issue.message}"
+                            for issue in validated.errors
+                        )
+                    )
                 )
                 self._append_budget_reminders(reminders)
                 continue
+            output = self.output_model.model_validate(validated.validated_object)
+            output_errors = self.validate_output(output)
+            if output_errors:
+                self.prompt_session.append_feedback(
+                    self._validation_feedback(output_errors)
+                )
+                self._append_budget_reminders(reminders)
+                continue
+            usage = self._usage(
+                prompt_tokens=prompt_tokens,
+                cached_input_tokens=cached_tokens,
+                output_tokens=output_tokens,
+                model_outputs=model_outputs,
+                tool_calls=tool_calls,
+                subagents_started=subagents_started,
+            )
+            if self.lifecycle == "system":
+                return SystemAgentResult(
+                    session_id=self.session_id,
+                    profile_name=self.profile.name,
+                    status="completed",
+                    output=output.model_dump(mode="json"),
+                    usage=usage,
+                )
             return AgentResult(
                 session_id=self.session_id,
                 profile_name=self.profile.name,
                 status="completed",
-                completion=AgentCompletion.model_validate(validated.validated_object),
-                usage=self._usage(
-                    prompt_tokens=prompt_tokens,
-                    cached_input_tokens=cached_tokens,
-                    output_tokens=output_tokens,
-                    model_outputs=model_outputs,
-                    tool_calls=tool_calls,
-                    subagents_started=subagents_started,
-                ),
+                completion=AgentCompletion.model_validate(output),
+                usage=usage,
             )
 
     def close(self) -> None:
         """Prevent more tasks and release the in-memory conversation."""
+        self.cancel_event.set()
         if self.tree_control is not None:
-            if self.is_subagent:
+            if self.lifecycle == "subagent":
                 self.tree_control.close_descendants(self.session_id)
             else:
                 self.tree_control.close()
@@ -397,16 +429,12 @@ class Agent:
         model_outputs: int = 0,
         tool_calls: int = 0,
         subagents_started: int = 0,
-    ) -> AgentResult:
+    ) -> AgentLoopResult:
         """Return stable cooperative cancellation without model-authored state."""
-        return AgentResult(
-            session_id=self.session_id,
-            profile_name=self.profile.name,
+        return self._failure_result(
             status="cancelled",
-            error=AgentError(
-                code="agent_cancelled",
-                message="The Agent was cancelled by its parent or Harness.",
-            ),
+            code="agent_cancelled",
+            message="The Agent was cancelled by its parent or Harness.",
             usage=self._usage(
                 prompt_tokens=prompt_tokens,
                 cached_input_tokens=cached_input_tokens,
@@ -426,16 +454,12 @@ class Agent:
         model_outputs: int,
         tool_calls: int,
         subagents_started: int,
-    ) -> AgentResult:
+    ) -> AgentLoopResult:
         """Stop the tree after charging, without accepting its overage action."""
-        return AgentResult(
-            session_id=self.session_id,
-            profile_name=self.profile.name,
+        return self._failure_result(
             status="rollout_budget_exceeded",
-            error=AgentError(
-                code="rollout_budget_exceeded",
-                message="The shared Agent-tree model budget was exhausted.",
-            ),
+            code="rollout_budget_exceeded",
+            message="The shared Agent-tree model budget was exhausted.",
             usage=self._usage(
                 prompt_tokens=prompt_tokens,
                 cached_input_tokens=cached_input_tokens,
@@ -456,13 +480,12 @@ class Agent:
         model_outputs: int = 0,
         tool_calls: int = 0,
         subagents_started: int = 0,
-    ) -> AgentResult:
+    ) -> AgentLoopResult:
         """Return a stable pre-action failure from private prompt assembly."""
-        return AgentResult(
-            session_id=self.session_id,
-            profile_name=self.profile.name,
+        return self._failure_result(
             status=error.code,
-            error=AgentError(code=error.code, message=error.safe_message),
+            code=error.code,
+            message=error.safe_message,
             usage=self._usage(
                 prompt_tokens=prompt_tokens,
                 cached_input_tokens=cached_input_tokens,
@@ -471,6 +494,44 @@ class Agent:
                 tool_calls=tool_calls,
                 subagents_started=subagents_started,
             ),
+        )
+
+    def _failure_result(
+        self,
+        *,
+        status: str,
+        code: str,
+        message: str,
+        usage: AgentUsage,
+    ) -> AgentLoopResult:
+        """Build the lifecycle-specific terminal result outside model control."""
+        error = AgentError(code=code, message=message)
+        if self.lifecycle == "system":
+            return SystemAgentResult(
+                session_id=self.session_id,
+                profile_name=self.profile.name,
+                status=status,
+                error=error,
+                usage=usage,
+            )
+        return AgentResult(
+            session_id=self.session_id,
+            profile_name=self.profile.name,
+            status=status,
+            error=error,
+            usage=usage,
+        )
+
+    @staticmethod
+    def _validation_feedback(errors: tuple[str, ...]) -> str:
+        """Return bounded actionable feedback without imposing a retry limit."""
+        details = "; ".join(errors[:10])[:1_800]
+        if not details:
+            details = "The result did not match the registered contract."
+        return (
+            "CORRECTION: The previous final result was rejected by the Harness. "
+            f"Problems: {details} Return one complete corrected result matching "
+            "the supplied JSON Schema."
         )
 
     @staticmethod

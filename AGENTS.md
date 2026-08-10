@@ -170,9 +170,9 @@ Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.
 
-## Main Agent, Subagent, Skill, Tool, and Harness boundaries
+## Main Agent, Subagent, System Agent, Skill, Tool, and Harness boundaries
 
-These five terms are RESTScope's core runtime language and hard constraints:
+These six terms are RESTScope's core runtime language and hard constraints:
 
 - **Main Agent** is the App's single long-lived LLM Agent. **Subagent** is an
   independent, task-scoped use of the same configurable Agent runtime, started
@@ -182,13 +182,18 @@ These five terms are RESTScope's core runtime language and hard constraints:
   Tools, Subagents, ordering, domain retries, and completion. The current
   blocking `RESTScopeApp.start()` entry launches that loop without a public
   task or result DTO; the removed FIFO Run Harness must not be restored.
+- **System Agent** is a synchronous, repeatable root use of the same generic
+  Agent, started only through a Harness-registered Profile/result contract.
+  Every call owns an isolated prompt session and Agent tree and is closed after
+  completion. It is not a Subagent and has no hidden Main-Agent state.
 - **Agent Profile** explicitly names one model configuration, ordered Tools,
   Skills, bounded context sources, and the child Profiles it may start. A
   Profile may include a bounded description; every Profile named as a child
   must include one for its direct parent's delegation guidance. Global
   discovery never grants execution permission. The Harness validates the
   complete Profile graph once and constructs Agents through
-  `start_main_agent`; do not expose a separate resolve-and-assemble seam.
+  `start_main_agent` or registered `run_system_agent` calls; do not expose a
+  separate resolve-and-assemble seam.
   A Subagent receives no hidden Main-Agent state and returns only a structured,
   bounded result. Failure Resolution and Parameter Patch methods now live in
   standard Skills; do not reintroduce the retired class-per-role Agents. Bounded Profile
@@ -218,6 +223,14 @@ These five terms are RESTScope's core runtime language and hard constraints:
   inline evidence and creates no run-local registry. The retired run-scoped FIFO and
   retry scheduler must not be restored; the blocking Main loop owns any future
   semantic scheduling through explicitly granted Skills and Tools.
+- `run_system_agent(profile_name, task)` may start only a Profile registered by
+  an immutable `SystemAgentDefinition`. Registration binds bounded task input
+  and the structured result contract but grants no capability: the unchanged
+  Profile remains the sole source of model, Tool, Skill, Context Source, and
+  child-Profile permission. System roots count model usage without enforcing a
+  token budget. The Harness gives every invalid final output bounded specific
+  correction feedback without an attempt limit; cancellation, App shutdown,
+  Provider errors, and safe compaction failure remain terminal.
 - Built-in Tools form one immutable global Catalog. Runtime-discovered MCP Tools
   use a separate external Catalog. Every Agent receives only the exact names in
   its Profile; neither Catalog is automatically injected. `skill.read` is the

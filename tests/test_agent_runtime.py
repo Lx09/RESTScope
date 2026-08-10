@@ -37,7 +37,7 @@ def _model(name: str = "thinking"):
     from restscope.llm import LLMModelConfig
 
     return LLMModelConfig(
-        role=name,
+        name=name,
         provider="scripted",
         model=f"{name}-model",
         max_tokens=512,

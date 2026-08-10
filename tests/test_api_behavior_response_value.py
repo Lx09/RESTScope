@@ -722,18 +722,19 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     from restscope.api_behavior_monitor.response_values.tracker import (
         ResponseValueTracker,
     )
-    from restscope.llm import LLMModelConfig, LLMResponse
+    from restscope.agent import SystemAgentResult
 
     class StubClient:
         def __init__(self) -> None:
             self.requests = []
 
-        def invoke(self, request):
-            self.requests.append(request)
-            return LLMResponse(
-                provider=request.provider,
-                model=request.model,
-                parsed_json={"sources": ["S1"]},
+        def run_system_agent(self, profile_name, task):
+            self.requests.append((profile_name, task))
+            return SystemAgentResult(
+                session_id=f"system-{len(self.requests)}",
+                profile_name=profile_name,
+                status="completed",
+                output={"sources": ["S1"]},
             )
 
     ir = OpenAPIParser.parse(
@@ -785,12 +786,7 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     client = StubClient()
     tracker = ResponseValueTracker(
         catalog=_catalog(),
-        client=client,
-        model=LLMModelConfig(
-            role="api_behavior_monitor",
-            provider="stub",
-            model="fast-stub",
-        ),
+        system_agent_runner=client,
     )
     tracker.observe(
         producer_operation_key="GET /commits",
@@ -818,9 +814,9 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
 
     assert [source.field_name for source in result.sources] == ["sha"]
     assert len(client.requests) == 2
-    request = client.requests[1]
-    assert request.metadata["role"] == "api_behavior_monitor"
-    prompt = request.messages[1].content
+    profile_name, task = client.requests[1]
+    assert profile_name == "response-source-selector"
+    prompt = task.objective
     assert "- `P1`" in prompt
     assert 'parameter: "commitId"' in prompt
     assert "- `S1`" in prompt
@@ -828,8 +824,7 @@ def test_semantic_source_selection_uses_bounded_ir_metadata_only() -> None:
     assert 'field: "body.sha"' in prompt
     assert "Commit object identifier" in prompt
     assert "string:" not in prompt
-    assert request.response_format == "json"
-    assert request.json_schema is None
+    assert task.allowed_result_aliases == ("S1", "S2")
     for forbidden in (
         "candidate_id",
         "selector",
@@ -925,29 +920,25 @@ def test_semantic_source_selection_fails_closed_without_repair() -> None:
     from restscope.api_behavior_monitor.response_values.catalog import (
         ResponseValueSource,
     )
-    from restscope.llm import LLMModelConfig, LLMResponse
+    from restscope.agent import SystemAgentResult
 
     class StubClient:
         def __init__(self) -> None:
             self.requests = []
 
-        def invoke(self, request):
-            self.requests.append(request)
-            return LLMResponse(
-                provider=request.provider,
-                model=request.model,
-                parsed_json={"sources": ["S9"]},
+        def run_system_agent(self, profile_name, task):
+            self.requests.append((profile_name, task))
+            return SystemAgentResult(
+                session_id="system-invalid",
+                profile_name=profile_name,
+                status="completed",
+                output={"sources": ["S9"]},
             )
 
     client = StubClient()
     tracker = ResponseValueTracker(
         catalog=_catalog(),
-        client=client,
-        model=LLMModelConfig(
-            role="api_behavior_monitor",
-            provider="stub",
-            model="fast-stub",
-        ),
+        system_agent_runner=client,
     )
 
     selected = tracker._semantic_sources(

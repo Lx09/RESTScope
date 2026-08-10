@@ -39,33 +39,19 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
     assert request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
 
 
-def test_model_selector_exposes_only_generic_thinking_and_fast_roles() -> None:
-    """Retired named Agent roles no longer influence model selection."""
-    from restscope.llm import LLMModelConfig, ModelSelector
+def test_model_config_is_named_without_a_semantic_role_selector() -> None:
+    """Profiles choose exact config names instead of hidden role mappings."""
+    from restscope.llm import LLMModelConfig
 
-    selector = ModelSelector(
-        thinking=LLMModelConfig(
-            role="thinking",
-            provider="stub",
-            model="thinking-model",
-            temperature=0.7,
-        ),
-        fast=LLMModelConfig(
-            role="fast",
-            provider="stub",
-            model="fast-model",
-            temperature=0.7,
-        ),
+    thinking = LLMModelConfig(
+        name="thinking",
+        provider="stub",
+        model="thinking-model",
     )
+    fast = LLMModelConfig(name="fast", provider="stub", model="fast-model")
 
-    for role, expected_model in (
-        ("planner", "thinking-model"),
-        ("api_behavior_monitor", "fast-model"),
-    ):
-        selected = selector.select(role)
-        assert selected.model == expected_model
-    with pytest.raises(ValueError, match="Unsupported LLM role"):
-        selector.select("parameter_patch_agent")
+    assert thinking.name == "thinking"
+    assert fast.name == "fast"
 
 
 def test_llm_model_config_uses_large_context_defaults() -> None:
@@ -73,7 +59,7 @@ def test_llm_model_config_uses_large_context_defaults() -> None:
     from restscope.llm import LLMModelConfig
 
     model = LLMModelConfig(
-        role="thinking",
+        name="thinking",
         provider="stub",
         model="think",
     )
@@ -83,7 +69,7 @@ def test_llm_model_config_uses_large_context_defaults() -> None:
 
     with pytest.raises(ValueError, match="smaller than context_window_tokens"):
         LLMModelConfig(
-            role="invalid",
+            name="invalid",
             provider="stub",
             model="think",
             max_tokens=4096,
@@ -633,9 +619,9 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
     assert response.tool_calls[0].name == "catalog.search"
 
 
-def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
-    """Scenario: verify that model selector uses thinking and fast configs."""
-    from restscope.llm import ModelSelector
+def test_model_builder_uses_named_thinking_and_fast_configs(tmp_path: Path) -> None:
+    """Each raw slot translates directly without semantic role selection."""
+    from restscope.llm import build_llm_model_config
     from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
@@ -654,14 +640,14 @@ def test_model_selector_uses_thinking_and_fast_configs(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     config = RESTScopeConfig.from_environment(env_file)
-    selector = ModelSelector.from_config(config.llm)
+    thinking = build_llm_model_config("thinking", config.llm.thinking)
+    fast = build_llm_model_config("fast", config.llm.fast)
 
-    assert selector.select("planner").model == "strong-model"
-    assert selector.select("result_analyst").model == "strong-model"
-    assert selector.select("check_designer").model == "strong-model"
-    assert selector.select("intelligence_updater").model == "strong-model"
-    assert selector.select("decision_maker").model == "fast-model"
-    assert selector.select("decision_maker").provider == "fake"
+    assert thinking.name == "thinking"
+    assert thinking.model == "strong-model"
+    assert fast.name == "fast"
+    assert fast.model == "fast-model"
+    assert fast.provider == "fake"
 
 
 def test_deepseek_profiles_accept_one_m_context_and_384k_output(tmp_path: Path) -> None:
@@ -749,7 +735,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that deepseek config defaults reasoning by model slot and registers provider."""
-    from restscope.llm import ModelSelector, build_llm_registry
+    from restscope.llm import build_llm_model_config, build_llm_registry
     from restscope.llm.providers.deepseek import DeepSeekProvider
     from restscope.config import RESTScopeConfig
 
@@ -766,11 +752,12 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
     )
 
     config = RESTScopeConfig.from_environment(env_file)
-    selector = ModelSelector.from_config(config.llm)
+    thinking = build_llm_model_config("thinking", config.llm.thinking)
+    fast = build_llm_model_config("fast", config.llm.fast)
     registry = build_llm_registry(config.llm)
 
-    assert selector.select("planner").reasoning.mode == "enabled"
-    assert selector.select("decision_maker").reasoning.mode == "disabled"
+    assert thinking.reasoning.mode == "enabled"
+    assert fast.reasoning.mode == "disabled"
     assert registry.list_names() == ["deepseek"]
     assert isinstance(registry.get("deepseek"), DeepSeekProvider)
     assert registry.get("deepseek").base_url == "https://api.deepseek.com"
@@ -778,7 +765,7 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
 
 def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> None:
     """Scenario: verify that deepseek config parses explicit reasoning effort."""
-    from restscope.llm import ModelSelector
+    from restscope.llm import build_llm_model_config
     from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
@@ -798,11 +785,13 @@ def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    selector = ModelSelector.from_config(RESTScopeConfig.from_environment(env_file).llm)
+    config = RESTScopeConfig.from_environment(env_file)
+    thinking = build_llm_model_config("thinking", config.llm.thinking)
+    fast = build_llm_model_config("fast", config.llm.fast)
 
-    assert selector.select("planner").reasoning.effort == "max"
-    assert selector.select("decision_maker").reasoning.mode == "disabled"
-    assert selector.select("decision_maker").reasoning.effort is None
+    assert thinking.reasoning.effort == "max"
+    assert fast.reasoning.mode == "disabled"
+    assert fast.reasoning.effort is None
 
 
 def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:

@@ -31,6 +31,13 @@ export interface ConversationItem {
   childSessionId?: string;
   childProfileName?: string;
   childStatus?: string;
+  systemAgents?: SystemAgentActivity[];
+}
+
+export interface SystemAgentActivity {
+  sessionId: string;
+  profileName: string;
+  status: string;
 }
 
 export interface ConversationProjection {
@@ -136,6 +143,40 @@ function itemMatches(item: ConversationItem, filters?: TimelineFilters): boolean
   if (search && !searchableItem(item).includes(search)) return false;
   if (!item.event) return true;
   return eventMatches(item.event, filters);
+}
+
+function systemAgentsForTool(
+  events: TimelineEvent[],
+  toolEvent: TimelineEvent,
+  sessions: Record<string, AgentIdentity>,
+): SystemAgentActivity[] {
+  // System roots remain independent sessions; only their first visible turn's
+  // parent event supplies the causal HTTP Tool placement.
+  const sessionIds = new Set(
+    events
+      .filter((event) => (
+        event.parent_event_id === toolEvent.event_id
+        && event.agent?.lifecycle === "system"
+      ))
+      .map((event) => event.agent?.session_id)
+      .filter((value): value is string => typeof value === "string"),
+  );
+  return [...sessionIds].map((sessionId) => {
+    const activity = events.filter((event) => event.agent?.session_id === sessionId);
+    const status = activity.some((event) => event.status === "running")
+      ? "running"
+      : activity.some((event) => event.status === "failed")
+        ? "failed"
+        : activity.some((event) => event.status === "warning")
+          ? "warning"
+          : "succeeded";
+    const identity = sessions[sessionId];
+    return {
+      sessionId,
+      profileName: identity?.profile_name ?? identity?.name ?? sessionId,
+      status,
+    };
+  });
 }
 
 /** Return every explicit generic Agent identity indexed by stable session ID. */
@@ -263,6 +304,7 @@ export function projectConversation(
         order: event.order,
         sessionId,
         event,
+        systemAgents: systemAgentsForTool(ordered, event, sessions),
       });
     }
   }

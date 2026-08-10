@@ -339,13 +339,16 @@ button,
 
 .subagent-activity:hover,
 .subagent-activity:focus-visible,
+.system-agent-activity:hover,
+.system-agent-activity:focus-visible,
 .breadcrumb-button:focus-visible {
   color: #69b1ff;
   outline: 2px solid rgba(79, 140, 255, 0.35);
   outline-offset: 2px;
 }
 
-.subagent-drawer .ant-drawer-body {
+.subagent-drawer .ant-drawer-body,
+.system-agent-drawer .ant-drawer-body {
   display: flex;
   min-height: 0;
   padding: 0 20px 20px;
@@ -353,8 +356,44 @@ button,
   flex-direction: column;
 }
 
-.subagent-drawer .conversation-viewport-wrap {
+.subagent-drawer .conversation-viewport-wrap,
+.system-agent-drawer .conversation-viewport-wrap {
   height: 100%;
+}
+
+.system-agent-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.system-agent-activity {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.system-agent-activity:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.system-agent-name {
+  overflow: hidden;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .breadcrumb-button {

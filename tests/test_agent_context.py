@@ -20,7 +20,7 @@ from restscope.llm import LLMModelConfig, LLMResponse, ToolCall
 def _model(*, context_window_tokens: int = 8_192) -> LLMModelConfig:
     """Return a small deterministic model window for projection tests."""
     return LLMModelConfig(
-        role="test",
+        name="test",
         provider="test",
         model="test-model",
         max_tokens=512,
@@ -532,8 +532,8 @@ def test_context_package_has_no_workflow_database_or_registry_dependencies() -> 
         assert forbidden not in source
 
 
-def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
-    """Every current decision site shares one safe message-construction path."""
+def test_domain_monitors_delegate_model_decisions_to_system_agents() -> None:
+    """Trackers cannot bypass Profile authorization or Harness validation."""
     root = Path(__file__).parents[1]
     callers = (
         root / "restscope/api_behavior_monitor/resource_identifiers/tracker.py",
@@ -542,8 +542,9 @@ def test_every_direct_domain_llm_call_uses_the_shared_agent_context() -> None:
 
     for caller in callers:
         source = caller.read_text(encoding="utf-8")
-        assert "AgentContext(" in source, caller
-        assert "messages_for_request(" in source, caller
+        assert "SystemAgentTask(" in source, caller
+        assert "client.invoke" not in source, caller
+        assert "LLMRequest(" not in source, caller
         assert "fit_prompt_context" not in source, caller
         assert "fit_message_context" not in source, caller
 

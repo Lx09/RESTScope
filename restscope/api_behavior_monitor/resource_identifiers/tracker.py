@@ -6,15 +6,10 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
-from restscope.context import AgentContext, CompactTextWriter, ContextLimits
-from restscope.llm import (
-    LLMClient,
-    LLMModelConfig,
-    LLMRequest,
-    LLMResponse,
-    OutputValidator,
-)
+from restscope.agent import SystemAgentTask
 from restscope.observability import TracingRuntime
+
+from ..system_agents import RESOURCE_IDENTIFIER_PROFILE_NAME, SystemAgentRunner
 
 from .catalog import ResourceCatalog
 from .prompts import (
@@ -145,15 +140,12 @@ class ResourceIdentifierTracker:
         self,
         *,
         catalog: ResourceCatalog,
-        client: LLMClient,
-        model: LLMModelConfig,
-        validator: OutputValidator | None = None,
+        system_agent_runner: SystemAgentRunner,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
+        """Bind persisted evidence and the Harness-owned decision runner."""
         self.catalog = catalog
-        self.client = client
-        self.model = model
-        self.validator = validator or OutputValidator()
+        self.system_agent_runner = system_agent_runner
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
 
     def observe(self, observation: ResourceObservation) -> ResourceMonitorResult:
@@ -636,40 +628,7 @@ class ResourceIdentifierTracker:
             resource_name=resource_name,
             candidates=batches[0],
         )
-        first_context = _prompt_context(first_prompt)
-        selection, errors, response = self._invoke_selection(
-            first_context,
-            first_prompt,
-        )
-        if errors:
-            first_context.append_assistant(response)
-            feedback = CompactTextWriter(max_value_chars=500)
-            feedback.section(
-                "REASONS THE PREVIOUS IDENTIFIER SELECTION WAS REJECTED",
-                untrusted=True,
-            )
-            for error in errors[:10]:
-                feedback.text("problem", error)
-            feedback.section("REQUIRED REPLACEMENT IDENTIFIER SELECTION")
-            feedback.text(
-                "instruction",
-                "Return one complete corrected JSON object.",
-            )
-            first_context.append_feedback(
-                feedback.render(max_chars=3_000).text
-            )
-            repaired, repair_errors, _response = self._invoke_selection(
-                first_context,
-                first_prompt,
-            )
-            if repair_errors or repaired is None:
-                raise ResourceIdentifierOutputError(
-                    "resource_monitor_output_invalid",
-                    "Resource Monitor output remained invalid: "
-                    f"{'; '.join(repair_errors[:5])}",
-                )
-            return _selected_field(repaired, batches[0])
-        assert selection is not None
+        selection = self._invoke_selection(first_prompt)
         selected = _selected_field(selection, batches[0])
         if selected is not None or len(batches) == 1:
             return selected
@@ -680,83 +639,57 @@ class ResourceIdentifierTracker:
             resource_name=resource_name,
             candidates=batches[1],
         )
-        second_context = _prompt_context(second_prompt)
-        second, second_errors, _response = self._invoke_selection(
-            second_context,
-            second_prompt,
-        )
-        if second_errors or second is None:
-            raise ResourceIdentifierOutputError(
-                "resource_monitor_output_invalid",
-                "Resource Monitor second selection was invalid: "
-                f"{'; '.join(second_errors[:5])}",
-            )
+        second = self._invoke_selection(second_prompt)
         return _selected_field(second, batches[1])
 
     def _invoke_selection(
         self,
-        context: AgentContext,
         prompt: IdentifierPrompt,
-    ) -> tuple[
-        IdentifierSelectionDecision | None,
-        list[str],
-        LLMResponse,
-    ]:
-        """Call the identifier-selection model and validate its bounded structured decision."""
-        if not self.model.enabled:
-            raise ResourceIdentifierOutputError(
-                "resource_monitor_model_not_configured",
-                "The resource_monitor FAST model is not configured",
-            )
-        llm_request = self._selection_request(context)
+    ) -> IdentifierSelectionDecision:
+        """Run one Profile and trust only its Harness-validated decision."""
+        task = SystemAgentTask(
+            objective=prompt.user,
+            allowed_result_aliases=prompt.candidate_aliases,
+        )
         with self.tracing_runtime.span(
             "ResourceIdentifierTracker.select_identifier",
             kind="CHAIN",
             input_value={"candidate_count": len(prompt.candidate_aliases)},
         ) as span:
-            for name, value in context.metrics.trace_attributes().items():
+            for name, value in prompt.metrics.trace_attributes().items():
                 span.set_attribute(name, value)
-            response = self.client.invoke(llm_request)
+            try:
+                result = self.system_agent_runner.run_system_agent(
+                    RESOURCE_IDENTIFIER_PROFILE_NAME,
+                    task,
+                )
+            except Exception as exc:
+                raise ResourceIdentifierOutputError(
+                    "resource_monitor_system_agent_failed",
+                    "Resource identifier System Agent could not run",
+                ) from exc
             span.set_output(
                 {
+                    "status": result.status,
                     "has_identifier": bool(
-                        isinstance(response.parsed_json, dict)
-                        and response.parsed_json.get("identifier")
+                        result.output and result.output.get("identifier")
                     ),
-                    "tool_call_count": len(response.tool_calls),
                 }
             )
-        validation = self.validator.validate(
-            response=response,
-            output_model=IdentifierSelectionDecision,
-        )
-        if not validation.valid:
-            return (
-                None,
-                ["Return one JSON object with only the identifier field."],
-                response,
+        if result.status != "completed" or result.output is None:
+            message = result.error.message if result.error is not None else result.status
+            raise ResourceIdentifierOutputError(
+                "resource_monitor_system_agent_failed",
+                f"Resource identifier System Agent failed: {message}",
             )
-        selection = IdentifierSelectionDecision.model_validate(
-            validation.validated_object
-        )
-        return selection, validate_identifier_decision(selection, prompt), response
-
-    def _selection_request(
-        self,
-        context: AgentContext,
-    ) -> LLMRequest:
-        return LLMRequest(
-            provider=self.model.provider,
-            model=self.model.model,
-            messages=context.messages_for_request(self.model),
-            temperature=self.model.temperature,
-            max_tokens=self.model.max_tokens,
-            response_format="json",
-            tool_choice="none",
-            timeout_seconds=self.model.timeout_seconds,
-            reasoning=self.model.reasoning,
-            metadata={"role": "api_behavior_monitor"},
-        )
+        selection = IdentifierSelectionDecision.model_validate(result.output)
+        errors = validate_identifier_decision(selection, prompt)
+        if errors:
+            raise ResourceIdentifierOutputError(
+                "resource_monitor_output_invalid",
+                f"Harness returned an invalid identifier decision: {errors[0]}",
+            )
+        return selection
 
     def _record_warning(
         self,
@@ -1292,22 +1225,6 @@ def _selection_prompt(
             )
             for alias, field in candidates
         ],
-    )
-
-
-def _prompt_context(prompt: IdentifierPrompt) -> AgentContext:
-    """Create the bounded one- or two-output identifier-selection session."""
-    return AgentContext(
-        system=prompt.system,
-        user=prompt.user,
-        limits=ContextLimits(
-            system_chars=1_600,
-            initial_user_chars=8_000,
-            feedback_chars=3_000,
-            conversation_chars=12_000,
-            required_output_tokens=512,
-        ),
-        metrics=prompt.metrics,
     )
 
 

@@ -43,7 +43,9 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
             create_engine_from_config,
             make_session_factory,
         )
-        from restscope.llm import ModelSelector, build_llm_client
+        from restscope.app import _build_main_agent_runtime_definition
+        from restscope.harness import build_harness
+        from restscope.llm import build_llm_client
         from restscope.observability import TracingRuntime
         from restscope.observability import Redactor
         from restscope.config import RESTScopeConfig
@@ -154,27 +156,36 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
                     "Registered DeepSeek base URL must match FAST.",
                     pytrace=False,
                 )
-            model = ModelSelector.from_config(config.llm).select(
-                "resource_monitor"
+            agent_runtime = _build_main_agent_runtime_definition(
+                config,
+                tracing_runtime=runtime,
+            )
+            assert agent_runtime is not None
+            harness = build_harness(
+                tracing_runtime=runtime,
+                agent_runtime=agent_runtime,
             )
             tracker = ResourceIdentifierTracker(
                 catalog=catalog,
-                client=llm_client,
-                model=model,
+                system_agent_runner=harness,
                 tracing_runtime=runtime,
             )
-            if tracker.model.role != "api_behavior_monitor":
-                pytest.fail(
-                    "Resource Identifier Tracker must select the "
-                    "resource_monitor model role.",
-                    pytrace=False,
-                )
-            if tracker.model.provider != fast.provider:
+            system_profile = next(
+                profile
+                for profile in agent_runtime.profiles
+                if profile.name == "resource-identifier-selector"
+            )
+            system_model = next(
+                model
+                for model in agent_runtime.models
+                if model.name == system_profile.model_config_name
+            )
+            if system_model.provider != fast.provider:
                 pytest.fail(
                     "Resource Identifier Tracker model provider must match FAST.",
                     pytrace=False,
                 )
-            if tracker.model.model != fast.model:
+            if system_model.model != fast.model:
                 pytest.fail(
                     "Resource Identifier Tracker model name must match FAST.",
                     pytrace=False,

@@ -126,7 +126,7 @@ def test_profile_missing_any_patch_dependency_is_rejected(missing_tool: str) -> 
                 ),
                 models=(
                     LLMModelConfig(
-                        role="fast",
+                        name="fast",
                         provider="unused",
                         model="unused",
                         max_tokens=256,

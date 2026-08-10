@@ -6,7 +6,7 @@ from restscope.llm.client import LLMClient
 from restscope.llm.providers.deepseek import DeepSeekProvider
 from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 from restscope.llm.registry import LLMProviderRegistry
-from restscope.llm.schemas import LLMReasoningConfig
+from restscope.llm.schemas import LLMModelConfig, LLMReasoningConfig
 from restscope.observability import TracingRuntime
 
 
@@ -57,4 +57,29 @@ def build_llm_client(
     return LLMClient(
         build_llm_registry(config),
         tracing_runtime=runtime,
+    )
+
+
+def build_llm_model_config(name: str, raw_config) -> LLMModelConfig:
+    """Translate one App model setting into a named Agent model configuration.
+
+    The function performs no semantic role selection. An Agent Profile chooses
+    this exact name, leaving provider and capacity settings reusable without a
+    second policy layer.
+    """
+    return LLMModelConfig(
+        name=name,
+        provider=getattr(raw_config, "provider", "openai_compatible"),
+        model=raw_config.model,
+        temperature=raw_config.temperature,
+        max_tokens=raw_config.max_tokens,
+        context_window_tokens=raw_config.context_window_tokens,
+        timeout_seconds=raw_config.timeout,
+        response_format="json_schema",
+        tool_choice="none",
+        reasoning=LLMReasoningConfig(
+            mode=getattr(raw_config, "reasoning_mode", "default"),
+            effort=getattr(raw_config, "reasoning_effort", None),
+        ),
+        enabled=bool(raw_config.model),
     )

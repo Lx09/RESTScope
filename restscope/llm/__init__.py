@@ -6,7 +6,7 @@ remains inside ``restscope.llm.providers``.
 """
 
 from .client import LLMClient
-from .config import build_llm_client, build_llm_registry
+from .config import build_llm_client, build_llm_model_config, build_llm_registry
 from .exceptions import (
     InvalidProviderResponseError,
     LLMError,
@@ -16,7 +16,6 @@ from .exceptions import (
     StrictToolUnavailableError,
     UnknownProviderError,
 )
-from .model_selector import ModelSelector
 from .output_validator import OutputValidator
 from .registry import LLMProviderRegistry
 from .schemas import (
@@ -35,6 +34,7 @@ from .schemas import (
 __all__ = [
     "LLMClient",
     "build_llm_client",
+    "build_llm_model_config",
     "build_llm_registry",
     "InvalidProviderResponseError",
     "LLMError",
@@ -43,7 +43,6 @@ __all__ = [
     "ProviderUnavailableError",
     "StrictToolUnavailableError",
     "UnknownProviderError",
-    "ModelSelector",
     "OutputValidator",
     "LLMProviderRegistry",
     "LLMMessage",

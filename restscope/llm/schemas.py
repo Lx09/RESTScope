@@ -114,9 +114,9 @@ class LLMResponse(BaseModel):
 
 
 class LLMModelConfig(BaseModel):
-    """Model settings selected for one context role."""
+    """One named provider/model configuration available to Agent Profiles."""
 
-    role: str
+    name: str
     provider: str
     model: str
     temperature: float = 0.0
