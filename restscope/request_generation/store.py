@@ -62,6 +62,8 @@ class ReferenceValueBinding:
     input_node_id: str
     kind: Literal["resource_identifier", "response_value"]
     value_name: str
+    identifier: str | None = None
+    component: str | None = None
     producer_operation_key: str | None = None
     producer_status_code: str | None = None
     producer_media_type: str | None = None

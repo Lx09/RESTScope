@@ -7,7 +7,6 @@ import traceback
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import Any
 
 from restscope.observability.content import PreparedContent, TraceContentEncoder
 from restscope.observability.openinference import prepare_message_attributes
@@ -23,20 +22,20 @@ class TraceSpan:
     def __init__(
         self,
         *,
-        span: Any | None = None,
+        span: object | None = None,
         content_encoder: TraceContentEncoder | None = None,
-        live_span: Any | None = None,
+        live_span: object | None = None,
     ) -> None:
         self._span = span
         self._content_encoder = content_encoder
         self._live_span = live_span
         self._has_error = False
 
-    def set_output(self, value: Any) -> None:
+    def set_output(self, value: object) -> None:
         """Attach a bounded, redacted output value to both trace and live-observer spans."""
         self._set_content("output", value)
 
-    def set_llm_input_messages(self, messages: Any) -> None:
+    def set_llm_input_messages(self, messages: object) -> None:
         """Record model-visible input as Phoenix-renderable chat messages."""
 
         try:
@@ -54,9 +53,9 @@ class TraceSpan:
 
     def set_llm_output_messages(
         self,
-        messages: Any,
+        messages: object,
         *,
-        summary: Any | None = None,
+        summary: object | None = None,
     ) -> None:
         """Record normalized model output as Phoenix-renderable chat messages."""
 
@@ -75,7 +74,7 @@ class TraceSpan:
             },
         )
 
-    def set_attribute(self, name: str, value: Any) -> None:
+    def set_attribute(self, name: str, value: object) -> None:
         """Attach one safe scalar attribute without allowing telemetry failure to affect the tested workflow."""
         if self._live_span is not None:
             try:
@@ -92,11 +91,11 @@ class TraceSpan:
         except Exception:
             return
 
-    def set_input(self, value: Any) -> None:
+    def set_input(self, value: object) -> None:
         """Attach a bounded, redacted input value to both trace and live-observer spans."""
         self._set_content("input", value)
 
-    def set_live_detail(self, name: str, value: Any) -> None:
+    def set_live_detail(self, name: str, value: object) -> None:
         """Add one observer-only detail without changing Phoenix attributes.
 
         Args:
@@ -179,7 +178,7 @@ class TraceSpan:
         except Exception:
             return
 
-    def _set_content(self, prefix: str, value: Any) -> None:
+    def _set_content(self, prefix: str, value: object) -> None:
         if self._live_span is not None:
             try:
                 self._live_span.set_content(prefix, value)
@@ -207,9 +206,9 @@ class TraceSpan:
     def _set_llm_messages(
         self,
         prefix: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         *,
-        summary: Any,
+        summary: object,
     ) -> None:
         """Encode provider-independent chat messages into OpenInference span attributes."""
         if self._live_span is not None:
@@ -263,7 +262,7 @@ class TraceSpan:
         except Exception:
             return
 
-    def _normalize_messages(self, messages: Any) -> list[dict[str, Any]]:
+    def _normalize_messages(self, messages: object) -> list[dict[str, object]]:
         if self._content_encoder is None:
             return []
         normalized = self._content_encoder.redactor.redact(messages)
@@ -282,7 +281,7 @@ class TraceSpan:
         )
 
 
-def _compact_json_bytes(value: Any) -> bytes:
+def _compact_json_bytes(value: object) -> bytes:
     import json
 
     return json.dumps(
@@ -306,8 +305,8 @@ class TracingRuntime:
         *,
         redactor: Redactor | None = None,
         max_content_bytes: int = 65536,
-        backend: Any | None = None,
-        run_observer: Any | None = None,
+        backend: object | None = None,
+        run_observer: object | None = None,
     ) -> None:
         self._redactor = redactor or Redactor()
         self._content_encoder = TraceContentEncoder(
@@ -334,7 +333,7 @@ class TracingRuntime:
         return self._redactor
 
     @property
-    def run_observer(self) -> Any | None:
+    def run_observer(self) -> object | None:
         """Return the optional current-run observer used by UI adapters."""
         return self._run_observer
 
@@ -343,7 +342,7 @@ class TracingRuntime:
         """Report whether a live observer can currently accept run events."""
         return self._run_observer is not None and not self._closed
 
-    def bind_run_observer(self, observer: Any | None) -> None:
+    def bind_run_observer(self, observer: object | None) -> None:
         """Attach one App-owned observer without changing Phoenix registration."""
         self._run_observer = observer
 
@@ -353,8 +352,8 @@ class TracingRuntime:
         name: str,
         *,
         kind: str,
-        input_value: Any | None = None,
-        attributes: Mapping[str, Any] | None = None,
+        input_value: object | None = None,
+        attributes: Mapping[str, object] | None = None,
     ) -> Iterator[TraceSpan]:
         """Open a UI-only aggregation scope that never changes Phoenix.
 
@@ -402,8 +401,8 @@ class TracingRuntime:
         name: str,
         *,
         kind: str,
-        input_value: Any | None = None,
-        attributes: Mapping[str, Any] | None = None,
+        input_value: object | None = None,
+        attributes: Mapping[str, object] | None = None,
     ) -> Iterator[TraceSpan]:
         """Open a best-effort span and always yield a safe local handle.
 
@@ -492,10 +491,10 @@ class TracingRuntime:
 
 
 def build_tracing_runtime(
-    config: Any,
+    config: object,
     *,
     redactor: Redactor | None = None,
-    run_observer: Any | None = None,
+    run_observer: object | None = None,
 ) -> TracingRuntime:
     """Build Phoenix tracing when enabled, otherwise return a safe no-op."""
 

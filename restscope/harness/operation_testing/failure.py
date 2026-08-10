@@ -7,7 +7,6 @@ Failure Memory, or persistence boundary behind them.
 
 from __future__ import annotations
 
-from typing import Any
 
 from .outcomes import HTTPFailure, TransportFailure
 
@@ -23,7 +22,7 @@ def parse_http_failure(
     status_code: int,
     reason_phrase: str,
     media_type: str | None,
-    response_body: Any | None,
+    response_body: object | None,
     body_truncated: bool,
 ) -> HTTPFailure | None:
     """Return parsed evidence for a non-2xx response, or ``None`` for success."""
@@ -82,7 +81,7 @@ def parse_transport_failure(*, code: str, message: str) -> TransportFailure:
     )
 
 
-def _extract_json_messages(value: Any, *, depth: int = 0) -> list[str]:
+def _extract_json_messages(value: object, *, depth: int = 0) -> list[str]:
     """Find conventional API error fields without traversing arbitrary bodies."""
     if depth > 8 or not isinstance(value, dict):
         return []
@@ -95,7 +94,7 @@ def _extract_json_messages(value: Any, *, depth: int = 0) -> list[str]:
     return []
 
 
-def _extract_json_field(value: Any, *, depth: int) -> list[str]:
+def _extract_json_field(value: object, *, depth: int) -> list[str]:
     """Extract strings and field-aware entries from one conventional error key."""
     if isinstance(value, str):
         normalized = _normalize_text(value)
@@ -122,7 +121,7 @@ def _extract_json_field(value: Any, *, depth: int) -> list[str]:
     return []
 
 
-def _extract_error_item(value: Any, *, depth: int) -> list[str]:
+def _extract_error_item(value: object, *, depth: int) -> list[str]:
     """Retain a field name when an API returns structured error arrays."""
     if isinstance(value, str):
         normalized = _normalize_text(value)
@@ -155,7 +154,7 @@ def _extract_error_item(value: Any, *, depth: int) -> list[str]:
 def _extract_field_messages(
     *,
     field: str,
-    value: Any,
+    value: object,
     depth: int,
 ) -> list[str]:
     """Flatten one field-keyed validation subtree into bounded semantic text."""

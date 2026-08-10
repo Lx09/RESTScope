@@ -57,7 +57,11 @@ prefer a compatible populated `resource_identifier` pool:
    the relevant resource is absent.
 2. Copy `canonical_resource` exactly, never an alias.
 3. Call `resource.list_ids` for that canonical resource.
-4. Use it only when its pool is non-empty and scalar values are compatible.
+4. Copy the returned `identifier` name and the needed `components[].name`
+   exactly. Use them only when Records are non-empty and component scalar
+   values are compatible.
+5. If the Definition has multiple components, bind only path parameters and
+   include one change for every component, exactly once, in the same Patch.
 
 Never randomly generate an existing identifier or copy one from unverified
 prose.
@@ -77,7 +81,7 @@ Choose the least target-coupled strategy covering the required domain:
 - `integer_range` or `number_range` for numeric bounds.
 - `random_string`, `regex`, or `format` for the corresponding text rule.
 - `boolean`, `array`, or `variant` for those declared structures.
-- `resource_identifier` for a discovered populated canonical resource.
+- `resource_identifier` for a discovered populated Definition and component.
 - `choice` only for an evidence-proven finite set. Do not invent a finite choice set.
 - `response_value` only for a required current producer value or later-round
   evidence that ordinary generation and fixed choices drift with target data.
@@ -99,7 +103,7 @@ Generator DSL:
 - `format(format)`
 - `array(min_items, max_items)`
 - `variant(branch_weights)`
-- `resource_identifier(resource)`
+- `resource_identifier(resource, identifier, component)`
 - `response_value(source)`
 
 ## Express Constraints

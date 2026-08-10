@@ -3,35 +3,34 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
 
 class RecordingCompletions:
-    def __init__(self, response: Any | None = None) -> None:
-        self.kwargs: dict[str, Any] | None = None
+    def __init__(self, response: object | None = None) -> None:
+        self.kwargs: dict[str, object] | None = None
         self.response = response or deepseek_response(content='{"ok": true}')
 
-    def create(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: object) -> object:
         self.kwargs = kwargs
         return self.response
 
 
 class RecordingClient:
-    def __init__(self, response: Any | None = None) -> None:
+    def __init__(self, response: object | None = None) -> None:
         self.chat = SimpleNamespace(completions=RecordingCompletions(response))
 
 
 class SequencedCompletions:
     """Return a different provider response for each retry attempt."""
 
-    def __init__(self, responses: list[Any]) -> None:
+    def __init__(self, responses: list[object]) -> None:
         """Keep the finite response script and every submitted request."""
         self.responses = list(responses)
-        self.requests: list[dict[str, Any]] = []
+        self.requests: list[dict[str, object]] = []
 
-    def create(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: object) -> object:
         """Return the next scripted response or expose an unexpected retry."""
         self.requests.append(kwargs)
         if not self.responses:
@@ -42,7 +41,7 @@ class SequencedCompletions:
 class SequencedClient:
     """Expose sequenced completions through the OpenAI-compatible shape."""
 
-    def __init__(self, responses: list[Any]) -> None:
+    def __init__(self, responses: list[object]) -> None:
         """Create one recording completions endpoint for the provider."""
         self.chat = SimpleNamespace(completions=SequencedCompletions(responses))
 
@@ -52,9 +51,9 @@ class FailingCompletions:
 
     def __init__(self, exc: Exception) -> None:
         self.exc = exc
-        self.requests: list[dict[str, Any]] = []
+        self.requests: list[dict[str, object]] = []
 
-    def create(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: object) -> object:
         self.requests.append(kwargs)
         raise self.exc
 
@@ -69,9 +68,9 @@ class FailingClient:
 def deepseek_response(
     *,
     content: str | None,
-    tool_calls: list[Any] | None = None,
+    tool_calls: list[object] | None = None,
     reasoning_content: str | None = None,
-) -> Any:
+) -> object:
     return SimpleNamespace(
         id="deepseek-response",
         choices=[
@@ -107,12 +106,12 @@ def test_deepseek_standard_and_beta_clients_share_three_sdk_retries(
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
-    constructed: list[dict[str, Any]] = []
+    constructed: list[dict[str, object]] = []
 
     class FakeSDKClient(RecordingClient):
         """Record SDK constructor options while serving one harmless response."""
 
-        def __init__(self, **kwargs: Any) -> None:
+        def __init__(self, **kwargs: object) -> None:
             constructed.append(kwargs)
             super().__init__()
 
@@ -311,7 +310,7 @@ def _strict_submit_tool():
     )
 
 
-def _strict_tool_call() -> Any:
+def _strict_tool_call() -> object:
     """Return one provider-shaped strict submission call."""
     return SimpleNamespace(
         id="call_submit",
@@ -713,7 +712,7 @@ def test_deepseek_thinking_rejects_forced_tool_choice_without_tools() -> None:
     assert client.chat.completions.kwargs is None
 
 
-def _provider_tool_call() -> Any:
+def _provider_tool_call() -> object:
     return SimpleNamespace(
         id="call_search",
         type="function",

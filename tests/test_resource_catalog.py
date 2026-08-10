@@ -1,4 +1,4 @@
-"""Regression scenarios for resource catalog. Each test documents one observable contract or failure boundary."""
+"""Catalog scenarios for Identifier Definitions and complete Records."""
 
 from __future__ import annotations
 
@@ -7,46 +7,61 @@ from pathlib import Path
 
 
 def _catalog(tmp_path: Path):
+    """Create one isolated real Catalog and engine."""
     from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
-    from restscope.db import (
-        Base,
-        SqlAlchemyResourceCatalogUnitOfWork,
-        create_engine_from_url,
-        make_session_factory,
-    )
+    from restscope.db import Base, SqlAlchemyResourceCatalogUnitOfWork, create_engine_from_url, make_session_factory
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'resources.sqlite'}")
     Base.metadata.create_all(engine)
-    session_factory = make_session_factory(engine)
-    return ResourceCatalog(
-        lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
+    sessions = make_session_factory(engine)
+    return ResourceCatalog(lambda: SqlAlchemyResourceCatalogUnitOfWork(sessions)), engine
+
+
+def _group(*, records: list[tuple[str, int]], aliases: list[str] | None = None):
+    """Build one two-component assignment Identifier observation."""
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import DetectedResourceGroup
+
+    return DetectedResourceGroup.model_validate(
+        {
+            "group_path": "$[]",
+            "resource_name": "assignment",
+            "resource_aliases": aliases or ["assignment"],
+            "identifier_name": "employeeId/projectId",
+            "identifier_path": "/assignments/{employeeId}/{projectId}",
+            "identifier_fields": [
+                {"component": "employeeId", "field_name": "employee_id", "selector": "$[].employee_id"},
+                {"component": "projectId", "field_name": "project_id", "selector": "$[].project_id"},
+            ],
+            "identifier_records": [
+                {
+                    "components": [
+                        {"name": "employeeId", "value": employee, "value_type": "string"},
+                        {"name": "projectId", "value": project, "value_type": "integer"},
+                    ]
+                }
+                for employee, project in records
+            ],
+            "classification_source": "llm",
+        }
     )
 
 
-def _catalog_with_engine(tmp_path: Path):
-    from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
-    from restscope.db import (
-        Base,
-        SqlAlchemyResourceCatalogUnitOfWork,
-        create_engine_from_url,
-        make_session_factory,
-    )
+def _operation():
+    """Return the stable operation identity used by Catalog scenarios."""
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import MonitoredOperation
 
-    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'resources.sqlite'}")
-    Base.metadata.create_all(engine)
-    session_factory = make_session_factory(engine)
-    return (
-        ResourceCatalog(lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)),
-        engine,
+    return MonitoredOperation(
+        operation_key="GET /assignments",
+        method="GET",
+        path="/assignments",
     )
 
 
-def test_current_baseline_adds_and_removes_resource_catalog_tables(tmp_path: Path) -> None:
-    """Scenario: the one baseline includes and downgrades Monitor persistence."""
+def test_current_baseline_adds_the_definition_table(tmp_path: Path) -> None:
+    """A fresh database contains seven Resource Identifier tables and downgrades cleanly."""
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import inspect
-
     from restscope.db import create_engine_from_url
     from restscope.db.migrations import MIGRATIONS_DIR
 
@@ -54,404 +69,76 @@ def test_current_baseline_adds_and_removes_resource_catalog_tables(tmp_path: Pat
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
-
     command.upgrade(config, "head")
-
     engine = create_engine_from_url(f"sqlite:///{database}")
-    table_names = set(inspect(engine).get_table_names())
-    assert {
-        "resources",
-        "resource_aliases",
-        "operation_resource_rules",
-        "resource_identifiers",
-        "resource_operation_usages",
-        "resource_monitor_errors",
-    } <= table_names
-
+    expected = {
+        "resources", "resource_aliases", "resource_identifier_definitions",
+        "operation_resource_rules", "resource_identifiers",
+        "resource_operation_usages", "resource_monitor_errors",
+    }
+    assert expected <= set(inspect(engine).get_table_names())
     command.downgrade(config, "base")
-    assert not {
-        "resources",
-        "resource_aliases",
-        "operation_resource_rules",
-        "resource_identifiers",
-        "resource_operation_usages",
-        "resource_monitor_errors",
-    } & set(inspect(engine).get_table_names())
+    assert not expected & set(inspect(engine).get_table_names())
 
 
-def test_catalog_records_aliases_typed_ids_and_latest_operation_usage(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that catalog records aliases typed ids and latest operation usage."""
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
+def test_catalog_preserves_typed_row_wise_composite_records(tmp_path: Path) -> None:
+    """Lookup returns complete tuples and updates recency without duplicating them."""
     from restscope.api_behavior_monitor import ResourceLookupRequest
 
-    catalog = _catalog(tmp_path)
-    first_seen = datetime(2026, 7, 23, 10, tzinfo=timezone.utc)
-    later_seen = first_seen + timedelta(minutes=5)
-    operation = MonitoredOperation(
-        operation_key="POST /users",
-        method="POST",
-        path="/users",
-    )
-    group = DetectedResourceGroup(
-        group_path="$",
-        resource_name="user",
-        resource_aliases=["user", "owner"],
-        id_field_name="id",
-        id_selector="$.id",
-        identifier_values=[42, "42"],
-        classification_source="exact_id",
-    )
-
-    catalog.record_groups(operation=operation, groups=[group], observed_at=first_seen)
+    catalog, _engine = _catalog(tmp_path)
+    first = datetime(2026, 8, 10, 10, tzinfo=timezone.utc)
+    later = first + timedelta(minutes=5)
     catalog.record_groups(
-        operation=operation,
-        groups=[
-            group.model_copy(
-                update={"resource_aliases": ["user", "account"], "identifier_values": [42]}
-            )
-        ],
-        observed_at=later_seen,
+        operation=_operation(),
+        groups=[_group(records=[("e1", 10), ("e2", 20)], aliases=["assignment", "allocation"])],
+        observed_at=first,
     )
-
-    result = catalog.lookup(ResourceLookupRequest(resource="OWNER"))
-
-    assert result.canonical_resource == "user"
-    assert result.aliases == ["account", "owner", "user"]
-    assert [(item.value, item.value_type) for item in result.identifiers] == [
-        (42, "integer"),
-        ("42", "string"),
-    ]
-    assert result.recommended_id == 42
-    assert result.operations[0].operation_key == "POST /users"
-    assert result.operations[0].access_mode == "write"
-    assert result.operations[0].latest_seen_at == later_seen
-    assert result.operations[0].id_field_aliases == ["id"]
-    assert result.operations[0].selectors == ["$.id"]
-
-
-def test_list_resources_loads_aliases_in_one_bounded_batch_query(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that list resources loads aliases in one bounded batch query."""
-    from sqlalchemy import event
-
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-
-    catalog, engine = _catalog_with_engine(tmp_path)
-    for resource_name in ("alpha", "beta", "gamma"):
-        catalog.record_groups(
-            operation=MonitoredOperation(
-                operation_key=f"GET /{resource_name}s",
-                method="GET",
-                path=f"/{resource_name}s",
-            ),
-            groups=[
-                DetectedResourceGroup(
-                    group_path="$",
-                    resource_name=resource_name,
-                    resource_aliases=[f"{resource_name}-extra"],
-                    id_field_name="id",
-                    id_selector="$.id",
-                    identifier_values=[1],
-                    classification_source="exact_id",
-                )
-            ],
-        )
-
-    select_statements: list[str] = []
-
-    def capture_select(_connection, _cursor, statement, _parameters, _context, _many):
-        if statement.lstrip().upper().startswith("SELECT"):
-            select_statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", capture_select)
-    try:
-        resources = catalog.list_resources(limit=3, aliases_per_resource=1)
-    finally:
-        event.remove(engine, "before_cursor_execute", capture_select)
-
-    assert [resource.canonical_name for resource in resources] == [
-        "alpha",
-        "beta",
-        "gamma",
-    ]
-    assert [resource.aliases for resource in resources] == [
-        ["alpha"],
-        ["beta"],
-        ["gamma"],
-    ]
-    assert len(select_statements) == 2
-
-
-def test_catalog_returns_delete_identifiers_and_filters_by_typed_value(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that catalog returns delete identifiers and filters by typed value."""
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-    from restscope.api_behavior_monitor import ResourceLookupRequest
-
-    catalog = _catalog(tmp_path)
-    observed_at = datetime(2026, 7, 23, 11, tzinfo=timezone.utc)
     catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="DELETE /commits/{commitId}",
-            method="DELETE",
-            path="/commits/{commitId}",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="commit",
-                resource_aliases=["commit"],
-                id_field_name="sha",
-                id_selector="$.sha",
-                identifier_values=["abc123"],
-                classification_source="llm",
-            )
-        ],
-        observed_at=observed_at,
+        operation=_operation(),
+        groups=[_group(records=[("e1", 10)])],
+        observed_at=later,
     )
 
-    result = catalog.lookup(
-        ResourceLookupRequest(resource="commit", id_value="abc123")
-    )
+    result = catalog.lookup(ResourceLookupRequest(resource="ALLOCATION"))
 
-    assert result.recommended_id == "abc123"
-    assert [item.value for item in result.identifiers] == ["abc123"]
-    assert result.operations[0].access_mode == "write"
-
-
-def test_catalog_latest_error_is_cleared_by_later_group_success(tmp_path: Path) -> None:
-    """Scenario: verify that catalog latest error is cleared by later group success."""
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-        ResourceMonitorWarning,
-    )
-    from restscope.api_behavior_monitor import ResourceLookupRequest
-
-    catalog = _catalog(tmp_path)
-    operation = MonitoredOperation(
-        operation_key="GET /projects/{projectId}",
-        method="GET",
-        path="/projects/{projectId}",
-    )
-    group = DetectedResourceGroup(
-        group_path="$",
-        resource_name="project",
-        resource_aliases=["project"],
-        id_field_name="id",
-        id_selector="$.id",
-        identifier_values=[7],
-        classification_source="exact_id",
-    )
-    catalog.record_groups(operation=operation, groups=[group])
-    catalog.record_error(
-        operation=operation,
-        group_path="$",
-        warning=ResourceMonitorWarning(
-            code="expected_resource_id_missing",
-            message="Expected resource identifier is missing",
-            issues=["$.id"],
-        ),
-    )
+    assert result.canonical_resource == "assignment"
+    assert result.total == 2
+    assert result.identifiers[0].last_seen_at == later
     assert [
-        error.code
-        for error in catalog.lookup(
-            ResourceLookupRequest(resource="project")
-        ).errors
-    ] == ["expected_resource_id_missing"]
-
-    catalog.record_groups(
-        operation=operation,
-        groups=[group],
-    )
-    assert catalog.lookup(
-        ResourceLookupRequest(resource="project")
-    ).errors == []
+        [(component.name, component.value_type, component.value) for component in record.components]
+        for record in result.identifiers
+    ] == [
+        [("employeeId", "string", "e1"), ("projectId", "integer", 10)],
+        [("employeeId", "string", "e2"), ("projectId", "integer", 20)],
+    ]
 
 
-def test_catalog_rolls_back_whole_response_when_one_group_conflicts(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that catalog rolls back whole response when one group conflicts."""
+def test_learned_rule_round_trips_ordered_fields(tmp_path: Path) -> None:
+    """The deterministic reuse rule retains path, definition, and component order."""
+    catalog, _engine = _catalog(tmp_path)
+    catalog.record_groups(operation=_operation(), groups=[_group(records=[("e1", 10)])])
+
+    rule = catalog.list_rules(_operation())[0]
+
+    assert rule.identifier_name == "employeeId/projectId"
+    assert rule.identifier_path == "/assignments/{employeeId}/{projectId}"
+    assert [item.component for item in rule.identifier_fields] == ["employeeId", "projectId"]
+
+
+def test_catalog_rolls_back_when_a_definition_changes_shape(tmp_path: Path) -> None:
+    """A conflicting component order cannot partially publish new aliases or Records."""
     import pytest
-
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
     from restscope.api_behavior_monitor import ResourceLookupRequest
     from restscope.db.adapters.resource_catalog import ResourceCatalogConflict
 
-    catalog = _catalog(tmp_path)
-    seed_operation = MonitoredOperation(
-        operation_key="POST /seed",
-        method="POST",
-        path="/seed",
-    )
-    for group_path, resource_name in (("$.user", "user"), ("$.project", "project")):
-        catalog.record_groups(
-            operation=seed_operation.model_copy(
-                update={"operation_key": f"POST /{resource_name}s"}
-            ),
-            groups=[
-                DetectedResourceGroup(
-                    group_path=group_path,
-                    resource_name=resource_name,
-                    resource_aliases=[resource_name],
-                    id_field_name="id",
-                    id_selector=f"{group_path}.id",
-                    identifier_values=[1],
-                    classification_source="exact_id",
-                )
-            ],
-        )
+    catalog, _engine = _catalog(tmp_path)
+    catalog.record_groups(operation=_operation(), groups=[_group(records=[("e1", 10)])])
+    conflict = _group(records=[("e2", 20)], aliases=["assignment", "new-alias"])
+    conflict.identifier_fields.reverse()
 
     with pytest.raises(ResourceCatalogConflict):
-        catalog.record_groups(
-            operation=MonitoredOperation(
-                operation_key="GET /dashboard",
-                method="GET",
-                path="/dashboard",
-            ),
-            groups=[
-                DetectedResourceGroup(
-                    group_path="$.team",
-                    resource_name="team",
-                    resource_aliases=["team"],
-                    id_field_name="id",
-                    id_selector="$.team.id",
-                    identifier_values=[7],
-                    classification_source="exact_id",
-                ),
-                DetectedResourceGroup(
-                    group_path="$.owner",
-                    resource_name="user",
-                    resource_aliases=["user", "project"],
-                    id_field_name="id",
-                    id_selector="$.owner.id",
-                    identifier_values=[9],
-                    classification_source="exact_id",
-                ),
-            ],
-        )
+        catalog.record_groups(operation=_operation(), groups=[conflict])
 
-    assert catalog.lookup(ResourceLookupRequest(resource="team")).status == "not_found"
-    assert catalog.list_rules("GET /dashboard") == []
-
-
-def test_lookup_reuses_canonical_aliases_across_all_resource_usage(
-    tmp_path: Path,
-) -> None:
-    """Usage rows stay operation-specific while aliases remain canonical vocabulary."""
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-    from restscope.api_behavior_monitor import ResourceLookupRequest
-
-    catalog = _catalog(tmp_path)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="POST /users",
-            method="POST",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["user"],
-                id_field_name="id",
-                id_selector="$.id",
-                identifier_values=[1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="GET /owners/{ownerId}",
-            method="GET",
-            path="/owners/{ownerId}",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$",
-                resource_name="user",
-                resource_aliases=["owner"],
-                id_field_name="ownerId",
-                id_selector="$.ownerId",
-                identifier_values=[2],
-                classification_source="llm",
-            )
-        ],
-    )
-
-    resource_result = catalog.lookup(
-        ResourceLookupRequest(resource="user", limit=1)
-    )
-    id_result = catalog.lookup(
-        ResourceLookupRequest(resource="user", id_value=1)
-    )
-
-    assert resource_result.total == 2
-    assert resource_result.truncated is True
-    assert {
-        item.operation_key: item.resource_aliases
-        for item in resource_result.operations
-    } == {
-        "POST /users": ["owner", "user"],
-        "GET /owners/{ownerId}": ["owner", "user"],
-    }
-    assert [item.operation_key for item in id_result.operations] == [
-        "POST /users"
-    ]
-
-
-def test_same_response_identifiers_have_stable_recommendation_order(
-    tmp_path: Path,
-) -> None:
-    """Scenario: verify that same response identifiers have stable recommendation order."""
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import (
-        DetectedResourceGroup,
-        MonitoredOperation,
-    )
-    from restscope.api_behavior_monitor import ResourceLookupRequest
-
-    catalog = _catalog(tmp_path)
-    catalog.record_groups(
-        operation=MonitoredOperation(
-            operation_key="GET /users",
-            method="GET",
-            path="/users",
-        ),
-        groups=[
-            DetectedResourceGroup(
-                group_path="$[]",
-                resource_name="user",
-                resource_aliases=["user"],
-                id_field_name="id",
-                id_selector="$[].id",
-                identifier_values=[2, 1],
-                classification_source="exact_id",
-            )
-        ],
-    )
-
-    result = catalog.lookup(ResourceLookupRequest(resource="user"))
-
-    assert [item.value for item in result.identifiers] == [1, 2]
-    assert result.recommended_id == 1
+    result = catalog.lookup(ResourceLookupRequest(resource="assignment"))
+    assert result.total == 1
+    assert "new-alias" not in result.aliases

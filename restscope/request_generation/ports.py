@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Protocol
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 
 from .models import ResourceIdentifierGenerator, ResponseValueGenerator
 
@@ -16,8 +16,15 @@ class ReferenceValueProvider(Protocol):
         strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
     ) -> Sequence[object]: ...
 
+    def identifier_records(
+        self,
+        *,
+        resource: str,
+        identifier: str,
+    ) -> Sequence[Mapping[str, object]]: ...
+
 
 class ResourceIdentifierLookup(Protocol):
     """Expose only canonical resource identifiers needed during validation."""
 
-    def list_ids(self, *, resource: str, limit: int) -> dict[str, Any]: ...
+    def list_ids(self, *, resource: str, limit: int) -> dict[str, object]: ...

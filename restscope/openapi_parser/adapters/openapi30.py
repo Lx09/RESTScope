@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 from .base import SpecificationAdapter
 from ..constants import SPEC_FORMAT_OAS30

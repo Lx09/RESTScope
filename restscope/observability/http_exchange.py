@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import time
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from .projection import response_detail as _response_detail
 
@@ -28,7 +28,7 @@ class LiveHTTPExchange:
         self._started = time.monotonic()
         self._closed = False
 
-    def finish(self, response: Any) -> None:
+    def finish(self, response: object) -> None:
         """Attach response evidence already bounded by the target transport."""
 
         if self._closed:
@@ -45,7 +45,7 @@ class LiveHTTPExchange:
         output.update({"response": response_detail, "http_duration_ms": duration})
         detail["output"] = output
         processor_result = getattr(response, "processor_result", None)
-        changes: dict[str, Any] = {"detail": detail}
+        changes: dict[str, object] = {"detail": detail}
         if processor_result is not None and bool(
             getattr(processor_result, "warnings", ())
         ):

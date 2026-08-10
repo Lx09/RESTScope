@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from dataclasses import dataclass
-from typing import Any
 
 from .redaction import Redactor
 
@@ -26,7 +25,7 @@ class TraceContentEncoder:
     redactor: Redactor
     max_content_bytes: int = 65536
 
-    def prepare(self, value: Any) -> PreparedContent:
+    def prepare(self, value: object) -> PreparedContent:
         """Redact and bound one tracing value before it reaches an exporter or live observer."""
         normalized = self.redactor.redact(value)
         original_size = len(_compact_json(normalized).encode("utf-8"))
@@ -43,7 +42,7 @@ class TraceContentEncoder:
             truncated=True,
         )
 
-    def _truncated_value(self, value: Any) -> str:
+    def _truncated_value(self, value: object) -> str:
         """Return a head-and-tail text preview with an explicit omitted-character marker."""
         string_limit = max(16, self.max_content_bytes // 2)
         for item_limit in (20, 10, 5, 2, 1, 0):
@@ -72,7 +71,7 @@ class TraceContentEncoder:
         return ""
 
 
-def _compact_json(value: Any) -> str:
+def _compact_json(value: object) -> str:
     return json.dumps(
         value,
         ensure_ascii=False,
@@ -81,7 +80,7 @@ def _compact_json(value: Any) -> str:
     )
 
 
-def _formatted_json(value: Any) -> str:
+def _formatted_json(value: object) -> str:
     return json.dumps(
         value,
         ensure_ascii=False,
@@ -91,12 +90,12 @@ def _formatted_json(value: Any) -> str:
 
 
 def _structured_preview(
-    value: Any,
+    value: object,
     *,
     item_limit: int,
     string_limit: int,
     depth_limit: int,
-) -> Any:
+) -> object:
     """Recursively bound a mapping or sequence while preserving JSON-safe scalar types."""
     if isinstance(value, str):
         return _utf8_prefix(value, string_limit)
@@ -107,7 +106,7 @@ def _structured_preview(
             return []
         return value
     if isinstance(value, dict):
-        preview: dict[str, Any] = {}
+        preview: dict[str, object] = {}
         for index, (key, item) in enumerate(value.items()):
             if index >= item_limit:
                 break

@@ -1,15 +1,14 @@
 """Map the durable Resource Identifier evidence learned from API responses.
 
-The tables keep canonical resource vocabulary, typed identifier values, and
-only the latest operation/error usage facts.  Method and path remain owned by
-the current OpenAPI document instead of being copied into these rows.
+The tables keep canonical resource vocabulary, ordered Identifier Definitions,
+complete typed Identifier Records, and only the latest operation/error usage
+facts. Method and operation path remain owned by the current OpenAPI document;
+only a rule's selected identifier-evidence path is stored.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -56,10 +55,8 @@ class OperationResourceRuleORM(CreatedAtMixin, UpdatedAtMixin, Base):
     __table_args__ = (
         UniqueConstraint("operation_key", "group_path", name="operation_group"),
         CheckConstraint(
-            "(has_resource AND resource_id IS NOT NULL "
-            "AND id_field_name IS NOT NULL AND id_selector IS NOT NULL) OR "
-            "((NOT has_resource) AND resource_id IS NULL "
-            "AND id_field_name IS NULL AND id_selector IS NULL)",
+            "(has_resource AND resource_id IS NOT NULL AND identifier_definition_id IS NOT NULL) OR "
+            "((NOT has_resource) AND resource_id IS NULL AND identifier_definition_id IS NULL)",
             name="resource_rule_shape",
         ),
     )
@@ -73,32 +70,49 @@ class OperationResourceRuleORM(CreatedAtMixin, UpdatedAtMixin, Base):
     operation_key: Mapped[str] = mapped_column(Text, nullable=False)
     group_path: Mapped[str] = mapped_column(Text, nullable=False)
     has_resource: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    id_field_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    id_selector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identifier_definition_id: Mapped[str | None] = mapped_column(
+        ForeignKey("resource_identifier_definitions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    identifier_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identifier_fields: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False)
     access_mode: Mapped[str] = mapped_column(String, nullable=False)
     classification_source: Mapped[str] = mapped_column(String, nullable=False)
 
 
-class ResourceIdentifierORM(Base):
-    """Map one typed identifier value observed for a canonical resource."""
+class ResourceIdentifierDefinitionORM(CreatedAtMixin, Base):
+    """Map one named ordered Identifier Definition for a resource."""
 
-    __tablename__ = "resource_identifiers"
+    __tablename__ = "resource_identifier_definitions"
     __table_args__ = (
-        UniqueConstraint("resource_id", "value_type", "value_text", name="resource_typed_value"),
-        CheckConstraint(
-            "value_type IN ('string', 'integer', 'number', 'boolean')",
-            name="resource_identifier_scalar_type",
-        ),
+        UniqueConstraint("resource_id", "name", name="resource_identifier_definition_name"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     resource_id: Mapped[str] = mapped_column(
-        ForeignKey("resources.id", ondelete="CASCADE"),
+        ForeignKey("resources.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    component_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+
+class ResourceIdentifierORM(Base):
+    """Map one complete ordered Identifier Record."""
+
+    __tablename__ = "resource_identifiers"
+    __table_args__ = (
+        UniqueConstraint("definition_id", "value_digest", name="resource_identifier_record"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    definition_id: Mapped[str] = mapped_column(
+        ForeignKey("resource_identifier_definitions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    value_type: Mapped[str] = mapped_column(String, nullable=False)
-    value_text: Mapped[str] = mapped_column(Text, nullable=False)
+    values: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    value_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -134,4 +148,4 @@ class ResourceMonitorErrorORM(CreatedAtMixin, UpdatedAtMixin, Base):
     )
     code: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    issues: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    issues: Mapped[list[object]] = mapped_column(JSON, nullable=False)

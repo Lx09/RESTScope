@@ -48,6 +48,14 @@ A Generator describes the possible values for one input and its inclusion
 probability. Strategies include constants, numeric or string ranges, choices,
 resource identifiers, and values observed in a producer response.
 
+### Identifier Definition and Identifier Record
+
+An Identifier Definition names one or more ordered resource-identity
+components. An Identifier Record is one complete typed component tuple observed
+in the same response root object or root-array item. Composite Records remain
+joint values through persistence, Patch binding, Batch freezing, generation,
+and Constraint solving.
+
 ### Constraint
 
 A Constraint describes a relationship that involves multiple inputs, such as
@@ -195,6 +203,17 @@ Ambiguous resource-identifier and response-source choices use two registered
 `fast` System Agent Profiles through a narrow runner. Their task-local `I*` and
 `S*` aliases make the output Schema closed over the current candidates; the
 Monitor never calls an LLM client directly.
+Resource Identifier discovery inspects only immediate fields at `$` or `$[]`.
+Its single decision prompt contains all observed string/integer candidates and
+the current or strict placeholder-suffix paths as full OpenAPI paths. Learned
+ordered field/path rules skip later Agent calls.
+
+### `restscope/data_types/`
+
+This small boundary defines recursive JSON value and object types shared by
+parsers, Monitor observations, and model result contracts. It exists so JSON is
+described precisely without the forbidden `typing.Any`; opaque non-JSON
+provider objects remain `object` until their owning Adapter validates them.
 
 ### `restscope/target_http/`
 
@@ -204,8 +223,8 @@ execution use this same transport boundary with different Tool contracts.
 
 ### `restscope/db/`
 
-The one baseline migration creates 13 business tables: two OpenAPI Audit tables,
-six Resource Identifier tables, and five Response Value tables. There are no
+The one baseline migration creates 14 business tables: two OpenAPI Audit tables,
+seven Resource Identifier tables, and five Response Value tables. There are no
 Generator, Constraint, Failure, Attempt, or candidate tables.
 
 ### `restscope/observability/`, `restscope/ui/`, and `ui/`

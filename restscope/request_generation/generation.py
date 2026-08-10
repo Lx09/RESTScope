@@ -9,7 +9,6 @@ import random
 import re
 import string
 from collections.abc import Iterable, Mapping
-from typing import Any
 from uuid import UUID
 
 from rstr.xeger import Xeger
@@ -106,7 +105,7 @@ class _BoundedXeger(Xeger):
             # stale group text from the preceding candidate.
             self._cache.clear()
 
-    def _handle_state(self, state: Any) -> Any:
+    def _handle_state(self, state: object) -> object:
         """Build one parsed state after charging it to the work budget.
 
         Branches and positive lookaheads need local handling because ``rstr``
@@ -142,12 +141,12 @@ class _BoundedXeger(Xeger):
                 "regular expression exceeded its generation work budget"
             )
 
-    def _build_string(self, parsed: Any) -> str:
+    def _build_string(self, parsed: object) -> str:
         """Return joined top-level states or stop at the output boundary."""
 
         return self._bounded_join(self._handle_state(state) for state in parsed)
 
-    def _handle_group(self, value: Any) -> str:
+    def _handle_group(self, value: object) -> str:
         """Return one bounded capture group and retain it for backreferences."""
 
         result = self._bounded_join(
@@ -157,7 +156,7 @@ class _BoundedXeger(Xeger):
             self._cache[value[0]] = result
         return result
 
-    def _handle_in(self, value: Any) -> str:
+    def _handle_in(self, value: object) -> str:
         """Choose one character from a class with stable negation ordering.
 
         ``rstr`` normally builds a Python set for a class such as ``[^AB]``.
@@ -188,7 +187,7 @@ class _BoundedXeger(Xeger):
         self,
         start_range: int,
         end_range: int,
-        value: Any,
+        value: object,
     ) -> str:
         """Generate a repeated branch while bounding open-ended quantifiers.
 
@@ -219,7 +218,7 @@ class _BoundedXeger(Xeger):
             for _ in range(times)
         )
 
-    def _bounded_join(self, parts: Iterable[Any]) -> str:
+    def _bounded_join(self, parts: Iterable[object]) -> str:
         """Return joined fragments or raise before their total exceeds the contract."""
 
         result: list[str] = []
@@ -241,7 +240,7 @@ def generate_strategy_value(
     *,
     seed: int,
     reference_values: ReferenceValueProvider | None = None,
-) -> Any:
+) -> object:
     """Generate one deterministic scalar value from a configured strategy.
 
     A new pseudo-random generator is created from ``seed`` for every call.
@@ -269,10 +268,26 @@ def generate_strategy_value(
         return generator.random() < strategy.true_probability
     if isinstance(strategy, FormatGenerator):
         return _format_value(strategy.format, generator)
-    if isinstance(
-        strategy,
-        ResourceIdentifierGenerator | ResponseValueGenerator,
-    ):
+    if isinstance(strategy, ResourceIdentifierGenerator):
+        records = (
+            list(
+                reference_values.identifier_records(
+                    resource=strategy.resource,
+                    identifier=strategy.identifier,
+                )
+            )
+            if reference_values is not None
+            else []
+        )
+        if not records:
+            raise GenerationError("Resource Identifier record pool is empty")
+        record = generator.choice(records)
+        if strategy.component not in record:
+            raise GenerationError(
+                f"Identifier component is absent: {strategy.component}"
+            )
+        return deepcopy(record[strategy.component])
+    if isinstance(strategy, ResponseValueGenerator):
         values = (
             list(reference_values.values_for(strategy))
             if reference_values is not None
@@ -444,7 +459,7 @@ def project_generated_input_value(
     generated: GeneratedTestCase,
     *,
     input_node_id: str,
-) -> Any:
+) -> object:
     """Read one semantic input node back from a generated HTTP request.
 
     Input nodes form a tree, but :class:`GeneratedTestCase` stores values in
@@ -487,7 +502,7 @@ def project_generated_input_value(
         values = by_location[parameter.location]
         if parameter.name not in values:
             raise KeyError(f"Generated parameter is absent: {parameter.name}")
-        value: Any = deepcopy(values[parameter.name])
+        value: object = deepcopy(values[parameter.name])
     else:
         # Request bodies contain control nodes (request body and media type)
         # that do not appear in the JSON value.  Start descent at the active
@@ -518,7 +533,7 @@ def project_generated_input_value(
     return value
 
 
-def _project_child_value(value: Any, *, suffix: str) -> Any:
+def _project_child_value(value: object, *, suffix: str) -> object:
     if suffix == "items":
         if not isinstance(value, list):
             raise KeyError("Generated array item parent is not an array")
@@ -594,7 +609,7 @@ class _TestCaseGenerator:
         # Parameters are emitted into the same containers the HTTP transport
         # expects, while `_build_value` records semantic values for later
         # constraint evaluation and trace evidence.
-        locations: dict[str, dict[str, Any]] = {
+        locations: dict[str, dict[str, object]] = {
             "path": {},
             "query": {},
             "header": {},
@@ -611,7 +626,7 @@ class _TestCaseGenerator:
 
         # Body generation is separate because OpenAPI permits multiple media
         # types but a concrete HTTP request can choose only one.
-        body_value: Any | None = None
+        body_value: object | None = None
         body_present = False
         media_type = self.config.active_media_type
         body_node = (
@@ -652,7 +667,7 @@ class _TestCaseGenerator:
     def _parameters(self) -> tuple[ParameterSnapshot, ...]:
         return tuple(self.operation.parameters)
 
-    def _build_value(self, node: InputNodeSnapshot, *, instance_path: str) -> tuple[bool, Any]:
+    def _build_value(self, node: InputNodeSnapshot, *, instance_path: str) -> tuple[bool, object]:
         """Generate one node value from its configured strategy, recursively handling containers and variants."""
         if not self._included(node, instance_path):
             return False, None
@@ -680,7 +695,11 @@ class _TestCaseGenerator:
                 if override is not None and override.has_value
                 else generate_strategy_value(
                     strategy,
-                    seed=self._seed(node, instance_path, "value"),
+                    seed=(
+                        self._resource_identifier_seed(strategy)
+                        if isinstance(strategy, ResourceIdentifierGenerator)
+                        else self._seed(node, instance_path, "value")
+                    ),
                     reference_values=self.reference_values,
                 )
             )
@@ -700,7 +719,7 @@ class _TestCaseGenerator:
         if isinstance(strategy, ObjectGenerator) and schema.all_of:
             return True, self._build_all_of(node, schema=schema, instance_path=instance_path)
         if isinstance(strategy, ObjectGenerator):
-            object_result: dict[str, Any] = {}
+            object_result: dict[str, object] = {}
             prefix = f"{node.canonical_path}/properties/"
             for child in self.children.get(node.input_node_id, []):
                 if not child.canonical_path.startswith(prefix):
@@ -742,7 +761,7 @@ class _TestCaseGenerator:
                 minimum_items,
                 strategy.max_items,
             )
-            array_result: list[Any] = []
+            array_result: list[object] = []
             for index in range(length):
                 included, value = self._build_value(
                     item_node,
@@ -762,7 +781,7 @@ class _TestCaseGenerator:
         *,
         schema: SchemaSnapshot,
         instance_path: str,
-    ) -> Any:
+    ) -> object:
         """Choose one weighted Schema branch and generate its complete nested value."""
         from .models import VariantGenerator
 
@@ -793,13 +812,13 @@ class _TestCaseGenerator:
         *,
         schema: SchemaSnapshot,
         instance_path: str,
-    ) -> Any:
+    ) -> object:
         branches = [
             child
             for child in self.children.get(node.input_node_id, [])
             if child.canonical_path.startswith(f"{node.canonical_path}/allOf/")
         ]
-        result: dict[str, Any] = {}
+        result: dict[str, object] = {}
         for branch in branches:
             included, value = self._build_value(branch, instance_path=instance_path)
             if not included or not isinstance(value, dict):
@@ -833,6 +852,14 @@ class _TestCaseGenerator:
         payload = f"{self.run_seed}\0{self.case_index}\0{node.input_node_id}\0{instance_path}\0{purpose}"
         return int.from_bytes(hashlib.sha256(payload.encode()).digest()[:8], "big")
 
+    def _resource_identifier_seed(self, strategy: ResourceIdentifierGenerator) -> int:
+        """Give every component of one definition the same per-case row choice."""
+        payload = (
+            f"{self.run_seed}\0{self.case_index}\0{strategy.resource}\0"
+            f"{strategy.identifier}\0identifier-record"
+        )
+        return int.from_bytes(hashlib.sha256(payload.encode()).digest()[:8], "big")
+
 
 def _format_value(format_name: str, generator: random.Random) -> str:
     if format_name == "uuid":
@@ -849,7 +876,7 @@ def _format_value(format_name: str, generator: random.Random) -> str:
     raise GenerationError(f"Unsupported format generator: {format_name}")
 
 
-def _validate_scalar(schema: SchemaSnapshot, value: Any, *, path: str) -> None:
+def _validate_scalar(schema: SchemaSnapshot, value: object, *, path: str) -> None:
     """Reject generated scalar values that violate the frozen type, enum, range, length, or pattern contract."""
     if value is None:
         if schema.nullable or _has_type(schema, "null"):
@@ -930,7 +957,7 @@ def _validate_scalar(schema: SchemaSnapshot, value: Any, *, path: str) -> None:
             raise GenerationError(f"Generated string is not an email for {path}")
 
 
-def _validate_object(schema: SchemaSnapshot, value: dict[str, Any], *, path: str) -> None:
+def _validate_object(schema: SchemaSnapshot, value: dict[str, object], *, path: str) -> None:
     read_only = sorted(set(schema.read_only_properties).intersection(value))
     if read_only:
         raise GenerationError(
@@ -945,7 +972,7 @@ def _validate_object(schema: SchemaSnapshot, value: dict[str, Any], *, path: str
         raise GenerationError(f"Generated object has too many properties for {path}")
 
 
-def _validate_array(schema: SchemaSnapshot, value: list[Any], *, path: str) -> None:
+def _validate_array(schema: SchemaSnapshot, value: list[object], *, path: str) -> None:
     if schema.min_items is not None and len(value) < schema.min_items:
         raise GenerationError(f"Generated array is shorter than minItems for {path}")
     if schema.max_items is not None and len(value) > schema.max_items:
@@ -956,7 +983,7 @@ def _validate_array(schema: SchemaSnapshot, value: list[Any], *, path: str) -> N
             raise GenerationError(f"Generated array violates uniqueItems for {path}")
 
 
-def schema_matches(schema: SchemaSnapshot, value: Any) -> bool:
+def schema_matches(schema: SchemaSnapshot, value: object) -> bool:
     """Return whether a concrete value satisfies the frozen supported constraints."""
 
     if schema.enum is not None:

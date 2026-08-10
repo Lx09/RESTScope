@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 import math
-from typing import Any
 
 from pydantic import ValidationError
 
@@ -141,7 +140,7 @@ def build_operation_snapshot(
 
     body_node = node_by_path.get("body")
     media_type_node_ids: dict[str, str] = {}
-    media_type_encodings: dict[str, dict[str, Any]] = {}
+    media_type_encodings: dict[str, dict[str, object]] = {}
     supported_media_types: list[str] = []
     excluded_body_paths: set[str] = set()
     if operation.request_body is not None:
@@ -307,7 +306,7 @@ def _schema_snapshot(schema: SchemaIR | None) -> SchemaSnapshot | None:
     )
 
 
-def _project_request_value(schema: SchemaIR, value: Any) -> Any:
+def _project_request_value(schema: SchemaIR, value: object) -> object:
     """Remove response-only properties from frozen concrete request values."""
 
     if isinstance(value, list):
@@ -318,7 +317,7 @@ def _project_request_value(schema: SchemaIR, value: Any) -> Any:
         return deepcopy(value)
 
     read_only_names = _read_only_property_names(schema)
-    projected: dict[Any, Any] = {}
+    projected: dict[object, object] = {}
     for name, item in value.items():
         if name in read_only_names:
             continue
@@ -353,7 +352,7 @@ def _read_only_property_names(
 
 def _request_property_schema(
     schema: SchemaIR,
-    name: Any,
+    name: object,
     *,
     visited: set[int] | None = None,
 ) -> SchemaIR | None:
@@ -376,7 +375,7 @@ def _request_property_schema(
 
 def _default_strategy(
     node: InputNodeSnapshot,
-) -> tuple[dict[str, Any], GeneratorDisabledReason | None]:
+) -> tuple[dict[str, object], GeneratorDisabledReason | None]:
     """Choose the safest bounded default Generator supported by one frozen input node."""
     if node.node_kind == "request_body":
         return {"type": "request_body"}, None
@@ -460,8 +459,8 @@ def _default_strategy(
 
 def _explicit_default(
     node: InputNodeSnapshot,
-    value: Any,
-) -> tuple[dict[str, Any], GeneratorDisabledReason | None]:
+    value: object,
+) -> tuple[dict[str, object], GeneratorDisabledReason | None]:
     from .generation import schema_matches
 
     assert node.schema_contract is not None
@@ -486,7 +485,7 @@ def _unavailable_reason(
     )
 
 
-def _fallback_strategy(node: InputNodeSnapshot) -> dict[str, Any]:
+def _fallback_strategy(node: InputNodeSnapshot) -> dict[str, object]:
     if node.node_kind == "request_body":
         return {"type": "request_body"}
     schema = node.schema_contract

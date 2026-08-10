@@ -9,7 +9,7 @@ independent of concrete Harness and Toolbox implementations.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Protocol
 
 from restscope.llm import LLMResponse, ToolCall, ToolResult
 

@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 from threading import RLock
-from typing import Any, Literal
+from typing import Literal
 
 from restscope.openapi_audit import OpenAPIChangeEventWrite, OpenAPIAudit
 from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
@@ -154,12 +154,12 @@ class ResponseContractTracker:
 
 
 def _document_response(
-    document: dict[str, Any],
+    document: dict[str, object],
     *,
     operation_path: str,
     operation_method: str,
     status_code: int,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Extract one exact normalized Response from a built OpenAPI document."""
 
     path_item = document.get("paths", {}).get(operation_path, {})
@@ -273,7 +273,7 @@ def _response_baseline(
     return responses.get("default")
 
 
-def _infer_schema(value: Any) -> SchemaIR:
+def _infer_schema(value: object) -> SchemaIR:
     """Infer a bounded OpenAPI Schema from an observed JSON-compatible response value."""
     if value is None:
         return _new_schema("null")

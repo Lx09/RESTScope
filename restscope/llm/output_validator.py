@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from pydantic import ValidationError
 
@@ -17,7 +16,7 @@ class OutputValidator:
         self,
         *,
         response: LLMResponse,
-        output_model: Any,
+        output_model: object,
     ) -> ValidationResult:
         """Parse model text and validate it against the requested Pydantic output type. Invalid JSON or fields become a bounded validation error."""
         raw_json, parse_errors = self._load_json(response)
@@ -43,7 +42,7 @@ class OutputValidator:
 
         return ValidationResult(valid=True, validated_object=validated, raw_json=raw_json)
 
-    def _load_json(self, response: LLMResponse) -> tuple[Any | None, list[ValidationIssue]]:
+    def _load_json(self, response: LLMResponse) -> tuple[object | None, list[ValidationIssue]]:
         if response.parsed_json is not None:
             return response.parsed_json, []
         if not response.content:

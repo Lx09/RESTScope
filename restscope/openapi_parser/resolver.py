@@ -3,7 +3,7 @@
 import json
 import os
 import urllib.parse
-from typing import Any, Tuple
+from typing import Tuple
 
 from .exceptions import RecursiveReferenceError, ReferenceResolutionError
 

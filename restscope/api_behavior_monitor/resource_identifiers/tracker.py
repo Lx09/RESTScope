@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 import re
-from typing import Any
 
 from restscope.agent import SystemAgentTask
 from restscope.observability import TracingRuntime
@@ -21,6 +21,9 @@ from .prompts import (
 )
 from .schemas import (
     DetectedResourceGroup,
+    IdentifierComponentValue,
+    IdentifierFieldMapping,
+    IdentifierRecord,
     LearnedResourceRule,
     MAX_CLASSIFICATION_GROUPS,
     MAX_RESOURCE_ALIAS_COUNT,
@@ -39,18 +42,14 @@ from .schemas import (
 MAX_RESPONSE_GROUPS = MAX_CLASSIFICATION_GROUPS
 MAX_OBSERVED_SCALARS = 1000
 MAX_RESOURCE_ITEMS = 1000
-MAX_VALUES_PER_FIELD = MAX_RESOURCE_ITEMS
 MAX_IDENTIFIER_BYTES = 4096
 MAX_SCHEMA_EVIDENCE_ITEMS = 1000
 MAX_EXISTING_RESOURCES_IN_PROMPT = 100
-MAX_PROMPT_CANDIDATES_PER_GROUP = 50
 MAX_PROMPT_CANDIDATES_TOTAL = 100
+MAX_PROMPT_PATHS = 100
 MAX_SCHEMA_FORMAT_CHARS = 200
 GENERIC_RESOURCE_WRAPPERS = frozenset(
     {"collection", "data", "items", "results"}
-)
-_ACKNOWLEDGEMENT_FIELD_NAMES = frozenset(
-    {"message", "status", "detail", "success"}
 )
 
 
@@ -101,7 +100,7 @@ class _FieldCandidate:
     selector: str
     name: str
     types: set[str] = field(default_factory=set)
-    values: list[Any] = field(default_factory=list)
+    values: list[object] = field(default_factory=list)
     description: str | None = None
     schema_format: str | None = None
 
@@ -128,9 +127,17 @@ class _FirstObservationOutcome:
 
 @dataclass(slots=True)
 class _SelectorExtraction:
-    values: list[str | int] = field(default_factory=list)
+    records: list[IdentifierRecord] = field(default_factory=list)
     missing_locations: list[str] = field(default_factory=list)
     evidence_issues: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True, frozen=True)
+class _IdentifierChoice:
+    """Keep the selected full path and ordered response fields together."""
+
+    path: str | None
+    fields: tuple[_FieldCandidate, ...]
 
 
 class ResourceIdentifierTracker:
@@ -262,14 +269,14 @@ class ResourceIdentifierTracker:
                 warnings=outcome.warnings,
                 groups_processed=len(resource_groups),
                 identifiers_recorded=sum(
-                    len(item.identifier_values) for item in resource_groups
+                    len(item.identifier_records) for item in resource_groups
                 ),
             )
         return ResourceMonitorResult(
             status="updated" if resource_groups else "ignored",
             groups_processed=len(resource_groups),
             identifiers_recorded=sum(
-                len(item.identifier_values) for item in resource_groups
+                len(item.identifier_records) for item in resource_groups
             ),
         )
 
@@ -278,29 +285,29 @@ class ResourceIdentifierTracker:
         observation: ResourceObservation,
         rules: list[LearnedResourceRule],
     ) -> ResourceMonitorResult:
-        """Apply learned response selectors to deterministic candidate groups before asking the model."""
+        """Apply an ordered learned Identifier Definition without another model call."""
         detections: list[DetectedResourceGroup] = []
         warnings: list[tuple[str, ResourceMonitorWarning]] = []
         for rule in rules:
             if not rule.has_resource:
                 continue
             assert rule.resource_name is not None
-            assert rule.id_field_name is not None
-            assert rule.id_selector is not None
-            extraction = _extract_group_identifier_values(
+            assert rule.identifier_name is not None
+            extraction = _extract_group_identifier_records(
                 observation.body,
                 group_path=rule.group_path,
-                selector=rule.id_selector,
+                mappings=rule.identifier_fields,
             )
-            if extraction.values:
+            if extraction.records:
                 detections.append(
                     DetectedResourceGroup(
                         group_path=rule.group_path,
                         resource_name=rule.resource_name,
                         resource_aliases=rule.resource_aliases,
-                        id_field_name=rule.id_field_name,
-                        id_selector=rule.id_selector,
-                        identifier_values=extraction.values,
+                        identifier_name=rule.identifier_name,
+                        identifier_path=rule.identifier_path,
+                        identifier_fields=rule.identifier_fields,
+                        identifier_records=extraction.records,
                         classification_source=rule.classification_source,
                     )
                 )
@@ -343,7 +350,7 @@ class ResourceIdentifierTracker:
                 warnings=warnings,
                 groups_processed=len(detections),
                 identifiers_recorded=sum(
-                    len(item.identifier_values) for item in detections
+                    len(item.identifier_records) for item in detections
                 ),
             )
         if not detections:
@@ -352,7 +359,7 @@ class ResourceIdentifierTracker:
             status="updated",
             groups_processed=len(detections),
             identifiers_recorded=sum(
-                len(item.identifier_values) for item in detections
+                len(item.identifier_records) for item in detections
             ),
         )
 
@@ -391,14 +398,13 @@ class ResourceIdentifierTracker:
         observation: ResourceObservation,
         groups: list[_ResponseGroup],
     ) -> _FirstObservationOutcome:
-        """Ask the model to choose identifier aliases only when deterministic evidence is insufficient."""
+        """Ask the System Agent for every first-time Identifier Definition."""
         existing_resources = self.catalog.list_resources(
             limit=MAX_EXISTING_RESOURCES_IN_PROMPT + 1,
             aliases_per_resource=MAX_RESOURCE_ALIAS_COUNT + 1,
         )
         resource_context = _resource_prompt_context(existing_resources)
         outcome = _FirstObservationOutcome()
-        unresolved: list[_ResponseGroup] = []
         for group in groups:
             if group.evidence_issues:
                 outcome.warnings.append(
@@ -414,116 +420,25 @@ class ResourceIdentifierTracker:
                         ),
                     )
                 )
-            exact = [
-                field
-                for field in _identifier_candidates(group.fields.values())
-                if _normalize_identifier_name(field.name) == "id"
-            ]
-            if exact:
-                field = exact[0]
-                extraction = _extract_group_identifier_values(
-                    observation.body,
-                    group_path=group.group_path,
-                    selector=field.selector,
-                )
-                if not extraction.values:
-                    if extraction.evidence_issues:
-                        outcome.warnings.append(
-                            (
-                                group.group_path,
-                                ResourceMonitorWarning(
-                                    code=(
-                                        "resource_monitor_evidence_limit_exceeded"
-                                    ),
-                                    message=(
-                                        "Resource identifier evidence exceeded "
-                                        "monitor limits"
-                                    ),
-                                    issues=extraction.evidence_issues[:20],
-                                ),
-                            )
-                        )
-                    else:
-                        outcome.warnings.append(
-                            (
-                                group.group_path,
-                                ResourceMonitorWarning(
-                                    code="expected_resource_id_missing",
-                                    message=(
-                                        "The IR-declared exact resource "
-                                        "identifier was not observed"
-                                    ),
-                                    issues=[field.selector],
-                                ),
-                            )
-                        )
-                    continue
-                resource_name = _resolve_resource_name(
-                    group,
-                    operation=observation.operation,
-                    resource_context=resource_context,
-                )
-                outcome.detections.append(
-                    DetectedResourceGroup(
-                        group_path=group.group_path,
-                        resource_name=resource_name,
-                        resource_aliases=[resource_name],
-                        id_field_name=field.name,
-                        id_selector=field.selector,
-                        identifier_values=extraction.values,
-                        classification_source="exact_id",
-                    )
-                )
-                if extraction.missing_locations:
-                    outcome.warnings.append(
-                        (
-                            group.group_path,
-                            ResourceMonitorWarning(
-                                code="expected_resource_id_missing",
-                                message=(
-                                    "One or more resource items omitted the "
-                                    "exact identifier"
-                                ),
-                                issues=extraction.missing_locations[:20],
-                            ),
-                        )
-                    )
-                if extraction.evidence_issues:
-                    outcome.warnings.append(
-                        (
-                            group.group_path,
-                            ResourceMonitorWarning(
-                                code="resource_monitor_evidence_limit_exceeded",
-                                message=(
-                                    "Some resource evidence was skipped or "
-                                    "truncated"
-                                ),
-                                issues=extraction.evidence_issues[:20],
-                            ),
-                        )
-                    )
-            else:
-                unresolved.append(group)
-
-        for group in unresolved:
             resource_name = _resolve_resource_name(
                 group,
                 operation=observation.operation,
                 resource_context=resource_context,
             )
-            field = self._select_identifier_candidate(
+            choice = self._select_identifier_candidate(
                 observation=observation,
                 group=group,
                 resource_name=resource_name,
             )
-            if field is None:
+            if choice is None:
                 continue
-            extraction = _extract_group_identifier_values(
+            mappings = _identifier_mappings(choice)
+            extraction = _extract_group_identifier_records(
                 observation.body,
                 group_path=group.group_path,
-                selector=field.selector,
+                mappings=mappings,
             )
-            if not extraction.values:
+            if not extraction.records:
                 outcome.warnings.append(
                     (
                         group.group_path,
@@ -533,19 +448,21 @@ class ResourceIdentifierTracker:
                                 "The selected resource identifier was not "
                                 "observed"
                             ),
-                            issues=[field.selector],
+                            issues=[item.selector for item in mappings],
                         ),
                     )
                 )
                 continue
+            identifier_name = _identifier_name(choice)
             outcome.detections.append(
                 DetectedResourceGroup(
                     group_path=group.group_path,
                     resource_name=resource_name,
                     resource_aliases=[resource_name],
-                    id_field_name=field.name,
-                    id_selector=field.selector,
-                    identifier_values=extraction.values,
+                    identifier_name=identifier_name,
+                    identifier_path=choice.path,
+                    identifier_fields=mappings,
+                    identifier_records=extraction.records,
                     classification_source="llm",
                 )
             )
@@ -585,62 +502,37 @@ class ResourceIdentifierTracker:
         observation: ResourceObservation,
         group: _ResponseGroup,
         resource_name: str,
-    ) -> _FieldCandidate | None:
+    ) -> _IdentifierChoice | None:
         """
         Select identifier candidate for API response monitoring and its narrowly
         approved evidence catalog.
         """
         candidates = _identifier_candidates(group.fields.values())
-        # Generic acknowledgement envelopes describe request processing, not
-        # reusable resource identity. Skipping them avoids a model call and
-        # deliberately does not persist a negative extraction rule.
-        if (
-            candidates
-            and any(field.values for field in candidates)
-            and all(
-                _normalize_identifier_name(field.name)
-                in _ACKNOWLEDGEMENT_FIELD_NAMES
-                for field in candidates
+        if not candidates:
+            return None
+        if len(candidates) > MAX_PROMPT_CANDIDATES_TOTAL:
+            raise _EvidenceLimitExceeded(
+                f"identifier candidates exceed {MAX_PROMPT_CANDIDATES_TOTAL}"
             )
-        ):
-            return None
-        suffix_candidates = [
-            field
-            for field in candidates
-            if _normalize_identifier_name(field.name).endswith("id")
-        ]
-        selected_pool = (suffix_candidates or candidates)[
-            :MAX_PROMPT_CANDIDATES_TOTAL
-        ]
-        if not selected_pool:
-            return None
+        if len(observation.related_identifier_paths) > MAX_PROMPT_PATHS:
+            raise _EvidenceLimitExceeded(
+                f"identifier paths exceed {MAX_PROMPT_PATHS}"
+            )
         numbered = [
             (f"I{index}", field)
-            for index, field in enumerate(selected_pool, start=1)
+            for index, field in enumerate(candidates, start=1)
         ]
-        batches = [
-            numbered[index : index + MAX_PROMPT_CANDIDATES_PER_GROUP]
-            for index in range(0, len(numbered), MAX_PROMPT_CANDIDATES_PER_GROUP)
-        ]
-        first_prompt = _selection_prompt(
-            observation=observation,
-            group=group,
-            resource_name=resource_name,
-            candidates=batches[0],
-        )
-        selection = self._invoke_selection(first_prompt)
-        selected = _selected_field(selection, batches[0])
-        if selected is not None or len(batches) == 1:
-            return selected
-
-        second_prompt = _selection_prompt(
-            observation=observation,
-            group=group,
-            resource_name=resource_name,
-            candidates=batches[1],
-        )
-        second = self._invoke_selection(second_prompt)
-        return _selected_field(second, batches[1])
+        try:
+            prompt = _selection_prompt(
+                observation=observation,
+                group=group,
+                resource_name=resource_name,
+                candidates=numbered,
+            )
+        except ValueError as exc:
+            raise _EvidenceLimitExceeded(str(exc)) from exc
+        selection = self._invoke_selection(prompt)
+        return _selected_choice(selection, numbered)
 
     def _invoke_selection(
         self,
@@ -650,6 +542,7 @@ class ResourceIdentifierTracker:
         task = SystemAgentTask(
             objective=prompt.user,
             allowed_result_aliases=prompt.candidate_aliases,
+            allowed_result_paths=prompt.candidate_paths,
         )
         with self.tracing_runtime.span(
             "ResourceIdentifierTracker.select_identifier",
@@ -720,49 +613,17 @@ def _build_groups(observation: ResourceObservation) -> list[_ResponseGroup]:
     groups: list[_ResponseGroup] = []
     budget = _EvidenceBudget()
     if isinstance(body, dict):
-        collections = [
-            (str(name), value)
-            for name, value in body.items()
-            if isinstance(value, list)
-        ]
-        if collections:
-            for name, items in collections:
-                _require_evidence_text(
-                    name,
-                    limit=MAX_RESOURCE_NAME_CHARS,
-                    label="response collection field name",
-                )
-                _require_selector_safe_field_name(
-                    name,
-                    label="response collection field name",
-                )
-                normalized_name = _normalize_resource_name(name)
-                alias = (
-                    _operation_resource_alias(observation.operation.path)
-                    if normalized_name in GENERIC_RESOURCE_WRAPPERS
-                    else _singularize(name)
-                )
-                _append_group(
-                    groups,
-                    _build_item_group(
-                        items,
-                        group_path=f"$.{name}[]",
-                        suggested_alias=alias,
-                    ),
-                    budget=budget,
-                )
-        else:
-            _append_group(
-                groups,
-                _build_item_group(
-                    [body],
-                    group_path="$",
-                    suggested_alias=_operation_resource_alias(
-                        observation.operation.path
-                    ),
+        _append_group(
+            groups,
+            _build_item_group(
+                [body],
+                group_path="$",
+                suggested_alias=_operation_resource_alias(
+                    observation.operation.path
                 ),
-                budget=budget,
-            )
+            ),
+            budget=budget,
+        )
     elif isinstance(body, list):
         _append_group(
             groups,
@@ -780,7 +641,7 @@ def _build_groups(observation: ResourceObservation) -> list[_ResponseGroup]:
 
 
 def _build_item_group(
-    items: list[Any],
+    items: list[object],
     *,
     group_path: str,
     suggested_alias: str,
@@ -798,7 +659,7 @@ def _build_item_group(
         if not isinstance(item, dict):
             continue
         location = _group_item_location(group_path, index)
-        if _json_scalar_count_exceeds(item, MAX_OBSERVED_SCALARS):
+        if len(item) > MAX_OBSERVED_SCALARS:
             if len(issues) < 20:
                 issues.append(
                     f"{location}: resource item exceeds "
@@ -820,7 +681,7 @@ def _build_item_group(
 
 
 def _collect_item_fields(
-    item: dict[Any, Any],
+    item: dict[object, object],
     *,
     group_path: str,
     fields: dict[str, _FieldCandidate],
@@ -835,7 +696,8 @@ def _collect_item_fields(
             label="response field name",
         )
         _require_selector_safe_field_name(name, label="response field name")
-        if isinstance(value, (dict, list)):
+        value_type = _json_type(value)
+        if value_type not in {"string", "integer"}:
             continue
         selector = f"{group_path}.{name}"
         _require_evidence_text(
@@ -856,23 +718,7 @@ def _collect_item_fields(
             fields[selector] = candidate
         if len(candidate.values) < MAX_RESOURCE_ITEMS:
             candidate.values.append(value)
-        candidate.types.add(_json_type(value))
-
-
-def _json_scalar_count_exceeds(value: Any, limit: int) -> bool:
-    count = 0
-    pending = [value]
-    while pending:
-        current = pending.pop()
-        if isinstance(current, dict):
-            pending.extend(current.values())
-        elif isinstance(current, list):
-            pending.extend(current)
-        else:
-            count += 1
-            if count > limit:
-                return True
-    return False
+        candidate.types.add(value_type)
 
 
 def _group_item_location(group_path: str, index: int) -> str:
@@ -916,6 +762,14 @@ def _merge_schema_fields(
         name = str(item.get("name") or "")
         if not selector.startswith("$") or not name:
             continue
+        group = _group_for_schema_selector(groups, selector)
+        if group is None:
+            continue
+        candidate = group.fields.get(selector)
+        if candidate is None:
+            # Schema evidence may describe an observed candidate, but it may
+            # never create or validate a field absent from the response.
+            continue
         _require_evidence_text(
             selector,
             limit=MAX_RESOURCE_SELECTOR_CHARS,
@@ -943,13 +797,6 @@ def _merge_schema_fields(
                     segment,
                     label="schema field path segment",
                 )
-        group = _group_for_schema_selector(groups, selector)
-        if group is None:
-            continue
-        candidate = group.fields.get(selector)
-        if candidate is None:
-            candidate = _FieldCandidate(selector=selector, name=name)
-            group.fields[selector] = candidate
         raw_type = item.get("type")
         if isinstance(raw_type, list):
             candidate.types.update(str(value) for value in raw_type)
@@ -1033,23 +880,13 @@ def _resolve_resource_name(
     return operation_alias
 
 
-def _extract_group_identifier_values(
-    body: Any,
+def _extract_group_identifier_records(
+    body: object,
     *,
     group_path: str,
-    selector: str,
+    mappings: list[IdentifierFieldMapping],
 ) -> _SelectorExtraction:
-    """Extract distinct typed identifier values from one detected resource group."""
-    prefix = f"{group_path}."
-    if not selector.startswith(prefix):
-        return _SelectorExtraction(
-            values=_identifier_values(_extract_selector_values(body, selector))
-        )
-    field_name = selector.removeprefix(prefix)
-    if not field_name or "." in field_name or "[]" in field_name:
-        return _SelectorExtraction(
-            values=_identifier_values(_extract_selector_values(body, selector))
-        )
+    """Extract complete ordered tuples without crossing response-item rows."""
     items = _items_for_group(body, group_path)
     extraction = _SelectorExtraction()
     if len(items) > MAX_RESOURCE_ITEMS:
@@ -1057,40 +894,55 @@ def _extract_group_identifier_values(
             f"{group_path}: collection truncated after "
             f"{MAX_RESOURCE_ITEMS} items"
         )
-    seen: set[tuple[type[object], object]] = set()
+    seen: set[tuple[tuple[str, str, object], ...]] = set()
     for index, item in enumerate(items[:MAX_RESOURCE_ITEMS]):
         if not isinstance(item, dict):
             continue
         location = _group_item_location(group_path, index)
-        if _json_scalar_count_exceeds(item, MAX_OBSERVED_SCALARS):
+        if len(item) > MAX_OBSERVED_SCALARS:
             if len(extraction.evidence_issues) < 20:
                 extraction.evidence_issues.append(
                     f"{location}: resource item exceeds "
                     f"{MAX_OBSERVED_SCALARS} scalar values"
                 )
             continue
-        raw_value = item.get(field_name)
-        try:
-            values = _identifier_values([raw_value])
-        except _EvidenceLimitExceeded as exc:
-            if len(extraction.evidence_issues) < 20:
-                extraction.evidence_issues.append(
-                    f"{location}: {exc}"
+        components: list[IdentifierComponentValue] = []
+        invalid = False
+        for mapping in mappings:
+            raw_value = item.get(mapping.field_name)
+            try:
+                values = _identifier_values([raw_value])
+            except _EvidenceLimitExceeded as exc:
+                if len(extraction.evidence_issues) < 20:
+                    extraction.evidence_issues.append(f"{location}: {exc}")
+                invalid = True
+                break
+            if not values:
+                invalid = True
+                break
+            value = values[0]
+            components.append(
+                IdentifierComponentValue(
+                    name=mapping.component,
+                    value=value,
+                    value_type="integer" if isinstance(value, int) else "string",
                 )
-            continue
-        if not values:
+            )
+        if invalid:
             if len(extraction.missing_locations) < 20:
                 extraction.missing_locations.append(location)
             continue
-        value = values[0]
-        key = (type(value), value)
+        key = tuple(
+            (component.name, component.value_type, component.value)
+            for component in components
+        )
         if key not in seen:
             seen.add(key)
-            extraction.values.append(value)
+            extraction.records.append(IdentifierRecord(components=components))
     return extraction
 
 
-def _items_for_group(body: Any, group_path: str) -> list[Any]:
+def _items_for_group(body: object, group_path: str) -> list[object]:
     if group_path == "$":
         return [body] if isinstance(body, dict) else []
     if group_path == "$[]":
@@ -1102,44 +954,7 @@ def _items_for_group(body: Any, group_path: str) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
-def _extract_selector_values(body: Any, selector: str) -> list[Any]:
-    """Read typed values at one validated selector across response items."""
-    if not selector.startswith("$"):
-        return []
-    tokens = [
-        (match.group(1), bool(match.group(2)))
-        for match in re.finditer(r"\.([^.\[\]]+)(\[\])?", selector[1:])
-    ]
-    root_array = selector.startswith("$[]")
-    current = list(body) if root_array and isinstance(body, list) else [body]
-    if len(current) > MAX_VALUES_PER_FIELD:
-        raise _EvidenceLimitExceeded(
-            f"identifier values exceed {MAX_VALUES_PER_FIELD}"
-        )
-    for name, is_array in tokens:
-        next_values: list[Any] = []
-        for value in current:
-            if not isinstance(value, dict) or name not in value:
-                continue
-            child = value[name]
-            if is_array:
-                if isinstance(child, list):
-                    if len(next_values) + len(child) > MAX_VALUES_PER_FIELD:
-                        raise _EvidenceLimitExceeded(
-                            f"identifier values exceed {MAX_VALUES_PER_FIELD}"
-                        )
-                    next_values.extend(child)
-            else:
-                if len(next_values) >= MAX_VALUES_PER_FIELD:
-                    raise _EvidenceLimitExceeded(
-                        f"identifier values exceed {MAX_VALUES_PER_FIELD}"
-                    )
-                next_values.append(child)
-        current = next_values
-    return current
-
-
-def _identifier_values(values: list[Any]) -> list[str | int]:
+def _identifier_values(values: list[object]) -> list[str | int]:
     output: list[str | int] = []
     seen: set[tuple[type[object], object]] = set()
     for value in values:
@@ -1225,27 +1040,55 @@ def _selection_prompt(
             )
             for alias, field in candidates
         ],
+        candidate_paths=list(observation.related_identifier_paths),
     )
 
 
-def _selected_field(
+def _selected_choice(
     selection: IdentifierSelectionDecision,
     candidates: list[tuple[str, _FieldCandidate]],
-) -> _FieldCandidate | None:
+) -> _IdentifierChoice | None:
+    """Restore prompt-local aliases as an ordered field combination."""
     if selection.identifier is None:
         return None
-    return dict(candidates)[selection.identifier]
+    by_alias = dict(candidates)
+    return _IdentifierChoice(
+        path=selection.identifier.path,
+        fields=tuple(by_alias[alias] for alias in selection.identifier.fields),
+    )
+
+
+def _identifier_mappings(
+    choice: _IdentifierChoice,
+) -> list[IdentifierFieldMapping]:
+    """Name ordered components from path placeholders or the selected field."""
+    components = (
+        re.findall(r"\{([^{}]+)\}", choice.path)
+        if choice.path is not None
+        else [choice.fields[0].name]
+    )
+    return [
+        IdentifierFieldMapping(
+            component=component,
+            field_name=field.name,
+            selector=field.selector,
+        )
+        for component, field in zip(components, choice.fields, strict=True)
+    ]
+
+
+def _identifier_name(choice: _IdentifierChoice) -> str:
+    """Return the stable semantic name for the selected definition."""
+    if choice.path is None:
+        return choice.fields[0].name
+    return "/".join(re.findall(r"\{([^{}]+)\}", choice.path))
 
 
 def _identifier_candidates(
-    fields: Any,
+    fields: Iterable[_FieldCandidate],
 ) -> list[_FieldCandidate]:
-    output: list[_FieldCandidate] = []
-    for field in fields:
-        known_types = field.types
-        if not known_types or known_types <= {"string", "integer"}:
-            output.append(field)
-    return output
+    """Return the already type-filtered immediate response fields in stable order."""
+    return list(fields)
 
 
 def _relative_field_path(group_path: str, selector: str) -> str:
@@ -1281,10 +1124,6 @@ def _singularize(value: str) -> str:
     return normalized or "resource"
 
 
-def _normalize_identifier_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.casefold())
-
-
 def _normalize_resource_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "", value.casefold())
     if not normalized:
@@ -1309,7 +1148,7 @@ def _require_selector_safe_field_name(value: str, *, label: str) -> None:
         )
 
 
-def _json_type(value: Any) -> str:
+def _json_type(value: object) -> str:
     if value is None:
         return "null"
     if isinstance(value, bool):

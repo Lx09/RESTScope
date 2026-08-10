@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import time
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from contextvars import Token
 
 from .observer import (
@@ -50,7 +50,7 @@ class LiveSpan:
         self._started = time.monotonic()
         self._closed = False
 
-    def set_content(self, direction: str, value: Any) -> None:
+    def set_content(self, direction: str, value: object) -> None:
         """Store semantic input or output while preserving nested HTTP evidence."""
 
         if self._is_agent_run and direction == "output" and self._task_id is not None:
@@ -84,7 +84,7 @@ class LiveSpan:
                 detail["output"] = output
         else:
             detail[direction] = safe_value
-        changes: dict[str, Any] = {"detail": detail}
+        changes: dict[str, object] = {"detail": detail}
         status = _semantic_status(event=event, output=safe_value, direction=direction)
         if status is not None:
             changes["status"] = status
@@ -93,9 +93,9 @@ class LiveSpan:
     def set_messages(
         self,
         direction: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         *,
-        summary: Any,
+        summary: object,
     ) -> None:
         """Store one Agent turn's incremental input or exact assistant output."""
 
@@ -107,7 +107,7 @@ class LiveSpan:
                 summary=summary,
             )
 
-    def set_attribute(self, name: str, value: Any) -> None:
+    def set_attribute(self, name: str, value: object) -> None:
         """Add semantic scope or status without provider metadata."""
 
         if self._event_id is None:
@@ -115,7 +115,7 @@ class LiveSpan:
         event = self._observer._event_copy(self._event_id)
         if event is None:
             return
-        changes: dict[str, Any] = {}
+        changes: dict[str, object] = {}
         if event.get("kind") != "agent_turn":
             attributes = deepcopy(event.get("attributes", {}))
             attributes[name] = self._observer._safe(value)
@@ -129,7 +129,7 @@ class LiveSpan:
         if changes:
             self._observer._update_event(self._event_id, **changes)
 
-    def set_detail(self, name: str, value: Any) -> None:
+    def set_detail(self, name: str, value: object) -> None:
         """Store observer-only detail that must not change tracing output."""
 
         if self._event_id is not None:

@@ -12,6 +12,7 @@ BUSINESS_TABLES = {
     "resource_aliases",
     "operation_resource_rules",
     "resource_identifiers",
+    "resource_identifier_definitions",
     "resource_operation_usages",
     "resource_monitor_errors",
     "response_value_pools",
@@ -34,7 +35,7 @@ def _alembic_config(database: Path):
     return config
 
 
-def test_orm_metadata_contains_exactly_thirteen_business_tables() -> None:
+def test_orm_metadata_contains_exactly_fourteen_business_tables() -> None:
     """No retired Smoke or Generator persistence remains in ORM metadata."""
     from restscope.db import Base
 
@@ -64,7 +65,6 @@ def test_evidence_tables_enforce_scalar_status_position_and_rule_shapes() -> Non
     }
     expected_suffixes = {
         "resource_rule_shape",
-        "resource_identifier_scalar_type",
         "response_pool_scalar_type",
         "response_observation_http_status",
         "response_observation_scalar_type",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -21,7 +21,7 @@ class ConstantGenerator(_Strategy):
     corresponding service functions.
     """
     type: Literal["constant"]
-    value: Any
+    value: object
 
 
 class ChoiceGenerator(_Strategy):
@@ -33,7 +33,7 @@ class ChoiceGenerator(_Strategy):
     corresponding service functions.
     """
     type: Literal["choice"]
-    values: list[Any] = Field(
+    values: list[object] = Field(
         min_length=1,
         json_schema_extra={
             "items": {
@@ -236,10 +236,12 @@ class RequestBodyGenerator(_Strategy):
 
 
 class ResourceIdentifierGenerator(_Strategy):
-    """Select an identifier already observed for one canonical resource."""
+    """Select one component from a complete observed Identifier Record."""
 
     type: Literal["resource_identifier"]
     resource: str = Field(min_length=1, max_length=200)
+    identifier: str = Field(min_length=1, max_length=200)
+    component: str = Field(min_length=1, max_length=200)
 
 
 class ResponseValueGenerator(_Strategy):
@@ -306,12 +308,12 @@ class SchemaSnapshot(BaseModel):
     read_only_properties: list[str] = Field(default_factory=list)
     required: list[str] = Field(default_factory=list)
     items: "SchemaSnapshot | None" = None
-    enum: list[Any] | None = None
-    const: Any | None = None
+    enum: list[object] | None = None
+    const: object | None = None
     has_const: bool = False
-    default: Any | None = None
+    default: object | None = None
     has_default: bool = False
-    example: Any | None = None
+    example: object | None = None
     has_example: bool = False
     nullable: bool | None = None
     minimum: int | float | None = None
@@ -375,7 +377,7 @@ class OperationTestSnapshot(BaseModel):
     parameters: list[ParameterSnapshot]
     request_body_node_id: str | None = None
     media_type_node_ids: dict[str, str] = Field(default_factory=dict)
-    media_type_encodings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    media_type_encodings: dict[str, dict[str, object]] = Field(default_factory=dict)
     available_media_types: list[str] = Field(default_factory=list)
     unsupported_parameter_nodes: dict[str, str] = Field(default_factory=dict)
     unsupported_schema_nodes: dict[str, list[str]] = Field(default_factory=dict)
@@ -416,7 +418,7 @@ class GeneratedNodeValue(BaseModel):
 
     input_node_id: str
     instance_path: str
-    value: Any
+    value: object
 
 
 class GeneratedTestCase(BaseModel):
@@ -427,11 +429,11 @@ class GeneratedTestCase(BaseModel):
     operation_key: str
     case_index: int = Field(ge=0)
     media_type: str | None = None
-    path_parameters: dict[str, Any]
-    query_parameters: dict[str, Any]
-    header_parameters: dict[str, Any]
-    cookie_parameters: dict[str, Any]
-    body: Any | None = None
+    path_parameters: dict[str, object]
+    query_parameters: dict[str, object]
+    header_parameters: dict[str, object]
+    cookie_parameters: dict[str, object]
+    body: object | None = None
     body_present: bool = False
     generated_values: list[GeneratedNodeValue]
     omitted_input_node_ids: list[str]

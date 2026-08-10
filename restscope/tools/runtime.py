@@ -13,7 +13,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from jsonschema import SchemaError, ValidationError, validate
 from jsonschema.validators import validator_for
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from restscope.tools.catalog import ToolCatalog
 
 
-ToolImplementation = Callable[..., Any]
+ToolImplementation = Callable[..., object]
 
 
 @dataclass(frozen=True)
@@ -159,7 +159,7 @@ class AgentToolbox:
 
     @staticmethod
     def _check_schema(
-        schema: dict[str, Any],
+        schema: dict[str, object],
         *,
         contract: str,
         tool_name: str,
@@ -208,7 +208,7 @@ class AgentToolbox:
             input returns immediately without creating worker threads.
 
         Raises:
-            ProviderUnavailableError: Any nested LLM-backed tool exhausted its
+            ProviderUnavailableError: A nested LLM-backed tool exhausted its
                 provider retry policy. No result group is returned.
         """
         if not tool_calls:

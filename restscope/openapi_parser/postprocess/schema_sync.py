@@ -10,19 +10,18 @@ Author: lixin
 
 from __future__ import annotations
 
-from typing import Any
 
 from ..ir import SchemaIR
 
 
-def infer_schema_from_value(value: Any) -> SchemaIR:
+def infer_schema_from_value(value: object) -> SchemaIR:
     """Create SchemaIR from an actual JSON value.
 
     Infers basic type, properties for objects, items for arrays.
     Does not infer complex constraints (min/max, pattern, etc.).
 
     Args:
-        value: Any JSON-serializable value (dict, list, str, int, etc.)
+        value: A JSON-serializable value (dict, list, str, int, etc.)
 
     Returns:
         SchemaIR representing the inferred schema.
@@ -61,7 +60,7 @@ def infer_schema_from_value(value: Any) -> SchemaIR:
     return _create_schema(type=None)
 
 
-def _infer_array_items(values: list[Any]) -> SchemaIR:
+def _infer_array_items(values: list[object]) -> SchemaIR:
     """Infer items schema from array values.
 
     If array is empty, returns schema with type=None.

@@ -9,7 +9,6 @@ the facade small and preserves the intended dependency direction.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
 
 __all__ = [
     "APIBehaviorMonitorCoordinator",
@@ -36,7 +35,7 @@ _PUBLIC_MODULE_BY_NAME = {
 }
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     """Resolve an approved workflow export from the module that owns it."""
     module_name = _PUBLIC_MODULE_BY_NAME.get(name)
     if module_name is None:

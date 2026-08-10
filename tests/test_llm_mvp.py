@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -143,7 +142,7 @@ def test_deepseek_preserves_raw_reasoning_on_every_response(
     )
 
     class Completions:
-        def create(self, **kwargs: Any) -> Any:
+        def create(self, **kwargs: object) -> object:
             del kwargs
             return response
 
@@ -290,9 +289,9 @@ class _FakeOpenAIResponse:
 
 class _FakeCompletions:
     def __init__(self) -> None:
-        self.kwargs: dict[str, Any] | None = None
+        self.kwargs: dict[str, object] | None = None
 
-    def create(self, **kwargs: Any) -> _FakeOpenAIResponse:
+    def create(self, **kwargs: object) -> _FakeOpenAIResponse:
         self.kwargs = kwargs
         return _FakeOpenAIResponse()
 
@@ -337,7 +336,7 @@ class _FailingCompletions:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    def create(self, **kwargs: Any) -> None:
+    def create(self, **kwargs: object) -> None:
         del kwargs
         raise self.error
 

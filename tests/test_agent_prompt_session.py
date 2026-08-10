@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 import pytest
 
@@ -13,10 +12,10 @@ class _PromptProvider:
 
     name = "scripted"
 
-    def __init__(self, responses: list[Any]) -> None:
+    def __init__(self, responses: list[object]) -> None:
         """Keep deterministic responses so tests never call a real model."""
         self.responses = list(responses)
-        self.requests: list[Any] = []
+        self.requests: list[object] = []
 
     def invoke(self, request):
         """Record the request before returning the next scripted response."""

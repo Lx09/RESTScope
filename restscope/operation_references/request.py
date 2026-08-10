@@ -11,7 +11,7 @@ tool registration, or persistent state.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Literal, Mapping
 
 
 RequestInputLocation = Literal["path", "query", "header", "cookie", "body"]
@@ -129,8 +129,8 @@ class RequestInputReference:
 
     def read(
         self,
-        request: Mapping[str, Any],
-    ) -> tuple[bool, Any | None]:
+        request: Mapping[str, object],
+    ) -> tuple[bool, object | None]:
         """Read this input from one structured Test Case request.
 
         Args:
@@ -166,7 +166,7 @@ class RequestInputReference:
             current = current[step.name]
         return True, current
 
-    def fragment(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def fragment(self, request: Mapping[str, object]) -> dict[str, object]:
         """Project this present input as direct-name request JSON.
 
         Args:
@@ -210,8 +210,8 @@ class RequestInputReference:
 
     def _root_value(
         self,
-        request: Mapping[str, Any],
-    ) -> tuple[bool, Any | None]:
+        request: Mapping[str, object],
+    ) -> tuple[bool, object | None]:
         """Read the Body or one direct name from its location object."""
         if self.location == "body":
             return (
@@ -227,7 +227,7 @@ class RequestInputReference:
             return False, None
         return True, container[self._parameter_name]
 
-    def _wrap(self, value: Any) -> dict[str, Any]:
+    def _wrap(self, value: object) -> dict[str, object]:
         """Rebuild direct-name JSON ancestry around one selected value."""
         current = value
         for step in reversed(self._steps):

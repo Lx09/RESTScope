@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -44,7 +44,7 @@ class SkillManifest(BaseModel):
     required_context_sources: tuple[str, ...] = ()
     risk_level: Literal["low", "medium", "high"] = "low"
     instruction_artifact_uri: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("required_tools", "required_context_sources")
     @classmethod

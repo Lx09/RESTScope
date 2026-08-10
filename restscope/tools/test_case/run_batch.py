@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from threading import RLock
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -42,7 +42,7 @@ class BatchCaseView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     case_number: int = Field(ge=1, le=5)
-    request: dict[str, Any] = Field(
+    request: dict[str, object] = Field(
         description="Complete bounded canonical method, URL, headers, and body for this case."
     )
     outcome_kind: Literal["http", "transport"]
@@ -73,7 +73,7 @@ class RunBatchOutput(BaseModel):
 class BatchExecutionBackend(Protocol):
     """Describe the narrow Harness service consumed by the Batch Tool."""
 
-    config_store: Any
+    config_store: object
 
     def run_batch(
         self,
@@ -82,7 +82,7 @@ class BatchExecutionBackend(Protocol):
         operation_key: str,
         case_count: int,
         seed: int | None,
-    ) -> Any: ...
+    ) -> object: ...
 
 
 class TestCaseBatchToolBackend:
@@ -98,7 +98,7 @@ class TestCaseBatchToolBackend:
         self.context_provider = context_provider
         self._lock = RLock()
 
-    def run_batch(self, **arguments: Any) -> dict[str, Any]:
+    def run_batch(self, **arguments: object) -> dict[str, object]:
         """Execute one complete preflighted Batch and return inline evidence."""
         try:
             request = RunBatchInput.model_validate(arguments)

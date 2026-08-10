@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
@@ -14,6 +16,7 @@ from ..orm import (
     OperationResourceRuleORM,
     ResourceAliasORM,
     ResourceIdentifierORM,
+    ResourceIdentifierDefinitionORM,
     ResourceMonitorErrorORM,
     ResourceOperationUsageORM,
     ResourceORM,
@@ -24,6 +27,7 @@ from ._transaction import _SqlAlchemyUnitOfWork
 if TYPE_CHECKING:
     from restscope.api_behavior_monitor.resource_identifiers.schemas import (
         DetectedResourceGroup,
+        IdentifierRecord,
         LearnedResourceRule,
         MonitoredOperation,
         ResourceLookupRequest,
@@ -31,6 +35,7 @@ if TYPE_CHECKING:
         ResourceMonitorWarning,
         ResourceNameSummary,
         ResourceIdentifierPage,
+        ResourceIdentifierSummary,
         ResourceOperationSummary,
     )
 
@@ -42,7 +47,8 @@ class ResourceCatalogConflict(ValueError):
 
 
 class SqlAlchemyResourceCatalogRepository:
-    """Persist canonical resources, aliases, learned selectors, identifiers, operation usage, and bounded monitor errors in one SQLAlchemy session."""
+    """Persist resources, ordered definitions/records, rules, usage, and errors."""
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -53,11 +59,12 @@ class SqlAlchemyResourceCatalogRepository:
         groups: list[DetectedResourceGroup],
         observed_at: datetime,
     ) -> None:
-        """Upsert one observation of resource groups, identifiers, selectors, aliases, and usage in the active transaction."""
+        """Upsert one observation's complete definitions, records, rules, and usage."""
         for group in groups:
             if not group.has_resource:
                 self._upsert_rule(
                     resource=None,
+                    definition=None,
                     operation=operation,
                     group=group,
                 )
@@ -71,15 +78,20 @@ class SqlAlchemyResourceCatalogRepository:
             resource = self._resolve_resource(group)
             assert group.resource_name is not None
             self._add_aliases(resource, [group.resource_name, *group.resource_aliases])
+            definition = self._resolve_identifier_definition(
+                resource=resource,
+                group=group,
+            )
             rule = self._upsert_rule(
                 resource=resource,
+                definition=definition,
                 operation=operation,
                 group=group,
             )
-            for value in group.identifier_values:
+            for record in group.identifier_records:
                 identifier = self._upsert_identifier(
-                    resource=resource,
-                    value=value,
+                    definition=definition,
+                    record=record,
                     observed_at=observed_at,
                 )
                 self._upsert_usage(
@@ -221,8 +233,13 @@ class SqlAlchemyResourceCatalogRepository:
             self.session.get(ResourceORM, alias.resource_id),
         )
         assert canonical is not None
-        query = select(ResourceIdentifierORM).where(
-            ResourceIdentifierORM.resource_id == canonical.id
+        query = (
+            select(ResourceIdentifierORM)
+            .join(
+                ResourceIdentifierDefinitionORM,
+                ResourceIdentifierORM.definition_id == ResourceIdentifierDefinitionORM.id,
+            )
+            .where(ResourceIdentifierDefinitionORM.resource_id == canonical.id)
         )
         total = self.session.scalar(
             select(func.count()).select_from(query.subquery())
@@ -230,8 +247,7 @@ class SqlAlchemyResourceCatalogRepository:
         rows = self.session.scalars(
             query.order_by(
                 ResourceIdentifierORM.last_seen_at.desc(),
-                ResourceIdentifierORM.value_type,
-                ResourceIdentifierORM.value_text,
+                ResourceIdentifierORM.value_digest,
             )
             .offset(offset)
             .limit(limit)
@@ -240,11 +256,7 @@ class SqlAlchemyResourceCatalogRepository:
             status="found",
             canonical_resource=canonical.canonical_name,
             identifiers=[
-                ResourceIdentifierSummary(
-                    value=_decode_identifier(row.value_type, row.value_text),
-                    value_type=row.value_type,
-                    last_seen_at=as_utc(row.last_seen_at),
-                )
+                self._identifier_summary(row)
                 for row in rows
             ],
             total=total,
@@ -350,14 +362,17 @@ class SqlAlchemyResourceCatalogRepository:
             .where(ResourceAliasORM.resource_id == resource.id)
             .order_by(func.lower(ResourceAliasORM.alias), ResourceAliasORM.alias)
         ).all()
-        identifier_query = select(ResourceIdentifierORM).where(
-            ResourceIdentifierORM.resource_id == resource.id
+        identifier_query = (
+            select(ResourceIdentifierORM)
+            .join(
+                ResourceIdentifierDefinitionORM,
+                ResourceIdentifierORM.definition_id == ResourceIdentifierDefinitionORM.id,
+            )
+            .where(ResourceIdentifierDefinitionORM.resource_id == resource.id)
         )
-        if request.id_value is not None:
-            value_type, value_text = _encode_identifier(request.id_value)
+        if request.identifier is not None:
             identifier_query = identifier_query.where(
-                ResourceIdentifierORM.value_type == value_type,
-                ResourceIdentifierORM.value_text == value_text,
+                ResourceIdentifierDefinitionORM.name == request.identifier
             )
         total = self.session.scalar(
             select(func.count()).select_from(identifier_query.subquery())
@@ -365,18 +380,13 @@ class SqlAlchemyResourceCatalogRepository:
         identifier_rows = self.session.scalars(
             identifier_query.order_by(
                 ResourceIdentifierORM.last_seen_at.desc(),
-                ResourceIdentifierORM.value_type,
-                ResourceIdentifierORM.value_text,
+                ResourceIdentifierORM.value_digest,
             ).limit(request.limit)
         ).all()
         selected_identifiers = identifier_rows
         operations = self._operation_summaries(
             resource_id=resource.id,
-            identifier_ids=(
-                [row.id for row in selected_identifiers]
-                if request.id_value is not None
-                else None
-            ),
+            identifier_ids=None,
         )
         errors = self.session.scalars(
             select(ResourceMonitorErrorORM)
@@ -384,11 +394,7 @@ class SqlAlchemyResourceCatalogRepository:
             .order_by(ResourceMonitorErrorORM.updated_at.desc())
         ).all()
         summaries = [
-            ResourceIdentifierSummary(
-                value=_decode_identifier(row.value_type, row.value_text),
-                value_type=row.value_type,
-                last_seen_at=as_utc(row.last_seen_at),
-            )
+            self._identifier_summary(row)
             for row in selected_identifiers
         ]
         return ResourceLookupResult(
@@ -396,7 +402,6 @@ class SqlAlchemyResourceCatalogRepository:
             canonical_resource=resource.canonical_name,
             aliases=[row.alias for row in aliases],
             identifiers=summaries,
-            recommended_id=summaries[0].value if summaries else None,
             operations=operations,
             errors=[
                 ResourceMonitorErrorSummary(
@@ -411,6 +416,28 @@ class SqlAlchemyResourceCatalogRepository:
             ],
             total=total,
             truncated=total > request.limit,
+        )
+
+    def _identifier_summary(
+        self,
+        row: ResourceIdentifierORM,
+    ) -> ResourceIdentifierSummary:
+        """Project a stored complete record through the Catalog Interface."""
+        from restscope.api_behavior_monitor.resource_identifiers.schemas import (
+            ResourceIdentifierSummary,
+        )
+
+        definition = self.session.get(
+            ResourceIdentifierDefinitionORM,
+            row.definition_id,
+        )
+        assert definition is not None
+        return ResourceIdentifierSummary.model_validate(
+            {
+                "identifier": definition.name,
+                "components": list(row.values),
+                "last_seen_at": as_utc(row.last_seen_at),
+            }
         )
 
     def _resolve_resource(self, group: DetectedResourceGroup) -> ResourceORM:
@@ -485,10 +512,41 @@ class SqlAlchemyResourceCatalogRepository:
             )
         self.session.flush()
 
+    def _resolve_identifier_definition(
+        self,
+        *,
+        resource: ResourceORM,
+        group: DetectedResourceGroup,
+    ) -> ResourceIdentifierDefinitionORM:
+        """Reuse or create the ordered Identifier Definition selected by the Agent."""
+        assert group.identifier_name is not None
+        component_names = [item.component for item in group.identifier_fields]
+        row = self.session.scalar(
+            select(ResourceIdentifierDefinitionORM).where(
+                ResourceIdentifierDefinitionORM.resource_id == resource.id,
+                ResourceIdentifierDefinitionORM.name == group.identifier_name,
+            )
+        )
+        if row is None:
+            row = ResourceIdentifierDefinitionORM(
+                id=_new_id("resource_identifier_definition"),
+                resource_id=resource.id,
+                name=group.identifier_name,
+                component_names=component_names,
+            )
+            self.session.add(row)
+        elif list(row.component_names) != component_names:
+            raise ResourceCatalogConflict(
+                f"Identifier Definition changed: {group.identifier_name}"
+            )
+        self.session.flush()
+        return row
+
     def _upsert_rule(
         self,
         *,
         resource: ResourceORM | None,
+        definition: ResourceIdentifierDefinitionORM | None,
         operation: MonitoredOperation,
         group: DetectedResourceGroup,
     ) -> OperationResourceRuleORM:
@@ -503,29 +561,33 @@ class SqlAlchemyResourceCatalogRepository:
             rule = OperationResourceRuleORM(
                 id=_new_id("resource_rule"),
                 resource_id=resource.id if resource is not None else None,
+                identifier_definition_id=(definition.id if definition is not None else None),
                 operation_key=operation.operation_key,
                 group_path=group.group_path,
                 has_resource=group.has_resource,
-                id_field_name=group.id_field_name,
-                id_selector=group.id_selector,
+                identifier_path=group.identifier_path,
+                identifier_fields=[item.model_dump(mode="json") for item in group.identifier_fields],
                 access_mode=operation.access_mode,
                 classification_source=group.classification_source,
             )
             self.session.add(rule)
         elif not rule.has_resource and group.has_resource:
             assert resource is not None
+            assert definition is not None
             rule.resource_id = resource.id
+            rule.identifier_definition_id = definition.id
             rule.has_resource = True
-            rule.id_field_name = group.id_field_name
-            rule.id_selector = group.id_selector
+            rule.identifier_path = group.identifier_path
+            rule.identifier_fields = [item.model_dump(mode="json") for item in group.identifier_fields]
             rule.access_mode = operation.access_mode
             rule.classification_source = group.classification_source
         else:
             if (
                 rule.resource_id != (resource.id if resource is not None else None)
                 or rule.has_resource != group.has_resource
-                or rule.id_selector != group.id_selector
-                or rule.id_field_name != group.id_field_name
+                or rule.identifier_definition_id != (definition.id if definition is not None else None)
+                or rule.identifier_path != group.identifier_path
+                or list(rule.identifier_fields) != [item.model_dump(mode="json") for item in group.identifier_fields]
             ):
                 raise ResourceCatalogConflict(
                     f"Operation resource rule changed for {operation.operation_key} {group.group_path}"
@@ -538,25 +600,27 @@ class SqlAlchemyResourceCatalogRepository:
     def _upsert_identifier(
         self,
         *,
-        resource: ResourceORM,
-        value: str | int,
+        definition: ResourceIdentifierDefinitionORM,
+        record: IdentifierRecord,
         observed_at: datetime,
     ) -> ResourceIdentifierORM:
-        """Insert a newly observed typed resource identifier without duplicating existing evidence."""
-        value_type, value_text = _encode_identifier(value)
+        """Insert one complete typed Identifier Record without duplicating it."""
+        values = [item.model_dump(mode="json") for item in record.components]
+        value_digest = hashlib.sha256(
+            json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         row = self.session.scalar(
             select(ResourceIdentifierORM).where(
-                ResourceIdentifierORM.resource_id == resource.id,
-                ResourceIdentifierORM.value_type == value_type,
-                ResourceIdentifierORM.value_text == value_text,
+                ResourceIdentifierORM.definition_id == definition.id,
+                ResourceIdentifierORM.value_digest == value_digest,
             )
         )
         if row is None:
             row = ResourceIdentifierORM(
                 id=_new_id("resource_id"),
-                resource_id=resource.id,
-                value_type=value_type,
-                value_text=value_text,
+                definition_id=definition.id,
+                values=values,
+                value_digest=value_digest,
                 first_seen_at=observed_at,
                 last_seen_at=observed_at,
             )
@@ -621,6 +685,11 @@ class SqlAlchemyResourceCatalogRepository:
             .where(ResourceOperationUsageORM.operation_rule_id == row.id)
             .limit(1)
         ) is not None
+        definition = (
+            self.session.get(ResourceIdentifierDefinitionORM, row.identifier_definition_id)
+            if row.identifier_definition_id is not None
+            else None
+        )
         return LearnedResourceRule.model_validate(
             {
                 "rule_id": row.id,
@@ -636,8 +705,9 @@ class SqlAlchemyResourceCatalogRepository:
                 "resource_aliases": list(aliases),
                 "operation": operation.model_dump(mode="json"),
                 "group_path": row.group_path,
-                "id_field_name": row.id_field_name,
-                "id_selector": row.id_selector,
+                "identifier_name": definition.name if definition is not None else None,
+                "identifier_path": row.identifier_path,
+                "identifier_fields": list(row.identifier_fields),
                 "access_mode": row.access_mode,
                 "classification_source": row.classification_source,
                 "id_observed": id_observed,
@@ -689,17 +759,17 @@ class SqlAlchemyResourceCatalogRepository:
                         "resource_aliases": list(aliases),
                         "id_field_aliases": sorted(
                             {
-                                rule.id_field_name
+                                field["field_name"]
                                 for rule in operation_rules
-                                if rule.id_field_name is not None
+                                for field in rule.identifier_fields
                             },
                             key=lambda value: value.casefold(),
                         ),
                         "selectors": sorted(
                             {
-                                rule.id_selector
+                                field["selector"]
                                 for rule in operation_rules
-                                if rule.id_selector is not None
+                                for field in rule.identifier_fields
                             }
                         ),
                         "latest_seen_at": max(
@@ -717,20 +787,6 @@ def _normalize_name(value: str) -> str:
     if not normalized:
         raise ResourceCatalogConflict("Resource name has no identifier characters")
     return normalized
-
-
-def _encode_identifier(value: str | int) -> tuple[str, str]:
-    if isinstance(value, bool):
-        raise ResourceCatalogConflict("Boolean values are not resource identifiers")
-    if isinstance(value, int):
-        return "integer", str(value)
-    if isinstance(value, str) and value.strip():
-        return "string", value
-    raise ResourceCatalogConflict("Resource identifier must be a non-empty string or integer")
-
-
-def _decode_identifier(value_type: str, value_text: str) -> str | int:
-    return int(value_text) if value_type == "integer" else value_text
 
 
 def _new_id(prefix: str) -> str:

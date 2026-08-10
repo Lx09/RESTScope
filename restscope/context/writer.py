@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import json
 import math
 import re
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from .context import ContextMetrics
 
@@ -104,7 +104,7 @@ class CompactTextWriter:
         record_label: str,
         *,
         required: bool = True,
-        **fields: Any,
+        **fields: object,
     ) -> None:
         """Add one self-contained Markdown card.
 
@@ -130,7 +130,7 @@ class CompactTextWriter:
     def detail(
         self,
         label: str,
-        values: Any,
+        values: object,
         *,
         required: bool = True,
     ) -> None:
@@ -148,7 +148,7 @@ class CompactTextWriter:
     def table(
         self,
         headers: Sequence[str],
-        rows: Iterable[Sequence[Any]],
+        rows: Iterable[Sequence[object]],
         *,
         required: bool = True,
     ) -> None:
@@ -175,7 +175,7 @@ class CompactTextWriter:
             )
         self._add_entry(tuple(lines), required=required)
 
-    def text(self, label: str, value: Any, *, required: bool = True) -> None:
+    def text(self, label: str, value: object, *, required: bool = True) -> None:
         """Add one controlled label with a scalar or recursive value."""
         self._add_entry(
             tuple(
@@ -193,7 +193,7 @@ class CompactTextWriter:
     def json_block(
         self,
         label: str,
-        value: Any,
+        value: object,
         *,
         required: bool = True,
     ) -> None:
@@ -331,7 +331,7 @@ class CompactTextWriter:
             output.extend(entry.lines)
         return "\n".join(output)
 
-    def _bounded_json(self, value: Any) -> Any:
+    def _bounded_json(self, value: object) -> object:
         """Return a JSON-safe tree whose individual strings obey value limits."""
         if isinstance(value, Mapping):
             return {
@@ -359,7 +359,7 @@ class CompactTextWriter:
             return value
         return self._bounded_json(str(value))
 
-    def _encode_scalar(self, value: Any) -> str:
+    def _encode_scalar(self, value: object) -> str:
         """Encode one leaf as JSON-style text and account for clipping."""
         if value is self.ABSENT:
             return "<not supplied>"
@@ -393,7 +393,7 @@ class CompactTextWriter:
     def _named_value_lines(
         self,
         label: str,
-        value: Any,
+        value: object,
         *,
         indent: int,
         capitalize: bool,
@@ -414,7 +414,7 @@ class CompactTextWriter:
         lines.extend(self._value_lines(value, indent=child_indent))
         return lines
 
-    def _value_lines(self, value: Any, *, indent: int) -> list[str]:
+    def _value_lines(self, value: object, *, indent: int) -> list[str]:
         """Recursively render a collection while preserving source order."""
         if isinstance(value, Mapping):
             return self._mapping_lines(value, indent=indent)
@@ -435,7 +435,7 @@ class CompactTextWriter:
 
     def _mapping_lines(
         self,
-        values: Mapping[Any, Any],
+        values: Mapping[object, object],
         *,
         indent: int,
     ) -> list[str]:
@@ -454,7 +454,7 @@ class CompactTextWriter:
             )
         return lines
 
-    def _can_inline_sequence(self, value: Any) -> bool:
+    def _can_inline_sequence(self, value: object) -> bool:
         """Return whether a short leaf-only sequence is clearer on one line."""
         if not isinstance(value, (list, tuple)):
             return False
@@ -469,7 +469,7 @@ class CompactTextWriter:
         estimated_chars = 2 + sum(len(str(item)) + 2 for item in value)
         return estimated_chars <= _INLINE_SEQUENCE_CHARS
 
-    def _inline_value(self, value: Any) -> str:
+    def _inline_value(self, value: object) -> str:
         """Render a scalar or already-approved short scalar sequence inline."""
         if isinstance(value, (list, tuple)):
             return "[" + ", ".join(
@@ -481,7 +481,7 @@ class CompactTextWriter:
             raise TypeError("non-empty mappings must be rendered recursively")
         return self._encode_scalar(value)
 
-    def _table_cell(self, value: Any) -> str:
+    def _table_cell(self, value: object) -> str:
         """Keep one encoded value inside its Markdown table column."""
         if _is_scalar(value) or self._can_inline_sequence(value):
             encoded = self._inline_value(value)
@@ -535,7 +535,7 @@ def _clean_scalar(value: str) -> str:
     return _CONTROL_CHARACTER.sub("\ufffd", value)
 
 
-def _is_scalar(value: Any) -> bool:
+def _is_scalar(value: object) -> bool:
     """Identify values that can be rendered without recursive structure."""
     return not isinstance(value, (Mapping, list, tuple))
 

@@ -54,6 +54,10 @@ and task records. Do not load unrelated large documents by default.
   configuration field, or persistence record. Every new abstraction must have
   a concrete current consumer and must hide or remove more complexity than its
   Interface adds. Prefer deleting, reusing, or deepening an existing Module.
+- Do not use `typing.Any` in production code or tests. Express opaque values as
+  `object`, and use concrete types, unions, type variables, or Protocols when
+  callers rely on specific behavior. Do not evade this rule by omitting useful
+  annotations or by importing `Any` under another name.
 - Maintain a `docs/tasks/` record for approved work that is multi-step, spans
   sessions, or crosses architectural areas. Small edits and read-only
   investigations do not require one.
@@ -132,8 +136,9 @@ explicit project decision:
   current normalized OpenAPI document and response-contract change events are
   approved audit/export artifacts, but they do not enable App recovery.
 - The API Behavior Monitor catalog is one explicit narrow exception. It may
-  persist resource names and aliases, learned identifier selectors, typed
-  identifier values, latest per-operation read/write usage, response-value
+  persist resource names and aliases, ordered Identifier Definitions, learned
+  operation field/path mappings, complete typed Identifier Records, latest
+  per-operation read/write usage, response-value
   monitor registrations and selectors, deduplicated typed response values, and
   latest monitor errors. It may also persist the complete current normalized
   OpenAPI and append-only response change events. The response check registry

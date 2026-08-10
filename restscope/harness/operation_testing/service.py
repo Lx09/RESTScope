@@ -12,7 +12,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 import secrets
-from typing import Any
 
 from restscope.tools.context import ToolContext
 from restscope.target_http import (
@@ -80,8 +79,13 @@ class TestingExecutionError(RuntimeError):
 class _FrozenReferenceValues:
     """Serve immutable value pools captured with one Generation revision."""
 
-    def __init__(self, values: dict[str, tuple[object, ...]]) -> None:
+    def __init__(
+        self,
+        values: dict[tuple[str, ...], tuple[object, ...]],
+        records: dict[tuple[str, str], tuple[dict[str, object], ...]],
+    ) -> None:
         self._values = values
+        self._records = records
 
     def values_for(
         self,
@@ -89,6 +93,15 @@ class _FrozenReferenceValues:
     ) -> tuple[object, ...]:
         """Return the pool captured for this exact Generator identity."""
         return self._values.get(_reference_key(strategy), ())
+
+    def identifier_records(
+        self,
+        *,
+        resource: str,
+        identifier: str,
+    ) -> tuple[dict[str, object], ...]:
+        """Return complete records captured once with the Batch revision."""
+        return self._records.get((resource, identifier), ())
 
 
 class OperationTestingService:
@@ -220,7 +233,7 @@ class OperationTestingService:
                 GeneratedTestCase,
                 PreparedTestRequest,
                 PreparedTargetRequest,
-                dict[str, Any],
+                dict[str, object],
             ]
         ] = []
         try:
@@ -290,7 +303,8 @@ class OperationTestingService:
         """Read every pool named by the frozen config once under its Store lock."""
         if self.reference_values is None:
             return None
-        captured: dict[str, tuple[object, ...]] = {}
+        captured: dict[tuple[str, ...], tuple[object, ...]] = {}
+        records: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
         for item in state.config.configs:
             strategy = item.strategy
             if not isinstance(
@@ -301,7 +315,17 @@ class OperationTestingService:
             key = _reference_key(strategy)
             if key not in captured:
                 captured[key] = tuple(self.reference_values.values_for(strategy))
-        return _FrozenReferenceValues(captured)
+            if isinstance(strategy, ResourceIdentifierGenerator):
+                record_key = (strategy.resource, strategy.identifier)
+                if record_key not in records:
+                    records[record_key] = tuple(
+                        dict(item)
+                        for item in self.reference_values.identifier_records(
+                            resource=strategy.resource,
+                            identifier=strategy.identifier,
+                        )
+                    )
+        return _FrozenReferenceValues(captured, records)
 
     def _execute_case(
         self,
@@ -312,7 +336,7 @@ class OperationTestingService:
         generated: GeneratedTestCase,
         request: PreparedTestRequest,
         target_request: PreparedTargetRequest,
-        catalog_request: dict[str, Any],
+        catalog_request: dict[str, object],
         operation_path: str,
     ) -> BatchCaseOutcome:
         """Execute one prepared request and retain bounded inline facts."""
@@ -413,14 +437,19 @@ class OperationTestingService:
 
 def _reference_key(
     strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
-) -> str:
+) -> tuple[str, ...]:
     """Return a stable identity for a resource or response-value pool."""
     if isinstance(strategy, ResourceIdentifierGenerator):
-        return f"resource:{strategy.resource}"
-    return f"response:{strategy.value_name}"
+        return (
+            "resource",
+            strategy.resource,
+            strategy.identifier,
+            strategy.component,
+        )
+    return ("response", strategy.value_name)
 
 
-def _catalog_request(generated: GeneratedTestCase) -> dict[str, Any]:
+def _catalog_request(generated: GeneratedTestCase) -> dict[str, object]:
     """Copy one generated case into canonical direct-name request JSON.
 
     Generator control state and internal node identities stay outside the Test
@@ -428,7 +457,7 @@ def _catalog_request(generated: GeneratedTestCase) -> dict[str, Any]:
     and semantic handles use that canonical spelling. The optional Body key
     preserves the difference between omission and an explicitly sent null.
     """
-    request: dict[str, Any] = {
+    request: dict[str, object] = {
         "path": deepcopy(generated.path_parameters),
         "query": deepcopy(generated.query_parameters),
         "header": {
@@ -447,7 +476,7 @@ def _decode_failure_body(
     *,
     media_type: str | None,
     encoding: str | None,
-) -> Any | None:
+) -> object | None:
     """Decode one retained 4xx/5xx body without losing arbitrary byte content."""
     if body is None:
         return None

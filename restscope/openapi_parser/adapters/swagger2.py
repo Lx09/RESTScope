@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 from .base import SpecificationAdapter
 from ..constants import SPEC_FORMAT_SWAGGER2
@@ -50,7 +49,7 @@ class Swagger2Adapter(SpecificationAdapter):
 
         Maps Swagger 2.0 top-level keys to components-style structure.
         """
-        components: dict[str, Any] = {}
+        components: dict[str, object] = {}
 
         # Map definitions to schemas
         if "definitions" in raw_schema:

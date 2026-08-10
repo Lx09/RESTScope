@@ -20,7 +20,6 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import Condition, RLock
-from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
@@ -56,9 +55,9 @@ class StreamChange:
 
     cursor: int
     event_type: str
-    data: dict[str, Any]
+    data: dict[str, object]
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> dict[str, object]:
         """Return the wire representation used by snapshot and SSE adapters."""
         return {
             "cursor": self.cursor,
@@ -73,8 +72,8 @@ class _ActiveContext:
 
     event_id: str | None
     context_id: str | None
-    agent: dict[str, Any] | None
-    scope: dict[str, Any]
+    agent: dict[str, object] | None
+    scope: dict[str, object]
 
 
 _CURRENT_CONTEXT: ContextVar[_ActiveContext] = ContextVar(
@@ -98,19 +97,19 @@ class LiveRunObserver:
         self._redactor = redactor or Redactor()
         self._lock = RLock()
         self._condition = Condition(self._lock)
-        self._events: dict[str, dict[str, Any]] = {}
+        self._events: dict[str, dict[str, object]] = {}
         self._event_order: list[str] = []
         self._changes: list[StreamChange] = []
         self._cursor = 0
         self._next_order = 0
-        self._run: dict[str, Any] | None = None
-        self._todo: dict[str, Any] | None = None
+        self._run: dict[str, object] | None = None
+        self._todo: dict[str, object] | None = None
         self._todo_revision = 0
         self._seen_message_counts: dict[str, Counter[str]] = {}
         self._latest_agent_turn: dict[str, str] = {}
         self._latest_agent_turn_by_task: dict[str, str] = {}
-        self._agent_sessions: dict[tuple[Any, ...], str] = {}
-        self._generic_agent_identities: dict[str, dict[str, Any]] = {}
+        self._agent_sessions: dict[tuple[object, ...], str] = {}
+        self._generic_agent_identities: dict[str, dict[str, object]] = {}
         self._closed = False
 
     @property
@@ -119,7 +118,7 @@ class LiveRunObserver:
         with self._lock:
             return not self._closed and self._run is not None
 
-    def begin_run(self, request: Any) -> str:
+    def begin_run(self, request: object) -> str:
         """Replace prior run evidence and publish a new current-run identity.
 
         Args:
@@ -158,7 +157,7 @@ class LiveRunObserver:
             self._publish_locked("run.reset", deepcopy(self._run))
         return run_id
 
-    def end_run(self, result: Any = None, *, error: BaseException | None = None) -> None:
+    def end_run(self, result: object = None, *, error: BaseException | None = None) -> None:
         """Mark the current run terminal without allowing observer failure out.
 
         Args:
@@ -197,7 +196,7 @@ class LiveRunObserver:
     def interrupt_run(self) -> None:
         """Stop only the current Run and retain semantic cards and UI state.
 
-        Any card still marked running is converted to a stopped warning. That
+        object card still marked running is converted to a stopped warning. That
         terminal state is visually explicit but is not a business failure. The
         snapshot remains available until :meth:`begin_run` or :meth:`close`.
         """
@@ -245,8 +244,8 @@ class LiveRunObserver:
         *,
         name: str,
         kind: str,
-        input_value: Any | None = None,
-        attributes: Mapping[str, Any] | None = None,
+        input_value: object | None = None,
+        attributes: Mapping[str, object] | None = None,
     ) -> "LiveSpan | None":
         """Open one semantic event or an invisible aggregation context.
 
@@ -263,7 +262,7 @@ class LiveRunObserver:
             safe_attributes = self._safe(dict(attributes or {}))
             scope = _merge_scope(parent.scope, safe_attributes)
             context_id = f"context_{uuid4().hex}"
-            event: dict[str, Any] | None = None
+            event: dict[str, object] | None = None
             agent = parent.agent
             visible_parent_id = parent.event_id
 
@@ -366,7 +365,7 @@ class LiveRunObserver:
         path: str,
         url: str,
         headers: Mapping[str, str],
-        request_kwargs: Mapping[str, Any] | None,
+        request_kwargs: Mapping[str, object] | None,
         operation_key: str | None,
         path_template: str | None,
     ) -> "LiveHTTPExchange | None":
@@ -418,7 +417,7 @@ class LiveRunObserver:
         except Exception:
             return None
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> dict[str, object]:
         """Return one atomic schema-v3 browser snapshot of the current run."""
         with self._lock:
             return {
@@ -437,7 +436,7 @@ class LiveRunObserver:
         self,
         cursor: int,
         timeout_seconds: float = 15.0,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """Wait for SSE changes newer than ``cursor`` without polling the App."""
         with self._condition:
             if not self._changes or self._changes[-1].cursor <= cursor:
@@ -470,9 +469,9 @@ class LiveRunObserver:
         *,
         name: str,
         parent: _ActiveContext,
-        scope: Mapping[str, Any],
+        scope: Mapping[str, object],
         context_id: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return a stable session identity for one Agent conversation.
 
         Repeated Agent method spans beneath one long-lived Coordinator belong to
@@ -511,10 +510,10 @@ class LiveRunObserver:
         self,
         *,
         parent: _ActiveContext,
-        attributes: Mapping[str, Any],
-        scope: dict[str, Any],
-        input_value: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        attributes: Mapping[str, object],
+        scope: dict[str, object],
+        input_value: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
         """Create one explicit generic Agent identity and task scope.
 
         Generic Main, Subagent, and System sessions supply their Harness-owned
@@ -539,7 +538,7 @@ class LiveRunObserver:
         parent_identity = self._generic_agent_identities.get(parent_session_id or "")
         parent_path = parent_identity.get("path", []) if parent_identity else []
         task_id = f"task_{uuid4().hex}"
-        identity: dict[str, Any] = {
+        identity: dict[str, object] = {
             "session_id": session_id,
             "parent_session_id": parent_session_id,
             "name": profile_name,
@@ -557,7 +556,7 @@ class LiveRunObserver:
             "task_objective": objective,
         }
 
-    def _complete_agent_task(self, *, task_id: str, output: Any) -> None:
+    def _complete_agent_task(self, *, task_id: str, output: object) -> None:
         """Correct the successful task's last model turn to Final Answer.
 
         A no-tool model response is only a candidate until the generic Agent
@@ -584,11 +583,11 @@ class LiveRunObserver:
         kind: EventKind,
         name: str,
         parent_event_id: str | None,
-        agent: dict[str, Any] | None,
-        scope: dict[str, Any],
-        input_value: Any,
-        attributes: Mapping[str, Any],
-    ) -> dict[str, Any]:
+        agent: dict[str, object] | None,
+        scope: dict[str, object],
+        input_value: object,
+        attributes: Mapping[str, object],
+    ) -> dict[str, object]:
         """Allocate one event in immutable start order before it can finish."""
         with self._lock:
             self._next_order += 1
@@ -618,7 +617,7 @@ class LiveRunObserver:
             ),
         }
 
-    def _upsert(self, event: dict[str, Any]) -> None:
+    def _upsert(self, event: dict[str, object]) -> None:
         """Store and publish one complete event replacement without raising."""
         try:
             with self._condition:
@@ -630,7 +629,7 @@ class LiveRunObserver:
         except Exception:
             return
 
-    def _update_event(self, event_id: str, **changes: Any) -> dict[str, Any] | None:
+    def _update_event(self, event_id: str, **changes: object) -> dict[str, object] | None:
         """Apply one in-place semantic update while retaining original order."""
         try:
             with self._condition:
@@ -644,7 +643,7 @@ class LiveRunObserver:
         except Exception:
             return None
 
-    def _event_copy(self, event_id: str | None) -> dict[str, Any] | None:
+    def _event_copy(self, event_id: str | None) -> dict[str, object] | None:
         """Read one event safely for a later copy-on-write update."""
         if event_id is None:
             return None
@@ -652,7 +651,7 @@ class LiveRunObserver:
             event = self._events.get(event_id)
             return deepcopy(event) if event is not None else None
 
-    def _publish_locked(self, event_type: str, data: dict[str, Any]) -> None:
+    def _publish_locked(self, event_type: str, data: dict[str, object]) -> None:
         """Append one stream change while the observer condition is held."""
         self._cursor += 1
         self._changes.append(
@@ -664,7 +663,7 @@ class LiveRunObserver:
         )
         self._condition.notify_all()
 
-    def _safe(self, value: Any) -> Any:
+    def _safe(self, value: object) -> object:
         """Convert a value to JSON data using the App's exact-value policy."""
         return self._redactor.redact(value)
 
@@ -673,8 +672,8 @@ class LiveRunObserver:
         *,
         event_id: str,
         direction: str,
-        messages: list[dict[str, Any]],
-        summary: Any,
+        messages: list[dict[str, object]],
+        summary: object,
     ) -> None:
         """Fold exact LLM messages into one user-facing Agent turn.
 
@@ -703,7 +702,7 @@ class LiveRunObserver:
             seen = self._seen_message_counts.setdefault(session_id, Counter())
             if direction == "input":
                 prompt_counts: Counter[str] = Counter()
-                new_messages: list[dict[str, Any]] = []
+                new_messages: list[dict[str, object]] = []
                 for message in safe_messages:
                     fingerprint = _message_fingerprint(message)
                     prompt_counts[fingerprint] += 1
@@ -723,7 +722,7 @@ class LiveRunObserver:
                     ),
                     safe_messages[0] if safe_messages else {},
                 )
-                exact_tool_calls: list[Any] = []
+                exact_tool_calls: list[object] = []
                 for message in safe_messages:
                     calls = message.get("tool_calls")
                     if isinstance(calls, list):
@@ -740,7 +739,7 @@ class LiveRunObserver:
                 }
         self._update_event(event_id, detail=detail)
 
-    def _set_event_detail_value(self, event_id: str, name: str, value: Any) -> None:
+    def _set_event_detail_value(self, event_id: str, name: str, value: object) -> None:
         """Add observer-only detail without changing exported Phoenix fields."""
         event = self._event_copy(event_id)
         if event is None:
@@ -749,7 +748,7 @@ class LiveRunObserver:
         detail[name] = self._safe(value)
         self._update_event(event_id, detail=detail)
 
-    def _record_todo(self, tool_event: dict[str, Any]) -> None:
+    def _record_todo(self, tool_event: dict[str, object]) -> None:
         """Project one successful Main Agent Plan replacement as the floating Todo.
 
         Subagents own independent private Plans. A single page-level Todo must

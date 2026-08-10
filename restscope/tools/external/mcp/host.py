@@ -11,7 +11,6 @@ from datetime import timedelta
 import os
 from queue import Queue
 from threading import Thread
-from typing import Any
 
 from .config import MCPServerConfig
 
@@ -23,7 +22,7 @@ class StdioMCPClientSession:
         self.config = config
         self._commands: Queue[_SessionCommand] = Queue()
         self._thread: Thread | None = None
-        self._session: Any | None = None
+        self._session: object | None = None
 
     def start(self) -> None:
         """Start every configured MCP server once and cache its live session."""
@@ -45,12 +44,12 @@ class StdioMCPClientSession:
             self._thread = None
             raise
 
-    def list_tools(self) -> list[dict[str, Any]]:
+    def list_tools(self) -> list[dict[str, object]]:
         """List the current tool definitions reported by each started MCP server."""
         result = self._request("list_tools")
         return [_to_plain_data(tool) for tool in result.tools]
 
-    def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def call_tool(self, tool_name: str, arguments: dict[str, object]) -> dict[str, object]:
         """Call one named tool on an already-started MCP server and return the provider result."""
         result = self._request("call_tool", tool_name, arguments)
         return _to_plain_data(result)
@@ -63,7 +62,7 @@ class StdioMCPClientSession:
         if thread is None:
             return
 
-        completed: Future[Any] = Future()
+        completed: Future[object] = Future()
         self._commands.put(_SessionCommand(name="close", args=(), completed=completed))
         try:
             completed.result(timeout=self.config.timeout)
@@ -72,9 +71,9 @@ class StdioMCPClientSession:
             self._thread = None
             self._session = None
 
-    def _request(self, name: str, *args: Any) -> Any:
+    def _request(self, name: str, *args: object) -> object:
         self.start()
-        completed: Future[Any] = Future()
+        completed: Future[object] = Future()
         self._commands.put(_SessionCommand(name=name, args=args, completed=completed))
         return completed.result()
 
@@ -143,11 +142,11 @@ class StdioMCPClientSession:
 @dataclass(frozen=True)
 class _SessionCommand:
     name: str
-    args: tuple[Any, ...]
-    completed: Future[Any]
+    args: tuple[object, ...]
+    completed: Future[object]
 
 
-MCPSessionFactory = Callable[[MCPServerConfig], Any]
+MCPSessionFactory = Callable[[MCPServerConfig], object]
 
 
 class MCPHost:
@@ -161,19 +160,19 @@ class MCPHost:
     ) -> None:
         self.configs = dict(configs)
         self._session_factory = session_factory or StdioMCPClientSession
-        self._sessions: dict[str, Any] = {}
+        self._sessions: dict[str, object] = {}
 
-    def discover_tools(self, server_names: Iterable[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+    def discover_tools(self, server_names: Iterable[str] | None = None) -> dict[str, list[dict[str, object]]]:
         """Return discovered tools grouped by MCP server name."""
 
-        discovered: dict[str, list[dict[str, Any]]] = {}
+        discovered: dict[str, list[dict[str, object]]] = {}
         for server_name in server_names or self.configs:
             if server_name not in self.configs:
                 continue
             discovered[server_name] = self._session_for(server_name).list_tools()
         return discovered
 
-    def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> Any:
+    def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, object]) -> object:
         """Call an MCP tool through the server-specific client session."""
 
         return self._session_for(server_name).call_tool(tool_name, arguments)
@@ -187,7 +186,7 @@ class MCPHost:
                 close()
         self._sessions.clear()
 
-    def _session_for(self, server_name: str) -> Any:
+    def _session_for(self, server_name: str) -> object:
         if server_name not in self.configs:
             raise KeyError(f"MCP server is not configured: {server_name}")
         if server_name not in self._sessions:
@@ -197,7 +196,7 @@ class MCPHost:
         return self._sessions[server_name]
 
 
-def _to_plain_data(value: Any) -> Any:
+def _to_plain_data(value: object) -> object:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", exclude_none=True)
     if isinstance(value, list):

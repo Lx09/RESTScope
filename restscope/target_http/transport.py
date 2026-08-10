@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Any
 
 import httpx
 
@@ -49,7 +48,7 @@ class TargetHTTPTransport:
         *,
         client_factory: ClientFactory = httpx.Client,
         response_processor: TargetResponseProcessor | None = None,
-        run_observer: Any | None = None,
+        run_observer: object | None = None,
     ) -> None:
         """Keep target I/O collaborators and an optional run observer.
 
@@ -108,7 +107,7 @@ class TargetHTTPTransport:
         override_context_headers: bool = True,
         allowed_sensitive_request_headers: Collection[str] = (),
         timeout_seconds: float = 30,
-        request_kwargs: Mapping[str, Any] | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> Iterator[httpx.Response]:
         """Send one prepared target request and yield a bounded response while guaranteeing connection cleanup. Transport and observation failures are translated at this boundary."""
         prepared = self.prepare(
@@ -134,7 +133,7 @@ class TargetHTTPTransport:
         prepared: PreparedTargetRequest,
         *,
         timeout_seconds: float = 30,
-        request_kwargs: Mapping[str, Any] | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> Iterator[httpx.Response]:
         """Execute a request previously accepted by :meth:`prepare`."""
 
@@ -160,7 +159,7 @@ class TargetHTTPTransport:
         prepared: PreparedTargetRequest,
         *,
         timeout_seconds: float = 30,
-        request_kwargs: Mapping[str, Any] | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         response_body_limit: int | None = None,
         failure_response_body_limit: int | None = None,
         truncate_response_body: bool = False,
@@ -208,7 +207,7 @@ class TargetHTTPTransport:
         prepared: PreparedTargetRequest,
         *,
         timeout_seconds: float = 30,
-        request_kwargs: Mapping[str, Any] | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         response_body_limit: int | None = None,
         failure_response_body_limit: int | None = None,
         truncate_response_body: bool = False,
@@ -320,9 +319,9 @@ class TargetHTTPTransport:
         self,
         *,
         prepared: PreparedTargetRequest,
-        request_kwargs: Mapping[str, Any] | None,
+        request_kwargs: Mapping[str, object] | None,
         processor_context: TargetResponseOperationContext | None,
-    ) -> Any | None:
+    ) -> object | None:
         """Open one observer handle without making it part of HTTP success."""
         if self.run_observer is None:
             return None

@@ -7,7 +7,6 @@ without reading the query implementation.
 
 from __future__ import annotations
 
-from typing import Any
 
 from restscope.llm import ToolSpec
 

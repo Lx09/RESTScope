@@ -7,7 +7,7 @@ nodes, while Tool results project only semantic names back to the model.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -40,6 +40,8 @@ class SelectedReferenceProvenance(_Model):
     input_node_id: str = Field(min_length=1, max_length=1000)
     kind: Literal["resource_identifier", "response_value"]
     canonical_resource: str | None = Field(default=None, max_length=200)
+    identifier: str | None = Field(default=None, max_length=200)
+    component: str | None = Field(default=None, max_length=200)
     value_name: str | None = Field(default=None, max_length=200)
     compatible_scalar_type: str | None = Field(default=None, max_length=50)
     value_count: int = Field(ge=1)
@@ -55,6 +57,8 @@ class SelectedReferenceProvenance(_Model):
         if self.kind == "resource_identifier":
             if (
                 not self.canonical_resource
+                or not self.identifier
+                or not self.component
                 or self.value_name is not None
                 or self.producer_operation_keys
                 or self.producer_status_code is not None
@@ -68,6 +72,8 @@ class SelectedReferenceProvenance(_Model):
         elif (
             not self.value_name
             or self.canonical_resource is not None
+            or self.identifier is not None
+            or self.component is not None
             or len(self.producer_operation_keys) != 1
             or not self.producer_status_code
             or not self.producer_media_type
@@ -139,7 +145,7 @@ class SemanticLiteralValue(_Model):
     """
 
     type: Literal["literal"]
-    value: Any
+    value: object
 
 
 class SemanticArithmeticValue(_Model):

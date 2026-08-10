@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
-from typing import Any
 
 from .constraints import (
     ConstraintSet,
@@ -50,6 +50,14 @@ class ConstraintSolveError(ValueError):
         super().__init__(message)
         self.code = code
         self.input_node_ids = tuple(input_node_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchUnit:
+    """Keep one scalar domain or one composite Identifier Record domain atomic."""
+
+    node_ids: tuple[str, ...]
+    candidates: tuple[dict[str, InputNodeOverride], ...]
 
 
 def build_candidate_domains(
@@ -142,18 +150,25 @@ def solve_input_overrides(
         reference_values=reference_values,
         max_domain_size=max_domain_size,
     )
+    baseline_assignments = assignments_from_generated_case(operation, baseline)
+    search_units = _build_search_units(
+        domains=domains,
+        config=config,
+        baseline=baseline_assignments,
+        reference_values=reference_values,
+        max_domain_size=max_domain_size,
+    )
     reference_counts = _reference_counts(constraints)
     # “Most constrained first” generally finds contradictions sooner. The node
     # ID tie-breaker keeps the search order reproducible.
-    ordered_ids = sorted(
-        domains,
-        key=lambda node_id: (
-            len(domains[node_id]),
-            -reference_counts[node_id],
-            node_id,
+    ordered_units = sorted(
+        search_units,
+        key=lambda unit: (
+            len(unit.candidates),
+            -sum(reference_counts[node_id] for node_id in unit.node_ids),
+            unit.node_ids,
         ),
     )
-    baseline_assignments = assignments_from_generated_case(operation, baseline)
     nodes = {node.input_node_id: node for node in operation.input_nodes}
     selected: dict[str, InputNodeOverride] = {}
     explored = 0
@@ -163,7 +178,7 @@ def solve_input_overrides(
         """Explore one input domain and stop at the first complete solution."""
 
         nonlocal explored, exhausted
-        if index == len(ordered_ids):
+        if index == len(ordered_units):
             if explored >= max_search_states:
                 exhausted = True
                 return None
@@ -178,13 +193,19 @@ def solve_input_overrides(
             if completed is None:
                 return None
             assignments, overrides = completed
+            if not _resource_identifier_records_match(
+                assignments=assignments,
+                config=config,
+                reference_values=reference_values,
+            ):
+                return None
             if evaluate_constraint_set(constraints, assignments):
                 return overrides
             return None
-        node_id = ordered_ids[index]
-        for candidate in domains[node_id]:
-            selected[node_id] = candidate
-            if index + 1 < len(ordered_ids):
+        unit = ordered_units[index]
+        for candidate in unit.candidates:
+            selected.update(candidate)
+            if index + 1 < len(ordered_units):
                 # A definitively false partial expression cannot be repaired by
                 # later inputs, so prune the remaining subtree.
                 partial = _partial_candidate(selected, nodes=nodes)
@@ -198,7 +219,8 @@ def solve_input_overrides(
                 return result
             if exhausted:
                 return None
-        selected.pop(node_id, None)
+        for node_id in unit.node_ids:
+            selected.pop(node_id, None)
         return None
 
     solution = search(0)
@@ -208,13 +230,133 @@ def solve_input_overrides(
         raise ConstraintSolveError(
             "constraint_search_exhausted",
             f"Constraint search exceeded {max_search_states} assignments",
-            input_node_ids=ordered_ids,
+            input_node_ids=tuple(
+                node_id for unit in ordered_units for node_id in unit.node_ids
+            ),
         )
     raise ConstraintSolveError(
         "constraint_unsatisfiable",
         "No Generator candidate assignment satisfies all constraints",
-        input_node_ids=ordered_ids,
+        input_node_ids=tuple(
+            node_id for unit in ordered_units for node_id in unit.node_ids
+        ),
     )
+
+
+def _build_search_units(
+    *,
+    domains: Mapping[str, tuple[InputNodeOverride, ...]],
+    config: OperationGeneratorConfig,
+    baseline: Mapping[str, InputAssignment],
+    reference_values: ReferenceValueProvider | None,
+    max_domain_size: int,
+) -> list[_SearchUnit]:
+    """Replace related component domains with bounded complete Record choices."""
+    remaining = set(domains)
+    units: list[_SearchUnit] = []
+    groups: dict[
+        tuple[str, str],
+        dict[str, tuple[str, ResourceIdentifierGenerator]],
+    ] = {}
+    for item in config.configs:
+        strategy = item.strategy
+        if isinstance(strategy, ResourceIdentifierGenerator):
+            groups.setdefault((strategy.resource, strategy.identifier), {})[
+                strategy.component
+            ] = (item.input_node_id, strategy)
+
+    if reference_values is not None:
+        for (resource, identifier), components in groups.items():
+            if len(components) <= 1 or not any(
+                node_id in remaining for node_id, _strategy in components.values()
+            ):
+                continue
+            node_ids = tuple(
+                node_id for node_id, _strategy in components.values()
+            )
+            candidates: list[dict[str, InputNodeOverride]] = []
+            for record in reference_values.identifier_records(
+                resource=resource,
+                identifier=identifier,
+            ):
+                if any(component not in record for component in components):
+                    continue
+                candidate = {
+                    node_id: InputNodeOverride(
+                        present=True,
+                        has_value=True,
+                        value=deepcopy(record[component]),
+                    )
+                    for component, (node_id, _strategy) in components.items()
+                }
+                if candidate not in candidates:
+                    candidates.append(candidate)
+            if not candidates:
+                raise ConstraintSolveError(
+                    "constraint_empty_domain",
+                    f"No complete Identifier Records are available for {resource}/{identifier}",
+                    input_node_ids=node_ids,
+                )
+            baseline_candidate = {
+                node_id: InputNodeOverride.model_validate(
+                    baseline.get(node_id, InputAssignment(present=False)).model_dump()
+                )
+                for node_id in node_ids
+            }
+            if baseline_candidate in candidates:
+                candidates.remove(baseline_candidate)
+                candidates.insert(0, baseline_candidate)
+            units.append(
+                _SearchUnit(
+                    node_ids=node_ids,
+                    candidates=tuple(candidates[:max_domain_size]),
+                )
+            )
+            remaining.difference_update(node_ids)
+
+    units.extend(
+        _SearchUnit(
+            node_ids=(node_id,),
+            candidates=tuple({node_id: candidate} for candidate in domains[node_id]),
+        )
+        for node_id in remaining
+    )
+    return units
+
+
+def _resource_identifier_records_match(
+    *,
+    assignments: dict[str, InputAssignment],
+    config: OperationGeneratorConfig,
+    reference_values: ReferenceValueProvider | None,
+) -> bool:
+    """Reject component combinations that were never observed in one record."""
+    if reference_values is None:
+        return True
+    groups: dict[tuple[str, str], dict[str, str]] = {}
+    for item in config.configs:
+        strategy = item.strategy
+        if isinstance(strategy, ResourceIdentifierGenerator):
+            groups.setdefault((strategy.resource, strategy.identifier), {})[
+                strategy.component
+            ] = item.input_node_id
+    for (resource, identifier), component_nodes in groups.items():
+        selected: dict[str, object] = {}
+        for component, node_id in component_nodes.items():
+            assignment = assignments.get(node_id)
+            if assignment is None or not assignment.present or not assignment.has_value:
+                return False
+            selected[component] = assignment.value
+        records = reference_values.identifier_records(
+            resource=resource,
+            identifier=identifier,
+        )
+        if not any(
+            all(record.get(name) == value for name, value in selected.items())
+            for record in records
+        ):
+            return False
+    return True
 
 
 def assignments_from_generated_case(
@@ -286,7 +428,7 @@ def assignments_from_generated_case(
 
 def _mark_body_descendants(
     parent_id: str,
-    value: Any,
+    value: object,
     *,
     assignments: dict[str, InputAssignment],
     nodes: Mapping[str, InputNodeSnapshot],
@@ -319,7 +461,7 @@ def _mark_body_descendants(
 
 def _assignment_for_generated_value(
     node: InputNodeSnapshot,
-    value: Any,
+    value: object,
 ) -> InputAssignment:
     """Convert one generated node value into the presence and value assignment consumed by Constraints."""
     schema = node.schema_contract
@@ -411,10 +553,10 @@ def _value_candidates(
     case_index: int,
     reference_values: ReferenceValueProvider | None,
     max_domain_size: int,
-) -> tuple[Any, ...]:
+) -> tuple[object, ...]:
     """Return deterministic candidate values for one Schema and Generator strategy."""
     strategy = config.strategy
-    result: list[Any] = []
+    result: list[object] = []
     if baseline.present and baseline.has_value:
         _append_typed_unique(result, deepcopy(baseline.value))
     if isinstance(strategy, ConstantGenerator):
@@ -482,7 +624,7 @@ def _value_candidates(
 
 
 def _append_generated_samples(
-    result: list[Any],
+    result: list[object],
     *,
     config: InputGeneratorConfig,
     run_seed: int,
@@ -597,7 +739,7 @@ def _config_generates_scalar(config: InputGeneratorConfig) -> bool:
 def _reference_counts(constraints: ConstraintSet) -> Counter[str]:
     result: Counter[str] = Counter()
 
-    def visit(value: Any) -> None:
+    def visit(value: object) -> None:
         if isinstance(value, dict):
             node_id = value.get("input_node_id")
             if isinstance(node_id, str):
@@ -620,13 +762,13 @@ def _append_unique(
         result.append(value)
 
 
-def _append_typed_unique(result: list[Any], value: Any) -> None:
+def _append_typed_unique(result: list[object], value: object) -> None:
     key = _typed_key(value)
     if all(_typed_key(existing) != key for existing in result):
         result.append(value)
 
 
-def _typed_key(value: Any) -> Any:
+def _typed_key(value: object) -> object:
     if isinstance(value, dict):
         return (
             "dict",

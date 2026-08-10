@@ -1,7 +1,6 @@
 """Parameter parser module."""
 
 import re
-from typing import Any
 
 from ..adapters.base import SpecificationAdapter
 from ..constants import HTTP_METHODS
@@ -73,7 +72,7 @@ def parse_single_parameter_from_definition(
 
     # Parse content
     content_raw = raw_param.get("content", {})
-    content: dict[str, Any] = {}
+    content: dict[str, object] = {}
     if isinstance(content_raw, dict):
         from .request_body_parser import parse_media_type_for_parameter
         for media_type, media_raw in content_raw.items():

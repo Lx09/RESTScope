@@ -1,10 +1,10 @@
 # RESTScope Database Design
 
-Status: Active exploratory design (2026-08-01)
+Status: Active exploratory design (2026-08-10)
 
 RESTScope creates one SQLite file for one App. The file is an audit artifact,
 not a recovery image: a later App always rejects that existing path and never
-deletes, migrates, overwrites, or resumes it. The current baseline contains 13
+deletes, migrates, overwrites, or resumes it. The current baseline contains 14
 business tables plus Alembic's `alembic_version` table.
 
 ## Boundary
@@ -62,15 +62,20 @@ pool sources used by a Patch remain API Behavior Pool evidence. Apply stages
 their durable replacement, publishes in-memory state, then commits; a commit
 failure restores the old state before unlocking.
 
-## Resource Identifier: 6 tables
+## Resource Identifier: 7 tables
 
 - `resources`: canonical and normalized resource identity.
 - `resource_aliases`: normalized alias primary key linked to one resource.
+- `resource_identifier_definitions`: one stable identifier name per resource
+  with its ordered component names. A Definition may have one component or a
+  path-ordered combination.
 - `operation_resource_rules`: latest classification for one operation/group,
-  including selector, access mode, and classification source. Method, path,
-  aliases, and observed flags are derived rather than copied.
-- `resource_identifiers`: every distinct typed identifier with first and last
-  seen timestamps. Resource identifiers have no capacity eviction.
+  including the referenced definition, selected full path, ordered response
+  field mappings, access mode, and classification source. Method, operation
+  path, aliases, and observed flags are derived rather than copied.
+- `resource_identifiers`: every distinct complete typed Identifier Record as
+  ordered JSON plus a type-sensitive digest and first/last seen timestamps.
+  Resource identifiers have no capacity eviction.
 - `resource_operation_usages`: composite identifier/rule key with only the
   latest observation time.
 - `resource_monitor_errors`: latest error for one operation/group. A later
@@ -103,7 +108,7 @@ rejected unchanged. Construction failure removes only a file and sidecars
 created by that construction; successful construction, initialization failure,
 and `close()` retain the artifact.
 
-Alembic has one `0001_current_baseline` that creates the final 13 tables. It
+Alembic has one `0001_current_baseline` that creates the final 14 tables. It
 contains no old-database data migration. Databases stamped with the retired
 exploratory chain are intentionally incompatible, and RESTScope provides no
 restore, reset, or automatic delete entrypoint.

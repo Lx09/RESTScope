@@ -4,7 +4,6 @@ import json
 import os
 import urllib.parse
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -23,7 +22,7 @@ def _is_local_path(text: str) -> bool:
     return os.path.exists(text)
 
 
-def _parse_yaml_or_json(content: str) -> dict[str, Any]:
+def _parse_yaml_or_json(content: str) -> dict[str, object]:
     """Parse content as YAML or JSON."""
     # Try JSON first
     try:
@@ -46,7 +45,7 @@ def _parse_yaml_or_json(content: str) -> dict[str, Any]:
     raise LoaderError("Content did not parse to a valid YAML/JSON object")
 
 
-def _load_from_url(url: str) -> dict[str, Any]:
+def _load_from_url(url: str) -> dict[str, object]:
     """Load spec from a URL."""
     try:
         import urllib.request
@@ -58,7 +57,7 @@ def _load_from_url(url: str) -> dict[str, Any]:
         raise LoaderError(f"Failed to load from URL {url}: {e}")
 
 
-def _load_from_file(file_path: str) -> dict[str, Any]:
+def _load_from_file(file_path: str) -> dict[str, object]:
     """Load spec from a local file."""
     try:
         abs_path = os.path.abspath(file_path)

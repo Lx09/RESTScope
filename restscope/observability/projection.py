@@ -12,7 +12,7 @@ import base64
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Literal
 
 
 EventKind = Literal["agent_turn", "tool_call"]
@@ -43,7 +43,7 @@ def event_summary(
     *,
     kind: EventKind,
     name: str,
-    attributes: Mapping[str, Any],
+    attributes: Mapping[str, object],
 ) -> str:
     """Build the short redundant label shown while a card is collapsed."""
 
@@ -55,9 +55,9 @@ def event_summary(
 
 
 def merge_scope(
-    parent: Mapping[str, Any],
-    attributes: Mapping[str, Any],
-) -> dict[str, Any]:
+    parent: Mapping[str, object],
+    attributes: Mapping[str, object],
+) -> dict[str, object]:
     """Propagate only identifiers needed to own semantic cards and Batch rows."""
 
     scope = dict(parent)
@@ -76,8 +76,8 @@ def merge_scope(
 
 def semantic_status(
     *,
-    event: Mapping[str, Any],
-    output: Any,
+    event: Mapping[str, object],
+    output: object,
     direction: str,
 ) -> str | None:
     """Derive visible Tool and Batch status from their completed output."""
@@ -100,13 +100,13 @@ def tool_status(status: str) -> str:
     return "succeeded"
 
 
-def message_fingerprint(message: Mapping[str, Any]) -> str:
+def message_fingerprint(message: Mapping[str, object]) -> str:
     """Produce a stable comparison key for repeated full prompt snapshots."""
 
     return json.dumps(message, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def request_body(request_kwargs: Mapping[str, Any]) -> dict[str, Any] | None:
+def request_body(request_kwargs: Mapping[str, object]) -> dict[str, object] | None:
     """Project the transport's one selected body encoding for safe display."""
 
     for key in ("json", "content", "data"):
@@ -119,7 +119,7 @@ def request_body(request_kwargs: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def response_detail(response: Any) -> dict[str, Any]:
+def response_detail(response: object) -> dict[str, object]:
     """Convert one already-bounded response into JSON, text, or Base64 evidence."""
 
     headers = dict(getattr(response, "headers", {}) or {})
@@ -150,7 +150,7 @@ def response_detail(response: Any) -> dict[str, Any]:
 
 
 def reported_response_size(
-    headers: Mapping[str, Any],
+    headers: Mapping[str, object],
     retained_size: int | None,
 ) -> int | None:
     """Prefer a valid Content-Length while retaining the stored byte count."""
@@ -174,7 +174,7 @@ def decode_body(
     *,
     media_type: str | None,
     encoding: str,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Decode bounded bytes without pretending binary evidence is text."""
 
     if media_type == "application/json" or (media_type or "").endswith("+json"):

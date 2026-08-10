@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
 
 from restscope.openapi_parser import OpenAPISpecIR
 
@@ -24,7 +23,7 @@ class ToolContext:
     """One initialized OpenAPI target shared for the lifetime of an app."""
 
     ir: OpenAPISpecIR
-    baseline_schema_source: Mapping[str, Any]
+    baseline_schema_source: Mapping[str, object]
     base_url: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict, repr=False)
 

@@ -36,6 +36,14 @@ A bounded set of typed values supplied to a reference-backed Generator.
 Resource pools contain learned canonical identifiers. Response pools contain
 values materialized from one explicitly selected Response Value Source.
 
+**Identifier Definition**
+An ordered set of one or more named components that identifies a resource; its
+order follows the placeholders in the selected full OpenAPI path when one exists.
+
+**Identifier Record**
+One complete ordered tuple of typed component values observed together in the
+same top-level response object or root-array item.
+
 **Response Value Source**
 The exact producer Operation, response status, media type, and field selector
 feeding one consumer input's Reference Value Pool. A Parameter Patch replaces

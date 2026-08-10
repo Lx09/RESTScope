@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from restscope.data_types import JSONObject, JSONValue
+
 
 MAX_RESOURCE_NAME_CHARS = 200
 MAX_RESOURCE_ALIAS_COUNT = 20
@@ -24,7 +26,48 @@ MAX_IDENTIFIER_CHARS = 4096
 
 IdentifierValue = Annotated[StrictStr, Field(max_length=MAX_IDENTIFIER_CHARS)] | StrictInt
 AccessMode = Literal["read", "write"]
-ClassificationSource = Literal["exact_id", "llm"]
+ClassificationSource = Literal["llm"]
+
+
+class IdentifierFieldMapping(BaseModel):
+    """Map one ordered Identifier component to one observed response field."""
+
+    component: str = Field(min_length=1, max_length=MAX_RESOURCE_NAME_CHARS)
+    field_name: str = Field(min_length=1, max_length=MAX_RESOURCE_NAME_CHARS)
+    selector: str = Field(min_length=1, max_length=MAX_RESOURCE_SELECTOR_CHARS)
+
+
+class IdentifierComponentValue(BaseModel):
+    """Carry one named, typed value inside a complete Identifier Record."""
+
+    name: str = Field(min_length=1, max_length=MAX_RESOURCE_NAME_CHARS)
+    value: IdentifierValue
+    value_type: Literal["string", "integer"]
+
+    @model_validator(mode="after")
+    def require_matching_type(self) -> "IdentifierComponentValue":
+        """Prevent a component's declared scalar type from disagreeing with its value."""
+        actual = "integer" if isinstance(self.value, int) and not isinstance(self.value, bool) else "string"
+        if actual != self.value_type:
+            raise ValueError("identifier component value_type does not match value")
+        return self
+
+
+class IdentifierRecord(BaseModel):
+    """Represent one complete ordered identifier tuple observed in one item."""
+
+    components: list[IdentifierComponentValue] = Field(min_length=1, max_length=20)
+
+    @field_validator("components")
+    @classmethod
+    def require_unique_component_names(
+        cls, values: list[IdentifierComponentValue]
+    ) -> list[IdentifierComponentValue]:
+        """Make component order meaningful and component lookup unambiguous."""
+        names = [item.name for item in values]
+        if len(names) != len(set(names)):
+            raise ValueError("identifier component names must be unique")
+        return values
 
 
 class MonitoredOperation(BaseModel):
@@ -47,7 +90,7 @@ class MonitoredOperation(BaseModel):
 
 
 class DetectedResourceGroup(BaseModel):
-    """One learned resource and identifier selector for a response group."""
+    """One learned resource with an ordered Identifier Definition and Records."""
 
     group_path: str = Field(min_length=1, max_length=MAX_RESOURCE_SELECTOR_CHARS)
     has_resource: bool = True
@@ -56,15 +99,13 @@ class DetectedResourceGroup(BaseModel):
         default_factory=list,
         max_length=MAX_RESOURCE_ALIAS_COUNT,
     )
-    id_field_name: str | None = Field(default=None, max_length=MAX_RESOURCE_NAME_CHARS)
-    id_selector: str | None = Field(
-        default=None,
-        max_length=MAX_RESOURCE_SELECTOR_CHARS,
-    )
-    identifier_values: list[IdentifierValue] = Field(default_factory=list)
+    identifier_name: str | None = Field(default=None, max_length=MAX_RESOURCE_NAME_CHARS)
+    identifier_path: str | None = Field(default=None, max_length=MAX_RESOURCE_SELECTOR_CHARS)
+    identifier_fields: list[IdentifierFieldMapping] = Field(default_factory=list, max_length=20)
+    identifier_records: list[IdentifierRecord] = Field(default_factory=list)
     classification_source: ClassificationSource
 
-    @field_validator("resource_name", "id_field_name")
+    @field_validator("resource_name", "identifier_name")
     @classmethod
     def strip_name(cls, value: str | None) -> str | None:
         """Trim a canonical resource name and reject an empty value."""
@@ -93,39 +134,21 @@ class DetectedResourceGroup(BaseModel):
                 output.append(alias)
         return output
 
-    @field_validator("identifier_values")
-    @classmethod
-    def validate_identifier_values(
-        cls,
-        values: list[IdentifierValue],
-    ) -> list[IdentifierValue]:
-        """Require identifier values to be distinct and limited to supported scalar types."""
-        output: list[IdentifierValue] = []
-        seen: set[tuple[type[object], object]] = set()
-        for value in values:
-            if isinstance(value, str) and not value.strip():
-                raise ValueError("string resource identifiers cannot be empty")
-            key = (type(value), value)
-            if key not in seen:
-                seen.add(key)
-                output.append(value)
-        return output
-
     @model_validator(mode="after")
     def require_resource_fields(self) -> "DetectedResourceGroup":
         """Require resource groups to include at least one field and one identifier candidate."""
         required = (
             self.resource_name,
             self.resource_aliases,
-            self.id_field_name,
-            self.id_selector,
+            self.identifier_name,
+            self.identifier_fields,
         )
         if self.has_resource and any(not item for item in required):
             raise ValueError(
                 "resource_name, aliases, id field, and selector are required for a resource"
             )
         if not self.has_resource and (
-            any(item for item in required) or self.identifier_values
+            any(item for item in required) or self.identifier_path or self.identifier_records
         ):
             raise ValueError("no-resource groups cannot contain resource fields")
         return self
@@ -141,8 +164,9 @@ class LearnedResourceRule(BaseModel):
     resource_aliases: list[str]
     operation: MonitoredOperation
     group_path: str
-    id_field_name: str | None
-    id_selector: str | None
+    identifier_name: str | None
+    identifier_path: str | None
+    identifier_fields: list[IdentifierFieldMapping]
     access_mode: AccessMode
     classification_source: ClassificationSource
     id_observed: bool
@@ -170,7 +194,7 @@ class ResourceLookupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resource: str = Field(min_length=1, max_length=MAX_RESOURCE_NAME_CHARS)
-    id_value: IdentifierValue | None = None
+    identifier: str | None = Field(default=None, max_length=MAX_RESOURCE_NAME_CHARS)
     limit: int = Field(default=20, ge=1, le=100)
 
     @field_validator("resource")
@@ -184,9 +208,10 @@ class ResourceLookupRequest(BaseModel):
 
 
 class ResourceIdentifierSummary(BaseModel):
-    """Return one canonical resource with a bounded page of typed identifiers."""
-    value: IdentifierValue
-    value_type: Literal["string", "integer"]
+    """Return one complete Identifier Record with its Definition name."""
+
+    identifier: str
+    components: list[IdentifierComponentValue]
     last_seen_at: datetime
 
 
@@ -232,7 +257,6 @@ class ResourceLookupResult(BaseModel):
     canonical_resource: str | None = None
     aliases: list[str] = Field(default_factory=list)
     identifiers: list[ResourceIdentifierSummary] = Field(default_factory=list)
-    recommended_id: IdentifierValue | None = None
     operations: list[ResourceOperationSummary] = Field(default_factory=list)
     errors: list[ResourceMonitorErrorSummary] = Field(default_factory=list)
     total: int = 0
@@ -245,8 +269,12 @@ class ResourceObservation(BaseModel):
     operation: MonitoredOperation
     status_code: int = Field(ge=200, le=299)
     media_type: str | None = None
-    body: Any
-    response_schema_fields: list[dict[str, Any]] = Field(default_factory=list)
+    body: JSONValue
+    response_schema_fields: list[JSONObject] = Field(default_factory=list)
+    # The Tracker, rather than model construction, turns excess path evidence
+    # into a normal Monitor warning so one large OpenAPI document cannot abort
+    # the successful target HTTP request that triggered observation.
+    related_identifier_paths: tuple[str, ...] = ()
     body_truncated: bool = False
 
 

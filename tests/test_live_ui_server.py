@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 from pathlib import Path
-from typing import Any
 
 
 def _static_fixture(tmp_path: Path) -> Path:
@@ -24,7 +23,7 @@ def _static_fixture(tmp_path: Path) -> Path:
 class _SnapshotObserver:
     """Supply deterministic snapshot data without starting a RESTScope run."""
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> dict[str, object]:
         """Return one empty current-run snapshot."""
         return {
             "schema_version": 2,
@@ -62,12 +61,12 @@ def test_ui_routes_are_get_only_and_apply_no_store_security_headers(
 class _StreamObserver:
     """Record the reconnect cursor and return one predictable stream change."""
 
-    def __init__(self, changes: list[dict[str, Any]]) -> None:
+    def __init__(self, changes: list[dict[str, object]]) -> None:
         """Store the changes the next cursor wait should reveal."""
         self.changes = changes
         self.calls: list[tuple[int, float]] = []
 
-    def wait_after(self, cursor: int, timeout_seconds: float) -> list[dict[str, Any]]:
+    def wait_after(self, cursor: int, timeout_seconds: float) -> list[dict[str, object]]:
         """Return configured changes and record the adapter's wait request."""
         self.calls.append((cursor, timeout_seconds))
         return self.changes
@@ -99,7 +98,7 @@ def test_sse_uses_newest_reconnect_cursor_and_serializes_named_incremental_event
         """Open one request and read only the first emitted SSE frame."""
         received = False
 
-        async def receive() -> dict[str, Any]:
+        async def receive() -> dict[str, object]:
             nonlocal received
             if not received:
                 received = True
@@ -140,7 +139,7 @@ def test_sse_emits_a_heartbeat_when_no_changes_arrive(tmp_path: Path) -> None:
 
     async def first_chunk() -> str:
         """Read the first idle frame emitted by the stream."""
-        async def receive() -> dict[str, Any]:
+        async def receive() -> dict[str, object]:
             return {"type": "http.request", "body": b"", "more_body": False}
 
         request = Request(

@@ -9,7 +9,6 @@ or an Agent receives any tool call.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from restscope.llm.exceptions import (
     ProviderInvokeError,
@@ -47,8 +46,8 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         *,
         api_key: str,
         base_url: str | None = None,
-        client: Any | None = None,
-        beta_client: Any | None = None,
+        client: object | None = None,
+        beta_client: object | None = None,
         default_reasoning: LLMReasoningConfig | None = None,
     ) -> None:
         """Create standard and lazily-built Beta endpoint adapters.
@@ -152,7 +151,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         self,
         request: LLMRequest,
         *,
-        client: Any,
+        client: object,
     ) -> LLMResponse:
         """Invoke through one endpoint and retry a missing reasoning field.
 
@@ -198,7 +197,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         # incomplete one. This guard documents that invariant for type checkers.
         raise AssertionError("DeepSeek reasoning retry loop ended unexpectedly")
 
-    def _get_beta_client(self) -> Any:
+    def _get_beta_client(self) -> object:
         """Build the official Beta client only when a strict call needs it."""
         if self._beta_client is None:
             assert self._strict_base_url is not None
@@ -208,7 +207,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             )
         return self._beta_client
 
-    def _request_kwargs(self, request: LLMRequest) -> dict[str, Any]:
+    def _request_kwargs(self, request: LLMRequest) -> dict[str, object]:
         """Build DeepSeek request options while omitting unsupported or unset fields."""
         reasoning = self._effective_reasoning(request)
         self._validate_reasoning_history(request, reasoning=reasoning)
@@ -242,7 +241,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             )
         return kwargs
 
-    def _message_to_openai(self, message: LLMMessage) -> dict[str, Any]:
+    def _message_to_openai(self, message: LLMMessage) -> dict[str, object]:
         payload = super()._message_to_openai(message)
         if message.role == "assistant" and message.tool_calls:
             reasoning_values = {
@@ -257,7 +256,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     def _normalize_response(
         self,
         request: LLMRequest,
-        raw_response: Any,
+        raw_response: object,
         latency_ms: int,
     ) -> LLMResponse:
         """Translate one DeepSeek response into the shared LLMResponse contract, preserving usage and tool calls."""
@@ -322,10 +321,10 @@ class DeepSeekProvider(OpenAICompatibleProvider):
 
     def _with_json_instruction(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         *,
         request: LLMRequest,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         converted = [dict(message) for message in messages]
         if request.response_format == "json" and any(
             "json" in str(message.get("content", "")).casefold()

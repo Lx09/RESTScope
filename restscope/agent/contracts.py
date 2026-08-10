@@ -9,7 +9,7 @@ model-authored content cannot forge lifecycle state.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -35,6 +35,7 @@ class SystemAgentTask(BaseModel):
 
     objective: str = Field(min_length=1, max_length=20_000)
     allowed_result_aliases: tuple[str, ...] = Field(default=(), max_length=100)
+    allowed_result_paths: tuple[str, ...] = Field(default=(), max_length=100)
 
     @field_validator("allowed_result_aliases")
     @classmethod
@@ -44,6 +45,16 @@ class SystemAgentTask(BaseModel):
             raise ValueError("System Agent result aliases must be unique")
         if any(not value.strip() or len(value) > 20 for value in values):
             raise ValueError("System Agent result aliases must be 1-20 characters")
+        return values
+
+    @field_validator("allowed_result_paths")
+    @classmethod
+    def require_bounded_unique_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep prompt-local OpenAPI paths unique and safe for feedback."""
+        if len(values) != len(set(values)):
+            raise ValueError("System Agent result paths must be unique")
+        if any(not value.startswith("/") or len(value) > 1000 for value in values):
+            raise ValueError("System Agent result paths must be absolute and bounded")
         return values
 
 
@@ -147,7 +158,7 @@ class SystemAgentResult(BaseModel):
     session_id: str = Field(min_length=1, max_length=160)
     profile_name: str = Field(min_length=1, max_length=120)
     status: AgentResultStatus
-    output: dict[str, Any] | None = None
+    output: dict[str, object] | None = None
     error: AgentError | None = None
     usage: AgentUsage = Field(default_factory=AgentUsage)
 

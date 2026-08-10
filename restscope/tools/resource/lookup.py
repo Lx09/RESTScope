@@ -9,7 +9,7 @@ new evidence nor exposes operation usage, Monitor errors, or database keys.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from restscope.llm import ToolSpec
 from restscope.tools.runtime import ToolBinding
@@ -28,7 +28,7 @@ _MAX_LIST_LIMIT = 200
 def resource_tool_bindings(
     backend: "ResourceToolBackend | None",
     *,
-    unavailable: Callable[..., dict[str, Any]],
+    unavailable: Callable[..., dict[str, object]],
 ) -> tuple[ToolBinding, ...]:
     """Bind canonical resource and identifier reads to one Monitor Catalog."""
     return (
@@ -108,13 +108,26 @@ def resource_list_ids_tool_spec() -> ToolSpec:
                     "items": {
                         "type": "object",
                         "properties": {
-                            "value": {"type": ["string", "integer"]},
-                            "value_type": {
-                                "type": "string",
-                                "enum": ["string", "integer"],
+                            "identifier": {"type": "string"},
+                            "components": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "value": {"type": ["string", "integer"]},
+                                        "value_type": {
+                                            "type": "string",
+                                            "enum": ["string", "integer"],
+                                        },
+                                    },
+                                    "required": ["name", "value", "value_type"],
+                                    "additionalProperties": False,
+                                },
                             },
                         },
-                        "required": ["value", "value_type"],
+                        "required": ["identifier", "components"],
                         "additionalProperties": False,
                     },
                 },
@@ -155,7 +168,7 @@ class ResourceToolBackend:
         *,
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return one stable page of canonical resource names.
 
         Args:
@@ -171,7 +184,7 @@ class ResourceToolBackend:
             offset=offset,
             limit=limit,
         )
-        result: dict[str, Any] = {
+        result: dict[str, object] = {
             "resources": [{"name": name} for name in names],
             "total": total,
             "offset": offset,
@@ -187,7 +200,7 @@ class ResourceToolBackend:
         resource: str,
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return one typed-ID page for a canonical resource name or alias.
 
         Args:
@@ -205,7 +218,7 @@ class ResourceToolBackend:
             offset=offset,
             limit=limit,
         )
-        result: dict[str, Any] = {
+        result: dict[str, object] = {
             "requested_resource": resource,
             "status": page.status,
             **(
@@ -214,7 +227,13 @@ class ResourceToolBackend:
                 else {}
             ),
             "ids": [
-                {"value": item.value, "value_type": item.value_type}
+                {
+                    "identifier": item.identifier,
+                    "components": [
+                        component.model_dump(mode="json")
+                        for component in item.components
+                    ],
+                }
                 for item in page.identifiers
             ],
             "total": page.total,
@@ -228,9 +247,9 @@ class ResourceToolBackend:
 
 def _pagination_input_schema(
     *,
-    extra_properties: dict[str, Any] | None = None,
+    extra_properties: dict[str, object] | None = None,
     required: list[str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build the identical bounded pagination contract used by Resource tools."""
     return {
         "type": "object",

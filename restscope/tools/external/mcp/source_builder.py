@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 from .host import MCPHost
 
@@ -18,7 +17,7 @@ class MCPSourceBuilder:
         self,
         *,
         server_names: Iterable[str] | None = None,
-    ) -> dict[str, dict[str, Any]]:
+    ) -> dict[str, dict[str, object]]:
         """Discover the selected MCP servers and expose each as an isolated external Tool source."""
         discovered = self.host.discover_tools(server_names=server_names)
         return {
@@ -31,7 +30,7 @@ class MCPSourceBuilder:
         }
 
     def _call_bridge(self, server_name: str):
-        def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+        def call_tool(tool_name: str, arguments: dict[str, object]) -> object:
             return self.host.call_tool(server_name, tool_name, arguments)
 
         return call_tool

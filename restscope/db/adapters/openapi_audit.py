@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -24,7 +23,7 @@ class SqlAlchemyOpenAPIRepository:
         """Use the caller-owned session for every read and write."""
 
         self.session = session
-    def initialize(self, document: dict[str, Any]) -> None:
+    def initialize(self, document: dict[str, object]) -> None:
         """Insert the only allowed current-document row."""
 
         if self.session.get(OpenAPICurrentORM, 1) is not None:
@@ -35,7 +34,7 @@ class SqlAlchemyOpenAPIRepository:
         except IntegrityError as exc:
             raise ValueError("The OpenAPI catalog is already initialized") from exc
 
-    def get_current(self) -> dict[str, Any] | None:
+    def get_current(self) -> dict[str, object] | None:
         """Return the current document without exposing ORM-managed state."""
 
         row = self.session.get(OpenAPICurrentORM, 1)
@@ -44,7 +43,7 @@ class SqlAlchemyOpenAPIRepository:
     def record_change(
         self,
         *,
-        document: dict[str, Any],
+        document: dict[str, object],
         event: OpenAPIChangeEventWrite,
     ) -> OpenAPIChangeEventRecord:
         """Update the singleton and insert one event in the active transaction."""

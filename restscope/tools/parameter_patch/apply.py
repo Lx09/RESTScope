@@ -9,7 +9,7 @@ HTTP request or records a Patch candidate/history entry.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -26,7 +26,7 @@ from restscope.tools.runtime import ToolBinding, ToolFailure
 PARAMETER_PATCH_APPLY_TOOL_NAME = "parameter_patch.apply"
 
 _ReferenceBinding = Annotated[
-    dict[str, Any],
+    dict[str, object],
     Field(description="One bounded canonical resource or response-value source summary."),
 ]
 
@@ -78,7 +78,7 @@ class ParameterPatchApplyBackend:
     def __init__(self, runtime: RequestGenerationPatchRuntime) -> None:
         self.runtime = runtime
 
-    def apply(self, **arguments: Any) -> dict[str, Any]:
+    def apply(self, **arguments: object) -> dict[str, object]:
         """Revalidate and apply one exact Patch or return a correctable error."""
         try:
             request = ApplyParameterPatchInput.model_validate(arguments)

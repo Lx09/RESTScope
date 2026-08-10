@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, is_dataclass
 from threading import RLock
-from typing import Any
 
 
 class Redactor:
@@ -21,7 +20,7 @@ class Redactor:
         with self._lock:
             self._secrets.update(value for value in values if value)
 
-    def redact(self, value: Any) -> Any:
+    def redact(self, value: object) -> object:
         """Recursively convert a value to secret-safe, JSON-friendly data."""
 
         if hasattr(value, "model_dump"):
@@ -30,7 +29,7 @@ class Redactor:
             value = asdict(value)
 
         if isinstance(value, Mapping):
-            redacted: dict[str, Any] = {}
+            redacted: dict[str, object] = {}
             for key, item in value.items():
                 base_key = self.redact_text(str(key))
                 redacted_key = base_key

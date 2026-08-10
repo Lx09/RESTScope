@@ -11,7 +11,6 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any
 
 from restscope.openapi_parser.ir import (
     MediaTypeIR,
@@ -438,7 +437,7 @@ def _closest_operation_keys(
     return [key for _score, key in ranked[:_MAX_ERROR_CHOICES]]
 
 
-def _choice_text(values: Mapping[str, Any]) -> str:
+def _choice_text(values: Mapping[str, object]) -> str:
     """Render a bounded deterministic choice list for model-safe failures."""
     names = sorted(str(name) for name in values)
     retained = names[:_MAX_ERROR_CHOICES]

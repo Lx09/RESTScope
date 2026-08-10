@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from restscope.target_http import (
     TargetResponseObservation,
@@ -105,7 +104,7 @@ class APIBehaviorMonitorCoordinator:
         media_type = normalize_media_type(
             observation.headers.get("content-type")
         )
-        attributes: dict[str, Any] = {
+        attributes: dict[str, object] = {
             "http.request.method": observation.method,
             "http.response.status_code": observation.status_code,
         }
@@ -238,6 +237,10 @@ class APIBehaviorMonitorCoordinator:
                         operation_ir,
                         status_code=observation.status_code,
                         media_type=media_type,
+                    ),
+                    related_identifier_paths=_related_identifier_paths(
+                        context.ir,
+                        operation.path,
                     ),
                 )
             )
@@ -450,7 +453,7 @@ def _response_schema_fields(
     *,
     status_code: int,
     media_type: str | None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     response = _response_for_status(operation, status_code)
     if response is None:
         return []
@@ -492,14 +495,14 @@ def _schema_fields(
     required: bool = False,
     resource_name: str | None = None,
     visited: set[int] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Collect scalar response-field candidates from one observed Schema tree."""
     reference = reference or ResponseFieldReference.body()
     visited = set() if visited is None else set(visited)
     if id(schema) in visited:
         return []
     visited.add(id(schema))
-    output: list[dict[str, Any]] = []
+    output: list[dict[str, object]] = []
     current_resource_name = schema.title or resource_name
     if schema.type == "object" or schema.properties:
         for name, child in schema.properties.items():
@@ -569,9 +572,38 @@ def _is_json_media_type(media_type: str | None) -> bool:
     )
 
 
+def _related_identifier_paths(ir: OpenAPISpecIR, current_path: str) -> tuple[str, ...]:
+    """Return current and strict placeholder-only descendant path evidence."""
+    current_segments = tuple(segment for segment in current_path.strip("/").split("/") if segment)
+    selected: set[str] = set()
+    if any(_is_placeholder(segment) for segment in current_segments):
+        selected.add(current_path)
+    for operation in ir.operations.values():
+        candidate = operation.path
+        candidate_segments = tuple(
+            segment for segment in candidate.strip("/").split("/") if segment
+        )
+        suffix = candidate_segments[len(current_segments) :]
+        if (
+            len(candidate_segments) > len(current_segments)
+            and candidate_segments[: len(current_segments)] == current_segments
+            and suffix
+            and all(_is_placeholder(segment) for segment in suffix)
+        ):
+            selected.add(candidate)
+    return tuple(
+        sorted(selected, key=lambda path: (path != current_path, path))
+    )
+
+
+def _is_placeholder(segment: str) -> bool:
+    """Recognize one complete OpenAPI path-template placeholder segment."""
+    return segment.startswith("{") and segment.endswith("}") and len(segment) > 2
+
+
 def _monitor_trace_summary(
     result: APIBehaviorMonitorResult,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Project a bounded status summary for the response-monitor trace span."""
     resource = result.resource_identifier
     response_values = result.response_values

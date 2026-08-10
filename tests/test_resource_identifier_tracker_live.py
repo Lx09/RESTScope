@@ -26,11 +26,14 @@ pytestmark = [
 def test_live_deepseek_fast_classifies_batched_synthetic_resources(
     tmp_path: Path,
 ) -> None:
-    """Classify two resources and reject summary metadata in one observation."""
+    """Classify one top-level resource while retaining an existing definition."""
 
     try:
         from restscope.api_behavior_monitor.resource_identifiers.schemas import (
             DetectedResourceGroup,
+            IdentifierComponentValue,
+            IdentifierFieldMapping,
+            IdentifierRecord,
             MonitoredOperation,
             ResourceObservation,
         )
@@ -202,10 +205,26 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
                         group_path="$",
                         resource_name="user",
                         resource_aliases=["account"],
-                        id_field_name="id",
-                        id_selector="$.id",
-                        identifier_values=[1],
-                        classification_source="exact_id",
+                        identifier_name="id",
+                        identifier_fields=[
+                            IdentifierFieldMapping(
+                                component="id",
+                                field_name="id",
+                                selector="$.id",
+                            )
+                        ],
+                        identifier_records=[
+                            IdentifierRecord(
+                                components=[
+                                    IdentifierComponentValue(
+                                        name="id",
+                                        value=42,
+                                        value_type="integer",
+                                    )
+                                ]
+                            )
+                        ],
+                        classification_source="llm",
                     )
                 ],
             )
@@ -213,64 +232,29 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
             result = tracker.observe(
                 ResourceObservation(
                     operation=MonitoredOperation(
-                        operation_key="POST /sync",
+                        operation_key="POST /commits",
                         method="POST",
-                        path="/sync",
+                        path="/commits",
                     ),
                     status_code=200,
                     media_type="application/json",
                     body={
-                        "commit": {
-                            "sha": "safe-commit-sha",
-                            "message": "Synthetic synchronization commit",
-                        },
-                        "owner": {
-                            "user_key": 42,
-                            "display_name": "Synthetic User",
-                        },
-                        "summary": {
-                            "status": "ok",
-                            "count": 2,
-                        },
+                        "sha": "safe-commit-sha",
+                        "message": "Synthetic synchronization commit",
+                        "metadata": {"status": "ignored"},
                     },
                     response_schema_fields=[
                         {
-                            "selector": "$.commit.sha",
+                            "selector": "$.sha",
                             "name": "sha",
                             "type": "string",
                             "description": "Unique commit hash",
                         },
                         {
-                            "selector": "$.commit.message",
+                            "selector": "$.message",
                             "name": "message",
                             "type": "string",
                             "description": "Synthetic commit message",
-                        },
-                        {
-                            "selector": "$.owner.user_key",
-                            "name": "user_key",
-                            "type": "integer",
-                            "description": "Unique user account key",
-                        },
-                        {
-                            "selector": "$.owner.display_name",
-                            "name": "display_name",
-                            "type": "string",
-                            "description": "Synthetic user display name",
-                        },
-                        {
-                            "selector": "$.summary.status",
-                            "name": "status",
-                            "type": "string",
-                            "description": "Synchronization summary status",
-                        },
-                        {
-                            "selector": "$.summary.count",
-                            "name": "count",
-                            "type": "integer",
-                            "description": (
-                                "Number of items in the synchronization summary"
-                            ),
                         },
                     ],
                 )
@@ -281,15 +265,15 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
                     "Resource Identifier Tracker result must have status=updated.",
                     pytrace=False,
                 )
-            if result.groups_processed != 2:
+            if result.groups_processed != 1:
                 pytest.fail(
-                    "Resource Identifier Tracker must process exactly two "
-                    "resource groups.",
+                    "Resource Identifier Tracker must process exactly one "
+                    "top-level resource group.",
                     pytrace=False,
                 )
-            if result.identifiers_recorded != 2:
+            if result.identifiers_recorded != 1:
                 pytest.fail(
-                    "Resource Identifier Tracker must record exactly two identifiers.",
+                    "Resource Identifier Tracker must record exactly one identifier.",
                     pytrace=False,
                 )
 
@@ -301,9 +285,13 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
                     "Commit lookup must resolve canonical_resource=commit.",
                     pytrace=False,
                 )
-            if commit.recommended_id != "safe-commit-sha":
+            if not any(
+                [(component.name, component.value) for component in item.components]
+                == [("sha", "safe-commit-sha")]
+                for item in commit.identifiers
+            ):
                 pytest.fail(
-                    "Commit lookup must recommend the synthetic safe SHA.",
+                    "Commit lookup must contain the synthetic safe SHA record.",
                     pytrace=False,
                 )
 
@@ -315,7 +303,11 @@ def test_live_deepseek_fast_classifies_batched_synthetic_resources(
                     "User lookup must resolve canonical_resource=user.",
                     pytrace=False,
                 )
-            if 42 not in {identifier.value for identifier in user.identifiers}:
+            if not any(
+                [(component.name, component.value) for component in item.components]
+                == [("id", 42)]
+                for item in user.identifiers
+            ):
                 pytest.fail(
                     "User lookup must include the synthetic identifier 42.",
                     pytrace=False,

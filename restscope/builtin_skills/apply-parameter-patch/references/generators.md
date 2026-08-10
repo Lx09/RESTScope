@@ -78,15 +78,21 @@ shadowed child has no effect.
 ## Reference-backed strategies
 
 ```json
-{"type":"resource_identifier","resource":"canonical-resource"}
+{"type":"resource_identifier","resource":"canonical-resource","identifier":"tenantId/userId","component":"userId"}
 {"type":"response_value","source":{"operation_key":"GET /x","matched_status_code":"200","media_type":"application/json","field":"body.id"}}
 ```
 
 For `resource_identifier`, discover and copy a canonical name with
 `resource.list_resources`, then successfully call `resource.list_ids` for it.
-The compiler requires a current non-empty scalar pool. JSON body values must
-match the declared scalar type; integers may satisfy number. Other parameters
-serialize scalars as text but still reject objects, arrays, and null pools.
+Copy one returned `identifier` Definition and one of its ordered component
+names exactly. The compiler requires a current non-empty Record set. A
+single-component Definition may bind a compatible scalar input. A composite
+Definition may bind only path parameters, and the same Patch must bind every
+component exactly once using the same resource and identifier. Generation then
+selects one complete Record and assigns all components together; it never mixes
+components from different observations. JSON body values must match the
+declared scalar type; integers may satisfy number. Other parameters serialize
+scalars as text but still reject objects, arrays, and null pools.
 
 For `response_value`, copy all four source fields exactly from a successful
 `openapi.find_observed_response_fields` result. Compilation re-runs current

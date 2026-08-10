@@ -9,17 +9,17 @@ blocks until the Agent completes or a safe runtime failure is raised.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import Engine
 
-from restscope.agent import Agent, AgentProfile, SystemAgentResult, SystemAgentTask
+from restscope.agent import AgentProfile, SystemAgentResult, SystemAgentTask
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
@@ -121,9 +121,12 @@ class _DeferredSystemAgentRunner:
     def __init__(self) -> None:
         """Create an unbound App-private runner."""
         self._lock = RLock()
-        self._run = None
+        self._run: Callable[[str, SystemAgentTask], SystemAgentResult] | None = None
 
-    def bind(self, run) -> None:
+    def bind(
+        self,
+        run: Callable[[str, SystemAgentTask], SystemAgentResult],
+    ) -> None:
         """Install the sole production runner exactly once."""
         if not callable(run):
             raise TypeError("System Agent runner must be callable")
@@ -179,6 +182,44 @@ _SchemaSource = Annotated[
 ]
 
 
+class _StartableRuntimeLoop(Protocol):
+    """Describe the sole Main Agent behavior used by the App lifecycle."""
+
+    def start(self) -> None: ...
+
+
+class _ClosableHost(Protocol):
+    """Describe an optional runtime-owned host that can be closed."""
+
+    def close(self) -> None: ...
+
+
+class _AppHarnessRuntime(Protocol):
+    """Describe the Harness capabilities required by App composition and tests."""
+
+    mcp_host: _ClosableHost | None
+
+    def bind_context(self, context: ToolContext) -> None: ...
+
+    def require_context(self) -> ToolContext: ...
+
+    def start_main_agent(self, profile_name: str) -> _StartableRuntimeLoop: ...
+
+    def close_main_agent(self) -> None: ...
+
+    def clear_context(self) -> None: ...
+
+    def bind_tracing_runtime(self, runtime: TracingRuntime) -> None: ...
+
+
+class _UIServiceHost(Protocol):
+    """Describe the optional UI handle retained by the App."""
+
+    url: str
+
+    def close(self) -> None: ...
+
+
 class RESTScopeApp:
     """Own all long-lived services used by one RESTScope process.
 
@@ -194,7 +235,7 @@ class RESTScopeApp:
         self,
         *,
         config: RESTScopeConfig,
-        harness_runtime: HarnessRuntime | Any | None = None,
+        harness_runtime: _AppHarnessRuntime | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Build runtime collaborators, or adopt explicitly injected test doubles.
@@ -208,11 +249,11 @@ class RESTScopeApp:
         # later constructor raises, the exception handler can close only the
         # resources opened by this method and leave injected objects untouched.
         database: _FreshSQLiteDatabase | None = None
-        built_runtime: HarnessRuntime | Any | None = None
+        built_runtime: HarnessRuntime | None = None
         built_tracing_runtime = tracing_runtime is None
         trace_runtime: TracingRuntime | None = None
         run_observer: LiveRunObserver | None = None
-        ui_service: Any | None = None
+        ui_service: _UIServiceHost | None = None
         operation_testing_service: OperationTestingService | None = None
         request_generation_store: RequestGenerationConfigStore | None = None
         request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None
@@ -381,7 +422,7 @@ class RESTScopeApp:
                     run_observer = None
             self._run_observer = run_observer
             self._ui_service = ui_service
-            self._main_agent: Agent | None = None
+            self._main_agent: _StartableRuntimeLoop | None = None
             self._main_loop_started = False
             self._closed = False
         except BaseException:
@@ -406,7 +447,7 @@ class RESTScopeApp:
         cls,
         *,
         env_file: str | Path | None = None,
-        harness_runtime: HarnessRuntime | Any | None = None,
+        harness_runtime: _AppHarnessRuntime | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
         """Load `.env`/environment config and build the program runtime."""
@@ -423,7 +464,7 @@ class RESTScopeApp:
         cls,
         config: RESTScopeConfig,
         *,
-        harness_runtime: HarnessRuntime | Any | None = None,
+        harness_runtime: _AppHarnessRuntime | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
         """Build RESTScope through the same composition path as direct use."""
@@ -461,7 +502,7 @@ class RESTScopeApp:
     def initialize(
         self,
         *,
-        schema_source: Mapping[str, Any],
+        schema_source: Mapping[str, object],
         base_url: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> ToolContext:
@@ -502,7 +543,7 @@ class RESTScopeApp:
         self.harness_runtime.bind_context(context)
         return context
 
-    def export_current_openapi(self) -> dict[str, Any]:
+    def export_current_openapi(self) -> dict[str, object]:
         """Return the normalized OpenAPI document persisted for audit/export.
 
         This method does not restore an App or expose raw schema-source paths.
@@ -617,7 +658,7 @@ class RESTScopeApp:
             raise RuntimeError("RESTScopeApp is already closed")
 
 
-def _schema_source_value(source: Any) -> str:
+def _schema_source_value(source: _SchemaSource) -> str:
     if source.kind == "file":
         return source.path
     if source.kind == "url":
@@ -731,7 +772,7 @@ def _resolve_app_random_seed(config: RESTScopeConfig) -> RESTScopeConfig:
     )
 
 
-def _close_runtime_host(runtime: Any | None) -> None:
+def _close_runtime_host(runtime: _AppHarnessRuntime | None) -> None:
     if runtime is None:
         return
     host = getattr(runtime, "mcp_host", None)

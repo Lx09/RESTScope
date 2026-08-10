@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,7 +43,7 @@ class ResponseSourceView:
     field_type: str | list[str] | None
     schema_format: str | None
     description: str | None
-    source: Any
+    source: object
 
 
 @dataclass(slots=True, frozen=True)
@@ -52,7 +51,7 @@ class ResponseSourcePrompt:
     """Hold the fixed guidance and escaped candidates for response-source selection."""
     system: str
     user: str
-    source_by_alias: Mapping[str, Any]
+    source_by_alias: Mapping[str, object]
     metrics: ContextMetrics
 
 

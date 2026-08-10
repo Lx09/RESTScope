@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+from restscope.data_types import JSONObject, JSONValue
 
 
 LLMRole = Literal["system", "developer", "user", "assistant", "tool"]
@@ -20,9 +22,9 @@ class ToolCall(BaseModel):
 
     id: str
     name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: dict[str, object] = Field(default_factory=dict)
     provider: str | None = None
-    provider_context: dict[str, Any] = Field(default_factory=dict, repr=False)
+    provider_context: dict[str, object] = Field(default_factory=dict, repr=False)
 
 
 class LLMReasoningConfig(BaseModel):
@@ -53,8 +55,8 @@ class ToolSpec(BaseModel):
     name: str
     description: str
     kind: ToolKind
-    input_schema: dict[str, Any]
-    output_schema: dict[str, Any] | None = Field(default=None)
+    input_schema: dict[str, object]
+    output_schema: dict[str, object] | None = Field(default=None)
     strict: bool = False
 
 
@@ -65,8 +67,8 @@ class ToolResult(BaseModel):
     name: str
     status: ToolResultStatus
     content: str | None = None
-    structured: Any | None = None
-    error: dict[str, Any] | None = Field(default=None)
+    structured: JSONValue = None
+    error: JSONObject | None = Field(default=None)
     artifact_ids: list[str] = Field(default_factory=list)
 
 
@@ -79,13 +81,13 @@ class LLMRequest(BaseModel):
     temperature: float = 0.0
     max_tokens: int = 2048
     response_format: LLMResponseFormat = "json_schema"
-    json_schema: dict[str, Any] | None = None
+    json_schema: dict[str, object] | None = None
     json_schema_name: str | None = None
     tools: list[ToolSpec] = Field(default_factory=list)
     tool_choice: str = "none"
     timeout_seconds: int = 60
     reasoning: LLMReasoningConfig = Field(default_factory=LLMReasoningConfig)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class LLMResponse(BaseModel):
@@ -101,7 +103,7 @@ class LLMResponse(BaseModel):
     model: str
     content: str | None = None
     reasoning_content: str | None = Field(default=None, repr=False)
-    parsed_json: Any | None = None
+    parsed_json: JSONValue = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     prompt_tokens: int | None = None
     cached_input_tokens: int = Field(default=0, ge=0)
@@ -110,7 +112,7 @@ class LLMResponse(BaseModel):
     finish_reason: str | None = None
     provider_request_id: str | None = None
     latency_ms: int | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class LLMModelConfig(BaseModel):
@@ -144,13 +146,13 @@ class ValidationIssue(BaseModel):
     type: str
     message: str
     location: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class ValidationResult(BaseModel):
     """Result of converting an LLM response into a typed output object."""
 
     valid: bool
-    validated_object: Any | None = None
+    validated_object: object | None = None
     errors: list[ValidationIssue] = Field(default_factory=list)
-    raw_json: Any | None = None
+    raw_json: object | None = None

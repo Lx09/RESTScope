@@ -16,7 +16,6 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
@@ -51,7 +50,7 @@ pytestmark = [
 ]
 
 
-def _diagnostic_counts(ir: Any) -> dict[str, int]:
+def _diagnostic_counts(ir: object) -> dict[str, int]:
     diagnostics = ir.diagnostics
     return {
         "spec_errors": len(diagnostics.spec_errors),
@@ -65,7 +64,7 @@ def _error_count(counts: Mapping[str, int]) -> int:
     return sum(value for name, value in counts.items() if name.endswith("_errors"))
 
 
-def _json_compatible(value: Any) -> Any:
+def _json_compatible(value: object) -> object:
     """Make YAML-loaded values deterministic and JSON serializable."""
     if isinstance(value, Mapping):
         return {
@@ -81,7 +80,7 @@ def _json_compatible(value: Any) -> Any:
     return str(value)
 
 
-def _canonical_json(document: Mapping[str, Any]) -> str:
+def _canonical_json(document: Mapping[str, object]) -> str:
     return json.dumps(
         _json_compatible(document),
         ensure_ascii=False,
@@ -90,7 +89,7 @@ def _canonical_json(document: Mapping[str, Any]) -> str:
     ) + "\n"
 
 
-def _component_counts(document: Mapping[str, Any]) -> dict[str, int]:
+def _component_counts(document: Mapping[str, object]) -> dict[str, int]:
     components = document.get("components")
     if isinstance(components, Mapping):
         return {
@@ -115,7 +114,7 @@ def _validator_result(
     *,
     generated_yaml: str,
     artifact_dir: Path,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, object], bool]:
     url = f"{VALIDATOR_URL}?{urllib.parse.urlencode(VALIDATOR_QUERY)}"
     request = urllib.request.Request(
         url,
@@ -185,7 +184,7 @@ def _validator_result(
     return result, passed
 
 
-def _write_json(path: Path, value: Any) -> None:
+def _write_json(path: Path, value: object) -> None:
     path.write_text(
         json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -204,7 +203,7 @@ def _expected_transformations(input_format: str) -> list[str]:
     return transformations
 
 
-def _process_asset(asset_path: Path) -> tuple[dict[str, Any], list[str]]:
+def _process_asset(asset_path: Path) -> tuple[dict[str, object], list[str]]:
     artifact_dir = OUTPUT_ROOT / asset_path.stem
     if artifact_dir.exists():
         shutil.rmtree(artifact_dir)
@@ -322,7 +321,7 @@ def _process_asset(asset_path: Path) -> tuple[dict[str, Any], list[str]]:
     return summary, failures
 
 
-def _write_summary(results: list[dict[str, Any]]) -> None:
+def _write_summary(results: list[dict[str, object]]) -> None:
     lines = [
         "# IR → OpenAPI 3.1 asset acceptance results",
         "",
@@ -355,7 +354,7 @@ def _write_summary(results: list[dict[str, Any]]) -> None:
 def test_all_assets_round_trip_through_ir_and_pass_swagger_validator() -> None:
     """Generate every asset document, retain evidence, and validate them online."""
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, object]] = []
     failures: list[str] = []
 
     for asset_path in ASSET_PATHS:

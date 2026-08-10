@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
 
 from .models import OpenAPIChangeEventRecord, OpenAPIChangeEventWrite
 from .ports import OpenAPIUnitOfWorkFactory
@@ -17,7 +16,7 @@ class OpenAPIAudit:
 
         self.unit_of_work_factory = unit_of_work_factory
 
-    def initialize(self, document: dict[str, Any]) -> None:
+    def initialize(self, document: dict[str, object]) -> None:
         """Insert the singleton initial document.
 
         ``document`` must already be produced by the normalized IR-to-spec
@@ -29,7 +28,7 @@ class OpenAPIAudit:
             uow.openapi.initialize(deepcopy(document))
             uow.commit()
 
-    def current_document(self) -> dict[str, Any]:
+    def current_document(self) -> dict[str, object]:
         """Return an isolated copy of the current persisted document."""
 
         with self.unit_of_work_factory() as uow:
@@ -41,7 +40,7 @@ class OpenAPIAudit:
     def record_change(
         self,
         *,
-        document: dict[str, Any],
+        document: dict[str, object],
         event: OpenAPIChangeEventWrite,
     ) -> OpenAPIChangeEventRecord:
         """Atomically update current OpenAPI and append its response event."""

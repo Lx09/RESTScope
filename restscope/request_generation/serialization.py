@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
 from urllib.parse import quote, urlencode
 
 from .models import (
@@ -89,7 +88,7 @@ def serialize_test_case(
     )
 
 
-def serialize_path_parameter_value(parameter: ParameterSnapshot, value: Any) -> str:
+def serialize_path_parameter_value(parameter: ParameterSnapshot, value: object) -> str:
     """Serialize one path value; also used to build safe request evidence."""
 
     style = parameter.style or "simple"
@@ -117,7 +116,7 @@ def serialize_path_parameter_value(parameter: ParameterSnapshot, value: Any) -> 
     raise SerializationError(f"Unsupported path parameter style: {style}")
 
 
-def _serialize_query(parameter: ParameterSnapshot, value: Any) -> list[tuple[str, str]]:
+def _serialize_query(parameter: ParameterSnapshot, value: object) -> list[tuple[str, str]]:
     """Encode query values using OpenAPI style and explode rules while preserving repeated keys."""
     collection_format = parameter.collection_format
     if isinstance(value, list) and isinstance(collection_format, str):
@@ -150,7 +149,7 @@ def _serialize_query(parameter: ParameterSnapshot, value: Any) -> list[tuple[str
     raise SerializationError(f"Unsupported query parameter style: {style}")
 
 
-def _serialize_header(parameter: ParameterSnapshot, value: Any) -> str:
+def _serialize_header(parameter: ParameterSnapshot, value: object) -> str:
     style = parameter.style or "simple"
     if style != "simple":
         raise SerializationError(f"Unsupported header parameter style: {style}")
@@ -158,7 +157,7 @@ def _serialize_header(parameter: ParameterSnapshot, value: Any) -> str:
     return _delimited_value(value, delimiter=",", explode=explode)
 
 
-def _serialize_cookie(parameter: ParameterSnapshot, value: Any) -> list[str]:
+def _serialize_cookie(parameter: ParameterSnapshot, value: object) -> list[str]:
     style = parameter.style or "form"
     explode = parameter.explode if parameter.explode is not None else True
     if style != "form":
@@ -174,7 +173,7 @@ def _serialize_cookie(parameter: ParameterSnapshot, value: Any) -> list[str]:
     return [f"{parameter.name}={_text(value)}"]
 
 
-def _serialize_body(media_type: str, body: Any) -> tuple[bytes, str]:
+def _serialize_body(media_type: str, body: object) -> tuple[bytes, str]:
     """Return body bytes and the effective Content-Type header.
 
     Most media types retain the OpenAPI value unchanged. Multipart is the
@@ -209,7 +208,7 @@ def _serialize_body(media_type: str, body: Any) -> tuple[bytes, str]:
     raise SerializationError(f"Unsupported request media type: {media_type}")
 
 
-def _serialize_multipart_body(body: Any) -> tuple[bytes, str]:
+def _serialize_multipart_body(body: object) -> tuple[bytes, str]:
     """Encode one non-file object as deterministic multipart form data.
 
     Scalar parts use UTF-8 text because that is the interoperable OpenAPI
@@ -258,7 +257,7 @@ def _serialize_multipart_body(body: Any) -> tuple[bytes, str]:
     )
 
 
-def _multipart_part(value: Any) -> tuple[str, bytes]:
+def _multipart_part(value: object) -> tuple[str, bytes]:
     """Translate one supported field value into its part media type and bytes."""
 
     if isinstance(value, bytes):
@@ -303,7 +302,7 @@ def _multipart_boundary(parts: list[tuple[str, str, bytes]]) -> str:
         candidate = hashlib.sha256(candidate.encode()).hexdigest()
 
 
-def _legacy_collection(name: str, value: list[Any], collection_format: str) -> list[tuple[str, str]]:
+def _legacy_collection(name: str, value: list[object], collection_format: str) -> list[tuple[str, str]]:
     if collection_format == "multi":
         return [(name, _text(item)) for item in value]
     delimiter = {"csv": ",", "ssv": " ", "tsv": "\t", "pipes": "|"}.get(collection_format)
@@ -323,7 +322,7 @@ def _parameters_at(
     ]
 
 
-def _simple_value(value: Any, *, explode: bool, allow_reserved: bool) -> str:
+def _simple_value(value: object, *, explode: bool, allow_reserved: bool) -> str:
     return _delimited_value(
         value,
         delimiter=",",
@@ -333,7 +332,7 @@ def _simple_value(value: Any, *, explode: bool, allow_reserved: bool) -> str:
 
 
 def _delimited_value(
-    value: Any,
+    value: object,
     *,
     delimiter: str,
     explode: bool,
@@ -354,14 +353,14 @@ def _delimited_value(
     return _encode_value(value, allow_reserved=allow_reserved)
 
 
-def _flatten_object(value: dict[Any, Any], *, delimiter: str) -> str:
+def _flatten_object(value: dict[object, object], *, delimiter: str) -> str:
     flattened: list[str] = []
     for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
         flattened.extend((str(key), _text(item)))
     return delimiter.join(flattened)
 
 
-def _form_items(value: dict[str, Any]) -> list[tuple[str, str]]:
+def _form_items(value: dict[str, object]) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     for key, item in value.items():
         values = item if isinstance(item, list) else [item]
@@ -369,7 +368,7 @@ def _form_items(value: dict[str, Any]) -> list[tuple[str, str]]:
     return items
 
 
-def _encode_value(value: Any, *, allow_reserved: bool = False) -> str:
+def _encode_value(value: object, *, allow_reserved: bool = False) -> str:
     return _encode(_text(value), allow_reserved=allow_reserved)
 
 
@@ -378,7 +377,7 @@ def _encode(value: str, *, allow_reserved: bool = False) -> str:
     return quote(value, safe=safe)
 
 
-def _text(value: Any) -> str:
+def _text(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if value is None:

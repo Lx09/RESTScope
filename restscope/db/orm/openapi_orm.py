@@ -9,7 +9,6 @@ and source-file locations never enter this persistence boundary.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import CheckConstraint, DateTime, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,7 +25,7 @@ class OpenAPICurrentORM(CreatedAtMixin, UpdatedAtMixin, Base):
     )
 
     singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    document: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class OpenAPIChangeEventORM(CreatedAtMixin, Base):
@@ -42,5 +41,5 @@ class OpenAPIChangeEventORM(CreatedAtMixin, Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     media_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     changes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    response_before: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    response_after: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    response_before: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    response_after: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)

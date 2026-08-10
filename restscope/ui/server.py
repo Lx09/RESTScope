@@ -13,9 +13,12 @@ import json
 import logging
 import time
 
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from threading import RLock, Thread
-from typing import Any
+from typing import Protocol
+
+from restscope.observability import LiveRunObserver
 
 
 LOGGER = logging.getLogger(__name__)
@@ -38,21 +41,57 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
 }
 
+_ASGIMessage = dict[str, object]
+_ASGIReceive = Callable[[], Awaitable[_ASGIMessage]]
+_ASGISend = Callable[[_ASGIMessage], Awaitable[None]]
+
+
+class _ASGIApplication(Protocol):
+    """Describe the callable ASGI surface wrapped by the middleware."""
+
+    async def __call__(
+        self,
+        scope: Mapping[str, object],
+        receive: _ASGIReceive,
+        send: _ASGISend,
+    ) -> None: ...
+
+
+class _ServerHandle(Protocol):
+    """Describe the small Uvicorn server lifecycle owned by ``UIService``."""
+
+    started: bool
+    should_exit: bool
+
+    def run(self) -> None: ...
+
+
+class _CursorRequest(Protocol):
+    """Expose only the request headers used to resume the event stream."""
+
+    query_params: Mapping[str, str]
+    headers: Mapping[str, str]
+
 
 class _SecurityHeadersMiddleware:
     """Append viewer security headers without buffering an SSE response body."""
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: _ASGIApplication) -> None:
         """Wrap one ASGI application supplied by Starlette."""
         self.app = app
 
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+    async def __call__(
+        self,
+        scope: Mapping[str, object],
+        receive: _ASGIReceive,
+        send: _ASGISend,
+    ) -> None:
         """Add headers to HTTP response starts and pass all other messages through."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        async def send_with_security_headers(message: dict[str, Any]) -> None:
+        async def send_with_security_headers(message: _ASGIMessage) -> None:
             if message["type"] == "http.response.start":
                 existing = list(message.get("headers", []))
                 blocked = {name.lower().encode("latin-1") for name in _SECURITY_HEADERS}
@@ -70,13 +109,19 @@ class _SecurityHeadersMiddleware:
 class UIService:
     """Own one background Uvicorn thread and expose its loopback URL."""
 
-    def __init__(self, *, observer: Any, port: int, static_root: Path = STATIC_ROOT) -> None:
+    def __init__(
+        self,
+        *,
+        observer: LiveRunObserver,
+        port: int,
+        static_root: Path = STATIC_ROOT,
+    ) -> None:
         """Store dependencies without opening a socket until :meth:`start`."""
         self.observer = observer
         self.port = port
         self.static_root = static_root
         self.url = f"http://127.0.0.1:{port}"
-        self._server: Any | None = None
+        self._server: _ServerHandle | None = None
         self._thread: Thread | None = None
         self._lock = RLock()
 
@@ -141,13 +186,17 @@ class UIService:
             LOGGER.warning("RESTScope UI server stopped: %s", type(exc).__name__)
 
 
-def start_ui_service(*, observer: Any, port: int) -> UIService | None:
+def start_ui_service(*, observer: LiveRunObserver, port: int) -> UIService | None:
     """Build and start one service, returning ``None`` on any optional failure."""
     service = UIService(observer=observer, port=port)
     return service if service.start() else None
 
 
-def build_ui_app(observer: Any, *, static_root: Path = STATIC_ROOT) -> Any:
+def build_ui_app(
+    observer: LiveRunObserver,
+    *,
+    static_root: Path = STATIC_ROOT,
+) -> _ASGIApplication:
     """Create the read-only Starlette adapter used by production and tests.
 
     Args:
@@ -227,7 +276,7 @@ def build_ui_app(observer: Any, *, static_root: Path = STATIC_ROOT) -> Any:
     return app
 
 
-def _read_cursor(request: Any) -> int:
+def _read_cursor(request: _CursorRequest) -> int:
     """Use the newest valid snapshot or standard SSE reconnect cursor."""
     values = (
         request.query_params.get("after"),

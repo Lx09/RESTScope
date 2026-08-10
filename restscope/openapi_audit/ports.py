@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from types import TracebackType
-from typing import Any, Protocol, TypeAlias
+from typing import Protocol, TypeAlias
 
 from .models import OpenAPIChangeEventRecord, OpenAPIChangeEventWrite
 
@@ -12,14 +12,14 @@ from .models import OpenAPIChangeEventRecord, OpenAPIChangeEventWrite
 class OpenAPIRepository(Protocol):
     """Define current-document and append-only event persistence operations."""
 
-    def initialize(self, document: dict[str, Any]) -> None: ...
+    def initialize(self, document: dict[str, object]) -> None: ...
 
-    def get_current(self) -> dict[str, Any] | None: ...
+    def get_current(self) -> dict[str, object] | None: ...
 
     def record_change(
         self,
         *,
-        document: dict[str, Any],
+        document: dict[str, object],
         event: OpenAPIChangeEventWrite,
     ) -> OpenAPIChangeEventRecord: ...
 

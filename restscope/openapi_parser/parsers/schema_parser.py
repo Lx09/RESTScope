@@ -1,6 +1,5 @@
 """Schema parser module."""
 
-from typing import Any
 
 from ..diagnostics import make_diagnostic
 from ..exceptions import RecursiveReferenceError, SchemaParseError

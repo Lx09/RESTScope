@@ -7,7 +7,6 @@ Schema, and return stable field handles or one bounded Schema summary.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from restscope.openapi_parser.ir import OperationIR
 from restscope.operation_references import ResponseFieldReference
@@ -31,7 +30,7 @@ def list_response_fields(
     status_code: int | str,
     offset: int = 0,
     limit: int = _DEFAULT_LIST_LIMIT,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Return one deterministic page of response-body field handles.
 
     The operation and response status select one response contract. The
@@ -61,7 +60,7 @@ def list_response_fields(
     )
     entries.sort(key=lambda item: item.name)
     page = entries[offset : offset + limit]
-    result: dict[str, Any] = {
+    result: dict[str, object] = {
         "operation_key": operation.operation_key,
         "requested_status_code": requested_status,
         "matched_status_code": matched_status,
@@ -82,7 +81,7 @@ def get_response_field_schema(
     status_code: int | str,
     field: str,
     media_type: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Return the compact Schema for one exact response-body field.
 
     Numeric array indexes from concrete Catalog evidence are normalized to

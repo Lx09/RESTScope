@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from restscope.agent import Agent, SystemAgentResult
 
@@ -66,7 +66,7 @@ class HarnessRuntime:
     external_tools: AgentToolbox | None = None
     mcp_host: MCPHost | None = None
     agent_runtime: AgentRuntimeResolver | None = None
-    observed_response_fields_provider: Callable[..., Any] | None = field(
+    observed_response_fields_provider: Callable[..., object] | None = field(
         default=None,
         repr=False,
     )
@@ -188,10 +188,10 @@ class HarnessRuntime:
 
 def build_harness(
     *,
-    sources: Mapping[str, Mapping[str, Any]] | None = None,
+    sources: Mapping[str, Mapping[str, object]] | None = None,
     tracing_runtime: TracingRuntime | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    observed_response_fields_provider: Callable[..., Any] | None = None,
+    observed_response_fields_provider: Callable[..., object] | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
@@ -338,7 +338,7 @@ def _production_tool_binding_factories(
     )
 
 
-def _unavailable_tool(**_arguments: Any) -> dict[str, Any]:
+def _unavailable_tool(**_arguments: object) -> dict[str, object]:
     """Fail closed when an optional production Tool backend is absent."""
     from restscope.tools import ToolFailure
 
@@ -355,7 +355,7 @@ def build_harness_with_mcp_host(
     server_names: Iterable[str] | None = None,
     tracing_runtime: TracingRuntime | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    observed_response_fields_provider: Callable[..., Any] | None = None,
+    observed_response_fields_provider: Callable[..., object] | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,

@@ -6,7 +6,6 @@ import os
 
 from dataclasses import dataclass, field
 from threading import RLock
-from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from phoenix.otel import register
@@ -16,7 +15,7 @@ from restscope.observability.otel_backend import OpenTelemetryBackend
 
 @dataclass
 class _SharedBackend:
-    key: tuple[Any, ...] = field(repr=False)
+    key: tuple[object, ...] = field(repr=False)
     backend: OpenTelemetryBackend
     proxy_environment: "_ProxyEnvironment | None"
     references: int = 1
@@ -69,7 +68,7 @@ _BACKEND_LOCK = RLock()
 _ACTIVE_BACKEND: _SharedBackend | None = None
 
 
-def build_phoenix_backend(*, config: Any) -> _BackendLease:
+def build_phoenix_backend(*, config: object) -> _BackendLease:
     """Register or reuse the process-wide Phoenix tracing backend."""
 
     global _ACTIVE_BACKEND

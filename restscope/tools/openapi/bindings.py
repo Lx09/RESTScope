@@ -7,7 +7,6 @@ or authorization; they only connect already-selected names to trusted methods.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from restscope.tools.runtime import ToolBinding
 
@@ -51,7 +50,7 @@ def openapi_tool_bindings(
 def observed_response_fields_tool_binding(
     backend: "OpenAPIToolBackend | None",
     *,
-    unavailable: Callable[..., dict[str, Any]],
+    unavailable: Callable[..., dict[str, object]],
 ) -> ToolBinding:
     """Bind the Patch-facing observed-field lookup or its safe unavailable result."""
     return ToolBinding(

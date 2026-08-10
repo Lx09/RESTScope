@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -91,7 +91,7 @@ class HTTPRequestArguments(BaseModel):
     path: str
     query: dict[str, ParameterValue] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
-    json_body: Any | None = None
+    json_body: object | None = None
     text_body: str | None = None
     form_body: dict[str, ParameterValue] | None = None
     timeout_seconds: float = Field(default=30, gt=0, le=30)
@@ -137,7 +137,7 @@ def http_request_tool_spec() -> ToolSpec:
                 },
                 "json_body": {
                     "description": (
-                        "Any JSON value used as the request body. This field is "
+                        "A JSON value used as the request body. This field is "
                         "intentionally open because OpenAPI bodies may be scalar, "
                         "array, object, boolean, or null."
                     )
@@ -240,7 +240,7 @@ class TargetHTTPRequestTool:
             client_factory=client_factory
         )
 
-    def execute(self, context: ToolContext, /, **arguments: Any) -> dict[str, Any]:
+    def execute(self, context: ToolContext, /, **arguments: object) -> dict[str, object]:
         """Validate, send, monitor, decode, and summarize one HTTP tool call."""
         request = _validate_arguments(arguments)
         request_kwargs = _body_arguments(request)
@@ -290,7 +290,7 @@ class TargetHTTPRequestTool:
         }
 
 
-def _validate_arguments(arguments: Mapping[str, Any]) -> HTTPRequestArguments:
+def _validate_arguments(arguments: Mapping[str, object]) -> HTTPRequestArguments:
     try:
         return HTTPRequestArguments.model_validate(arguments)
     except ValidationError as exc:
@@ -318,7 +318,7 @@ def _parameter_text(value: ParameterScalar) -> str:
     return str(value)
 
 
-def _body_arguments(request: HTTPRequestArguments) -> dict[str, Any]:
+def _body_arguments(request: HTTPRequestArguments) -> dict[str, object]:
     supplied = request.model_fields_set.intersection(_BODY_FIELDS)
     if "json_body" in supplied:
         try:
@@ -342,7 +342,7 @@ def _contains_header(headers: Mapping[str, str], expected: str) -> bool:
 
 def _response_payload(
     response: BufferedTargetResponse,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Convert a buffered transport response into the tool's public JSON result."""
     assert response.body is not None
     content = response.body
@@ -382,7 +382,7 @@ def _decode_response(
     *,
     content: bytes,
     media_type: str,
-) -> tuple[Literal["json", "text"], Any]:
+) -> tuple[Literal["json", "text"], object]:
     """Decode only declared JSON or safely recognizable text response bodies.
 
     Binary data is rejected rather than embedded in model context. A response

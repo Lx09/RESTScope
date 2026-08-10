@@ -1,168 +1,110 @@
-# Resource Identifier Bounded Classification
+# Composite Resource Identifier Discovery
 
 Status: Implemented and locally verified; uncommitted
 
 ## Objective
 
-Replace response-wide Resource Identifier classification with an IR-first,
-resource-item-aware flow that uses deterministic rules for exact `id` fields
-and a strictly bounded FAST fallback for semantic identifiers.
+Make Resource Identifier discovery match observable REST paths: inspect only
+the response level that can represent the resource itself, give one System
+Agent all bounded field and full-path evidence, and preserve multi-component
+identifiers as complete ordered records through storage and request generation.
 
-## Approved scope
+## Approved behavior
 
-- A root object is one resource instance.
-- A root array, or each top-level array of objects in a wrapper response, is
-  one resource group whose items are instances of the same resource.
-- V1 does not classify nested objects inside a resource item as independent
-  resources.
-- Process at most the first 1000 collection items in stable response order.
-- A resource item may contain at most 1000 recursive JSON scalar values.
-  Oversized items are skipped with a warning while other items continue.
-- Identifier candidates are immediate resource-item fields with observed or
-  schema-declared string/integer types. Boolean, number/float, null, object,
-  and array fields are excluded.
-- Observed response fields precede IR-only fields in stable candidate order.
-- An exact normalized field name `id` wins over all other candidates and does
-  not require an LLM call.
-- A schema-declared exact `id` must be observed with a usable value before its
-  selector is persisted. If absent, report `expected_resource_id_missing`,
-  write no identifier value or rule, and retry on a future 2xx response.
-- Non-exact names ending in `id`, including `userId`, `project_id`, and `iid`,
-  require FAST semantic selection.
-- If no `id`-ending candidate exists, FAST may inspect other top-level
-  string/integer candidates.
-- Any LLM-backed selection examines at most 100 candidates in two stable
-  batches of at most 50.
-- Each resource group has a strict maximum of two real Provider calls,
-  including structural repair. A repair consumes the second call and prevents
-  examining a second candidate batch.
-- The LLM receives operation method/path, the locally resolved canonical
-  resource name, and bounded candidate metadata. It never receives actual
-  identifier values, full responses, complete OpenAPI documents, selectors,
-  database IDs, aliases, or Pool contents.
-- The LLM returns only a supplied temporary candidate ID or `null`. Local code
-  restores the selector and field name.
-- A valid `null` result after the available batches produces `ignored` without
-  persisting a negative rule or error. Future responses may retry.
-- Invalid output may be repaired once within the two-call budget. A still
-  invalid result records `resource_monitor_output_invalid` without a rule.
-- A selected identifier must be observed at least once before the rule is
-  persisted.
-- Apply the learned selector to at most 1000 items. Persist valid typed,
-  deduplicated identifiers even when some items omit the identifier; report
-  the missing count and at most 20 item locations.
+- A root object contributes only its direct fields at `$`. A root array
+  contributes only each object item's direct fields at `$[]`. Nested objects,
+  nested arrays, and arrays inside wrapper objects are never traversed.
+- Only observed non-blank strings and integers become candidates. Booleans,
+  floats, nulls, containers, and schema-only fields do not. OpenAPI Schema may
+  add a description or format only to an already observed candidate.
+- Every first decision, including a field named `id`, goes through the
+  registered no-Tool `resource-identifier-selector` System Agent. A learned
+  operation/group rule is reused without another model call.
+- One task contains every candidate field and every related full OpenAPI path.
+  The limits are 100 fields, 100 paths, and 20,000 rendered characters. If any
+  complete evidence set does not fit, monitoring returns a warning and makes no
+  partial or batched decision.
+- Path evidence includes the current path when it contains a placeholder and a
+  longer path only when the current path is its full-segment prefix and every
+  added segment is a placeholder. Paths are deduplicated across HTTP methods.
+- The Agent may return no identifier, one field with no path, or ordered fields
+  for a supplied full path. Harness validation requires known unique aliases,
+  a supplied path, and exactly one field for every placeholder in full-path
+  order. Specific correction feedback continues without a retry limit.
 
-## Resource naming
+## Domain and persistence
 
-Canonical resource names are resolved locally without an LLM:
+An **Identifier Definition** belongs to one resource and gives the identifier a
+stable name plus one or more ordered component names. An **Identifier Record**
+is one complete ordered tuple of typed component values observed together in a
+single root object or root-array item.
 
-1. Reuse a canonical name when a meaningful local alias exactly matches the
-   persisted Resource Catalog.
-2. Otherwise use the OpenAPI response item schema title/name when available.
-3. Otherwise derive a singular name from the operation path's last
-   non-template segment.
+The database baseline now has a `resource_identifier_definitions` table.
+Operation rules reference a definition and store the chosen full path plus
+ordered response-field mappings. `resource_identifiers` stores complete JSON
+tuples and a type-sensitive digest. A missing or invalid component skips the
+whole record and produces a warning; partial tuples are never stored. There is
+no migration path for an older exploratory database.
 
-Generic wrapper names such as `collection`, `data`, `items`, and `results`
-describe response location only and are not persisted as resource names or
-aliases.
+`resource.list_ids` returns the definition name and ordered components only.
+`ResourceIdentifierGenerator` names `resource`, `identifier`, and `component`.
+A composite definition may bind only path parameters, and one Parameter Patch
+must bind every component exactly once. Batch snapshotting freezes complete
+records; deterministic generation selects one record per resource/definition
+and assigns all components atomically. Constraint solving rejects assignments
+that combine components from different observed records.
 
-## Persistence
+## Cross-cutting Python rule
 
-No database migration is required. Successful observations continue to update:
-
-- `resources`
-- `resource_aliases`
-- `operation_resource_rules`
-- `resource_identifiers`
-- `resource_operation_usages`
-- `resource_monitor_errors`
-
-Legacy persisted `has_resource=false` rules are not treated as authoritative.
-New negative decisions are not persisted, and a later positive observation may
-replace a legacy negative rule for the same operation/group.
-
-Raw responses, LLM reasoning, candidate batches, and evolved IR remain
-unpersisted.
-
-## Non-goals
-
-- Nested-resource classification.
-- Identifier ranking, embeddings, static synonym dictionaries, or actual-value
-  prompts.
-- More than two Provider calls per resource group.
-- Database schema changes.
-- Response Value Tracker behavior changes.
-- OpenAPI Retrieval integration.
-- Real target or external-model verification during implementation.
-- GitHub CI/CD, push, PR creation, or automatic commit.
+Production code and tests may not import, alias, or qualify `typing.Any`.
+Recursive JSON data uses the shared `JSONValue`/`JSONObject` types; deliberately
+opaque external values use `object`; behavioral collaborators use concrete
+contracts, generics, or Protocols. An AST test enforces the prohibition across
+the Python repository.
 
 ## Verification
 
-Run:
+Required final checks:
 
-```bash
-uv run pytest -q tests/test_resource_monitor_agent.py
-uv run pytest -q tests/test_resource_monitor_transport.py
-uv run pytest -q tests/test_app_tool_context.py tests/test_operation_smoke_agent.py
+```text
+uv run pytest -q tests/test_resource_identifier_tracker.py \
+  tests/test_resource_identifier_composites.py \
+  tests/test_resource_catalog.py tests/test_resource_lookup_tools.py \
+  tests/test_generic_batch_tool.py tests/test_no_typing_any.py
 uv run pytest -q
-uv run python -m compileall -q restscope
+uv run python -m compileall -q restscope tests
+uv run alembic upgrade head
 git diff --check
 ```
 
-No live target, external model, Phoenix live contract, or GitHub CI/CD action
-is part of this task.
-
-## Implemented result
-
-- Collection responses are evaluated as resource-item groups. Nested objects
-  stay attributes of the enclosing item in V1.
-- Candidate construction filters types before applying the exact-`id` rule, so
-  a boolean, number, or null field named `id` cannot hide a valid semantic
-  string/integer candidate.
-- Exact normalized `id` fields use deterministic local selection. Other
-  `id`-suffix candidates and fallback scalar candidates use the minimal
-  `ResourceIdentifierSelection` model contract.
-- FAST receives at most two batches of 50 candidates, with two Provider calls
-  total per resource group including repair.
-- Successful and partially successful collection extraction persists typed,
-  deduplicated identifier values through the existing Resource Catalog
-  transaction. Negative classifications are not persisted.
-- The repository can upgrade a legacy negative operation/group rule when later
-  positive identifier evidence is observed.
+The opt-in live Provider test, a live target API, and external observability
+services are outside local verification. No commit, merge, push, PR, branch
+deletion, or worktree deletion is authorized by this implementation request.
 
 ## Verification results
 
-Executed in the dedicated feature worktree:
+Executed in the dedicated feature worktree on 2026-08-10:
 
 ```text
-uv run pytest -q tests/test_resource_monitor_agent.py
-29 passed
-
-uv run pytest -q tests/test_resource_monitor_transport.py
-10 passed
-
-uv run pytest -q \
-  tests/test_app_tool_context.py \
-  tests/test_operation_smoke_agent.py \
-  tests/test_supervisor_operation_smoke.py \
-  tests/test_api_behavior_response_value.py
-29 passed
+focused Resource Identifier, persistence, Tool, Batch, solver, boundary, and
+Any-rule tests
+55 passed
 
 uv run pytest -q
-407 passed, 14 skipped
+555 passed, 14 skipped
 
-uv run python -m compileall -q restscope
+uv run python -m compileall -q restscope tests
 passed
+
+fresh Alembic upgrade plus SQLite integrity checks
+integrity_check=ok; foreign_key_check=[]; business_tables=14
+
+production direct client.invoke scan
+only restscope/agent/runtime.py
+
+retired Resource Identifier name/selector/scalar compatibility scan
+no matches
 
 git diff --check
 passed
 ```
-
-The first full-suite attempt exposed only an uninitialized, Git-ignored
-`services/schemathesis-mcp/.venv` in the new worktree. After synchronizing that
-locked subproject environment, its real stdio contract test passed and the
-complete suite passed. No production file was changed for that environment
-issue.
-
-Live target behavior, a real external FAST model, and Phoenix trace output
-remain intentionally unverified. No GitHub CI/CD action was run or triggered.

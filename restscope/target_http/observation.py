@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 
 @dataclass(slots=True, frozen=True)
@@ -52,7 +52,7 @@ class TargetResponseProcessorResult:
 
     response_validation: Literal["evaluated", "partial", "not_evaluated"]
     warnings: tuple[TargetResponseProcessorWarning, ...] = ()
-    details: Mapping[str, Any] | None = None
+    details: Mapping[str, object] | None = None
 
 
 class TargetResponseProcessor(Protocol):

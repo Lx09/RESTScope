@@ -7,19 +7,18 @@ values, enum size, and untrusted text.
 
 from __future__ import annotations
 
-from typing import Any
 
 from restscope.openapi_parser.ir import SchemaIR
 
 _MAX_ENUM_VALUES = 50
 _MAX_SCHEMA_TEXT_CHARS = 800
 
-def _schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
+def _schema_summary(schema: SchemaIR | None) -> dict[str, object]:
     """Return only one node's bounded structural and validation facts."""
     if schema is None:
         return {}
     enum_values = list(schema.enum) if schema.enum is not None else None
-    values: dict[str, Any] = {
+    values: dict[str, object] = {
         "type": schema.type,
         "format": schema.format,
         "nullable": schema.nullable,
@@ -54,7 +53,7 @@ def _schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
     return {name: value for name, value in values.items() if value is not None}
 
 
-def _input_schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
+def _input_schema_summary(schema: SchemaIR | None) -> dict[str, object]:
     """Add request-input guidance to one exact, bounded Schema summary.
 
     Descriptions and examples help an Agent diagnose an otherwise terse
@@ -71,7 +70,7 @@ def _input_schema_summary(schema: SchemaIR | None) -> dict[str, Any]:
     return summary
 
 
-def _additional_properties_summary(value: bool | SchemaIR | None) -> Any | None:
+def _additional_properties_summary(value: bool | SchemaIR | None) -> object | None:
     """Describe whether an object accepts undeclared fields without a subtree."""
     if isinstance(value, SchemaIR):
         # The selected node owns only the shape of additional values. Returning
@@ -90,7 +89,7 @@ def _additional_properties_summary(value: bool | SchemaIR | None) -> Any | None:
         }
     return value
 
-def _bound_schema_value(value: Any, *, depth: int = 0) -> Any:
+def _bound_schema_value(value: object, *, depth: int = 0) -> object:
     """Bound untrusted Schema literals so one exact query stays token-safe."""
     if isinstance(value, str):
         if len(value) <= _MAX_SCHEMA_TEXT_CHARS:

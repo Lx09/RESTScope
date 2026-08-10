@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 
 def _format_named_schema_item(name: str, schema: "SchemaIR | None", *, required: bool | None = None) -> str:
@@ -78,7 +78,7 @@ def _iter_schema_path_items_json(
     parent_path: str = "",
     required: bool | None = None,
     visited: set[int] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Flatten one schema into list of dicts with field_path, schema_text, required, description."""
     if schema is None:
         return []
@@ -93,7 +93,7 @@ def _iter_schema_path_items_json(
     visited = set(visited)
     visited.add(schema_id)
 
-    path_items: list[dict[str, Any]] = []
+    path_items: list[dict[str, object]] = []
 
     if schema.type == "object" and schema.properties:
         for prop_name, prop_schema in schema.properties.items():
@@ -155,7 +155,7 @@ def _format_response_schema_lines(schema: "SchemaIR") -> list[str]:
 @dataclass(slots=True)
 class ParseInput:
     """Input for parsing."""
-    raw_document: dict[str, Any]
+    raw_document: dict[str, object]
     source_location: str | None
     source_kind: str
 
@@ -503,7 +503,7 @@ class OperationIR:
 
         return "\n".join(lines) if lines else "- No request parameters or body"
 
-    def to_request_schema_json(self) -> list[dict[str, Any]]:
+    def to_request_schema_json(self) -> list[dict[str, object]]:
         """Return JSON-serializable list of all request parameters with expanded body fields.
 
         Each dict contains:
@@ -516,7 +516,7 @@ class OperationIR:
 
         Body fields are expanded recursively with descriptions from SchemaIR.
         """
-        items: list[dict[str, Any]] = []
+        items: list[dict[str, object]] = []
 
         # Path/Query/Header/Cookie parameters
         for location, param_list in [

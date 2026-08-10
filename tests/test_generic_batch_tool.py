@@ -94,6 +94,14 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
                 "structured": {
                     "status": "found",
                     "canonical_resource": resource,
+                    "ids": [
+                        {
+                            "identifier": "limit",
+                            "components": [
+                                {"name": "limit", "value": 1, "value_type": "integer"}
+                            ],
+                        }
+                    ],
                 }
             }
 
@@ -109,6 +117,11 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
             self.calls += 1
             return pool
 
+        def identifier_records(self, *, resource, identifier):
+            del resource, identifier
+            pool_index = max(0, min(self.calls - 1, len(self.pools) - 1))
+            return tuple({"limit": value} for value in self.pools[pool_index])
+
         @contextmanager
         def stage_updates(self, *, updates, **_arguments):
             strategy = updates[0].strategy
@@ -119,6 +132,8 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
                         input_node_id=updates[0].input_node_id,
                         kind="resource_identifier",
                         value_name=strategy.resource,
+                        identifier=strategy.identifier,
+                        component=strategy.component,
                     ),
                 ),
                 removed_response_value_inputs=(),
@@ -129,12 +144,12 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
             "openapi": "3.0.3",
             "info": {"title": "Frozen references", "version": "1"},
             "paths": {
-                "/items": {
+                "/items/{limit}": {
                     "get": {
                         "parameters": [
                             {
                                 "name": "limit",
-                                "in": "query",
+                                "in": "path",
                                 "required": True,
                                 "schema": {"type": "integer"},
                             }
@@ -158,27 +173,29 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
         {
             "changes": [
                 {
-                    "input": "query.limit",
+                    "input": "path.limit",
                     "inclusion_probability": 1,
                     "strategy": {
                         "type": "resource_identifier",
                         "resource": "limits",
+                        "identifier": "limit",
+                        "component": "limit",
                     },
                 }
             ]
         }
     )
     validated = runtime.validate(
-        operation_key="GET /items",
+        operation_key="GET /items/{limit}",
         expected_revision=0,
-        affected_inputs=("query.limit",),
+        affected_inputs=("path.limit",),
         patch=patch,
     )
     runtime.apply(
-        operation_key="GET /items",
+        operation_key="GET /items/{limit}",
         expected_revision=0,
         validation_digest=validated.validation_digest,
-        affected_inputs=("query.limit",),
+        affected_inputs=("path.limit",),
         patch=patch,
     )
 
@@ -205,10 +222,10 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
             base_url="https://api.example.test",
             headers={},
         ),
-        operation_key="GET /items",
+        operation_key="GET /items/{limit}",
         case_count=2,
         seed=5,
     )
 
     assert values.calls == 1
-    assert all("limit=7" in url for url in sent)
+    assert all(url.endswith("/items/7") for url in sent)

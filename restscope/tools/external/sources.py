@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any
 
 from restscope.tools.runtime import AgentToolbox
 from restscope.tools.external.mcp import MCPToolAdapter
 from restscope.llm.schemas import ToolSpec
 
 
-CallTool = Callable[[str, dict[str, Any]], Any]
+CallTool = Callable[[str, dict[str, object]], object]
 
 
 class ToolSourceError(Exception):
@@ -25,8 +24,8 @@ def register_tool_source(
     *,
     toolbox: AgentToolbox,
     server_name: str,
-    source: Mapping[str, Any],
-    adapter_registry: Mapping[str, Any] | None = None,
+    source: Mapping[str, object],
+    adapter_registry: Mapping[str, object] | None = None,
 ) -> list[ToolSpec]:
     """Add every discovered tool from one explicit source to a caller toolbox.
 
@@ -60,7 +59,7 @@ def register_tool_source(
     return registered
 
 
-def _adapter_for_kind(kind: str, adapter_registry: Mapping[str, Any] | None) -> Any:
+def _adapter_for_kind(kind: str, adapter_registry: Mapping[str, object] | None) -> object:
     """Choose the caller override or RESTScope's built-in MCP adapter."""
     if adapter_registry and kind in adapter_registry:
         return adapter_registry[kind]
@@ -72,7 +71,7 @@ def _adapter_for_kind(kind: str, adapter_registry: Mapping[str, Any] | None) -> 
 def _build_handler(*, tool_name: str, call_tool: CallTool):
     """Bind the source's original name and bridge before Agent execution."""
 
-    def handler(**arguments: Any) -> dict[str, Any]:
+    def handler(**arguments: object) -> dict[str, object]:
         """Call the external source and normalize its model-facing result."""
         result = call_tool(tool_name, arguments)
         return _normalize_source_result(result)
@@ -80,7 +79,7 @@ def _build_handler(*, tool_name: str, call_tool: CallTool):
     return handler
 
 
-def _normalize_source_result(result: Any) -> dict[str, Any]:
+def _normalize_source_result(result: object) -> dict[str, object]:
     """Convert MCP-style or plain results into the toolbox output envelope."""
     if isinstance(result, dict):
         structured = result.get("structured")
@@ -94,7 +93,7 @@ def _normalize_source_result(result: Any) -> dict[str, Any]:
     return {"content": _summarize_content(result), "structured": None, "artifact_ids": []}
 
 
-def _summarize_content(content: Any, *, max_chars: int = 2000) -> str:
+def _summarize_content(content: object, *, max_chars: int = 2000) -> str:
     """Return a bounded readable summary without changing structured output."""
     if isinstance(content, str):
         text = content
@@ -107,7 +106,7 @@ def _summarize_content(content: Any, *, max_chars: int = 2000) -> str:
     return text[:max_chars]
 
 
-def _content_part_to_text(part: Any) -> str:
+def _content_part_to_text(part: object) -> str:
     """Project one MCP content block into its compact text representation."""
     if isinstance(part, dict):
         if part.get("type") == "text" and "text" in part:

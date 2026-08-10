@@ -9,7 +9,7 @@ would exceed the Tool limit.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 from ..constraints import OperationConstraintRecord
 from ..models import OperationGeneratorConfig
@@ -55,7 +55,7 @@ def constraint_closure(
 def semantic_state_payload(
     state: RequestGenerationState,
     input_handles: Sequence[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Project selected Generators and their complete Constraint closure."""
     selected = _validate_affected_inputs(state.config, input_handles)
     semantic = build_semantic_input_map(state.config)
@@ -95,7 +95,7 @@ def semantic_state_payload(
     return payload
 
 
-def validation_payload(validated: "ValidatedPatch") -> dict[str, Any]:
+def validation_payload(validated: "ValidatedPatch") -> dict[str, object]:
     """Project complete post-Patch state and bounded deterministic witnesses."""
     semantic = build_semantic_input_map(validated.final_config)
     configs = {item.input_node_id: item for item in validated.final_config.configs}
@@ -183,10 +183,10 @@ def _binding_for(
 
 
 def _project_generator_strategy(
-    strategy: Any,
+    strategy: object,
     *,
     binding: ReferenceValueBinding | None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Add exact response producer identity to an otherwise semantic Generator."""
     payload = strategy.model_dump(mode="json")
     if binding is not None and binding.kind == "response_value":
@@ -205,9 +205,9 @@ def _project_generator_strategy(
 def _semantic_constraint_record(
     item: OperationConstraintRecord,
     handle_by_node: Mapping[str, str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Replace internal node IDs with semantic handles in one Tool result."""
-    def convert(value: Any) -> Any:
+    def convert(value: object) -> object:
         if isinstance(value, list):
             return [convert(child) for child in value]
         if not isinstance(value, dict):
@@ -227,7 +227,7 @@ def _semantic_constraint_record(
     }
 
 
-def _require_bounded_payload(payload: dict[str, Any]) -> None:
+def _require_bounded_payload(payload: dict[str, object]) -> None:
     """Fail closed rather than truncate Generator or Constraint state."""
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     if len(encoded) > MAX_TOOL_OUTPUT_CHARACTERS:

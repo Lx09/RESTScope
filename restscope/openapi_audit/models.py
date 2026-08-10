@@ -8,7 +8,6 @@ observation so callers can inspect evolution without storing raw HTTP data.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,8 +25,8 @@ class OpenAPIChangeEventWrite(_AuditModel):
     status_code: int = Field(ge=100, le=599)
     media_type: str | None = None
     changes: list[str] = Field(min_length=1)
-    response_before: dict[str, Any] | None = None
-    response_after: dict[str, Any]
+    response_before: dict[str, object] | None = None
+    response_after: dict[str, object]
 
 
 class OpenAPIChangeEventRecord(OpenAPIChangeEventWrite):

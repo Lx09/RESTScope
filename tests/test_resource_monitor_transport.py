@@ -288,10 +288,26 @@ def _resource_monitor(tmp_path: Path):
         create_engine_from_url,
         make_session_factory,
     )
-    class UnexpectedLLM:
+    class IdentifierLLM:
+        """Select the first field using current full-path evidence when present."""
+
         def run_system_agent(self, profile_name, task):
-            raise AssertionError(
-                f"unexpected System Agent request: {profile_name} {task}"
+            from restscope.agent import AgentUsage, SystemAgentResult
+
+            # This stand-in rejects acknowledgement text just as the real
+            # Profile guidance should, while proving the decision reached it.
+            identifier = None
+            if 'field: "message"' not in task.objective:
+                identifier = {
+                    "path": task.allowed_result_paths[0] if task.allowed_result_paths else None,
+                    "fields": [task.allowed_result_aliases[0]],
+                }
+            return SystemAgentResult(
+                session_id="monitor-test",
+                profile_name=profile_name,
+                status="completed",
+                output={"identifier": identifier},
+                usage=AgentUsage(model_outputs=1),
             )
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'resource-monitor.sqlite'}")
@@ -302,7 +318,7 @@ def _resource_monitor(tmp_path: Path):
     )
     resource_tracker = ResourceIdentifierTracker(
         catalog=catalog,
-        system_agent_runner=UnexpectedLLM(),
+        system_agent_runner=IdentifierLLM(),
     )
     response_value_catalog = ResponseValueCatalog(
         lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
@@ -329,6 +345,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import MonitoredOperation
     from restscope.tools.context import ToolContext
     from restscope.tools.http import TargetHTTPRequestTool
     from restscope.target_http import TargetHTTPTransport
@@ -395,7 +412,7 @@ def test_raw_http_matches_operation_before_synchronously_updating_catalog(
     assert result["structured"]["body"] == {"id": 7, "name": "Ada"}
     assert result["structured"]["behavior_monitor_warnings"] == []
     lookup = catalog.lookup(ResourceLookupRequest(resource="user"))
-    assert lookup.recommended_id == 7
+    assert lookup.identifiers[0].components[0].value == 7
     assert lookup.operations[0].operation_key == "GET /users/{userId}"
 
 
@@ -544,14 +561,15 @@ def test_resolved_operation_monitor_error_is_persisted_and_later_cleared(
     assert catalog.lookup(ResourceLookupRequest(resource="user")).errors == []
 
 
-def test_schema_only_dotted_property_fails_closed_without_learning_selector(
+def test_schema_only_dotted_property_is_ignored_without_learning_selector(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that schema only dotted property fails closed without learning selector."""
+    """An unobserved Schema field is outside the Resource Identifier boundary."""
     from restscope.api_behavior_monitor import (
         ResourceLookupRequest,
         APIBehaviorResponseProcessor,
     )
+    from restscope.api_behavior_monitor.resource_identifiers.schemas import MonitoredOperation
     from restscope.target_http import (
         TargetResponseObservation,
         TargetResponseOperationContext,
@@ -602,9 +620,15 @@ def test_schema_only_dotted_property_fails_closed_without_learning_selector(
     first = processor.process(observation, context)
     second = processor.process(observation, context)
 
-    assert first.warnings[0].code == "resource_monitor_evidence_limit_exceeded"
-    assert second.warnings[0].code == "resource_monitor_evidence_limit_exceeded"
-    assert catalog.list_rules("GET /commits/{commitId}") == []
+    assert first.warnings == ()
+    assert second.warnings == ()
+    assert catalog.list_rules(
+        MonitoredOperation(
+            operation_key="GET /commits/{commitId}",
+            method="GET",
+            path="/commits/{commitId}",
+        )
+    ) == []
     assert catalog.lookup(ResourceLookupRequest(resource="commit")).status == "not_found"
 
 

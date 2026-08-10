@@ -167,6 +167,54 @@ def test_coordinator_updates_ir_before_success_trackers_receive_evidence() -> No
     ]
 
 
+def test_coordinator_supplies_only_strict_placeholder_suffix_paths() -> None:
+    """Path evidence keeps full templates and excludes static or unrelated descendants."""
+    from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.target_http import TargetResponseOperationContext
+
+    paths = {
+        path: {"get": {"responses": {"200": {"description": "ok"}}}}
+        for path in (
+            "/users",
+            "/users/{userId}",
+            "/users/{organizationId}/{userId}",
+            "/users/{userId}/orders",
+            "/users/search/{query}",
+            "/accounts/{accountId}",
+        )
+    }
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "paths", "version": "1"},
+            "paths": paths,
+        }
+    )
+    resource_tracker = _CapturingResourceTracker()
+    coordinator = APIBehaviorMonitorCoordinator(
+        contract_tracker=ResponseContractTracker(),
+        resource_identifier_tracker=resource_tracker,
+        response_value_tracker=_CapturingValueTracker(),
+    )
+
+    coordinator.observe_response(
+        _observation(200, b'{"id":7}'),
+        TargetResponseOperationContext(
+            ir=ir,
+            operation_key="GET /users",
+            operation_method="GET",
+            operation_path="/users",
+        ),
+    )
+
+    assert resource_tracker.observations[0].related_identifier_paths == (
+        "/users/{organizationId}/{userId}",
+        "/users/{userId}",
+    )
+
+
 def test_behavior_monitor_trace_uses_supplied_operation_key_consistently() -> None:
     """Scenario: verify that behavior monitor trace uses supplied operation key consistently."""
     from restscope.api_behavior_monitor import APIBehaviorMonitorCoordinator

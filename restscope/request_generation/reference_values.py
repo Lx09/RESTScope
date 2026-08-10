@@ -69,10 +69,33 @@ class BehaviorMonitorReferenceValues:
         result = self.coordinator.lookup(
             ResourceLookupRequest(
                 resource=strategy.resource,
+                identifier=strategy.identifier,
                 limit=100,
             )
         )
-        return [item.value for item in result.identifiers]
+        return [
+            component.value
+            for item in result.identifiers
+            if item.identifier == strategy.identifier
+            for component in item.components
+            if component.name == strategy.component
+        ]
+
+    def identifier_records(
+        self,
+        *,
+        resource: str,
+        identifier: str,
+    ) -> list[dict[str, object]]:
+        """Return complete component maps so generation can preserve row correlation."""
+        result = self.coordinator.lookup(
+            ResourceLookupRequest(resource=resource, identifier=identifier, limit=100)
+        )
+        return [
+            {component.name: component.value for component in item.components}
+            for item in result.identifiers
+            if item.identifier == identifier
+        ]
 
     def resolve_response_source(
         self,
@@ -233,6 +256,8 @@ class BehaviorMonitorReferenceValues:
                     selected is None
                     or selected.kind != "resource_identifier"
                     or selected.canonical_resource != strategy.resource
+                    or selected.identifier != strategy.identifier
+                    or selected.component != strategy.component
                 ):
                     raise ValueError(
                         "Resource Identifier Generator requires selected "
@@ -249,6 +274,8 @@ class BehaviorMonitorReferenceValues:
                         input_node_id=update.input_node_id,
                         kind="resource_identifier",
                         value_name=strategy.resource,
+                        identifier=strategy.identifier,
+                        component=strategy.component,
                     )
                 )
                 continue

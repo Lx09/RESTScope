@@ -8,7 +8,7 @@ discarded with the Tool result.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -43,7 +43,7 @@ class BatchCaseOutcome(_Model):
     """Carry one canonical request and its bounded transport outcome."""
 
     case_number: int = Field(ge=1, le=5)
-    request: dict[str, Any]
+    request: dict[str, object]
     status_code: int | None = Field(default=None, ge=100, le=599)
     reason_phrase: str | None = Field(default=None, max_length=200)
     failure: CatalogFailure | None = Field(default=None, discriminator="kind")

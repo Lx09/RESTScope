@@ -12,7 +12,6 @@ import hashlib
 import json
 import re
 import time
-from typing import Any
 
 from restscope.llm.exceptions import (
     InvalidProviderResponseError,
@@ -39,7 +38,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         *,
         api_key: str,
         base_url: str | None = None,
-        client: Any | None = None,
+        client: object | None = None,
     ) -> None:
         """Create or accept one OpenAI-compatible SDK client.
 
@@ -77,7 +76,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self,
         request: LLMRequest,
         *,
-        client: Any,
+        client: object,
     ) -> LLMResponse:
         """Invoke one request through an already-selected compatible client.
 
@@ -130,7 +129,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         except ImportError as exc:  # pragma: no cover - covered by dependency metadata.
             raise ProviderInvokeError("The openai package is required for OpenAICompatibleProvider") from exc
 
-        kwargs: dict[str, Any] = {
+        kwargs: dict[str, object] = {
             "api_key": api_key,
             "max_retries": _PROVIDER_RETRY_LIMIT,
         }
@@ -138,8 +137,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             kwargs["base_url"] = base_url
         return OpenAI(**kwargs)
 
-    def _request_kwargs(self, request: LLMRequest) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {
+    def _request_kwargs(self, request: LLMRequest) -> dict[str, object]:
+        kwargs: dict[str, object] = {
             "model": request.model,
             "messages": [self._message_to_openai(message) for message in request.messages],
             "temperature": request.temperature,
@@ -162,8 +161,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
         return kwargs
 
-    def _message_to_openai(self, message: LLMMessage) -> dict[str, Any]:
-        payload: dict[str, Any] = {"role": message.role, "content": message.content}
+    def _message_to_openai(self, message: LLMMessage) -> dict[str, object]:
+        payload: dict[str, object] = {"role": message.role, "content": message.content}
         if message.tool_calls:
             payload["tool_calls"] = [
                 {
@@ -182,7 +181,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             payload["name"] = message.name
         return payload
 
-    def _response_format(self, request: LLMRequest) -> dict[str, Any] | None:
+    def _response_format(self, request: LLMRequest) -> dict[str, object] | None:
         if request.response_format == "text":
             return None
         if request.response_format == "json":
@@ -200,7 +199,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             }
         return None
 
-    def _tool_to_openai(self, tool: ToolSpec) -> dict[str, Any]:
+    def _tool_to_openai(self, tool: ToolSpec) -> dict[str, object]:
         function = {
             "name": _provider_tool_name(tool.name),
             "description": tool.description,
@@ -213,7 +212,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             "function": function,
         }
 
-    def _normalize_response(self, request: LLMRequest, raw_response: Any, latency_ms: int) -> LLMResponse:
+    def _normalize_response(self, request: LLMRequest, raw_response: object, latency_ms: int) -> LLMResponse:
         try:
             choice = raw_response.choices[0]
             message = choice.message
@@ -244,7 +243,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             latency_ms=latency_ms,
         )
 
-    def _extract_tool_calls(self, message: Any, *, request: LLMRequest) -> list[ToolCall]:
+    def _extract_tool_calls(self, message: object, *, request: LLMRequest) -> list[ToolCall]:
         """Translate provider tool-call payloads into provider-independent ToolCall records."""
         raw_tool_calls = getattr(message, "tool_calls", None) or []
         internal_names = {
@@ -274,7 +273,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             )
         return tool_calls
 
-    def _parse_json_content(self, content: str | None) -> Any | None:
+    def _parse_json_content(self, content: str | None) -> object | None:
         if not content:
             return None
         try:
@@ -282,7 +281,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         except json.JSONDecodeError:
             return None
 
-    def _parse_arguments(self, arguments: Any) -> dict[str, Any]:
+    def _parse_arguments(self, arguments: object) -> dict[str, object]:
         if isinstance(arguments, dict):
             return arguments
         if not arguments:

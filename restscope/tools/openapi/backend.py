@@ -8,7 +8,6 @@ shared OpenAPI traversal remains private in ``traversal.py``.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from restscope.openapi_parser.ir import OpenAPISpecIR, OperationIR
 from restscope.tools.context import ToolContext
@@ -40,7 +39,7 @@ class OpenAPIToolBackend:
         self,
         *,
         context_provider: Callable[[], ToolContext],
-        observed_response_fields_provider: Callable[[], list[Any]] | None = None,
+        observed_response_fields_provider: Callable[[], list[object]] | None = None,
     ) -> None:
         """Retain callbacks without reading target state during composition."""
         self._context_provider = context_provider
@@ -54,7 +53,7 @@ class OpenAPIToolBackend:
         prefix: str | None = None,
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return one deterministic page of semantic request-input handles."""
         return query_inputs(
             operation_resolver=self._operation,
@@ -70,12 +69,12 @@ class OpenAPIToolBackend:
         *,
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return one stable page of exact operation identities."""
         ir = self._current_ir()
         operations = [ir.operations[key] for key in sorted(ir.operations)]
         page = operations[offset : offset + limit]
-        result: dict[str, Any] = {
+        result: dict[str, object] = {
             "operations": [
                 {
                     "operation_key": item.operation_key,
@@ -99,7 +98,7 @@ class OpenAPIToolBackend:
         status_code: int | str,
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return one deterministic page of declared response-field handles."""
         return query_response_fields(
             operation_resolver=self._operation,
@@ -115,7 +114,7 @@ class OpenAPIToolBackend:
         name: str,
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return similarly named fields backed by retained scalar evidence."""
         return query_observed_fields(
             ir_provider=self._current_ir,
@@ -131,7 +130,7 @@ class OpenAPIToolBackend:
         operation_key: str,
         input: str,
         media_type: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return the compact Schema for one exact request-input handle."""
         return query_input_schema(
             operation_resolver=self._operation,
@@ -147,7 +146,7 @@ class OpenAPIToolBackend:
         status_code: int | str,
         field: str,
         media_type: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return the compact Schema for one exact response-field handle."""
         return query_response_schema(
             operation_resolver=self._operation,

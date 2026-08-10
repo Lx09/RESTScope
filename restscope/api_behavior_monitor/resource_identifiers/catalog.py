@@ -30,7 +30,7 @@ class ResourceCatalog:
         groups: list[DetectedResourceGroup],
         observed_at: datetime | None = None,
     ) -> None:
-        """Atomically persist detected resources, aliases, selectors, typed identifiers, and operation usage."""
+        """Atomically persist resources, definitions, complete records, and usage."""
         timestamp = observed_at or datetime.now(UTC)
         with self.unit_of_work_factory() as uow:
             uow.resources.record_groups(
@@ -42,16 +42,11 @@ class ResourceCatalog:
 
     def list_rules(
         self,
-        operation: MonitoredOperation | str,
+        operation: MonitoredOperation,
     ) -> list[LearnedResourceRule]:
         """Return learned resource selector rules for one exact operation."""
-        resolved = (
-            operation
-            if isinstance(operation, MonitoredOperation)
-            else _operation_from_key(operation)
-        )
         with self.unit_of_work_factory() as uow:
-            return uow.resources.list_rules(resolved)
+            return uow.resources.list_rules(operation)
 
     def list_resources(
         self,
@@ -161,16 +156,3 @@ class ResourceCatalog:
         """
         with self.unit_of_work_factory() as uow:
             return uow.resources.lookup(request)
-
-
-def _operation_from_key(operation_key: str) -> MonitoredOperation:
-    """Rebuild method and path from the canonical ``METHOD /path`` key."""
-
-    method, separator, path = operation_key.partition(" ")
-    if not separator or not path:
-        raise ValueError(f"Invalid operation key: {operation_key}")
-    return MonitoredOperation(
-        operation_key=operation_key,
-        method=method,
-        path=path,
-    )

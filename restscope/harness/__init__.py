@@ -8,7 +8,6 @@ global Tool Catalog itself is importing.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
 
 
 __all__ = [
@@ -24,7 +23,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     """Load one approved runtime export on first use."""
     if name not in __all__:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

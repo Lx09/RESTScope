@@ -14,7 +14,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any
 
 from restscope.operation_references import ResponseFieldReference
 from restscope.openapi_parser import OpenAPISpecIR
@@ -99,6 +98,23 @@ class _CandidateReferenceValues:
             self._captured[key] = tuple(self.delegate.values_for(strategy))
         return self._captured[key]
 
+    def identifier_records(
+        self,
+        *,
+        resource: str,
+        identifier: str,
+    ) -> Sequence[Mapping[str, object]]:
+        """Freeze complete Identifier Records for correlated component generation."""
+        if self.delegate is None:
+            return ()
+        return tuple(
+            dict(item)
+            for item in self.delegate.identifier_records(
+                resource=resource,
+                identifier=identifier,
+            )
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ValidatedPatch:
@@ -113,8 +129,8 @@ class ValidatedPatch:
     final_config: OperationGeneratorConfig
     final_constraints: tuple[OperationConstraintRecord, ...]
     final_reference_bindings: tuple[ReferenceValueBinding, ...]
-    samples: tuple[dict[str, Any], ...]
-    domain_analysis: tuple[dict[str, Any], ...]
+    samples: tuple[dict[str, object], ...]
+    domain_analysis: tuple[dict[str, object], ...]
     validation_digest: str
     seed: int
     sample_count: int
@@ -127,6 +143,8 @@ class AppliedReferenceBinding:
     input: str
     kind: str
     canonical_resource: str | None = None
+    identifier: str | None = None
+    component: str | None = None
     producer_operation_key: str | None = None
     producer_status_code: str | None = None
     producer_media_type: str | None = None
@@ -176,7 +194,7 @@ class RequestGenerationPatchRuntime:
         *,
         operation_key: str,
         input_handles: Sequence[str],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Return one bounded semantic state projection without exposing Store."""
         return semantic_state_payload(
             self._store.require_state(operation_key),
@@ -432,7 +450,7 @@ class RequestGenerationPatchRuntime:
                     f"{change.input} is outside affected_inputs",
                 )
             node_id = semantic.node_by_handle[change.input]
-            strategy: Any = change.strategy
+            strategy: object = change.strategy
             if isinstance(strategy, ResourceIdentifierGenerator):
                 option, values = self._validate_resource_reference(
                     config=config,
@@ -495,6 +513,10 @@ class RequestGenerationPatchRuntime:
             selected_reference_provenance=provenance,
         )
         preview_generator_patch(config, compiled.updates)
+        self._validate_complete_resource_identifier_bindings(
+            config=config,
+            updates=updates,
+        )
         return compiled, candidate_values
 
     def _validate_resource_reference(
@@ -521,6 +543,22 @@ class RequestGenerationPatchRuntime:
                 "resource_not_canonical",
                 f"{strategy.resource!r} is not a populated canonical resource",
             )
+        records = [
+            item
+            for item in structured.get("ids", [])
+            if isinstance(item, dict) and item.get("identifier") == strategy.identifier
+        ]
+        component_names = {
+            component.get("name")
+            for record in records
+            for component in record.get("components", [])
+            if isinstance(component, dict)
+        }
+        if strategy.component not in component_names:
+            raise ParameterPatchValidationError(
+                "resource_component_unknown",
+                f"Identifier component is unavailable: {strategy.identifier}/{strategy.component}",
+            )
         values = list(self._reference_values.values_for(strategy))
         if not values:
             raise ParameterPatchValidationError(
@@ -539,11 +577,68 @@ class RequestGenerationPatchRuntime:
                 input_node_id=input_node_id,
                 kind="resource_identifier",
                 canonical_resource=strategy.resource,
+                identifier=strategy.identifier,
+                component=strategy.component,
                 compatible_scalar_type=expected or "|".join(sorted(set(types))),
                 value_count=len(values),
             ),
             values,
         )
+
+    def _validate_complete_resource_identifier_bindings(
+        self,
+        *,
+        config: OperationGeneratorConfig,
+        updates: list[InputGeneratorPatch],
+    ) -> None:
+        """Require each composite Definition to bind every path component once."""
+        groups: dict[tuple[str, str], list[tuple[str, ResourceIdentifierGenerator]]] = {}
+        for update in updates:
+            if isinstance(update.strategy, ResourceIdentifierGenerator):
+                groups.setdefault(
+                    (update.strategy.resource, update.strategy.identifier), []
+                ).append((update.input_node_id, update.strategy))
+        if not groups:
+            return
+        if self._resource_backend is None:
+            raise ParameterPatchValidationError(
+                "resource_reference_unavailable",
+                "Resource Identifier evidence is unavailable",
+            )
+        parameters = {item.input_node_id: item for item in config.snapshot.parameters}
+        for (resource, identifier), bindings in groups.items():
+            result = self._resource_backend.list_ids(resource=resource, limit=200)
+            structured = result.get("structured", {})
+            records = [
+                item for item in structured.get("ids", [])
+                if isinstance(item, dict) and item.get("identifier") == identifier
+            ]
+            expected = {
+                component.get("name")
+                for record in records
+                for component in record.get("components", [])
+                if isinstance(component, dict)
+            }
+            # A one-component Definition behaves like the original scalar
+            # reference and may satisfy any schema-compatible input. Only a
+            # composite Definition has the atomic path-binding requirement.
+            if len(expected) <= 1:
+                continue
+            if any(
+                parameters.get(node_id) is None
+                or parameters[node_id].location != "path"
+                for node_id, _strategy in bindings
+            ):
+                raise ParameterPatchValidationError(
+                    "resource_composite_requires_path",
+                    "Composite Resource Identifier components may bind only path parameters",
+                )
+            supplied = [strategy.component for _node_id, strategy in bindings]
+            if not expected or len(supplied) != len(set(supplied)) or set(supplied) != expected:
+                raise ParameterPatchValidationError(
+                    "resource_identifier_binding_incomplete",
+                    f"Patch must bind every component of {identifier} exactly once",
+                )
 
     def _validate_response_reference(
         self,
@@ -603,6 +698,8 @@ def _final_reference_bindings(
                     input_node_id=selected.input_node_id,
                     kind="resource_identifier",
                     value_name=selected.canonical_resource,
+                    identifier=selected.identifier,
+                    component=selected.component,
                 )
             )
             continue
@@ -645,6 +742,8 @@ def _applied_reference_bindings(
             canonical_resource=(
                 item.value_name if item.kind == "resource_identifier" else None
             ),
+            identifier=item.identifier,
+            component=item.component,
             producer_operation_key=item.producer_operation_key,
             producer_status_code=item.producer_status_code,
             producer_media_type=item.producer_media_type,
@@ -687,7 +786,7 @@ def _sample(
     reference_values: ReferenceValueProvider,
     seed: int,
     sample_count: int,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Generate bounded witnesses from the complete final state."""
     expressions = [
         expression
@@ -696,7 +795,7 @@ def _sample(
     ]
     constraint_set = ConstraintSet(constraints=expressions) if expressions else None
     semantic = build_semantic_input_map(config)
-    samples: list[dict[str, Any]] = []
+    samples: list[dict[str, object]] = []
     for case_index in range(sample_count):
         generated = generate_test_case(
             config.snapshot,
@@ -707,7 +806,7 @@ def _sample(
             constraints=constraint_set,
         )
         assignments = assignments_from_generated_case(config.snapshot, generated)
-        values: dict[str, Any] = {}
+        values: dict[str, object] = {}
         presence: dict[str, bool] = {}
         for handle in affected_inputs:
             node_id = semantic.node_by_handle[handle]
@@ -734,7 +833,7 @@ def _domain_analysis(
     handle: str,
     provenance: Sequence[SelectedReferenceProvenance],
     bindings: Sequence[ReferenceValueBinding],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Describe the entire possible domain of one final Generator."""
     semantic = build_semantic_input_map(config)
     node_id = semantic.node_by_handle[handle]
@@ -754,7 +853,7 @@ def _domain_analysis(
                 "field": binding.source_field,
             },
         }
-    analysis: dict[str, Any] = {
+    analysis: dict[str, object] = {
         "input": handle,
         "inclusion_probability": item.inclusion_probability,
         "strategy_type": strategy["type"],
@@ -781,7 +880,7 @@ def _validation_digest(
     final_config: OperationGeneratorConfig,
     final_constraints: Sequence[OperationConstraintRecord],
     final_reference_bindings: Sequence[ReferenceValueBinding],
-    samples: Sequence[dict[str, Any]],
+    samples: Sequence[dict[str, object]],
     provenance: Sequence[SelectedReferenceProvenance],
     seed: int,
     sample_count: int,

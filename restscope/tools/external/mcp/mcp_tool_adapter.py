@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 from restscope.llm.schemas import ToolSpec
 
@@ -32,7 +31,7 @@ class MCPToolAdapter:
             ),
         )
 
-    def _get(self, value: Any, key: str, default: Any = None) -> Any:
+    def _get(self, value: object, key: str, default: object = None) -> object:
         """Read one field from either an MCP dictionary or SDK object."""
         if isinstance(value, dict):
             return value.get(key, default)

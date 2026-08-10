@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 import re
-from typing import Any, Iterator, Literal
+from typing import Iterator, Literal
 
 from restscope.agent import SystemAgentTask
 from restscope.observability import TracingRuntime
@@ -482,7 +482,7 @@ class ResponseValueTracker:
         producer_operation_key: str,
         status_code: int,
         media_type: str | None,
-        body: Any,
+        body: object,
     ) -> ResponseValueObservationResult:
         """Extract and persist registered scalar values from one successful response."""
         normalized_media = normalize_media_type(media_type)
@@ -639,7 +639,7 @@ def _schema_leaves(
     ]
 
 
-def _extract_selector_values(body: Any, selector: str) -> list[object]:
+def _extract_selector_values(body: object, selector: str) -> list[object]:
     if not selector.startswith("$"):
         return []
     tokens = [token for token in selector[1:].split(".") if token]
@@ -647,7 +647,7 @@ def _extract_selector_values(body: Any, selector: str) -> list[object]:
     for token in tokens:
         expand = token.endswith("[]")
         name = token.removesuffix("[]")
-        next_values: list[Any] = []
+        next_values: list[object] = []
         for value in current:
             child = value.get(name) if isinstance(value, dict) else None
             if expand:
@@ -664,7 +664,7 @@ def _extract_selector_values(body: Any, selector: str) -> list[object]:
 
 
 def _flatten_observed_scalars(
-    value: Any,
+    value: object,
     *,
     reference: ResponseFieldReference | None = None,
 ) -> list[tuple[str, object]]:

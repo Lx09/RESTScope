@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import Any
 
 from .exceptions import OperationDocumentGenerationError
 from .ir import (
@@ -127,7 +126,7 @@ _SECURITY_SCHEME_ALLOWED_KEYS = {
 def build_openapi_document(
     ir: OpenAPISpecIR,
     operation_keys: Sequence[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build a standalone OpenAPI 3.1 document for selected operation keys.
 
     Selection is stable and duplicate keys are ignored. Only referenced schema
@@ -172,8 +171,8 @@ class _DocumentBuilder:
     """
     def __init__(self, ir: OpenAPISpecIR) -> None:
         self.ir = ir
-        self.schema_components: dict[str, dict[str, Any] | bool] = {}
-        self.security_components: dict[str, dict[str, Any]] = {}
+        self.schema_components: dict[str, dict[str, object] | bool] = {}
+        self.security_components: dict[str, dict[str, object]] = {}
         self._pending_schema_components: set[str] = set()
         self._active_raw_schema_refs: set[str] = set()
         self._active_example_refs: set[str] = set()
@@ -181,9 +180,9 @@ class _DocumentBuilder:
             id(schema): name for name, schema in ir.components.schemas.items()
         }
 
-    def build(self, operations: list[OperationIR]) -> dict[str, Any]:
+    def build(self, operations: list[OperationIR]) -> dict[str, object]:
         """Serialize paths first, then attach components discovered along the way."""
-        document: dict[str, Any] = {
+        document: dict[str, object] = {
             "openapi": "3.1.0",
             "info": self._serialize_info(operations),
             "paths": {},
@@ -191,7 +190,7 @@ class _DocumentBuilder:
         if self.ir.meta.external_docs is not None:
             document["externalDocs"] = deepcopy(self.ir.meta.external_docs)
 
-        paths: dict[str, dict[str, Any]] = document["paths"]
+        paths: dict[str, dict[str, object]] = document["paths"]
         for operation in operations:
             path_item = paths.setdefault(
                 operation.path,
@@ -204,7 +203,7 @@ class _DocumentBuilder:
                 )
             path_item[method] = self._serialize_operation(operation)
 
-        components: dict[str, Any] = {}
+        components: dict[str, object] = {}
         if self.schema_components:
             components["schemas"] = self.schema_components
         if self.security_components:
@@ -213,7 +212,7 @@ class _DocumentBuilder:
             document["components"] = components
         return document
 
-    def _serialize_info(self, operations: list[OperationIR]) -> dict[str, Any]:
+    def _serialize_info(self, operations: list[OperationIR]) -> dict[str, object]:
         meta = self.ir.meta
         if meta.title:
             title = meta.title
@@ -222,7 +221,7 @@ class _DocumentBuilder:
         else:
             title = "RESTScope selected operations"
 
-        info: dict[str, Any] = {
+        info: dict[str, object] = {
             "title": title,
             "version": meta.version or "0.0.0",
         }
@@ -233,24 +232,24 @@ class _DocumentBuilder:
         _set_if_not_none(info, "license", meta.license)
         return info
 
-    def _serialize_path_metadata(self, path: str) -> dict[str, Any]:
+    def _serialize_path_metadata(self, path: str) -> dict[str, object]:
         path_ir = self.ir.paths.get(path)
         if path_ir is None:
             return {}
-        result: dict[str, Any] = {}
+        result: dict[str, object] = {}
         _set_if_not_none(result, "summary", path_ir.summary)
         _set_if_not_none(result, "description", path_ir.description)
         result.update(deepcopy(path_ir.extensions))
         return result
 
-    def _serialize_operation(self, operation: OperationIR) -> dict[str, Any]:
+    def _serialize_operation(self, operation: OperationIR) -> dict[str, object]:
         """Convert one normalized Operation IR into its OpenAPI Path Item operation object."""
         if not operation.responses.by_status:
             raise OperationDocumentGenerationError(
                 f"Operation {operation.operation_key} has no responses"
             )
 
-        result: dict[str, Any] = {}
+        result: dict[str, object] = {}
         _set_if_not_none(result, "operationId", operation.operation_id)
         if operation.tags:
             result["tags"] = list(operation.tags)
@@ -285,7 +284,7 @@ class _DocumentBuilder:
         result.update(deepcopy(operation.extensions))
         return result
 
-    def _serialize_parameter(self, parameter: ParameterIR) -> dict[str, Any]:
+    def _serialize_parameter(self, parameter: ParameterIR) -> dict[str, object]:
         """Convert one normalized Parameter IR into an OpenAPI parameter object."""
         result = _raw_extras(
             parameter.raw,
@@ -326,7 +325,7 @@ class _DocumentBuilder:
             )
         return result
 
-    def _serialize_request_body(self, body: RequestBodyIR) -> dict[str, Any]:
+    def _serialize_request_body(self, body: RequestBodyIR) -> dict[str, object]:
         if not body.contents:
             raise OperationDocumentGenerationError("Request body has no media types")
         result = _raw_extras(
@@ -343,7 +342,7 @@ class _DocumentBuilder:
             result["required"] = True
         return result
 
-    def _serialize_response(self, response: ResponseIR) -> dict[str, Any]:
+    def _serialize_response(self, response: ResponseIR) -> dict[str, object]:
         result = _raw_extras(
             response.raw,
             allowed=_RESPONSE_ALLOWED_KEYS,
@@ -362,7 +361,7 @@ class _DocumentBuilder:
             }
         return result
 
-    def _serialize_header(self, header: HeaderIR) -> dict[str, Any]:
+    def _serialize_header(self, header: HeaderIR) -> dict[str, object]:
         """Convert one normalized response Header IR into an OpenAPI header object."""
         result = _raw_extras(
             header.raw,
@@ -406,7 +405,7 @@ class _DocumentBuilder:
             )
         return result
 
-    def _serialize_media_type(self, media: MediaTypeIR) -> dict[str, Any]:
+    def _serialize_media_type(self, media: MediaTypeIR) -> dict[str, object]:
         result = _raw_extras(
             media.raw,
             allowed=_MEDIA_TYPE_ALLOWED_KEYS,
@@ -425,7 +424,7 @@ class _DocumentBuilder:
             result["encoding"] = deepcopy(media.encoding)
         return result
 
-    def _serialize_example(self, example: ExampleIR) -> dict[str, Any]:
+    def _serialize_example(self, example: ExampleIR) -> dict[str, object]:
         result = self._example_raw_base(example.raw)
         _set_if_not_none(result, "summary", example.summary)
         _set_if_not_none(result, "description", example.description)
@@ -435,13 +434,13 @@ class _DocumentBuilder:
         return result
 
     @staticmethod
-    def _serialize_server(server: ServerIR) -> dict[str, Any]:
-        result: dict[str, Any] = {"url": server.url}
+    def _serialize_server(server: ServerIR) -> dict[str, object]:
+        result: dict[str, object] = {"url": server.url}
         _set_if_not_none(result, "description", server.description)
         if server.variables:
-            variables: dict[str, Any] = {}
+            variables: dict[str, object] = {}
             for name, variable in server.variables.items():
-                item: dict[str, Any] = {"default": variable.default or ""}
+                item: dict[str, object] = {"default": variable.default or ""}
                 if variable.enum:
                     item["enum"] = list(variable.enum)
                 _set_if_not_none(item, "description", variable.description)
@@ -472,7 +471,7 @@ class _DocumentBuilder:
         return serialized
 
     @staticmethod
-    def _serialize_security_scheme(scheme: SecuritySchemeIR) -> dict[str, Any]:
+    def _serialize_security_scheme(scheme: SecuritySchemeIR) -> dict[str, object]:
         """Convert one normalized security scheme into its OpenAPI component form."""
         result = _raw_extras(
             scheme.raw,
@@ -514,7 +513,7 @@ class _DocumentBuilder:
         schema: SchemaIR,
         *,
         active: set[int] | None = None,
-    ) -> dict[str, Any] | bool:
+    ) -> dict[str, object] | bool:
         """Recursively convert one normalized Schema IR node into OpenAPI Schema keywords."""
         if schema.ref_path:
             name = self._component_name_from_ref(schema.ref_path)
@@ -618,8 +617,8 @@ class _DocumentBuilder:
         finally:
             active.remove(schema_id)
 
-    def _schema_raw_extras(self, raw: dict[str, object]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
+    def _schema_raw_extras(self, raw: dict[str, object]) -> dict[str, object]:
+        result: dict[str, object] = {}
         raw_ref = raw.get("$ref")
         if raw_ref is not None:
             if not isinstance(raw_ref, str):
@@ -634,7 +633,7 @@ class _DocumentBuilder:
             result[key] = self._normalize_schema_keyword(key, value)
         return result
 
-    def _normalize_schema_keyword(self, key: str, value: Any) -> Any:
+    def _normalize_schema_keyword(self, key: str, value: object) -> object:
         """Bound and copy extension, example, default, enum, and const values into document-safe JSON."""
         if key in _SCHEMA_SINGLE_KEYS:
             return self._normalize_raw_schema(value)
@@ -664,7 +663,7 @@ class _DocumentBuilder:
             }
         return deepcopy(value)
 
-    def _normalize_raw_schema(self, value: Any) -> Any:
+    def _normalize_raw_schema(self, value: object) -> object:
         if isinstance(value, bool):
             return value
         if not isinstance(value, dict):
@@ -688,7 +687,7 @@ class _DocumentBuilder:
         return resolved
 
     @staticmethod
-    def _normalize_raw_schema_dialect(schema: dict[str, Any]) -> None:
+    def _normalize_raw_schema_dialect(schema: dict[str, object]) -> None:
         schema_type = schema.get("type")
         if schema_type == "file":
             schema["type"] = "string"
@@ -711,7 +710,7 @@ class _DocumentBuilder:
         elif exclusive_maximum is False:
             schema.pop("exclusiveMaximum")
 
-    def _resolve_raw_schema_ref(self, ref_path: str) -> dict[str, Any] | bool:
+    def _resolve_raw_schema_ref(self, ref_path: str) -> dict[str, object] | bool:
         name = self._component_name_from_ref(ref_path)
         if name in self._active_raw_schema_refs:
             self._ensure_schema_component(name)
@@ -724,7 +723,7 @@ class _DocumentBuilder:
         finally:
             self._active_raw_schema_refs.remove(name)
 
-    def _example_raw_base(self, raw: dict[str, object]) -> dict[str, Any]:
+    def _example_raw_base(self, raw: dict[str, object]) -> dict[str, object]:
         raw_ref = raw.get("$ref")
         if raw_ref is None:
             return _raw_extras(
@@ -744,7 +743,7 @@ class _DocumentBuilder:
         )
         return result
 
-    def _normalize_raw_example(self, value: Any) -> Any:
+    def _normalize_raw_example(self, value: object) -> object:
         if not isinstance(value, dict):
             return deepcopy(value)
         raw_ref = value.get("$ref")
@@ -762,7 +761,7 @@ class _DocumentBuilder:
         )
         return result
 
-    def _resolve_example_ref(self, ref_path: str) -> dict[str, Any]:
+    def _resolve_example_ref(self, ref_path: str) -> dict[str, object]:
         """Resolve a local example reference from the normalized component map without following external URLs."""
         prefix = "#/components/examples/"
         if not ref_path.startswith(prefix):
@@ -791,7 +790,7 @@ class _DocumentBuilder:
             self._active_example_refs.remove(name)
 
     @staticmethod
-    def _serialize_numeric_constraints(schema: SchemaIR, result: dict[str, Any]) -> None:
+    def _serialize_numeric_constraints(schema: SchemaIR, result: dict[str, object]) -> None:
         minimum = schema.minimum
         maximum = schema.maximum
         exclusive_minimum = schema.exclusive_minimum
@@ -856,7 +855,7 @@ def _raw_extras(
     *,
     allowed: set[str],
     modeled: set[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     return {
         key: deepcopy(value)
         for key, value in raw.items()
@@ -864,6 +863,6 @@ def _raw_extras(
     }
 
 
-def _set_if_not_none(target: dict[str, Any], key: str, value: Any) -> None:
+def _set_if_not_none(target: dict[str, object], key: str, value: object) -> None:
     if value is not None:
         target[key] = deepcopy(value)

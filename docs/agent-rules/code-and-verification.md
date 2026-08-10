@@ -23,6 +23,11 @@ For meaningful Python changes:
 - keep modules and functions focused on one clear responsibility;
 - make public interfaces and dependency boundaries explicit;
 - use type hints for contracts and non-obvious structures;
+- never import, reference, or alias `typing.Any` in production code or tests;
+  use `object` for deliberately opaque values, and use concrete types, unions,
+  type variables, or Protocols when code depends on supported operations;
+- do not satisfy the `typing.Any` prohibition by dropping useful annotations,
+  hiding it behind an alias, or adding unchecked casts;
 - use concise module, class, and function docstrings where they clarify purpose
   or constraints;
 - comment non-obvious reasoning, safety boundaries, and design constraints
@@ -42,6 +47,8 @@ Run verification after the final edit, not just before it:
 - cross-cutting change: focused tests plus the full suite when practical;
 - documentation or governance change: link/path checks, content checks, and
   `git diff --check`;
+- Python code change: scan the changed scope for explicit or aliased
+  `typing.Any` use in addition to its behavioral tests;
 - import or packaging change: relevant import/build smoke checks;
 - Agent/Profile change: verify launch-time name resolution, exact provider Tool
   payloads, Context/Skill exclusion, child ownership, and unchanged state after

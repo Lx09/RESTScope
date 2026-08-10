@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from threading import Thread
-from typing import Any
 
 
 class OpenTelemetryBackend:
@@ -12,7 +11,7 @@ class OpenTelemetryBackend:
     def __init__(
         self,
         *,
-        tracer_provider: Any,
+        tracer_provider: object,
         flush_timeout_seconds: float,
     ) -> None:
         self.tracer_provider = tracer_provider

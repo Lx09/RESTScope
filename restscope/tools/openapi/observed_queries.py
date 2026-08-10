@@ -8,7 +8,6 @@ never stored values, timestamps, or database identities.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from restscope.openapi_parser.ir import OpenAPISpecIR
 from restscope.operation_references import ResponseFieldReference
@@ -29,11 +28,11 @@ from .traversal import (
 def find_observed_response_fields(
     *,
     ir_provider: Callable[[], OpenAPISpecIR],
-    observed_fields_provider: Callable[[], list[Any]] | None,
+    observed_fields_provider: Callable[[], list[object]] | None,
     name: str,
     offset: int = 0,
     limit: int = _DEFAULT_LIST_LIMIT,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Find similarly named fields backed by retained scalar observations.
 
     Args:
@@ -138,7 +137,7 @@ def find_observed_response_fields(
         ),
     )
     page = ranked[offset : offset + limit]
-    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str, str], dict[str, object]] = {}
     for item in page:
         group_key = (
             item.operation_key,
@@ -161,7 +160,7 @@ def find_observed_response_fields(
                 "match_basis": item.match_basis,
             }
         )
-    result: dict[str, Any] = {
+    result: dict[str, object] = {
         "requested_name": name,
         "responses": list(groups.values()),
         "total": len(ranked),

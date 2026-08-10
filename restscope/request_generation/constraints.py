@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal, TypeAlias, cast
+from typing import Annotated, Literal, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -26,7 +26,7 @@ class InputAssignment(_ConstraintModel):
 
     present: bool
     has_value: bool = False
-    value: Any = None
+    value: object = None
 
     @model_validator(mode="after")
     def validate_value_state(self) -> "InputAssignment":
@@ -63,7 +63,7 @@ class LiteralValue(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["literal"]
-    value: Any
+    value: object
 
 
 class ArithmeticValue(_ConstraintModel):
@@ -527,7 +527,7 @@ def _node_scalar_types(node: InputNodeSnapshot) -> frozenset[str]:
     return frozenset(result or {"unknown"})
 
 
-def _literal_type(value: Any) -> str:
+def _literal_type(value: object) -> str:
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -689,7 +689,7 @@ def _evaluate_boolean(
 def _evaluate_value(
     expression: ValueExpression,
     assignments: Mapping[str, InputAssignment],
-) -> Any:
+) -> object:
     """Resolve one complete value expression used by a comparison or arithmetic Constraint."""
     if isinstance(expression, InputValue):
         assignment = assignments.get(expression.input_node_id)
@@ -808,7 +808,7 @@ def _evaluate_boolean_partial(
 def _evaluate_value_partial(
     expression: ValueExpression,
     assignments: Mapping[str, InputAssignment],
-) -> Any:
+) -> object:
     """Resolve a value expression during search, returning unknown until all referenced inputs are assigned."""
     if isinstance(expression, InputValue):
         assignment = assignments.get(expression.input_node_id)
@@ -846,7 +846,7 @@ def _evaluate_value_partial(
     return _UNAVAILABLE
 
 
-def _compare_values(operator: str, left: Any, right: Any) -> bool:
+def _compare_values(operator: str, left: object, right: object) -> bool:
     try:
         if operator == "==":
             return _values_equal(left, right)
@@ -867,19 +867,19 @@ def _compare_values(operator: str, left: Any, right: Any) -> bool:
     return False
 
 
-def _values_equal(left: Any, right: Any) -> bool:
+def _values_equal(left: object, right: object) -> bool:
     if _is_number(left) and _is_number(right):
         return left == right
     return type(left) is type(right) and left == right
 
 
-def _ordered_values_compatible(left: Any, right: Any) -> bool:
+def _ordered_values_compatible(left: object, right: object) -> bool:
     return (_is_number(left) and _is_number(right)) or (
         isinstance(left, str) and isinstance(right, str)
     )
 
 
-def _is_number(value: Any) -> bool:
+def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 

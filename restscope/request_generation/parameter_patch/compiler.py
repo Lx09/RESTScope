@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from ..constraints import (
     ConstraintSet,
@@ -58,7 +57,7 @@ def compile_constraint(
     """Compile one recursive semantic expression into normalized node IDs."""
     source = expression.model_dump(mode="python")
 
-    def convert(value: Any) -> Any:
+    def convert(value: object) -> object:
         if isinstance(value, list):
             return [convert(item) for item in value]
         if not isinstance(value, dict):
@@ -249,7 +248,7 @@ def validate_variant_branch_updates(
             current = parent
 
 
-def _variant_branch_index(node: Any) -> int:
+def _variant_branch_index(node: object) -> int:
     """Return one branch's numeric OpenAPI position for stable ordering."""
     try:
         return int(node.canonical_path.rstrip("/").rsplit("/", 1)[-1])

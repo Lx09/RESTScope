@@ -28,9 +28,8 @@ def upgrade() -> None:
     """Create every current table in dependency order.
 
     Alembic already owns the ``alembic_version`` table.  SQLAlchemy metadata
-contains only the thirteen OpenAPI Audit and API Behavior Monitor tables, so
-``create_all`` does not alter
-    Alembic's bookkeeping.
+    contains only the fourteen OpenAPI Audit and API Behavior Monitor tables,
+    so ``create_all`` does not alter Alembic's bookkeeping.
     """
     Base.metadata.create_all(bind=op.get_bind())
 

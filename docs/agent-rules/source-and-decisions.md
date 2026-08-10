@@ -102,8 +102,9 @@ as the active project direction.
   schema source is a narrow input-storage capability, not a precedent for
   persisting parsed catalogs, plans, operation graphs, or Agent memory.
 - The user has separately approved a narrow API Behavior Monitor evidence
-  catalog: resource names and aliases, learned identifier selectors, typed
-  identifier values, latest per-operation read/write usage, response-value
+  catalog: resource names and aliases, ordered Identifier Definitions, learned
+  operation field/path mappings, complete typed Identifier Records, latest
+  per-operation read/write usage, response-value
   monitor registrations and selectors, deduplicated typed response values, and
   latest monitor errors. The catalog also retains the latest 100 valid,
   non-truncated 2xx JSON observations per operation as flattened, typed,
@@ -118,6 +119,13 @@ as the active project direction.
   response-value source selection—use registered no-Tool `fast` System Agent
   Profiles. Dynamic `I*` and `S*` aliases are restricted by a per-invocation
   Schema and local validation before Monitor state changes.
+  Resource Identifier evidence is limited to direct fields of a root object or
+  each root-array object item. One complete Agent request carries every
+  observed string/integer field and every related full OpenAPI path: the
+  current placeholder path plus strict descendants whose added segments are
+  all placeholders. Ordered multi-field choices persist and generate only as
+  complete jointly observed records; oversized evidence is skipped with a
+  warning rather than truncated or split.
 - Operation Smoke, its persistent Failure/Attempt/Generator tables, specialized
   Failure/Patch/Review Agents, candidate registry, Finalizer, and evaluation
   package are retired. Standard `resolve-operation-failures` and

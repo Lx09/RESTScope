@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass(frozen=True)
@@ -18,7 +17,7 @@ class PreparedMessageAttributes:
 
 
 def prepare_message_attributes(
-    messages: list[Any],
+    messages: list[object],
     *,
     direction: str,
     max_value_bytes: int,
@@ -77,7 +76,7 @@ def prepare_message_attributes(
 
 
 def _message_attribute_group(
-    message: Any,
+    message: object,
     *,
     direction: str,
     index: int,

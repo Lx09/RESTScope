@@ -8,7 +8,7 @@ state.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -27,7 +27,7 @@ REQUEST_GENERATION_GET_INPUT_STATE_TOOL_NAME = "request_generation.get_input_sta
 REQUEST_GENERATION_VALIDATE_PATCH_TOOL_NAME = "request_generation.validate_patch"
 
 _SemanticRecord = Annotated[
-    dict[str, Any],
+    dict[str, object],
     Field(description="One bounded semantic record whose fields depend on its type."),
 ]
 
@@ -119,7 +119,7 @@ class RequestGenerationToolBackend:
     def __init__(self, runtime: RequestGenerationPatchRuntime) -> None:
         self.runtime = runtime
 
-    def get_input_state(self, **arguments: Any) -> dict[str, Any]:
+    def get_input_state(self, **arguments: object) -> dict[str, object]:
         """Read current state without truncating its Constraint closure."""
         try:
             request = GetInputStateInput.model_validate(arguments)
@@ -140,7 +140,7 @@ class RequestGenerationToolBackend:
             ) from exc
         return {"structured": output.model_dump(mode="json")}
 
-    def validate_patch(self, **arguments: Any) -> dict[str, Any]:
+    def validate_patch(self, **arguments: object) -> dict[str, object]:
         """Compile and sample a Patch without changing App or target state."""
         try:
             request = ValidatePatchInput.model_validate(arguments)
