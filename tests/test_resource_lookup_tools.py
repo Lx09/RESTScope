@@ -7,13 +7,13 @@ from pathlib import Path
 
 def _catalog(tmp_path: Path):
     """Create one isolated unified Response Monitor Catalog."""
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
-    from restscope.db import Base, SqlAlchemyResponseMonitorUnitOfWork, create_engine_from_url, make_session_factory
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.db import Base, SqlAlchemyAPIBehaviorUnitOfWork, create_engine_from_url, make_session_factory
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'tools.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    return ResponseMonitorCatalog(lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions))
+    return APIBehaviorCatalog(lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions))
 
 
 def _record_resource(catalog, *, name: str = "assignment") -> None:

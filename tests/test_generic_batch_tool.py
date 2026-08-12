@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 
-def _response_monitor_catalog():
+def _api_behavior_catalog():
     """Create a real in-memory Catalog required before every Batch send."""
 
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -17,8 +17,8 @@ def _response_monitor_catalog():
     engine = create_engine_from_url("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    return ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    return APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
 
 
@@ -27,10 +27,10 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
     import httpx
 
     from restscope.harness.operation_testing import OperationTestingService
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -66,8 +66,8 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
     engine = create_engine_from_url("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    catalog = ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
     sent: list[str] = []
     transport = TargetHTTPTransport(
@@ -88,7 +88,7 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
         service=OperationTestingService(
             config_store=store,
             transport=transport,
-            response_monitor_catalog=catalog,
+            api_behavior_catalog=catalog,
         ),
         context_provider=lambda: context,
     )
@@ -122,8 +122,8 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
     from restscope.request_generation import (
         RequestGenerationConfigStore,
         RequestGenerationPatchRuntime,
-        SemanticParameterPatch,
     )
+    from restscope.request_generation.parameter_patch import SemanticParameterPatch
     from restscope.target_http import TargetHTTPTransport
     from restscope.tools.context import ToolContext
 
@@ -231,7 +231,7 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
     )
     service = OperationTestingService(
         config_store=store,
-        response_monitor_catalog=_response_monitor_catalog(),
+        api_behavior_catalog=_api_behavior_catalog(),
         transport=transport,
         reference_values=values,
     )
@@ -296,7 +296,7 @@ def test_abstract_case_persistence_failure_stops_batch_before_network() -> None:
     )
     service = OperationTestingService(
         config_store=store,
-        response_monitor_catalog=FailingCatalog(),
+        api_behavior_catalog=FailingCatalog(),
         transport=transport,
     )
 

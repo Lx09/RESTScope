@@ -137,7 +137,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
 
 
 def test_harness_binds_new_domain_tools_without_granting_them_to_main(
-    response_monitor_catalog,
+    api_behavior_catalog,
 ) -> None:
     """A caller Profile can resolve every new binding, while production Main stays unchanged."""
     from restscope.agent import AgentProfile
@@ -179,7 +179,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
         ),
         operation_testing_service=OperationTestingService(
             config_store=store,
-            response_monitor_catalog=response_monitor_catalog,
+            api_behavior_catalog=api_behavior_catalog,
         ),
         agent_runtime=AgentRuntimeDefinition(
             profiles=(profile,),

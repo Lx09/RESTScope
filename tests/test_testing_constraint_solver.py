@@ -16,7 +16,7 @@ class _ReferenceValues:
 
 
 def _solver_config():
-    from restscope.request_generation import (
+    from restscope.request_generation.models import (
         InputGeneratorConfig,
         InputNodeSnapshot,
         OperationGeneratorConfig,
@@ -163,7 +163,7 @@ def _solver_config():
 
 
 def _baseline():
-    from restscope.request_generation import GeneratedNodeValue, GeneratedTestCase
+    from restscope.request_generation.models import GeneratedNodeValue, GeneratedTestCase
 
     values = {
         "query/fixed": 1,
@@ -203,7 +203,7 @@ def _baseline():
 
 
 def _constraint_set(*expressions: dict):
-    from restscope.request_generation import ConstraintSet
+    from restscope.request_generation.constraints import ConstraintSet
 
     return ConstraintSet.model_validate({"constraints": list(expressions)})
 
@@ -289,7 +289,7 @@ def test_candidate_domains_follow_generators_and_put_baseline_first() -> None:
 
 def test_candidate_domain_samples_regex_generator_values() -> None:
     """Scenario: constraints can choose deterministic values from a regex domain."""
-    from restscope.request_generation import InputGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig
     from restscope.request_generation.constraint_solver import build_candidate_domains
 
     config = _solver_config()
@@ -575,7 +575,10 @@ def test_candidate_domain_reports_an_empty_required_reference_pool() -> None:
 
 def test_solver_contracts_are_exported_from_testing_package() -> None:
     """Scenario: verify that solver contracts are exported from testing package."""
-    from restscope.request_generation import ConstraintSolveError, solve_input_overrides
+    from restscope.request_generation.constraint_solver import (
+        ConstraintSolveError,
+        solve_input_overrides,
+    )
 
     assert issubclass(ConstraintSolveError, ValueError)
     assert callable(solve_input_overrides)
@@ -583,7 +586,7 @@ def test_solver_contracts_are_exported_from_testing_package() -> None:
 
 def test_generated_case_assignments_recover_container_presence() -> None:
     """Scenario: verify that generated case assignments recover container presence."""
-    from restscope.request_generation import (
+    from restscope.request_generation.models import (
         GeneratedTestCase,
         InputNodeSnapshot,
         OperationTestSnapshot,

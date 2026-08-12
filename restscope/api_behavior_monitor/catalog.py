@@ -1,10 +1,9 @@
-"""Persist factual API responses and the state derived from those responses.
+"""Persist the complete API Behavior Monitor evidence and audit catalog.
 
-The Response Monitor Catalog is the database-independent interface used by the
-response processor, Request Generation, Batch execution, and Resource Tools.
-Callers provide validated operations and observations; the Catalog opens a
-short transaction for each public mutation and returns immutable records.
-Concrete SQL statements remain in :mod:`restscope.db`.
+The Catalog stores the current normalized OpenAPI document, append-only
+Contract changes, successful observations, derived resources, exact request
+input sources, and immutable abstract Test Case snapshots. Callers use this one
+Interface while concrete SQL statements remain in :mod:`restscope.db`.
 """
 
 from __future__ import annotations
@@ -29,6 +28,24 @@ class _CatalogModel(BaseModel):
     """Reject unknown fields and prevent persisted records changing in memory."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class OpenAPIChangeEventWrite(_CatalogModel):
+    """Describe one validated response Contract change before insertion."""
+
+    operation_key: str = Field(min_length=1)
+    status_code: int = Field(ge=100, le=599)
+    media_type: str | None = None
+    changes: list[str] = Field(min_length=1)
+    response_before: dict[str, object] | None = None
+    response_after: dict[str, object]
+
+
+class OpenAPIChangeEventRecord(OpenAPIChangeEventWrite):
+    """Return one persisted Contract change through the Catalog Interface."""
+
+    id: str
+    created_at: datetime
 
 
 class OperationDefinition(_CatalogModel):
@@ -281,8 +298,29 @@ def _merge_json_objects(previous: JSONObject, observed: JSONObject) -> JSONObjec
     return output
 
 
-class ResponseMonitorRepository(Protocol):
+class _APIBehaviorRepository(Protocol):
     """Define persistence operations required by the public Catalog."""
+
+    def initialize_api(
+        self,
+        *,
+        document: dict[str, object],
+        operations: list[OperationDefinition],
+    ) -> None: ...
+
+    def get_current_openapi(self) -> dict[str, object] | None: ...
+
+    def record_openapi_change(
+        self,
+        *,
+        document: dict[str, object],
+        event: OpenAPIChangeEventWrite,
+    ) -> OpenAPIChangeEventRecord: ...
+
+    def list_openapi_changes(
+        self,
+        operation_key: str | None = None,
+    ) -> list[OpenAPIChangeEventRecord]: ...
 
     def ensure_operation(
         self,
@@ -357,12 +395,12 @@ class ResponseMonitorRepository(Protocol):
     ) -> AbstractTestCaseRecord: ...
 
 
-class ResponseMonitorUnitOfWork(Protocol):
-    """Expose one Response Monitor repository inside one database transaction."""
+class _APIBehaviorUnitOfWork(Protocol):
+    """Expose one API Behavior repository inside one database transaction."""
 
-    response_monitor: ResponseMonitorRepository
+    api_behavior: _APIBehaviorRepository
 
-    def __enter__(self) -> "ResponseMonitorUnitOfWork": ...
+    def __enter__(self) -> "_APIBehaviorUnitOfWork": ...
 
     def __exit__(
         self,
@@ -374,19 +412,73 @@ class ResponseMonitorUnitOfWork(Protocol):
     def commit(self) -> None: ...
 
 
-ResponseMonitorUnitOfWorkFactory: TypeAlias = Callable[[], ResponseMonitorUnitOfWork]
+_APIBehaviorUnitOfWorkFactory: TypeAlias = Callable[[], _APIBehaviorUnitOfWork]
 
 
-class ResponseMonitorCatalog:
-    """Provide short, explicit transactions for Response Monitor persistence."""
+class APIBehaviorCatalog:
+    """Provide one transaction Interface for all durable API Behavior state."""
 
     def __init__(
         self,
-        unit_of_work_factory: ResponseMonitorUnitOfWorkFactory,
+        unit_of_work_factory: _APIBehaviorUnitOfWorkFactory,
     ) -> None:
         """Retain the factory without opening a database connection."""
 
         self._unit_of_work_factory = unit_of_work_factory
+
+    def initialize_api(
+        self,
+        *,
+        document: dict[str, object],
+        operations: list[OperationDefinition],
+    ) -> None:
+        """Atomically insert one normalized document and its operation metadata.
+
+        Reinitialization raises ``ValueError`` without changing the existing
+        document or adding any supplied operation. The caller retains ownership
+        of its mapping; persistence receives an isolated copy.
+        """
+
+        with self._unit_of_work_factory() as uow:
+            uow.api_behavior.initialize_api(
+                document=deepcopy(document),
+                operations=operations,
+            )
+            uow.commit()
+
+    def current_openapi(self) -> dict[str, object]:
+        """Return an isolated copy of the current normalized OpenAPI document."""
+
+        with self._unit_of_work_factory() as uow:
+            document = uow.api_behavior.get_current_openapi()
+        if document is None:
+            raise RuntimeError("The API Behavior Catalog has not been initialized")
+        return deepcopy(document)
+
+    def record_openapi_change(
+        self,
+        *,
+        document: dict[str, object],
+        event: OpenAPIChangeEventWrite,
+    ) -> OpenAPIChangeEventRecord:
+        """Atomically replace current OpenAPI and append one Contract change."""
+
+        with self._unit_of_work_factory() as uow:
+            record = uow.api_behavior.record_openapi_change(
+                document=deepcopy(document),
+                event=event,
+            )
+            uow.commit()
+            return record
+
+    def list_openapi_changes(
+        self,
+        operation_key: str | None = None,
+    ) -> list[OpenAPIChangeEventRecord]:
+        """Return chronological Contract changes, optionally for one operation."""
+
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.list_openapi_changes(operation_key)
 
     def ensure_operation(
         self,
@@ -395,7 +487,7 @@ class ResponseMonitorCatalog:
         """Insert or refresh one operation's current descriptive metadata."""
 
         with self._unit_of_work_factory() as uow:
-            result = uow.response_monitor.ensure_operation(operation)
+            result = uow.api_behavior.ensure_operation(operation)
             uow.commit()
             return result
 
@@ -406,7 +498,7 @@ class ResponseMonitorCatalog:
         """Insert one observation and atomically retain the latest one hundred."""
 
         with self._unit_of_work_factory() as uow:
-            result = uow.response_monitor.record_observation(observation)
+            result = uow.api_behavior.record_observation(observation)
             uow.commit()
             return result
 
@@ -451,7 +543,7 @@ class ResponseMonitorCatalog:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.list_observations(
+            return uow.api_behavior.list_observations(
                 operation_id=operation_id,
                 status_code=status_code,
                 media_type=normalized_media_type,
@@ -465,7 +557,7 @@ class ResponseMonitorCatalog:
         """Return distinct response coordinates without loading response JSON."""
 
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.list_observed_response_coordinates()
+            return uow.api_behavior.list_observed_response_coordinates()
 
     def record_resource_derivations(
         self,
@@ -482,7 +574,7 @@ class ResponseMonitorCatalog:
         if not operation_id.strip():
             raise ValueError("operation_id cannot be blank")
         with self._unit_of_work_factory() as uow:
-            result = uow.response_monitor.record_resource_derivations(
+            result = uow.api_behavior.record_resource_derivations(
                 operation_id=operation_id,
                 derivations=derivations,
             )
@@ -499,7 +591,7 @@ class ResponseMonitorCatalog:
 
         _require_page(offset=offset, limit=limit)
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.list_resources(offset=offset, limit=limit)
+            return uow.api_behavior.list_resources(offset=offset, limit=limit)
 
     def get_resource(self, name: str) -> ResourceDefinitionRecord | None:
         """Return one exact normalized resource without scanning list pages."""
@@ -508,7 +600,7 @@ class ResponseMonitorCatalog:
         if normalized_name != name:
             return None
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.get_resource(name=normalized_name)
+            return uow.api_behavior.get_resource(name=normalized_name)
 
     def list_resource_instances(
         self,
@@ -523,7 +615,7 @@ class ResponseMonitorCatalog:
         normalized_type = normalize_resource_name(resource_type)
         _require_page(offset=offset, limit=limit)
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.list_resource_instances(
+            return uow.api_behavior.list_resource_instances(
                 resource_type=normalized_type,
                 offset=offset,
                 limit=limit,
@@ -546,7 +638,7 @@ class ResponseMonitorCatalog:
         if not operation_id.strip():
             raise ValueError("operation_id cannot be blank")
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.list_operation_resources(
+            return uow.api_behavior.list_operation_resources(
                 operation_id=operation_id,
             )
 
@@ -557,7 +649,7 @@ class ResponseMonitorCatalog:
         """Insert or reuse one exact source without changing its Beta prior."""
 
         with self._unit_of_work_factory() as uow:
-            result = uow.response_monitor.ensure_input_source(source)
+            result = uow.api_behavior.ensure_input_source(source)
             uow.commit()
             return result
 
@@ -572,7 +664,7 @@ class ResponseMonitorCatalog:
         if not consumer_operation_id.strip() or not consumer_input_node_id.strip():
             raise ValueError("consumer operation and input node cannot be blank")
         with self._unit_of_work_factory() as uow:
-            return uow.response_monitor.list_input_sources(
+            return uow.api_behavior.list_input_sources(
                 consumer_operation_id=consumer_operation_id,
                 consumer_input_node_id=consumer_input_node_id,
             )
@@ -584,7 +676,7 @@ class ResponseMonitorCatalog:
         """Insert or reuse one exact operation and state-digest snapshot."""
 
         with self._unit_of_work_factory() as uow:
-            result = uow.response_monitor.ensure_abstract_test_case(test_case)
+            result = uow.api_behavior.ensure_abstract_test_case(test_case)
             uow.commit()
             return result
 
@@ -606,9 +698,9 @@ class ResponseMonitorCatalog:
 
         with self._unit_of_work_factory() as uow:
             for operation in operations:
-                uow.response_monitor.ensure_operation(operation)
+                uow.api_behavior.ensure_operation(operation)
             for source in sources:
-                uow.response_monitor.ensure_input_source(source)
+                uow.api_behavior.ensure_input_source(source)
             yield
             uow.commit()
 
@@ -628,11 +720,13 @@ __all__ = [
     "ObservationRecord",
     "ObservationWrite",
     "ObservedResponseCoordinate",
+    "OpenAPIChangeEventRecord",
+    "OpenAPIChangeEventWrite",
     "OperationDefinition",
     "OperationInputSource",
     "ResourceDefinitionRecord",
     "ResourceDerivation",
     "ResourceDerivationResult",
     "ResourceInstanceRecord",
-    "ResponseMonitorCatalog",
+    "APIBehaviorCatalog",
 ]

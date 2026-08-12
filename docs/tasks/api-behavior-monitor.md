@@ -1,5 +1,11 @@
 # API Behavior Monitor
 
+> Superseded navigation note (2026-08-12): this record describes an earlier
+> Monitor and database layout. The current implementation uses the unified
+> `APIBehaviorCatalog`, the nine-table baseline, and flat `contract_monitor.py`,
+> `resource_monitor.py`, and `resource_identity.py` owners. Preserve this file
+> as implementation history rather than a current code map.
+
 Status: Completed
 
 ## Approved scope

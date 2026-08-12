@@ -8,10 +8,10 @@ from datetime import UTC, datetime, timedelta
 def _catalog():
     """Create one real in-memory persistence boundary for provider scenarios."""
 
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -19,8 +19,8 @@ def _catalog():
     engine = create_engine_from_url("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    return ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    return APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
 
 
@@ -33,6 +33,8 @@ def test_response_values_are_parsed_from_exact_observations_on_demand() -> None:
     )
     from restscope.request_generation import (
         BehaviorMonitorReferenceValues,
+    )
+    from restscope.request_generation.models import (
         OperationInputSourceReference,
         ResponseValueGenerator,
     )
@@ -93,6 +95,8 @@ def test_response_values_keep_only_eight_latest_distinct_candidates() -> None:
     )
     from restscope.request_generation import (
         BehaviorMonitorReferenceValues,
+    )
+    from restscope.request_generation.models import (
         OperationInputSourceReference,
         ResponseValueGenerator,
     )
@@ -152,11 +156,11 @@ def test_staged_source_commit_failure_rolls_back_flushed_database_rows() -> None
     from restscope.api_behavior_monitor.catalog import (
         OperationDefinition,
         OperationInputSource,
-        ResponseMonitorCatalog,
+        APIBehaviorCatalog,
     )
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -165,13 +169,13 @@ def test_staged_source_commit_failure_rolls_back_flushed_database_rows() -> None
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
 
-    class CommitFailureUnitOfWork(SqlAlchemyResponseMonitorUnitOfWork):
+    class CommitFailureUnitOfWork(SqlAlchemyAPIBehaviorUnitOfWork):
         """Fail after repository flushes but before SQLAlchemy commits."""
 
         def commit(self) -> None:
             raise RuntimeError("database commit failed")
 
-    catalog = ResponseMonitorCatalog(lambda: CommitFailureUnitOfWork(sessions))
+    catalog = APIBehaviorCatalog(lambda: CommitFailureUnitOfWork(sessions))
     consumer = OperationDefinition(
         operation_id="GET /consumers",
         method="GET",
@@ -200,8 +204,8 @@ def test_staged_source_commit_failure_rolls_back_flushed_database_rows() -> None
         ):
             pass
 
-    readable = ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    readable = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
     assert readable.list_input_sources(
         consumer_operation_id=consumer.operation_id,
@@ -218,6 +222,8 @@ def test_resource_source_returns_complete_correlated_current_instances() -> None
     )
     from restscope.request_generation import (
         BehaviorMonitorReferenceValues,
+    )
+    from restscope.request_generation.models import (
         OperationInputSourceReference,
         ResourceIdentifierGenerator,
     )
@@ -280,8 +286,10 @@ def test_patch_staging_persists_only_the_exact_consumer_source_proposition() -> 
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
         BehaviorMonitorReferenceValues,
-        OperationInputSourceReference,
         RequestGenerationConfigStore,
+    )
+    from restscope.request_generation.models import (
+        OperationInputSourceReference,
         ResponseValueGenerator,
     )
     from restscope.request_generation.store import ReferenceValueBinding

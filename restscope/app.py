@@ -25,8 +25,9 @@ from restscope.api_behavior_monitor import (
     build_api_behavior_monitor_coordinator,
 )
 from restscope.api_behavior_monitor.catalog import (
+    APIBehaviorCatalog,
+    OpenAPIChangeEventRecord,
     OperationDefinition,
-    ResponseMonitorCatalog,
 )
 from restscope.harness import (
     AgentRuntimeDefinition,
@@ -38,7 +39,6 @@ from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.tools.context import ToolContext, ToolContextError
 from restscope.tools.resource import ResourceToolBackend
 from restscope.target_http import TargetHTTPTransport
-from restscope.openapi_audit import OpenAPIAudit, OpenAPIChangeEventRecord
 from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 from restscope.observability import (
     LiveRunObserver,
@@ -54,8 +54,7 @@ from restscope.request_generation import (
 )
 from restscope.config import RESTScopeConfig
 from restscope.db import (
-    SqlAlchemyOpenAPIUnitOfWork,
-    SqlAlchemyResponseMonitorUnitOfWork,
+    SqlAlchemyAPIBehaviorUnitOfWork,
     create_engine_from_config,
     make_session_factory,
 )
@@ -63,14 +62,12 @@ from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
 from restscope.request_generation import RequestGenerationConfigStore
 from restscope.harness.operation_testing import OperationTestingService
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
-from restscope.api_behavior_monitor.resource_identifiers.prompts import (
+from restscope.api_behavior_monitor.resource_identity import (
     IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
     IdentifierSelectionDecision,
+    RESOURCE_IDENTIFIER_PROFILE_NAME,
     identifier_system_output_schema,
     validate_identifier_system_output,
-)
-from restscope.api_behavior_monitor.system_agents import (
-    RESOURCE_IDENTIFIER_PROFILE_NAME,
 )
 
 
@@ -253,8 +250,7 @@ class RESTScopeApp:
         request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None
         api_behavior_monitor_coordinator = None
         target_transport: TargetHTTPTransport | None = None
-        openapi_audit: OpenAPIAudit | None = None
-        response_monitor_catalog: ResponseMonitorCatalog | None = None
+        api_behavior_catalog: APIBehaviorCatalog | None = None
         database_engine: Engine | None = None
         try:
             config = _resolve_app_random_seed(config)
@@ -293,25 +289,21 @@ class RESTScopeApp:
                 database_engine = create_engine_from_config(config.db)
                 session_factory = make_session_factory(database_engine)
                 request_generation_store = RequestGenerationConfigStore()
-                response_monitor_catalog = ResponseMonitorCatalog(
-                    lambda: SqlAlchemyResponseMonitorUnitOfWork(session_factory)
-                )
-                openapi_audit = OpenAPIAudit(
-                    lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
+                api_behavior_catalog = APIBehaviorCatalog(
+                    lambda: SqlAlchemyAPIBehaviorUnitOfWork(session_factory)
                 )
                 system_agent_runner = _DeferredSystemAgentRunner()
                 api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
                     config,
-                    catalog=response_monitor_catalog,
-                    openapi_audit=openapi_audit,
+                    catalog=api_behavior_catalog,
                     system_agent_runner=system_agent_runner,
                     tracing_runtime=self._tracing_runtime,
                 )
                 reference_values = BehaviorMonitorReferenceValues(
-                    response_monitor_catalog
+                    api_behavior_catalog
                 )
                 resource_backend = ResourceToolBackend(
-                    catalog=response_monitor_catalog
+                    catalog=api_behavior_catalog
                 )
                 target_transport = TargetHTTPTransport(
                     response_processor=APIBehaviorResponseProcessor(
@@ -324,7 +316,7 @@ class RESTScopeApp:
                     transport=target_transport,
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
-                    response_monitor_catalog=response_monitor_catalog,
+                    api_behavior_catalog=api_behavior_catalog,
                 )
                 request_generation_patch_runtime = RequestGenerationPatchRuntime(
                     store=request_generation_store,
@@ -341,7 +333,7 @@ class RESTScopeApp:
                 built_runtime = build_harness(
                     tracing_runtime=self._tracing_runtime,
                     target_http_transport=target_transport,
-                    observed_response_reader=response_monitor_catalog,
+                    observed_response_reader=api_behavior_catalog,
                     resource_tool_backend=resource_backend,
                     request_generation_patch_runtime=(
                         request_generation_patch_runtime
@@ -371,11 +363,8 @@ class RESTScopeApp:
             self.target_http_transport = (
                 target_transport if harness_runtime is built_runtime else None
             )
-            self.openapi_audit: OpenAPIAudit | None = (
-                openapi_audit if harness_runtime is built_runtime else None
-            )
-            self.response_monitor_catalog: ResponseMonitorCatalog | None = (
-                response_monitor_catalog
+            self.api_behavior_catalog: APIBehaviorCatalog | None = (
+                api_behavior_catalog
                 if harness_runtime is built_runtime
                 else None
             )
@@ -524,22 +513,21 @@ class RESTScopeApp:
             base_url=base_url,
             headers=headers or {},
         )
-        if self.response_monitor_catalog is not None:
-            # Operation rows are current OpenAPI metadata and satisfy foreign
-            # keys for Contract events even when a caller invokes the exposed
-            # Contract Tracker before sending a response through Coordinator.
-            for operation in ir.operations.values():
-                self.response_monitor_catalog.ensure_operation(
+        if self.api_behavior_catalog is not None:
+            # The initial normalized document and every operation are one API
+            # identity. Publish them together so no caller can observe only
+            # half of the initialized persistence state.
+            self.api_behavior_catalog.initialize_api(
+                document=build_openapi_document(ir, list(ir.operations)),
+                operations=[
                     OperationDefinition(
                         operation_id=operation.operation_key,
                         method=operation.method,
                         path=operation.path,
                         description=operation.description,
                     )
-                )
-        if self.openapi_audit is not None:
-            self.openapi_audit.initialize(
-                build_openapi_document(ir, list(ir.operations))
+                    for operation in ir.operations.values()
+                ],
             )
         if self.request_generation_store is not None:
             self.request_generation_store.initialize_once(ir)
@@ -555,9 +543,9 @@ class RESTScopeApp:
         """
 
         self._ensure_open()
-        if self.openapi_audit is None:
-            raise RuntimeError("The current runtime has no OpenAPI Audit")
-        return self.openapi_audit.current_document()
+        if self.api_behavior_catalog is None:
+            raise RuntimeError("The current runtime has no API Behavior Catalog")
+        return self.api_behavior_catalog.current_openapi()
 
     def list_openapi_change_events(
         self,
@@ -566,9 +554,9 @@ class RESTScopeApp:
         """Return chronological persisted response changes for inspection."""
 
         self._ensure_open()
-        if self.openapi_audit is None:
-            raise RuntimeError("The current runtime has no OpenAPI Audit")
-        return self.openapi_audit.list_changes(operation_key)
+        if self.api_behavior_catalog is None:
+            raise RuntimeError("The current runtime has no API Behavior Catalog")
+        return self.api_behavior_catalog.list_openapi_changes(operation_key)
 
     def start(self) -> None:
         """Start the Main Agent once and block until its model loop finishes.

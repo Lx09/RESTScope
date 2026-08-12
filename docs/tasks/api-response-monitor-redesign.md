@@ -7,6 +7,11 @@ ownership optimization is complete. No commit, merge, push, or worktree
 cleanup has been performed; those Git actions still require separate
 authorization.
 
+Superseded navigation note (2026-08-12): the later code-navigation refactor
+renames `ResponseMonitorCatalog` to `APIBehaviorCatalog`, combines the OpenAPI
+audit persistence seam with it, and flattens the Monitor's shallow internal
+packages. The behavior and database decisions recorded here remain active.
+
 ## Objective
 
 Replace the existing Resource Identifier and Response Value persistence model
@@ -125,7 +130,7 @@ materialized into shared pools.
   pending edge; the fix is to flush each newly materialized natural key before
   processing the next derivation.
 - Unified Catalog slice is green: `uv run pytest -q
-  tests/test_response_monitor_catalog.py tests/test_schema_catalog.py` passes 6
+  tests/test_api_behavior_catalog.py tests/test_schema_catalog.py` passes 6
   tests covering exact response retention, latest-100 pruning, composite state
   merge, normalized resources, and distinct RESOURCE/VALUE_REUSE source keys.
 - The first App bootstrap probe now fails at the expected replacement seam:

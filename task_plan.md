@@ -4,9 +4,17 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 20 evidence confidence is complete, verified, and authorized for a scoped commit on local `main`; Phase 19 exact 375 px confirmation remains pending
+Phase 21 code-navigation and API Behavior persistence consolidation is complete and verified on local `main`; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 21: Code navigation and API Behavior persistence consolidation
+- [x] Audit current top-level Modules, ports, facades, and persistence ownership
+- [x] Add red Catalog and package-navigation contracts
+- [x] Consolidate OpenAPI Audit and Response Monitor persistence
+- [x] Flatten shallow Behavior Monitor paths and narrow Request Generation facade
+- [x] Update current architecture records and run complete verification
+- **Status:** complete and verified on local `main`; pre-existing target transport edit preserved; no Git delivery performed
 
 ### Phase 20: Generic evidence confidence
 - [x] Confirm the public `Evidence[T]` seam and Beta(1,1) update semantics
@@ -171,6 +179,7 @@ Phase 20 evidence confidence is complete, verified, and authorized for a scoped 
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Phase 21 Catalog test patch expected `_catalog(tmp_path)` instead of the current `_catalog()` | 1 | No partial test edit occurred; append the new scenarios against the current in-memory fixture shape. |
 | Final multi-file status patch used a progress heading as a findings anchor | 1 | No partial edit occurred; inspect each file and apply exact per-file anchors. |
 | Full suite rejected `restscope/evidence.py` at the root package seam | 1 | Preserve `restscope.evidence.Evidence` while moving the complete Module into `restscope/evidence/__init__.py`; do not weaken the boundary test. |
 | Four invalid-input scenarios changed confidence instead of raising | 1 | Expected TDD red state; validate the boolean before either Beta counter changes. |

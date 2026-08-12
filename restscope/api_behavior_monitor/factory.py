@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
 from restscope.config import RESTScopeConfig
-from restscope.openapi_audit import OpenAPIAudit
 from restscope.observability import TracingRuntime
 
 from .coordinator import APIBehaviorMonitorCoordinator
-from .resources import ResourceResponseTracker
-from .response_contracts import ResponseContractTracker
-from .system_agents import SystemAgentRunner
+from .contract_monitor import ResponseContractTracker
+from .resource_identity import SystemAgentRunner
+from .resource_monitor import ResourceResponseTracker
 
 
 def build_api_behavior_monitor_coordinator(
     config: RESTScopeConfig,
     *,
-    catalog: ResponseMonitorCatalog,
-    openapi_audit: OpenAPIAudit,
+    catalog: APIBehaviorCatalog,
     system_agent_runner: SystemAgentRunner,
     tracing_runtime: TracingRuntime | None = None,
 ) -> APIBehaviorMonitorCoordinator:
@@ -37,7 +35,7 @@ def build_api_behavior_monitor_coordinator(
         )
     )
     return APIBehaviorMonitorCoordinator(
-        contract_tracker=ResponseContractTracker(openapi_audit),
+        contract_tracker=ResponseContractTracker(catalog),
         catalog=catalog,
         resource_tracker=ResourceResponseTracker(
             catalog=catalog,

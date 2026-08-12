@@ -1,5 +1,24 @@
 # Findings & Decisions
 
+## Code navigation and API Behavior persistence consolidation (2026-08-12)
+
+- The former `restscope.openapi_audit` package has only 164 production lines and
+  no lifecycle independent of API Behavior Monitor. App currently constructs
+  two Catalog/UoW chains over one nine-table database and exposes both as
+  attributes, which makes one evidence lifecycle look like two peer domains.
+- The approved replacement is one `APIBehaviorCatalog` and one SQLAlchemy UoW.
+  Repository and transaction Protocols remain private at the consuming Catalog
+  seam; no global `ports` package or compatibility aliases will be added.
+- `request_generation.__init__` exports 63 names while production code outside
+  that package consumes only four integration entries. Tests will import model,
+  constraint, generation, and Patch details from their owning modules instead.
+- `operation_references`, `target_http`, and `data_types` remain top-level
+  Modules because each has several independent consumers. Agent ports and the
+  shared Request Generation value-provider port also remain with their demand
+  owners.
+- The pre-existing `restscope/target_http/transport.py` edit is unrelated user
+  work and must remain unmodified by this refactor.
+
 ## Generic evidence confidence (2026-08-11)
 
 - The approved public seam is `restscope.evidence.Evidence[T]`; existing

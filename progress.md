@@ -491,3 +491,27 @@
 | What's the goal? | One reference-based Failure Resolution Agent with a minimal harness |
 | What have I learned? | See `findings.md` |
 | What have I done? | Implemented the continuous Agent, atomic finalizer, workflow replacement, and single Resolution Eval suite |
+# 2026-08-12: Code navigation and API Behavior persistence consolidation
+
+- Read current ownership, persistence, Git, verification, and beginner-readable
+  rules plus the codebase-design, TDD, and file-planning skills.
+- Audited the top-level dependency graph, Protocol consumers, package facades,
+  database adapters, ORM layout, and current architecture records.
+- Current baseline verification passed: `uv run pytest -q` -> 552 passed,
+  2 skipped in 4.71 seconds.
+- Implementation is authorized directly on local `main`; Git staging, commit,
+  push, and other delivery actions remain unauthorized.
+- The first Catalog test patch expected a stale fixture signature. No test file
+  changed; the next patch uses the current in-memory `_catalog()` fixture.
+- The first App import migration left the resource-identifier Profile constant
+  outside its import parentheses. It was detected before tests and corrected
+  without changing runtime behavior.
+- Replaced the two App persistence collaborators with one `APIBehaviorCatalog`
+  and one concrete SQLAlchemy Unit of Work while retaining the exact nine-table
+  baseline and independent response-stage transaction boundaries.
+- Flattened Contract Monitor, Resource Monitor, resource identity, and result
+  owners; removed old packages and generated caches; narrowed the Request
+  Generation facade to four integration entries.
+- Final verification passed 556 tests with 2 skips. The 44-test focused suite,
+  `typing.Any` guard, Python compilation, unchanged migration, diff hygiene,
+  and wheel old-path inspection also passed.

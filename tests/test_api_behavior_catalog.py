@@ -1,4 +1,4 @@
-"""Public persistence behavior for the redesigned API Response Monitor."""
+"""Public persistence behavior for the unified API Behavior Catalog."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 def _catalog():
     """Create one real in-memory database behind the public Monitor Catalog."""
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -18,9 +18,93 @@ def _catalog():
     engine = create_engine_from_url("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    return ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    return APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
+
+
+def test_api_behavior_catalog_initializes_document_and_operations_atomically() -> None:
+    """One API initialization publishes its document and operation metadata together."""
+
+    from restscope.api_behavior_monitor import APIBehaviorCatalog
+    from restscope.api_behavior_monitor.catalog import OperationDefinition
+    from restscope.db import (
+        Base,
+        SqlAlchemyAPIBehaviorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+
+    engine = create_engine_from_url("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(make_session_factory(engine))
+    )
+    document = {
+        "openapi": "3.0.3",
+        "info": {"title": "Catalog", "version": "1"},
+        "paths": {
+            "/items": {
+                "get": {"responses": {"200": {"description": "ok"}}}
+            }
+        },
+    }
+    operation = OperationDefinition(
+        operation_id="GET /items",
+        method="GET",
+        path="/items",
+    )
+
+    catalog.initialize_api(document=document, operations=[operation])
+
+    assert catalog.current_openapi() == document
+    assert catalog.list_openapi_changes() == []
+    assert catalog.list_operation_resources(operation_id="GET /items") == []
+
+
+def test_api_behavior_catalog_rejects_reinitialization_without_partial_changes() -> None:
+    """A second initialization cannot add operations or replace the first document."""
+
+    import pytest
+
+    from restscope.api_behavior_monitor import APIBehaviorCatalog
+    from restscope.api_behavior_monitor.catalog import OperationDefinition
+    from restscope.db import (
+        Base,
+        SqlAlchemyAPIBehaviorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+
+    engine = create_engine_from_url("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(make_session_factory(engine))
+    )
+    original = {
+        "openapi": "3.0.3",
+        "info": {"title": "First", "version": "1"},
+        "paths": {},
+    }
+    catalog.initialize_api(document=original, operations=[])
+
+    with pytest.raises(ValueError, match="already initialized"):
+        catalog.initialize_api(
+            document={
+                "openapi": "3.0.3",
+                "info": {"title": "Second", "version": "1"},
+                "paths": {},
+            },
+            operations=[
+                OperationDefinition(
+                    operation_id="GET /unexpected",
+                    method="GET",
+                    path="/unexpected",
+                )
+            ],
+        )
+
+    assert catalog.current_openapi() == original
 
 
 def test_observations_keep_the_original_json_and_latest_hundred_per_operation() -> None:

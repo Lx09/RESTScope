@@ -63,12 +63,12 @@ def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
     tmp_path: Path,
 ) -> None:
     """The runtime exposes lookup implementations but owns no global toolbox."""
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.harness import build_harness
     from restscope.tools.resource import ResourceToolBackend
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -76,8 +76,8 @@ def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'catalogs.sqlite'}")
     Base.metadata.create_all(engine)
     session_factory = make_session_factory(engine)
-    response_catalog = ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(session_factory)
+    response_catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(session_factory)
     )
     resource_backend = ResourceToolBackend(catalog=response_catalog)
     runtime = build_harness(

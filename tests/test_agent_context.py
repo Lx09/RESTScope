@@ -535,7 +535,7 @@ def test_context_package_has_no_workflow_database_or_registry_dependencies() -> 
 def test_domain_monitors_delegate_model_decisions_to_system_agents() -> None:
     """Trackers cannot bypass Profile authorization or Harness validation."""
     root = Path(__file__).parents[1]
-    callers = (root / "restscope/api_behavior_monitor/resources.py",)
+    callers = (root / "restscope/api_behavior_monitor/resource_monitor.py",)
 
     for caller in callers:
         source = caller.read_text(encoding="utf-8")
@@ -547,7 +547,7 @@ def test_domain_monitors_delegate_model_decisions_to_system_agents() -> None:
 
 def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:
     """OpenAPI descriptions stay encoded inside one explicitly untrusted section."""
-    from restscope.api_behavior_monitor.resource_identifiers.prompts import (
+    from restscope.api_behavior_monitor.resource_identity import (
         IdentifierCandidateView,
         build_identifier_prompt,
     )

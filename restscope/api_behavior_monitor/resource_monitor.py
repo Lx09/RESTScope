@@ -18,19 +18,19 @@ from restscope.api_behavior_monitor.catalog import (
     ResourceDefinitionRecord,
     ResourceDerivation,
     ResourceDerivationResult,
-    ResponseMonitorCatalog,
+    APIBehaviorCatalog,
     normalize_resource_name,
 )
 from restscope.data_types import JSONValue
 from restscope.observability import TracingRuntime
 
-from .resource_identifiers.prompts import (
+from .resource_identity import (
     IdentifierCandidateView,
     IdentifierSelectionDecision,
     build_identifier_prompt,
     validate_identifier_decision,
 )
-from .system_agents import RESOURCE_IDENTIFIER_PROFILE_NAME, SystemAgentRunner
+from .resource_identity import RESOURCE_IDENTIFIER_PROFILE_NAME, SystemAgentRunner
 
 
 _MAX_GROUPS = 50
@@ -54,7 +54,7 @@ class ResourceResponseTracker:
     def __init__(
         self,
         *,
-        catalog: ResponseMonitorCatalog,
+        catalog: APIBehaviorCatalog,
         system_agent_runner: SystemAgentRunner,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:

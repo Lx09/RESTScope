@@ -13,7 +13,7 @@ def _snapshot(operation):
 def test_openapi_serializer_applies_parameter_styles_and_json_body() -> None:
     """Scenario: verify that openapi serializer applies parameter styles and json body."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import GeneratedTestCase
+    from restscope.request_generation.models import GeneratedTestCase
     from restscope.request_generation.serialization import serialize_test_case
 
     spec = {
@@ -89,7 +89,7 @@ def test_openapi_serializer_applies_parameter_styles_and_json_body() -> None:
 def test_openapi_serializer_supports_text_form_and_swagger_collection_formats() -> None:
     """Scenario: verify that openapi serializer supports text form and swagger collection formats."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import GeneratedTestCase
+    from restscope.request_generation.models import GeneratedTestCase
     from restscope.request_generation.serialization import serialize_test_case
 
     swagger_operation = OpenAPIParser.parse(
@@ -188,7 +188,7 @@ def test_openapi_serializer_supports_text_form_and_swagger_collection_formats() 
 def test_openapi_serializer_builds_deterministic_non_file_multipart_body() -> None:
     """Multipart object fields become stable text or JSON form-data parts."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import GeneratedTestCase
+    from restscope.request_generation.models import GeneratedTestCase
     from restscope.request_generation.serialization import serialize_test_case
 
     operation = OpenAPIParser.parse(
@@ -283,7 +283,7 @@ def test_multipart_serializer_rejects_file_values_and_header_injection() -> None
     import pytest
 
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import GeneratedTestCase
+    from restscope.request_generation.models import GeneratedTestCase
     from restscope.request_generation.serialization import (
         SerializationError,
         serialize_test_case,
@@ -338,7 +338,7 @@ def test_allow_reserved_query_values_are_preserved_by_target_url_preparation() -
     """Scenario: verify that allow reserved query values are preserved by target url preparation."""
     from restscope.target_http import build_target_url
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import GeneratedTestCase
+    from restscope.request_generation.models import GeneratedTestCase
     from restscope.harness.operation_testing.service import _target_query_items
     from restscope.request_generation.serialization import serialize_test_case
 

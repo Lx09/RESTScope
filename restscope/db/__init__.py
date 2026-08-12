@@ -7,17 +7,13 @@ from .bootstrap import (
     UnsupportedDatabaseURLError,
 )
 from .session import create_engine_from_config, create_engine_from_url, make_session_factory
-from .adapters import (
-    SqlAlchemyOpenAPIUnitOfWork,
-    SqlAlchemyResponseMonitorUnitOfWork,
-)
+from .adapters import SqlAlchemyAPIBehaviorUnitOfWork
 
 __all__ = [
     "Base",
     "DatabaseAlreadyExistsError",
     "DatabaseBootstrapError",
-    "SqlAlchemyOpenAPIUnitOfWork",
-    "SqlAlchemyResponseMonitorUnitOfWork",
+    "SqlAlchemyAPIBehaviorUnitOfWork",
     "UnsupportedDatabaseURLError",
     "create_engine_from_config",
     "create_engine_from_url",

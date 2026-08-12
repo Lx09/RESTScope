@@ -24,11 +24,11 @@ class _CompositeResourceValues:
 
 def test_composite_resource_generators_choose_components_from_one_instance() -> None:
     """Equal per-resource seeds never construct an unobserved composite identity."""
-    from restscope.request_generation import (
+    from restscope.request_generation.models import (
         OperationInputSourceReference,
         ResourceIdentifierGenerator,
-        generate_strategy_value,
     )
+    from restscope.request_generation.generation import generate_strategy_value
 
     common = {
         "producer_operation_id": "GET /memberships",

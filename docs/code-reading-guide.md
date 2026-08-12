@@ -21,7 +21,9 @@ The runtime has five distinct responsibilities:
    prepares a complete Batch, and sends its requests.
 4. `restscope.tools` exposes narrow model-callable behaviors. Profiles—not the
    global Catalog—decide which Tools an Agent may call.
-5. `restscope.agent`, `restscope.skills`, and `restscope.harness` run the same
+5. `restscope.api_behavior_monitor` owns the nine-table evidence/audit Catalog
+   and the ordered response-processing flow.
+6. `restscope.agent`, `restscope.skills`, and `restscope.harness` run the same
    generic Agent as a Main Agent, Subagent, or System Agent. Skills teach a
    method but do not execute code or grant Tools.
 
@@ -112,8 +114,8 @@ a stale or changed Patch from being applied.
 
 ### `restscope/app.py`
 
-The App is the only production composition root. It creates the database-backed
-OpenAPI Audit and API Behavior Monitor, the in-memory generation Store, HTTP
+The App is the only production composition root. It creates one database-backed
+API Behavior Catalog, the in-memory generation Store, HTTP
 transport, generic Harness, and plan-only Main Profile. `initialize()` parses
 one API and initializes revision `0`; `start()` blocks in the Main Agent loop.
 
@@ -122,11 +124,6 @@ one API and initializes revision `0`; `start()` blocks in the Main Agent loop.
 This package loads, resolves, validates, and normalizes OpenAPI into the IR used
 by every downstream Module. `openapi.list_operations` and Schema-query Tools
 read this initialized state through a narrow backend.
-
-### `restscope/openapi_audit/`
-
-OpenAPI Audit persists the complete current normalized document and append-only
-response-contract changes. It is an audit/export boundary, not App recovery.
 
 ### `restscope/operation_references/`
 
@@ -207,11 +204,12 @@ Skills cannot be used by it until a later approved Profile change.
 
 The API Behavior Monitor checks every matched response contract, persists
 complete valid 2xx JSON observations, and then derives resource state in a
-separate transaction. `catalog.py` is the unified persistence Interface;
-`coordinator.py` owns stage ordering; `resources.py` reuses known identity
-fields or asks one registered `fast` System Agent Profile for a bounded new
-choice. Its task-local `I*` aliases close the result Schema over current direct
-string/integer fields. The Monitor never calls an LLM client directly and does
+separate transaction. `catalog.py` owns all nine persisted tables, including
+the current normalized OpenAPI and append-only contract-change events.
+`contract_monitor.py` checks and updates response contracts;
+`coordinator.py` owns stage ordering; `resource_monitor.py` derives resources;
+and `resource_identity.py` contains the bounded System Agent contract used for
+an unknown identity. The Monitor never calls an LLM client directly and does
 not persist extraction rules or reasoning.
 
 Parameter Patch stores exact RESOURCE or VALUE_REUSE source propositions with
@@ -235,9 +233,10 @@ boundary with different Tool contracts.
 
 ### `restscope/db/`
 
-The one baseline migration creates nine business tables: two OpenAPI Audit
-tables plus operations, resources, operation-resource edges, resource
-instances, observations, operation input sources, and abstract test cases.
+The one baseline migration creates nine business tables. Their SQLAlchemy
+mappings live together in `orm/api_behavior_monitor.py`, and the sole concrete
+transaction Adapter is `adapters/api_behavior_monitor.py`. Two tables retain
+OpenAPI audit/export facts; seven retain response and resource evidence.
 There are no response-value pools, extraction-rule, concrete Test Case,
 Failure, Attempt, plan, queue, or candidate tables.
 
@@ -275,7 +274,7 @@ every semantic predicate was correct. A failed Batch does not roll back state.
   only the smallest needed Tool behavior.
 - Change Agent methodology in the relevant built-in Skill and its References.
 - Change authorization in a Profile; never infer it from Catalog discovery.
-- Change persistence only in the owning audit/monitor Adapter and baseline
+- Change persistence only in the API Behavior Adapter and baseline
   migration after explicit approval.
 - Change target request transport in `target_http`, not inside a Skill or Agent.
 

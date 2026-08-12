@@ -1,10 +1,11 @@
-"""Map durable API response facts and the state derived from those facts.
+"""Map all durable API Behavior Monitor evidence and audit state.
 
-The API Response Monitor writes successful JSON observations, then derives
-operations, resources, current resource instances, and exact request-input
-sources.  Request Generation may also record the immutable abstract
-configuration that produced a Batch request.  These tables never store Agent
-reasoning, scheduler state, or a restorable Generation State.
+The API Behavior Monitor initializes the current normalized OpenAPI and its
+operations, audits Contract changes, writes successful JSON observations, and
+then derives resources, current instances, and exact request-input sources.
+Request Generation may also record the immutable abstract configuration that
+produced a Batch request. These tables never store Agent reasoning, scheduler
+state, or a restorable Generation State.
 """
 
 from __future__ import annotations
@@ -24,7 +25,43 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ..base import Base, CreatedAtMixin
+from ..base import Base, CreatedAtMixin, UpdatedAtMixin
+
+
+class OpenAPICurrentORM(CreatedAtMixin, UpdatedAtMixin, Base):
+    """Map the one normalized OpenAPI document owned by the current App."""
+
+    __tablename__ = "openapi_current"
+    __table_args__ = (
+        CheckConstraint("singleton_id = 1", name="singleton_id_is_one"),
+    )
+
+    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+
+
+class OpenAPIChangeEventORM(CreatedAtMixin, Base):
+    """Map one append-only response-contract change caused by an observation."""
+
+    __tablename__ = "openapi_change_events"
+    __table_args__ = (
+        Index(
+            "ix_openapi_change_events_operation_created",
+            "operation_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    operation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    response_before: Mapped[dict[str, object] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    response_after: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class OperationORM(Base):

@@ -18,7 +18,7 @@ from restscope.api_behavior_monitor.catalog import (
     OperationDefinition,
     OperationInputSource,
     ResourceDefinitionRecord,
-    ResponseMonitorCatalog,
+    APIBehaviorCatalog,
 )
 from restscope.target_http.request import normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
@@ -41,9 +41,9 @@ _MAX_RESPONSE_VALUE_CANDIDATES = 8
 
 
 class BehaviorMonitorReferenceValues:
-    """Adapt the unified Response Monitor Catalog to Generator value reads."""
+    """Adapt the API Behavior Catalog to Generator value reads."""
 
-    def __init__(self, catalog: ResponseMonitorCatalog) -> None:
+    def __init__(self, catalog: APIBehaviorCatalog) -> None:
         """Bind the durable response facts used by later request generation."""
 
         self.catalog = catalog

@@ -11,6 +11,7 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "APIBehaviorCatalog",
     "APIBehaviorMonitorCoordinator",
     "APIBehaviorMonitorError",
     "APIBehaviorMonitorResult",
@@ -20,11 +21,12 @@ __all__ = [
 ]
 
 _PUBLIC_MODULE_BY_NAME = {
+    "APIBehaviorCatalog": ".catalog",
     "APIBehaviorMonitorCoordinator": ".coordinator",
     "APIBehaviorMonitorError": ".coordinator",
-    "APIBehaviorMonitorResult": ".schemas",
+    "APIBehaviorMonitorResult": ".results",
     "APIBehaviorResponseProcessor": ".response_processor",
-    "APIBehaviorWarning": ".schemas",
+    "APIBehaviorWarning": ".results",
     "build_api_behavior_monitor_coordinator": ".factory",
 }
 

@@ -7,30 +7,27 @@ from datetime import UTC, datetime
 
 def _runtime():
     """Build real Monitor and OpenAPI persistence over one in-memory database."""
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
     from restscope.db import (
         Base,
-        SqlAlchemyOpenAPIUnitOfWork,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.openapi_audit import OpenAPIAudit
 
     engine = create_engine_from_url("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    catalog = ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
-    audit = OpenAPIAudit(lambda: SqlAlchemyOpenAPIUnitOfWork(sessions))
     coordinator = APIBehaviorMonitorCoordinator(
-        contract_tracker=ResponseContractTracker(audit),
+        contract_tracker=ResponseContractTracker(catalog),
         catalog=catalog,
     )
-    return coordinator, catalog, audit
+    return coordinator, catalog
 
 
 def _ir():
@@ -73,9 +70,12 @@ def test_valid_success_response_is_saved_even_when_resource_derivation_is_absent
         TargetResponseOperationContext,
     )
 
-    coordinator, catalog, audit = _runtime()
+    coordinator, catalog = _runtime()
     ir = _ir()
-    audit.initialize(build_openapi_document(ir, list(ir.operations)))
+    catalog.initialize_api(
+        document=build_openapi_document(ir, list(ir.operations)),
+        operations=[],
+    )
     from restscope.api_behavior_monitor.catalog import (
         AbstractTestCaseWrite,
         OperationDefinition,
@@ -144,7 +144,7 @@ def test_internal_contract_failure_warns_but_does_not_block_valid_observation() 
         def observe(self, **_arguments):
             raise RuntimeError("internal contract defect")
 
-    _coordinator, catalog, _audit = _runtime()
+    _coordinator, catalog = _runtime()
     coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=BrokenContractTracker(),
         catalog=catalog,

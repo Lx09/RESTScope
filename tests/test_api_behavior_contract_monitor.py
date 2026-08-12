@@ -1,4 +1,4 @@
-"""Regression scenarios for api behavior contract tracker. Each test documents one observable contract or failure boundary."""
+"""Regression scenarios for the API Behavior Contract Monitor."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _ir_with_wildcard_response():
 
 def test_first_exact_status_materializes_from_wildcard_and_widens_ir() -> None:
     """Scenario: verify that first exact status materializes from wildcard and widens ir."""
-    from restscope.api_behavior_monitor.response_contracts import (
+    from restscope.api_behavior_monitor.contract_monitor import (
         ResponseContractTracker,
     )
 
@@ -74,7 +74,7 @@ def test_first_exact_status_materializes_from_wildcard_and_widens_ir() -> None:
 
 def test_checked_response_key_is_not_merged_twice() -> None:
     """Scenario: verify that checked response key is not merged twice."""
-    from restscope.api_behavior_monitor.response_contracts import (
+    from restscope.api_behavior_monitor.contract_monitor import (
         ResponseContractTracker,
     )
 
@@ -105,7 +105,7 @@ def test_checked_response_key_is_not_merged_twice() -> None:
 
 def test_invalid_or_truncated_json_remains_pending_and_retries() -> None:
     """Scenario: verify that invalid or truncated json remains pending and retries."""
-    from restscope.api_behavior_monitor.response_contracts import (
+    from restscope.api_behavior_monitor.contract_monitor import (
         ResponseContractTracker,
     )
 
@@ -146,7 +146,7 @@ def test_invalid_or_truncated_json_remains_pending_and_retries() -> None:
 
 def test_text_empty_and_binary_responses_create_conservative_exact_contracts() -> None:
     """Scenario: verify that text empty and binary responses create conservative exact contracts."""
-    from restscope.api_behavior_monitor.response_contracts import (
+    from restscope.api_behavior_monitor.contract_monitor import (
         ResponseContractTracker,
     )
 

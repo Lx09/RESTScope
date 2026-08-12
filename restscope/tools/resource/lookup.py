@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 from restscope.api_behavior_monitor.catalog import (
     ResourceDefinitionRecord,
-    ResponseMonitorCatalog,
+    APIBehaviorCatalog,
     normalize_resource_name,
 )
 from restscope.llm import ToolSpec
@@ -160,7 +160,7 @@ class ResourceToolBackend:
     constructing this Backend alone does not expose a tool to an Agent.
     """
 
-    def __init__(self, *, catalog: ResponseMonitorCatalog) -> None:
+    def __init__(self, *, catalog: APIBehaviorCatalog) -> None:
         """Retain the existing Catalog without opening a database transaction."""
         self._catalog = catalog
 

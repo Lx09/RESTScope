@@ -9,9 +9,10 @@ from threading import RLock
 from typing import Literal
 
 from restscope.target_http.request import is_json_media_type, normalize_media_type
-from restscope.openapi_audit import OpenAPIChangeEventWrite, OpenAPIAudit
 from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
 from restscope.openapi_parser.ir import MediaTypeIR, ResponseIR, SchemaIR
+
+from .catalog import APIBehaviorCatalog, OpenAPIChangeEventWrite
 
 
 ContractCheckStatus = Literal[
@@ -49,14 +50,14 @@ class ContractCheckResult:
 class ResponseContractTracker:
     """Check each exact status/media observation once for one App lifetime."""
 
-    def __init__(self, audit: OpenAPIAudit | None = None) -> None:
+    def __init__(self, catalog: APIBehaviorCatalog | None = None) -> None:
         """Create an App-lifetime state machine with optional durable auditing.
 
-        Production supplies ``audit``. Focused pure tracker tests may omit it
+        Production supplies ``catalog``. Focused pure tracker tests may omit it
         when they intentionally exercise only IR merge semantics.
         """
 
-        self.audit = audit
+        self.catalog = catalog
         self._states: dict[ResponseContractKey, Literal["checking", "checked", "pending"]] = {}
         self._lock = RLock()
 
@@ -113,7 +114,7 @@ class ResponseContractTracker:
                     observed_schema=observed_schema,
                     body_kind=body_kind,
                 )
-                if changes and self.audit is not None:
+                if changes and self.catalog is not None:
                     current_document = build_openapi_document(
                         ir,
                         list(ir.operations),
@@ -125,7 +126,7 @@ class ResponseContractTracker:
                         status_code=status_code,
                     )
                     assert response_after is not None
-                    self.audit.record_change(
+                    self.catalog.record_openapi_change(
                         document=current_document,
                         event=OpenAPIChangeEventWrite(
                             operation_key=operation_key,

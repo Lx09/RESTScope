@@ -1,4 +1,4 @@
-"""Resource derivation into definitions, role edges, and current state."""
+"""Resource Monitor derivation into definitions, roles, and current state."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from __future__ import annotations
 def _catalog():
     """Create a real in-memory Catalog for one Resource Monitor scenario."""
 
-    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -17,8 +17,8 @@ def _catalog():
     engine = create_engine_from_url("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    return ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    return APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
 
 
@@ -47,7 +47,7 @@ def test_unknown_resource_uses_agent_once_then_reuses_identity_and_logically_del
     """Known identity fields avoid repeated model calls and DELETE hides state."""
 
     from restscope.api_behavior_monitor.catalog import OperationDefinition
-    from restscope.api_behavior_monitor.resources import ResourceResponseTracker
+    from restscope.api_behavior_monitor.resource_monitor import ResourceResponseTracker
 
     catalog = _catalog()
     get_operation = OperationDefinition(

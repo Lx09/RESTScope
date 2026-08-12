@@ -680,7 +680,7 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
 
 def test_generic_batch_emits_sanitized_batch_and_case_spans(
     tmp_path: Path,
-    response_monitor_catalog,
+    api_behavior_catalog,
 ) -> None:
     """The generic Batch runner traces structure without target secrets."""
     import httpx
@@ -691,8 +691,8 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
     from restscope.request_generation import (
         RequestGenerationPatchRuntime,
         RequestGenerationConfigStore,
-        SemanticParameterPatch,
     )
+    from restscope.request_generation.parameter_patch import SemanticParameterPatch
     from restscope.harness.operation_testing import OperationTestingService
 
     class UnreadableBody(httpx.SyncByteStream):
@@ -746,7 +746,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
         config_store=catalog,
-        response_monitor_catalog=response_monitor_catalog,
+        api_behavior_catalog=api_behavior_catalog,
         tracing_runtime=runtime,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(

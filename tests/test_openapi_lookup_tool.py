@@ -256,11 +256,11 @@ def _observed_catalog(tmp_path: Path):
     from restscope.api_behavior_monitor.catalog import (
         ObservationWrite,
         OperationDefinition,
-        ResponseMonitorCatalog,
+        APIBehaviorCatalog,
     )
     from restscope.db import (
         Base,
-        SqlAlchemyResponseMonitorUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
@@ -268,8 +268,8 @@ def _observed_catalog(tmp_path: Path):
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'observed.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    catalog = ResponseMonitorCatalog(
-        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
 
     class ObservedCatalog:

@@ -48,7 +48,7 @@ def _runtime():
 
 def _relational_patch():
     """Return a complete final Generator/Constraint replacement."""
-    from restscope.request_generation import SemanticParameterPatch
+    from restscope.request_generation.parameter_patch import SemanticParameterPatch
 
     return SemanticParameterPatch.model_validate(
         {
@@ -126,7 +126,7 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
 
 def test_digest_mismatch_and_no_change_leave_store_untouched() -> None:
     """Failed Apply attempts never increment revision or replace content."""
-    from restscope.request_generation import SemanticParameterPatch
+    from restscope.request_generation.parameter_patch import SemanticParameterPatch
     from restscope.request_generation.parameter_patch import ParameterPatchValidationError
     from restscope.request_generation.store import GeneratorConfigError
 
@@ -202,7 +202,7 @@ def test_two_concurrent_applies_of_one_revision_have_one_winner() -> None:
 def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() -> None:
     """Source identity is state, and a failed durable commit restores that state."""
     from restscope.operation_references import ResponseFieldReference
-    from restscope.request_generation import OperationInputSourceReference
+    from restscope.request_generation.models import OperationInputSourceReference
     from restscope.request_generation.parameter_patch import (
         ParameterPatchValidationError,
         SemanticParameterPatch,

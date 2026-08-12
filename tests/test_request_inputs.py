@@ -77,7 +77,7 @@ def test_openapi_and_testing_adapters_share_the_same_references() -> None:
     """Both operation representations must expose one canonical handle set."""
     from restscope.tools.openapi import operation_input_references
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import build_semantic_input_map
+    from restscope.request_generation.semantics import build_semantic_input_map
     from restscope.request_generation.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(

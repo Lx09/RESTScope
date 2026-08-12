@@ -99,10 +99,7 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
         SOURCE_ROOT / "tools" / "openapi" / "response_queries.py",
         SOURCE_ROOT / "tools" / "openapi" / "observed_queries.py",
         SOURCE_ROOT / "tools" / "test_case" / "run_batch.py",
-        SOURCE_ROOT
-        / "api_behavior_monitor"
-        / "resource_identifiers"
-        / "prompts.py",
+        SOURCE_ROOT / "api_behavior_monitor" / "resource_identity.py",
     ):
         assert expected.is_file(), f"missing focused owner: {expected}"
 
@@ -332,12 +329,55 @@ def test_workflow_facades_export_only_the_approved_interfaces() -> None:
 
     assert importlib.util.find_spec("restscope.operation_smoke") is None
     assert set(behavior_monitor.__all__) == {
+        "APIBehaviorCatalog",
         "APIBehaviorMonitorCoordinator",
         "APIBehaviorMonitorError",
         "APIBehaviorMonitorResult",
         "APIBehaviorResponseProcessor",
         "APIBehaviorWarning",
         "build_api_behavior_monitor_coordinator",
+    }
+
+
+def test_api_behavior_monitor_owns_its_complete_persistence_navigation() -> None:
+    """Readers find one Catalog and no retired peer Audit or Monitor seams."""
+
+    import restscope.api_behavior_monitor as behavior_monitor
+    import restscope.db as database
+
+    assert importlib.util.find_spec("restscope.openapi_audit") is None
+    assert not (SOURCE_ROOT / "api_behavior_monitor" / "response_contracts").exists()
+    assert not (SOURCE_ROOT / "api_behavior_monitor" / "resource_identifiers").exists()
+    assert not (SOURCE_ROOT / "db" / "adapters" / "openapi_audit.py").exists()
+    assert not (SOURCE_ROOT / "db" / "adapters" / "response_monitor.py").exists()
+    assert not (SOURCE_ROOT / "db" / "orm" / "openapi_orm.py").exists()
+    assert not (SOURCE_ROOT / "db" / "orm" / "response_monitor_orm.py").exists()
+    assert hasattr(behavior_monitor, "APIBehaviorCatalog")
+    assert hasattr(database, "SqlAlchemyAPIBehaviorUnitOfWork")
+    for retired_name in (
+        "OpenAPIAudit",
+        "OpenAPIRepository",
+        "OpenAPIUnitOfWork",
+        "ResponseMonitorCatalog",
+        "ResponseMonitorRepository",
+        "ResponseMonitorUnitOfWork",
+        "SqlAlchemyOpenAPIUnitOfWork",
+        "SqlAlchemyResponseMonitorUnitOfWork",
+    ):
+        assert not hasattr(behavior_monitor, retired_name)
+        assert not hasattr(database, retired_name)
+
+
+def test_request_generation_facade_exposes_only_integration_entries() -> None:
+    """The package doorway points readers to four cross-Module entry points."""
+
+    import restscope.request_generation as request_generation
+
+    assert set(request_generation.__all__) == {
+        "BehaviorMonitorReferenceValues",
+        "RequestGenerationConfigStore",
+        "RequestGenerationPatchRuntime",
+        "SeededRandom",
     }
 
 

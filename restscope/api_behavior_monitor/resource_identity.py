@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-
 import re
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from restscope.agent import SystemAgentTask
+from restscope.agent import SystemAgentResult, SystemAgentTask
 from restscope.context import CompactTextWriter, ContextMetrics
 
 
@@ -21,6 +21,21 @@ IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS = (
     "Return one JSON object containing only `identifier`; use null when the evidence "
     "does not establish an identifier. Do not explain."
 )
+
+RESOURCE_IDENTIFIER_PROFILE_NAME = "resource-identifier-selector"
+
+
+class SystemAgentRunner(Protocol):
+    """Run the registered identity-selection Profile through the Agent Harness."""
+
+    def run_system_agent(
+        self,
+        profile_name: str,
+        task: SystemAgentTask,
+    ) -> SystemAgentResult:
+        """Return one Harness-validated decision or terminal failure."""
+
+        ...
 
 
 class _PromptModel(BaseModel):
@@ -54,7 +69,10 @@ class IdentifierSelectionDecision(_PromptModel):
 
     @field_validator("identifier")
     @classmethod
-    def reject_blank_identifier(cls, value: IdentifierSelection | None) -> IdentifierSelection | None:
+    def reject_blank_identifier(
+        cls,
+        value: IdentifierSelection | None,
+    ) -> IdentifierSelection | None:
         """Keep the validator hook explicit for the nullable result contract."""
         return value
 

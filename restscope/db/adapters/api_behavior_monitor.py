@@ -1,4 +1,4 @@
-"""SQLAlchemy adapter for API Response Monitor facts and derived state.
+"""SQLAlchemy adapter for API Behavior Monitor evidence and audit state.
 
 This Module translates the Catalog's immutable records into ORM rows.  It owns
 the mechanical latest-one-hundred observation retention rule but does not
@@ -11,6 +11,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from restscope.api_behavior_monitor.catalog import (
@@ -19,6 +20,8 @@ from restscope.api_behavior_monitor.catalog import (
     ObservationRecord,
     ObservationWrite,
     ObservedResponseCoordinate,
+    OpenAPIChangeEventRecord,
+    OpenAPIChangeEventWrite,
     OperationDefinition,
     OperationInputSource,
     ResourceDefinitionRecord,
@@ -32,6 +35,8 @@ from restscope.api_behavior_monitor.catalog import (
 from ..orm import (
     AbstractTestCaseORM,
     ObservationORM,
+    OpenAPIChangeEventORM,
+    OpenAPICurrentORM,
     OperationInputSourceORM,
     OperationORM,
     OperationResourceEdgeORM,
@@ -42,13 +47,80 @@ from ..time import as_utc
 from ._transaction import _SqlAlchemyUnitOfWork
 
 
-class SqlAlchemyResponseMonitorRepository:
-    """Store Response Monitor rows in one caller-owned SQLAlchemy session."""
+class _SqlAlchemyAPIBehaviorRepository:
+    """Store all API Behavior rows in one caller-owned SQLAlchemy session."""
 
     def __init__(self, session: Session) -> None:
         """Retain the session without committing it independently."""
 
         self.session = session
+
+    def initialize_api(
+        self,
+        *,
+        document: dict[str, object],
+        operations: list[OperationDefinition],
+    ) -> None:
+        """Insert the initial document and every normalized operation atomically."""
+
+        if self.session.get(OpenAPICurrentORM, 1) is not None:
+            raise ValueError("The API Behavior Catalog is already initialized")
+        self.session.add(
+            OpenAPICurrentORM(singleton_id=1, document=deepcopy(document))
+        )
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            raise ValueError(
+                "The API Behavior Catalog is already initialized"
+            ) from exc
+        for operation in operations:
+            self.ensure_operation(operation)
+
+    def get_current_openapi(self) -> dict[str, object] | None:
+        """Return the current normalized OpenAPI document detached from ORM state."""
+
+        row = self.session.get(OpenAPICurrentORM, 1)
+        return deepcopy(row.document) if row is not None else None
+
+    def record_openapi_change(
+        self,
+        *,
+        document: dict[str, object],
+        event: OpenAPIChangeEventWrite,
+    ) -> OpenAPIChangeEventRecord:
+        """Replace the current document and append its Contract change event."""
+
+        current = self.session.get(OpenAPICurrentORM, 1)
+        if current is None:
+            raise RuntimeError("The API Behavior Catalog has not been initialized")
+        current.document = deepcopy(document)
+        row = OpenAPIChangeEventORM(
+            id=f"openapi_change_{uuid4().hex}",
+            operation_id=event.operation_key,
+            status_code=event.status_code,
+            media_type=event.media_type,
+            changes=list(event.changes),
+            response_before=deepcopy(event.response_before),
+            response_after=deepcopy(event.response_after),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return _openapi_change_record(row)
+
+    def list_openapi_changes(
+        self,
+        operation_key: str | None = None,
+    ) -> list[OpenAPIChangeEventRecord]:
+        """Return Contract change events in durable creation order."""
+
+        query = select(OpenAPIChangeEventORM)
+        if operation_key is not None:
+            query = query.where(OpenAPIChangeEventORM.operation_id == operation_key)
+        rows = self.session.scalars(
+            query.order_by(OpenAPIChangeEventORM.created_at, OpenAPIChangeEventORM.id)
+        ).all()
+        return [_openapi_change_record(row) for row in rows]
 
     def ensure_operation(
         self,
@@ -418,6 +490,23 @@ def _operation_definition(row: OperationORM) -> OperationDefinition:
     )
 
 
+def _openapi_change_record(
+    row: OpenAPIChangeEventORM,
+) -> OpenAPIChangeEventRecord:
+    """Detach one OpenAPI Contract change from its ORM row."""
+
+    return OpenAPIChangeEventRecord(
+        id=row.id,
+        operation_key=row.operation_id or "",
+        status_code=row.status_code,
+        media_type=row.media_type,
+        changes=list(row.changes),
+        response_before=deepcopy(row.response_before),
+        response_after=deepcopy(row.response_after),
+        created_at=as_utc(row.created_at),
+    )
+
+
 def _observation_record(row: ObservationORM) -> ObservationRecord:
     """Detach one observation row while preserving its original JSON text."""
 
@@ -483,13 +572,11 @@ def _abstract_test_case(row: AbstractTestCaseORM) -> AbstractTestCaseRecord:
     )
 
 
-class SqlAlchemyResponseMonitorUnitOfWork(_SqlAlchemyUnitOfWork):
-    """Open one transaction containing the unified Response Monitor repository."""
+class SqlAlchemyAPIBehaviorUnitOfWork(_SqlAlchemyUnitOfWork):
+    """Open one transaction containing the complete API Behavior repository."""
 
-    def __enter__(self) -> "SqlAlchemyResponseMonitorUnitOfWork":
+    def __enter__(self) -> "SqlAlchemyAPIBehaviorUnitOfWork":
         """Open the session and expose its repository."""
 
-        self.response_monitor = SqlAlchemyResponseMonitorRepository(
-            self._open_session()
-        )
+        self.api_behavior = _SqlAlchemyAPIBehaviorRepository(self._open_session())
         return self

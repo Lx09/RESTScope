@@ -10,10 +10,11 @@ and applies only an exact previously validated revision/digest pair.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
+from typing import Protocol
 
 from restscope.target_http.request import normalize_media_type
 from restscope.operation_references import ResponseFieldReference
@@ -54,10 +55,7 @@ from .compiler import (
     validate_variant_branch_updates,
 )
 from .projection import semantic_state_payload
-from ..ports import (
-    ReferenceBindingStager,
-    ReferenceValueProvider,
-)
+from ..ports import ReferenceValueProvider
 from ..semantics import build_semantic_input_map
 from ..store import (
     GeneratorConfigError,
@@ -70,6 +68,25 @@ from ..store import (
 )
 from ..constraint_solver import assignments_from_generated_case
 from ..generation import project_generated_input_value
+
+
+class _ReferenceBindingStager(Protocol):
+    """Stage durable bindings while this Runtime publishes in-memory state.
+
+    This private port sits beside its only consumer.  A concrete behavior
+    catalog may satisfy it structurally without making the persistence detail
+    part of Request Generation's shared integration Interface.
+    """
+
+    def stage_bindings(
+        self,
+        *,
+        config: OperationGeneratorConfig,
+        bindings: Sequence[ReferenceValueBinding],
+    ) -> AbstractContextManager[None]:
+        """Keep one durable transaction open until publication completes."""
+
+        ...
 
 
 class _CandidateReferenceValues:
@@ -187,7 +204,7 @@ class RequestGenerationPatchRuntime:
         store: RequestGenerationConfigStore,
         ir_provider: Callable[[], OpenAPISpecIR],
         reference_values: ReferenceValueProvider | None = None,
-        reference_binding_stager: ReferenceBindingStager | None = None,
+        reference_binding_stager: _ReferenceBindingStager | None = None,
     ) -> None:
         self._store = store
         self._ir_provider = ir_provider

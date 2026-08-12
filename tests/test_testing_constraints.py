@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 
 def _operation_snapshot():
-    from restscope.request_generation import (
+    from restscope.request_generation.models import (
         InputNodeSnapshot,
         OperationTestSnapshot,
         SchemaSnapshot,
@@ -676,7 +676,7 @@ def test_normalization_orders_commutative_children() -> None:
 
 def test_constraint_services_are_exported_from_testing_package() -> None:
     """Scenario: verify that constraint services are exported from testing package."""
-    from restscope.request_generation import (
+    from restscope.request_generation.constraints import (
         ConstraintValidationError,
         classify_constraint,
         evaluate_constraint_set,

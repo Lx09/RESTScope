@@ -449,7 +449,7 @@ def test_container_enum_choice_bypasses_descendant_generators(
 def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
     """Scenario: verify that manual scalar generator overrides the frozen schema type."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import InputGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig
     from restscope.request_generation.generation import generate_test_case
     from restscope.request_generation.snapshot import build_initial_operation_config
 
@@ -507,7 +507,7 @@ def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
 
 def _constrained_generation_config():
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import InputGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig
     from restscope.request_generation.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
@@ -615,7 +615,7 @@ def test_generate_test_case_none_constraints_preserves_unconstrained_output() ->
 
 def test_constrained_generation_can_force_an_optional_parameter_present() -> None:
     """Scenario: verify that constrained generation can force an optional parameter present."""
-    from restscope.request_generation import ConstraintSet
+    from restscope.request_generation.constraints import ConstraintSet
     from restscope.request_generation.generation import generate_test_case
 
     config = _constrained_generation_config()
@@ -666,7 +666,7 @@ def test_constrained_generation_can_force_an_optional_parameter_present() -> Non
 
 def test_constrained_generation_preserves_explicit_null_override() -> None:
     """Scenario: verify that constrained generation preserves explicit null override."""
-    from restscope.request_generation import ConstraintSet
+    from restscope.request_generation.constraints import ConstraintSet
     from restscope.request_generation.generation import generate_test_case
 
     config = _constrained_generation_config()
@@ -707,7 +707,7 @@ def test_constrained_generation_preserves_explicit_null_override() -> None:
 
 def test_constrained_body_property_forces_request_body_ancestors_present() -> None:
     """Scenario: verify that constrained body property forces request body ancestors present."""
-    from restscope.request_generation import ConstraintSet
+    from restscope.request_generation.constraints import ConstraintSet
     from restscope.request_generation.generation import generate_test_case
 
     config = _constrained_generation_config()
@@ -748,11 +748,11 @@ def test_constrained_body_property_forces_request_body_ancestors_present() -> No
 def test_body_projection_uses_the_active_media_root_for_arrays_and_scalars() -> None:
     """Scenario: verify that body projection uses the active media root for arrays and scalars."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import (
-        build_semantic_input_map,
+    from restscope.request_generation.semantics import build_semantic_input_map
+    from restscope.request_generation.generation import (
+        generate_test_case,
         project_generated_input_value,
     )
-    from restscope.request_generation.generation import generate_test_case
     from restscope.request_generation.snapshot import build_initial_operation_config
 
     operation = OpenAPIParser.parse(
@@ -838,7 +838,7 @@ def test_constrained_generation_rechecks_the_completed_case(
     monkeypatch,
 ) -> None:
     """Scenario: verify that constrained generation rechecks the completed case."""
-    from restscope.request_generation import ConstraintSet, InputNodeOverride
+    from restscope.request_generation.constraints import ConstraintSet, InputNodeOverride
     from restscope.request_generation.constraint_solver import ConstraintSolveError
     from restscope.request_generation.generation import generate_test_case
 
@@ -885,7 +885,7 @@ def test_constrained_generation_rechecks_the_completed_case(
 def test_test_case_generator_builds_configured_request_inputs_and_omits_optional_nodes() -> None:
     """Scenario: verify that test case generator builds configured request inputs and omits optional nodes."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig, OperationGeneratorConfig
     from restscope.request_generation.generation import generate_test_case
 
     spec = {
@@ -996,7 +996,7 @@ def test_test_case_generator_builds_configured_request_inputs_and_omits_optional
 def test_test_case_generator_supports_weighted_variants_and_all_of_objects() -> None:
     """Scenario: verify that test case generator supports weighted variants and all of objects."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig, OperationGeneratorConfig
     from restscope.request_generation.generation import generate_test_case
 
     operation = OpenAPIParser.parse(
@@ -1099,7 +1099,7 @@ def test_test_case_generator_supports_weighted_variants_and_all_of_objects() -> 
 def test_nullable_object_can_generate_an_explicit_json_null_body() -> None:
     """Scenario: verify that nullable object can generate an explicit json null body."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig, OperationGeneratorConfig
     from restscope.request_generation.generation import generate_test_case
     from restscope.request_generation.serialization import serialize_test_case
 
@@ -1161,7 +1161,7 @@ def test_nullable_object_can_generate_an_explicit_json_null_body() -> None:
 def test_feedback_variant_generator_does_not_revalidate_one_of_membership() -> None:
     """Scenario: verify that feedback variant generator does not revalidate one of membership."""
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.request_generation import InputGeneratorConfig, OperationGeneratorConfig
+    from restscope.request_generation.models import InputGeneratorConfig, OperationGeneratorConfig
     from restscope.request_generation.generation import generate_test_case
 
     operation = OpenAPIParser.parse(

@@ -19,7 +19,7 @@ from restscope.tools.context import ToolContext
 from restscope.api_behavior_monitor.catalog import (
     AbstractTestCaseWrite,
     OperationDefinition,
-    ResponseMonitorCatalog,
+    APIBehaviorCatalog,
 )
 from restscope.target_http import (
     PreparedTargetRequest,
@@ -142,7 +142,7 @@ class OperationTestingService:
         self,
         *,
         config_store: RequestGenerationConfigStore,
-        response_monitor_catalog: ResponseMonitorCatalog,
+        api_behavior_catalog: APIBehaviorCatalog,
         transport: TargetHTTPTransport | None = None,
         tracing_runtime: TracingRuntime | None = None,
         reference_values: ReferenceValueProvider | None = None,
@@ -151,7 +151,7 @@ class OperationTestingService:
         self.transport = transport or TargetHTTPTransport()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.reference_values = reference_values
-        self.response_monitor_catalog = response_monitor_catalog
+        self.api_behavior_catalog = api_behavior_catalog
 
     def run_batch(
         self,
@@ -381,7 +381,7 @@ class OperationTestingService:
         preflight failure, so the target receives no partial Batch.
         """
         operation = state.config.snapshot
-        self.response_monitor_catalog.ensure_operation(
+        self.api_behavior_catalog.ensure_operation(
             OperationDefinition(
                 operation_id=state.config.operation_key,
                 method=operation.method,
@@ -402,7 +402,7 @@ class OperationTestingService:
                 item.model_dump(mode="json") for item in state.constraints
             ]
         }
-        record = self.response_monitor_catalog.ensure_abstract_test_case(
+        record = self.api_behavior_catalog.ensure_abstract_test_case(
             AbstractTestCaseWrite(
                 operation_id=state.config.operation_key,
                 state_digest=state.state_digest,

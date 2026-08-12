@@ -30,13 +30,13 @@ from .catalog import (
     ObservationWrite,
     OperationDefinition,
     ResourceDerivationResult,
-    ResponseMonitorCatalog,
+    APIBehaviorCatalog,
 )
-from .response_contracts import (
+from .contract_monitor import (
     ContractCheckResult,
     ResponseContractTracker,
 )
-from .schemas import APIBehaviorMonitorResult, APIBehaviorWarning
+from .results import APIBehaviorMonitorResult, APIBehaviorWarning
 
 
 class ResourceResponseTracker(Protocol):
@@ -67,7 +67,7 @@ class APIBehaviorMonitorCoordinator:
         self,
         *,
         contract_tracker: ResponseContractTracker,
-        catalog: ResponseMonitorCatalog,
+        catalog: APIBehaviorCatalog,
         resource_tracker: ResourceResponseTracker | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:

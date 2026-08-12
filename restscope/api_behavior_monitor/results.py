@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .catalog import ResourceDerivationResult
-from .response_contracts import ContractCheckResult
+from .contract_monitor import ContractCheckResult
 
 
 @dataclass(frozen=True, slots=True)

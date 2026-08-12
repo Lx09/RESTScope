@@ -6,6 +6,11 @@ Subsequent change: ADR 0003 retires the temporary Operation Smoke and named
 Agent Modules that this audit intentionally left in place. Counts and dependency
 observations below describe the recorded audit baseline, not the current tree.
 
+Subsequent navigation change (2026-08-12): OpenAPI audit persistence was later
+folded into `api_behavior_monitor.APIBehaviorCatalog`, and the shallow Behavior
+Monitor subject packages were flattened. The recommendations below preserve
+the historical decision path and no longer describe those current locations.
+
 Baseline commit: `9f3e50e55f48a7fda85d9d4e7f89304efa33989c`
 
 ## Objective

@@ -1,4 +1,4 @@
-"""Protect normalized OpenAPI export and append-only response-change auditing."""
+"""Protect the Catalog's OpenAPI export and append-only change auditing."""
 
 from __future__ import annotations
 
@@ -84,39 +84,44 @@ def test_app_exports_full_current_document_and_filterable_change_events(
 
 def test_catalog_rolls_back_current_document_when_event_write_fails(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     """A transaction failure cannot leave current OpenAPI without its audit event."""
 
-    from restscope.openapi_audit import OpenAPIChangeEventWrite, OpenAPIAudit
+    from restscope.api_behavior_monitor import APIBehaviorCatalog
+    from restscope.api_behavior_monitor.catalog import OpenAPIChangeEventWrite
     from restscope.db import (
         Base,
-        SqlAlchemyOpenAPIUnitOfWork,
+        SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
-    from restscope.db.adapters.openapi_audit import SqlAlchemyOpenAPIRepository
+
+    class CommitFailureUnitOfWork(SqlAlchemyAPIBehaviorUnitOfWork):
+        """Fail after repository writes so context cleanup must roll them back."""
+
+        def commit(self) -> None:
+            """Materialize pending SQL without committing the transaction."""
+
+            if self.session is None:
+                raise RuntimeError("Unit of work is not active")
+            self.session.flush()
+            raise RuntimeError("simulated event failure")
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'rollback.sqlite'}")
     Base.metadata.create_all(engine)
-    catalog = OpenAPIAudit(
-        lambda: SqlAlchemyOpenAPIUnitOfWork(make_session_factory(engine))
+    sessions = make_session_factory(engine)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
-    catalog.initialize(_spec())
-    original = SqlAlchemyOpenAPIRepository.record_change
-
-    def fail_after_flush(self, **arguments):
-        original(self, **arguments)
-        raise RuntimeError("simulated event failure")
-
-    monkeypatch.setattr(SqlAlchemyOpenAPIRepository, "record_change", fail_after_flush)
+    catalog.initialize_api(document=_spec(), operations=[])
+    failing_catalog = APIBehaviorCatalog(lambda: CommitFailureUnitOfWork(sessions))
     changed = deepcopy(_spec())
     changed["paths"]["/items"]["post"]["responses"]["201"] = {
         "description": "created"
     }
 
     with pytest.raises(RuntimeError, match="simulated event failure"):
-        catalog.record_change(
+        failing_catalog.record_openapi_change(
             document=changed,
             event=OpenAPIChangeEventWrite(
                 operation_key="POST /items",
@@ -128,18 +133,18 @@ def test_catalog_rolls_back_current_document_when_event_write_fails(
             ),
         )
 
-    assert catalog.current_document() == _spec()
-    assert catalog.list_changes() == []
+    assert catalog.current_openapi() == _spec()
+    assert catalog.list_openapi_changes() == []
 
 
 def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
     """A failed durable update leaves the in-memory Response exactly retryable."""
 
-    from restscope.api_behavior_monitor.response_contracts import ResponseContractTracker
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     class FailingCatalog:
-        def record_change(self, **_arguments):
+        def record_openapi_change(self, **_arguments):
             raise RuntimeError("database unavailable")
 
     ir = OpenAPIParser.parse(_spec())
@@ -156,7 +161,7 @@ def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
         )
 
     assert build_openapi_document(ir, list(ir.operations)) == before
-    tracker.audit = None
+    tracker.catalog = None
     retried = tracker.observe(
         ir=ir,
         operation_key="POST /items",
