@@ -78,30 +78,31 @@ shadowed child has no effect.
 ## Reference-backed strategies
 
 ```json
-{"type":"resource_identifier","resource":"canonical-resource","identifier":"tenantId/userId","component":"userId"}
-{"type":"response_value","source":{"operation_key":"GET /x","matched_status_code":"200","media_type":"application/json","field":"body.id"}}
+{"type":"resource_identifier","source":{"operation_key":"GET /x","status_code":200,"media_type":"application/json","field":"body.userId"}}
+{"type":"response_value","source":{"operation_key":"GET /x","status_code":200,"media_type":"application/json","field":"body.id"}}
 ```
 
-For `resource_identifier`, discover and copy a canonical name with
-`resource.list_resources`, then successfully call `resource.list_ids` for it.
-Copy one returned `identifier` Definition and one of its ordered component
-names exactly. The compiler requires a current non-empty Record set. A
-single-component Definition may bind a compatible scalar input. A composite
-Definition may bind only path parameters, and the same Patch must bind every
-component exactly once using the same resource and identifier. Generation then
-selects one complete Record and assigns all components together; it never mixes
-components from different observations. JSON body values must match the
-declared scalar type; integers may satisfy number. Other parameters serialize
-scalars as text but still reject objects, arrays, and null pools.
+For `resource_identifier`, first confirm the exact normalized resource with
+`resource.list_resources` and a non-empty `resource.list_ids` result. Then use
+`openapi.find_observed_response_fields` to copy the exact producer coordinates
+for each identity field. The compiler resolves that source back to exactly one
+operation-resource edge and requires current instances. A single identity field
+may bind a compatible scalar input. Composite identity fields may bind only
+path parameters, and the same Patch must bind every field exactly once. Each
+field may have its own selector, but all must resolve to the same resource.
+Generation selects one complete current instance and assigns all components
+together; it never mixes components from different observations. JSON body
+values must match the declared scalar type; integers may satisfy number. Other
+parameters serialize scalars as text but still reject objects, arrays, or null.
 
 For `response_value`, copy all four source fields exactly from a successful
 `openapi.find_observed_response_fields` result. Compilation re-runs current
-observation lookup, resolves the private pool name, checks complete provenance,
-and requires non-empty type-compatible scalar values. Never emit the private
-pool name. The selected source is the complete final source identity for that
-input. Replacing it removes the old source and values derived only from that
-source; it never appends another alternative. Changing the Generator away from
-`response_value` removes the old response pool. Prefer `resource_identifier`
+observation lookup, resolves the exact selector, checks complete provenance,
+and requires non-empty type-compatible scalar values. The selected source is
+the complete final source identity for that input. Replacing it removes the old
+source; later reads parse values only from observations at the new coordinate.
+It never appends another alternative. Changing the Generator away from
+`response_value` removes the old response source. Prefer `resource_identifier`
 when it represents the same entity.
 
 ## Presence and minimal repair
@@ -123,6 +124,6 @@ Build the Patch in this order:
    satisfies the requirement and schema.
 4. Add mandatory ancestors and exclusive branch selections needed to guarantee
    the value.
-5. Add a reference strategy only after its current pool was queried.
+5. Add a reference strategy only after its current values were queried.
 6. Re-read the complete final state for accidental old controls or unrelated
    behavior changes.

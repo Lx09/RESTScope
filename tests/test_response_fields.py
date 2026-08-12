@@ -38,3 +38,32 @@ def test_response_reference_keeps_schema_branch_identity_out_of_json_selector() 
 
     assert reference.handle == "body.oneOf[1].id"
     assert reference.selector == "$.id"
+
+
+def test_response_reference_selects_values_from_nested_objects_and_arrays() -> None:
+    """One parsed Reference traverses runtime JSON without a second parser."""
+    from restscope.operation_references import ResponseFieldReference
+
+    reference = ResponseFieldReference.from_selector("$.projects[].owner.id")
+
+    assert reference.select_values(
+        {
+            "projects": [
+                {"owner": {"id": 7}},
+                {"owner": {"id": None}},
+                {"owner": {}},
+                {"owner": {"id": {"nested": True}}},
+            ]
+        }
+    ) == (7, None, {"nested": True})
+
+
+def test_response_reference_selects_root_array_values_and_ignores_missing_steps() -> None:
+    """Root arrays expand while incompatible or absent branches add no value."""
+    from restscope.operation_references import ResponseFieldReference
+
+    reference = ResponseFieldReference.from_selector("$[].code")
+
+    assert reference.select_values(
+        [{"code": "a"}, {"other": "b"}, 3, {"code": "c"}]
+    ) == ("a", "c")

@@ -12,6 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from restscope.target_http.request import normalize_media_type
+
 
 _SchemaVariant = Literal["oneOf", "anyOf", "allOf"]
 _COMBINERS = {"oneOf", "anyOf", "allOf"}
@@ -173,6 +176,41 @@ class ResponseFieldReference:
             if step.kind == "property" and step.name is not None
         )
 
+    def select_values(self, document: object) -> tuple[object, ...]:
+        """Return values reached by this Reference in one response document.
+
+        Property steps read dictionary keys and item steps expand arrays. Schema
+        variant steps are intentionally ignored because ``oneOf`` and similar
+        branches identify an OpenAPI Schema location rather than a runtime JSON
+        key. Missing keys and values of the wrong container type contribute no
+        result; an explicitly present null remains a result so the caller can
+        apply its own scalar or null policy.
+
+        Args:
+            document: Parsed response JSON or another opaque value to inspect.
+
+        Returns:
+            Values in response order. This method does not copy or interpret
+            them and changes no state.
+        """
+
+        current: list[object] = [document]
+        for step in self._steps:
+            if step.kind == "variant":
+                continue
+            next_values: list[object] = []
+            if step.kind == "items":
+                for value in current:
+                    if isinstance(value, list):
+                        next_values.extend(value)
+            else:
+                assert step.name is not None
+                for value in current:
+                    if isinstance(value, dict) and step.name in value:
+                        next_values.append(value[step.name])
+            current = next_values
+        return tuple(current)
+
     def property(self, name: str) -> "ResponseFieldReference":
         """Return an immutable child for one direct JSON property name."""
         if not name or any(marker in name for marker in (".", "[", "]")):
@@ -200,6 +238,46 @@ class ResponseFieldReference:
     def _child(self, step: _PathStep) -> "ResponseFieldReference":
         """Append one trusted path step without changing the current reference."""
         return ResponseFieldReference((*self._steps, step))
+
+
+class ResponseSourceCoordinate(BaseModel):
+    """Identify one exact field in successful responses from a producer.
+
+    This shared value owns the source coordinates used by Generator strategies,
+    in-memory Generation State bindings, and persisted consumer propositions.
+    It normalizes media-type parameters and proves that the readable field name
+    agrees with the single selector grammar owned by
+    :class:`ResponseFieldReference`.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    producer_operation_id: str = Field(min_length=1, max_length=2000)
+    status_code: int = Field(ge=200, le=299)
+    media_type: str = Field(min_length=1, max_length=500)
+    selector: str = Field(min_length=2, max_length=2000)
+    field_name: str = Field(min_length=1, max_length=500)
+
+    @field_validator("media_type")
+    @classmethod
+    def normalize_media_type_value(cls, value: str) -> str:
+        """Remove transport parameters and use case-insensitive HTTP spelling."""
+
+        normalized = normalize_media_type(value)
+        if normalized is None:
+            raise ValueError("media_type cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_selector_field_name(self) -> "ResponseSourceCoordinate":
+        """Reject a display field that contradicts the exact JSON selector."""
+
+        reference = ResponseFieldReference.from_selector(self.selector)
+        if not reference.property_names:
+            raise ValueError("source selector must identify a response property")
+        if reference.property_names[-1] != self.field_name:
+            raise ValueError("field_name must equal the selector's final property")
+        return self
 
 
 def _take_index(value: str, *, handle: str) -> tuple[str, str]:

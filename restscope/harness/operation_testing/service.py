@@ -3,7 +3,9 @@
 The service freezes Generator configuration, prepares every request before the
 first network call, then executes the requests sequentially. Its output is a
 ``BatchExecutionResult`` contains inline canonical requests and bounded
-HTTP/transport outcomes. It creates no Test Case identity or persistent state.
+HTTP/transport outcomes.  Before the first network call it persists one
+immutable Abstract Test Case for the frozen Generator/Constraint state; every
+successful observation produced by that Batch points to this identity.
 """
 
 from __future__ import annotations
@@ -14,6 +16,11 @@ import json
 import secrets
 
 from restscope.tools.context import ToolContext
+from restscope.api_behavior_monitor.catalog import (
+    AbstractTestCaseWrite,
+    OperationDefinition,
+    ResponseMonitorCatalog,
+)
 from restscope.target_http import (
     PreparedTargetRequest,
     TargetHTTPTimeout,
@@ -26,6 +33,7 @@ from .failure import parse_http_failure, parse_transport_failure
 from .outcomes import BatchCaseOutcome
 
 from restscope.request_generation import RequestGenerationConfigStore
+from restscope.request_generation.store import RequestGenerationState
 from restscope.request_generation.constraints import (
     ConstraintSet,
     ConstraintValidationError,
@@ -54,6 +62,7 @@ class BatchExecutionResult:
     operation_key: str
     generation_revision: int
     generation_state_digest: str
+    abstract_test_case_id: str
     seed: int
     cases: tuple[BatchCaseOutcome, ...]
 
@@ -77,31 +86,47 @@ class TestingExecutionError(RuntimeError):
 
 
 class _FrozenReferenceValues:
-    """Serve immutable value pools captured with one Generation revision."""
+    """Serve immutable reference values captured with one Generation revision."""
 
     def __init__(
         self,
         values: dict[tuple[str, ...], tuple[object, ...]],
-        records: dict[tuple[str, str], tuple[dict[str, object], ...]],
+        records: dict[str, tuple[dict[str, object], ...]],
+        resources: dict[tuple[str, ...], str],
+        identity_fields: dict[str, tuple[str, ...]],
     ) -> None:
         self._values = values
         self._records = records
+        self._resources = resources
+        self._identity_fields = identity_fields
 
     def values_for(
         self,
         strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
     ) -> tuple[object, ...]:
-        """Return the pool captured for this exact Generator identity."""
+        """Return values captured for this exact Generator identity."""
         return self._values.get(_reference_key(strategy), ())
 
-    def identifier_records(
+    def resource_key(self, strategy: ResourceIdentifierGenerator) -> str:
+        """Return the resource identity frozen for one exact source."""
+
+        return self._resources[_reference_key(strategy)]
+
+    def resource_records(
         self,
-        *,
-        resource: str,
-        identifier: str,
+        strategy: ResourceIdentifierGenerator,
     ) -> tuple[dict[str, object], ...]:
-        """Return complete records captured once with the Batch revision."""
-        return self._records.get((resource, identifier), ())
+        """Return complete current states captured once for the Batch."""
+
+        return self._records.get(self.resource_key(strategy), ())
+
+    def resource_identity_fields(
+        self,
+        strategy: ResourceIdentifierGenerator,
+    ) -> tuple[str, ...]:
+        """Return immutable identity fields captured with resource records."""
+
+        return self._identity_fields.get(self.resource_key(strategy), ())
 
 
 class OperationTestingService:
@@ -117,6 +142,7 @@ class OperationTestingService:
         self,
         *,
         config_store: RequestGenerationConfigStore,
+        response_monitor_catalog: ResponseMonitorCatalog,
         transport: TargetHTTPTransport | None = None,
         tracing_runtime: TracingRuntime | None = None,
         reference_values: ReferenceValueProvider | None = None,
@@ -125,6 +151,7 @@ class OperationTestingService:
         self.transport = transport or TargetHTTPTransport()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.reference_values = reference_values
+        self.response_monitor_catalog = response_monitor_catalog
 
     def run_batch(
         self,
@@ -273,6 +300,13 @@ class OperationTestingService:
         except (ConstraintValidationError, ConstraintSolveError) as exc:
             raise TestingExecutionError(exc.code, str(exc)) from exc
 
+        # The audit identity is created only after every request has passed
+        # generation and serialization preflight, but still before the first
+        # target side effect. Production App wiring always supplies the Catalog.
+        abstract_test_case_id = self._ensure_abstract_test_case(
+            generation_state,
+        )
+
         # Network execution begins only after preflight succeeds for every case.
         cases: list[BatchCaseOutcome] = []
         for case_index, (generated, request, target_request, inline_request) in enumerate(
@@ -288,6 +322,7 @@ class OperationTestingService:
                     target_request=target_request,
                     catalog_request=inline_request,
                     operation_path=operation.path,
+                    abstract_test_case_id=abstract_test_case_id,
                 )
             )
 
@@ -295,16 +330,22 @@ class OperationTestingService:
             operation_key=operation_key,
             generation_revision=generation_state.revision,
             generation_state_digest=generation_state.state_digest,
+            abstract_test_case_id=abstract_test_case_id,
             seed=run_seed,
             cases=tuple(cases),
         )
 
-    def _capture_reference_values(self, state) -> _FrozenReferenceValues | None:
-        """Read every pool named by the frozen config once under its Store lock."""
+    def _capture_reference_values(
+        self,
+        state: RequestGenerationState,
+    ) -> _FrozenReferenceValues | None:
+        """Read each configured reference source once under its Store lock."""
         if self.reference_values is None:
             return None
         captured: dict[tuple[str, ...], tuple[object, ...]] = {}
-        records: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
+        records: dict[str, tuple[dict[str, object], ...]] = {}
+        resources: dict[tuple[str, ...], str] = {}
+        identity_fields: dict[str, tuple[str, ...]] = {}
         for item in state.config.configs:
             strategy = item.strategy
             if not isinstance(
@@ -316,16 +357,60 @@ class OperationTestingService:
             if key not in captured:
                 captured[key] = tuple(self.reference_values.values_for(strategy))
             if isinstance(strategy, ResourceIdentifierGenerator):
-                record_key = (strategy.resource, strategy.identifier)
-                if record_key not in records:
-                    records[record_key] = tuple(
+                resource = self.reference_values.resource_key(strategy)
+                resources[key] = resource
+                if resource not in records:
+                    records[resource] = tuple(
                         dict(item)
-                        for item in self.reference_values.identifier_records(
-                            resource=strategy.resource,
-                            identifier=strategy.identifier,
-                        )
+                        for item in self.reference_values.resource_records(strategy)
                     )
-        return _FrozenReferenceValues(captured, records)
+                    identity_fields[resource] = tuple(
+                        self.reference_values.resource_identity_fields(strategy)
+                    )
+        return _FrozenReferenceValues(
+            captured,
+            records,
+            resources,
+            identity_fields,
+        )
+
+    def _ensure_abstract_test_case(self, state: RequestGenerationState) -> str:
+        """Persist the exact frozen generation meaning before network execution.
+
+        The Catalog is required: inability to create this audit identity is a
+        preflight failure, so the target receives no partial Batch.
+        """
+        operation = state.config.snapshot
+        self.response_monitor_catalog.ensure_operation(
+            OperationDefinition(
+                operation_id=state.config.operation_key,
+                method=operation.method,
+                path=operation.path,
+            )
+        )
+        generators_json = {
+            "active_media_type": state.config.active_media_type,
+            "configs": [
+                item.model_dump(mode="json") for item in state.config.configs
+            ],
+            "reference_bindings": [
+                item.model_dump(mode="json") for item in state.reference_bindings
+            ],
+        }
+        constraints_json = {
+            "constraints": [
+                item.model_dump(mode="json") for item in state.constraints
+            ]
+        }
+        record = self.response_monitor_catalog.ensure_abstract_test_case(
+            AbstractTestCaseWrite(
+                operation_id=state.config.operation_key,
+                state_digest=state.state_digest,
+                generators_json=generators_json,
+                constraints_json=constraints_json,
+            )
+        )
+        return record.abstract_test_case_id
 
     def _execute_case(
         self,
@@ -338,6 +423,7 @@ class OperationTestingService:
         target_request: PreparedTargetRequest,
         catalog_request: dict[str, object],
         operation_path: str,
+        abstract_test_case_id: str,
     ) -> BatchCaseOutcome:
         """Execute one prepared request and retain bounded inline facts."""
         with self.tracing_runtime.span(
@@ -378,6 +464,7 @@ class OperationTestingService:
                         operation_key=generated.operation_key,
                         operation_method=request.method,
                         operation_path=operation_path,
+                        abstract_test_case_id=abstract_test_case_id,
                     ),
                 )
                 media_type = (
@@ -438,15 +525,17 @@ class OperationTestingService:
 def _reference_key(
     strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
 ) -> tuple[str, ...]:
-    """Return a stable identity for a resource or response-value pool."""
-    if isinstance(strategy, ResourceIdentifierGenerator):
-        return (
-            "resource",
-            strategy.resource,
-            strategy.identifier,
-            strategy.component,
-        )
-    return ("response", strategy.value_name)
+    """Return a stable identity for one exact source-backed Generator."""
+
+    source = strategy.source
+    return (
+        strategy.type,
+        source.producer_operation_id,
+        str(source.status_code),
+        source.media_type,
+        source.selector,
+        source.field_name,
+    )
 
 
 def _catalog_request(generated: GeneratedTestCase) -> dict[str, object]:

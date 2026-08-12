@@ -8,6 +8,7 @@ import json
 from threading import RLock
 from typing import Literal
 
+from restscope.target_http.request import is_json_media_type, normalize_media_type
 from restscope.openapi_audit import OpenAPIChangeEventWrite, OpenAPIAudit
 from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
 from restscope.openapi_parser.ir import MediaTypeIR, ResponseIR, SchemaIR
@@ -168,14 +169,6 @@ def _document_response(
     return deepcopy(response) if isinstance(response, dict) else None
 
 
-def normalize_media_type(media_type: str | None) -> str | None:
-    """Strip parameters and lowercase one media type, returning ``None`` for blank input."""
-    if media_type is None:
-        return None
-    normalized = media_type.split(";", 1)[0].strip().lower()
-    return normalized or None
-
-
 def _observed_body_schema(
     *,
     media_type: str | None,
@@ -184,7 +177,7 @@ def _observed_body_schema(
 ) -> tuple[SchemaIR | None, Literal["json", "text", "empty", "binary", "pending"]]:
     if not body:
         return None, "empty"
-    if _is_json_media_type(media_type):
+    if is_json_media_type(media_type):
         if body_truncated:
             return None, "pending"
         try:
@@ -396,12 +389,6 @@ def _new_schema(schema_type: str | None) -> SchemaIR:
         external_docs=None,
         source_pointer=None,
         raw={},
-    )
-
-
-def _is_json_media_type(media_type: str | None) -> bool:
-    return media_type == "application/json" or bool(
-        media_type and media_type.endswith("+json")
     )
 
 

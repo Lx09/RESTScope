@@ -1,9 +1,10 @@
 """Validate and prepare requests that may be sent to the configured target API.
 
 The module accepts the App-owned target origin plus operation-relative request
-parts and returns a :class:`PreparedTargetRequest`.  It is the URL and header
-trust boundary used before :mod:`restscope.target_http.transport` opens a
-network connection.
+parts and returns a :class:`PreparedTargetRequest`. It also owns shared HTTP
+media-type spelling used when request, OpenAPI, and response code compare
+Content-Type values. It is the URL and header trust boundary used before
+:mod:`restscope.target_http.transport` opens a network connection.
 """
 
 from __future__ import annotations
@@ -32,6 +33,33 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def normalize_media_type(media_type: str | None) -> str | None:
+    """Return a lowercase type without parameters, or ``None`` when blank.
+
+    Args:
+        media_type: A complete HTTP Content-Type value or an OpenAPI media key.
+
+    Returns:
+        The comparable ``type/subtype`` spelling. Parameters such as charset
+        are intentionally omitted because they do not select a different JSON
+        field source.
+    """
+
+    if media_type is None:
+        return None
+    normalized = media_type.split(";", 1)[0].strip().casefold()
+    return normalized or None
+
+
+def is_json_media_type(media_type: str | None) -> bool:
+    """Return whether a media type denotes ordinary or vendor-specific JSON."""
+
+    normalized = normalize_media_type(media_type)
+    return normalized == "application/json" or bool(
+        normalized and normalized.endswith("+json")
+    )
 
 
 @dataclass(slots=True, frozen=True)

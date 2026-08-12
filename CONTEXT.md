@@ -31,10 +31,11 @@ One immutable view of all Generators, active Constraints, reference bindings,
 revision, and digest for an Operation. The App-lifetime
 `RequestGenerationConfigStore` holds only the latest state.
 
-**Reference Value Pool**
-A bounded set of typed values supplied to a reference-backed Generator.
-Resource pools contain learned canonical identifiers. Response pools contain
-values materialized from one explicitly selected Response Value Source.
+**Reference Values**
+A bounded, App-lifetime snapshot supplied to a reference-backed Generator.
+Resource values come from current resource instances. Response values are
+parsed on demand from retained observations at one exact source coordinate;
+they are not materialized into a shared database table.
 
 **Identifier Definition**
 An ordered set of one or more named components that identifies a resource; its
@@ -46,7 +47,7 @@ same top-level response object or root-array item.
 
 **Response Value Source**
 The exact producer Operation, response status, media type, and field selector
-feeding one consumer input's Reference Value Pool. A Parameter Patch replaces
+feeding one consumer input. A Parameter Patch replaces
 the complete source identity; it never appends an implicit alternative.
 
 **Parameter Patch**
@@ -63,14 +64,14 @@ sample count, and witnesses. Validation is read-only.
 
 **Applied Revision**
 The next Generation State published after the same validated Patch is
-recompiled and its durable response-pool replacement commits. Publication and
-pool commit are atomic within the running App: either both become visible or
+recompiled and its durable response-source replacement commits. Publication
+and source commit are atomic within the running App: either both become visible or
 the previous state remains visible.
 
 **Batch Evidence**
 Bounded inline requests and HTTP or transport outcomes from 1–5 generated
-cases. A Batch freezes one Generation State and all named Reference Value
-Pools before generating its first case. It creates no persistent Test Case,
+cases. A Batch freezes one Generation State and its current reference values
+before generating its first case. It creates no persistent Test Case,
 Failure, candidate, or Agent memory record.
 
 ## Core relationships
@@ -81,7 +82,7 @@ Failure, candidate, or Agent memory record.
   Response Value Source changes the state digest and advances the revision.
 - Patch Validation supplies proof material but does not mutate state.
 - Applying a Parameter Patch atomically replaces in-memory Generation State
-  and the affected durable response pools. A database commit failure restores
+  and the affected durable response sources. A database commit failure restores
   the old in-memory state before the Operation lock is released.
 - An Applied Revision proves only that RESTScope changed future generation.
   A later Batch provides new evidence about the target API.

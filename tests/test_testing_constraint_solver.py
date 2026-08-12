@@ -128,7 +128,16 @@ def _solver_config():
         "query/limit": {"type": "integer_range", "minimum": 1, "maximum": 10},
         "query/offset": {"type": "integer_range", "minimum": 1, "maximum": 10},
         "query/ratio": {"type": "number_range", "minimum": 0.5, "maximum": 2.5},
-        "query/ref": {"type": "response_value", "value_name": "known_ids"},
+        "query/ref": {
+            "type": "response_value",
+            "source": {
+                "producer_operation_id": "GET /known",
+                "status_code": 200,
+                "media_type": "application/json",
+                "selector": "$.items[].id",
+                "field_name": "id",
+            },
+        },
         "body": {"type": "request_body"},
         "body/json": {"type": "object"},
         "body/count": {"type": "integer_range", "minimum": 1, "maximum": 3},

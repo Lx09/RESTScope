@@ -15,7 +15,10 @@ from restscope.tools.runtime import ToolFailure
 
 from .input_queries import get_input_schema as query_input_schema
 from .input_queries import list_inputs as query_inputs
-from .observed_queries import find_observed_response_fields as query_observed_fields
+from .observed_queries import (
+    ObservedResponseReader,
+    find_observed_response_fields as query_observed_fields,
+)
 from .response_queries import get_response_field_schema as query_response_schema
 from .response_queries import list_response_fields as query_response_fields
 from .traversal import (
@@ -31,19 +34,19 @@ class OpenAPIToolBackend:
 
     Args:
         context_provider: Returns the initialized target and parsed OpenAPI IR.
-        observed_response_fields_provider: Optionally returns retained scalar
-            field locations from API Behavior Monitor.
+        observed_response_reader: Optionally reads retained response evidence
+            from API Behavior Monitor through bounded Catalog pages.
     """
 
     def __init__(
         self,
         *,
         context_provider: Callable[[], ToolContext],
-        observed_response_fields_provider: Callable[[], list[object]] | None = None,
+        observed_response_reader: ObservedResponseReader | None = None,
     ) -> None:
         """Retain callbacks without reading target state during composition."""
         self._context_provider = context_provider
-        self._observed_response_fields_provider = observed_response_fields_provider
+        self._observed_response_reader = observed_response_reader
 
     def list_inputs(
         self,
@@ -118,7 +121,7 @@ class OpenAPIToolBackend:
         """Return similarly named fields backed by retained scalar evidence."""
         return query_observed_fields(
             ir_provider=self._current_ir,
-            observed_fields_provider=self._observed_response_fields_provider,
+            observed_response_reader=self._observed_response_reader,
             name=name,
             offset=offset,
             limit=limit,

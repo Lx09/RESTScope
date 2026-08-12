@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from restscope.operation_references.response import ResponseSourceCoordinate
+
 
 class _Strategy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -235,20 +237,31 @@ class RequestBodyGenerator(_Strategy):
     type: Literal["request_body"]
 
 
+class OperationInputSourceReference(ResponseSourceCoordinate):
+    """Point to one exact field in successful responses from a producer.
+
+    The reference is copied into a Generator when a Parameter Patch selects a
+    source.  Keeping all response coordinates here makes later Batch execution
+    independent of any precomputed shared response-value table.
+    """
+
 class ResourceIdentifierGenerator(_Strategy):
-    """Select one component from a complete observed Identifier Record."""
+    """Select one identity field from a complete observed resource instance.
+
+    Request Generation asks the reference provider which resource owns the
+    exact source.  Every field from that resource uses the same per-case seed,
+    so a composite identity always comes from one observed instance.
+    """
 
     type: Literal["resource_identifier"]
-    resource: str = Field(min_length=1, max_length=200)
-    identifier: str = Field(min_length=1, max_length=200)
-    component: str = Field(min_length=1, max_length=200)
+    source: OperationInputSourceReference
 
 
 class ResponseValueGenerator(_Strategy):
-    """Select a deduplicated response value from one named monitor pool."""
+    """Select a typed value parsed on demand from exact observations."""
 
     type: Literal["response_value"]
-    value_name: str = Field(min_length=1, max_length=200)
+    source: OperationInputSourceReference
 
 
 GeneratorStrategy = Annotated[

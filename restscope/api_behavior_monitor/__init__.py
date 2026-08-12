@@ -16,9 +16,6 @@ __all__ = [
     "APIBehaviorMonitorResult",
     "APIBehaviorResponseProcessor",
     "APIBehaviorWarning",
-    "ResponseValueSource",
-    "ResourceLookupRequest",
-    "ResourceLookupResult",
     "build_api_behavior_monitor_coordinator",
 ]
 
@@ -28,9 +25,6 @@ _PUBLIC_MODULE_BY_NAME = {
     "APIBehaviorMonitorResult": ".schemas",
     "APIBehaviorResponseProcessor": ".response_processor",
     "APIBehaviorWarning": ".schemas",
-    "ResponseValueSource": ".response_values.catalog",
-    "ResourceLookupRequest": ".resource_identifiers.schemas",
-    "ResourceLookupResult": ".resource_identifiers.schemas",
     "build_api_behavior_monitor_coordinator": ".factory",
 }
 

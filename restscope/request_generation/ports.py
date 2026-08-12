@@ -3,28 +3,58 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
+from contextlib import AbstractContextManager
+from typing import Protocol, TYPE_CHECKING
 
-from .models import ResourceIdentifierGenerator, ResponseValueGenerator
+from .models import (
+    OperationGeneratorConfig,
+    ResourceIdentifierGenerator,
+    ResponseValueGenerator,
+)
+
+if TYPE_CHECKING:
+    from .store import ReferenceValueBinding
 
 
 class ReferenceValueProvider(Protocol):
-    """Return current typed values for one resource or response-value pool."""
+    """Resolve exact response sources into current typed runtime values."""
 
     def values_for(
         self,
         strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
     ) -> Sequence[object]: ...
 
-    def identifier_records(
+    def resource_key(self, strategy: ResourceIdentifierGenerator) -> str:
+        """Return the resource shared by all components of one identity."""
+
+        ...
+
+    def resource_records(
+        self,
+        strategy: ResourceIdentifierGenerator,
+    ) -> Sequence[Mapping[str, object]]:
+        """Return complete current states for the source's resource type."""
+
+        ...
+
+    def resource_identity_fields(
+        self,
+        strategy: ResourceIdentifierGenerator,
+    ) -> Sequence[str]:
+        """Return the immutable identity fields for the resolved resource."""
+
+        ...
+
+
+class ReferenceBindingStager(Protocol):
+    """Stage durable source bindings around one in-memory state publication."""
+
+    def stage_bindings(
         self,
         *,
-        resource: str,
-        identifier: str,
-    ) -> Sequence[Mapping[str, object]]: ...
+        config: OperationGeneratorConfig,
+        bindings: Sequence["ReferenceValueBinding"],
+    ) -> AbstractContextManager[None]:
+        """Keep one durable transaction open until publication completes."""
 
-
-class ResourceIdentifierLookup(Protocol):
-    """Expose only canonical resource identifiers needed during validation."""
-
-    def list_ids(self, *, resource: str, limit: int) -> dict[str, object]: ...
+        ...

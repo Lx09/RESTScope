@@ -46,15 +46,24 @@ remain an implementation detail and never cross the new Tool boundary.
 
 A Generator describes the possible values for one input and its inclusion
 probability. Strategies include constants, numeric or string ranges, choices,
-resource identifiers, and values observed in a producer response.
+resource identity fields, and values observed at an exact producer response
+source.
 
-### Identifier Definition and Identifier Record
+### Resource definition, instance, and input source
 
-An Identifier Definition names one or more ordered resource-identity
-components. An Identifier Record is one complete typed component tuple observed
-in the same response root object or root-array item. Composite Records remain
-joint values through persistence, Patch binding, Batch freezing, generation,
-and Constraint solving.
+A Resource definition has one normalized name and immutable direct identity
+fields. A Resource instance uses typed canonical JSON over those fields as its
+identity and keeps recursively merged current state. An operation input source
+connects one consumer input to an exact producer operation, actual status,
+media type, selector, and field as either RESOURCE or VALUE_REUSE. Composite
+resource fields always come from one complete current instance.
+
+### Observation and Abstract Test Case
+
+An Observation is one complete valid 2xx JSON response plus its sanitized
+actual request. An Abstract Test Case is the immutable Generator/Constraint
+state used by a Batch. It is created before network execution, and every
+eligible response from that Batch references it.
 
 ### Constraint
 
@@ -138,17 +147,18 @@ This is the owner of the whole request-generation language:
 - `parameter_patch/compiler.py` owns pure semantic and Constraint compilation.
 - `parameter_patch/projection.py` owns bounded model-facing output.
 - `parameter_patch/runtime.py` exposes state read, validation, and atomic Apply.
-- `reference_values.py` bridges resource and response-value evidence through
-  narrow Protocols.
+- `reference_values.py` resolves exact input sources from retained observations
+  or complete current resource instances without a shared value pool.
 
 The Store is not persistent and records no Patch history or rollback state.
 
 ### `restscope/harness/operation_testing/`
 
-`OperationTestingService` freezes a complete Store snapshot and all named
-reference pools before generating the whole Batch. `outcomes.py` and
-`failure.py` define bounded inline evidence.
-There is no Test Case Catalog or `TC*`/`E*` identity layer.
+`OperationTestingService` freezes a complete Store snapshot and current exact
+reference values before generating the whole Batch. After every request passes
+preflight, it persists or reuses one Abstract Test Case before the first
+network call. `outcomes.py` and `failure.py` define bounded inline evidence.
+There is no concrete per-case registry or `TC*`/`E*` identity layer.
 
 ### `restscope/tools/`
 
@@ -195,18 +205,19 @@ Skills cannot be used by it until a later approved Profile change.
 
 ### `restscope/api_behavior_monitor/`
 
-The API Behavior Monitor observes bounded target responses. It owns response
-contract tracking, resource identifiers, and response-value pools. A successful
-Patch Apply stages exact response-value pool replacements, publishes matching
-generation state, then commits or restores that publication before unlock.
-Ambiguous resource-identifier and response-source choices use two registered
-`fast` System Agent Profiles through a narrow runner. Their task-local `I*` and
-`S*` aliases make the output Schema closed over the current candidates; the
-Monitor never calls an LLM client directly.
-Resource Identifier discovery inspects only immediate fields at `$` or `$[]`.
-Its single decision prompt contains all observed string/integer candidates and
-the current or strict placeholder-suffix paths as full OpenAPI paths. Learned
-ordered field/path rules skip later Agent calls.
+The API Behavior Monitor checks every matched response contract, persists
+complete valid 2xx JSON observations, and then derives resource state in a
+separate transaction. `catalog.py` is the unified persistence Interface;
+`coordinator.py` owns stage ordering; `resources.py` reuses known identity
+fields or asks one registered `fast` System Agent Profile for a bounded new
+choice. Its task-local `I*` aliases close the result Schema over current direct
+string/integer fields. The Monitor never calls an LLM client directly and does
+not persist extraction rules or reasoning.
+
+Parameter Patch stores exact RESOURCE or VALUE_REUSE source propositions with
+neutral Beta(1,1) evidence. Values are resolved on demand from raw observations
+or current non-deleted instances. There is no response-value pool or second
+response-source System Agent.
 
 ### `restscope/data_types/`
 
@@ -217,15 +228,18 @@ provider objects remain `object` until their owning Adapter validates them.
 
 ### `restscope/target_http/`
 
-This package prepares and sends target requests, reads bounded responses, and
-runs response observers. Both `restscope.http.request` and generated Batch
-execution use this same transport boundary with different Tool contracts.
+This package prepares and sends target requests, reads the complete response
+for the Monitor, and returns a separately bounded Tool/Batch projection. Both
+`restscope.http.request` and generated Batch execution use this same transport
+boundary with different Tool contracts.
 
 ### `restscope/db/`
 
-The one baseline migration creates 14 business tables: two OpenAPI Audit tables,
-seven Resource Identifier tables, and five Response Value tables. There are no
-Generator, Constraint, Failure, Attempt, or candidate tables.
+The one baseline migration creates nine business tables: two OpenAPI Audit
+tables plus operations, resources, operation-resource edges, resource
+instances, observations, operation input sources, and abstract test cases.
+There are no response-value pools, extraction-rule, concrete Test Case,
+Failure, Attempt, plan, queue, or candidate tables.
 
 ### `restscope/observability/`, `restscope/ui/`, and `ui/`
 

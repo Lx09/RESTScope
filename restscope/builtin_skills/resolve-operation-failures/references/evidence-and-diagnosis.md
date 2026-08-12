@@ -7,7 +7,7 @@ Use current evidence in this order:
 1. A failure message that states a concrete value or presence rule.
 2. The actual inline Batch request and its HTTP/transport outcome.
 3. A controlled Probe that changes only inputs in one explicit hypothesis.
-4. Current Generator/Constraint state and current observed reference pools.
+4. Current Generator/Constraint state and current observed reference values.
 5. OpenAPI Schema, description, example, and response contract.
 6. Model knowledge, which may form a hypothesis but never prove one.
 
@@ -25,7 +25,7 @@ resource identity, and same-request relationships. Consider:
   different canonical resource;
 - a choice that is not valid for the current resource or lifecycle state;
 - a response-derived value whose producer, response contract, selector, media
-  type, or retained pool has drifted;
+  type, or retained observations have drifted;
 - equality, inequality, ordering, arithmetic, dependency, cardinality, and
   conditional-presence relationships;
 - a value that is valid in isolation but incompatible with the HTTP method,

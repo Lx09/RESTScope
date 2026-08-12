@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
+from restscope.target_http.request import normalize_media_type
 from restscope.operation_references import ResponseFieldReference
 from restscope.openapi_parser import OpenAPISpecIR
 
@@ -39,6 +40,7 @@ from .models import (
     SelectedReferenceProvenance,
     SemanticBooleanExpression,
     SemanticParameterPatch,
+    SemanticResourceIdentifierGenerator,
     SemanticResponseValueGenerator,
 )
 from .errors import ParameterPatchValidationError
@@ -53,8 +55,8 @@ from .compiler import (
 )
 from .projection import semantic_state_payload
 from ..ports import (
+    ReferenceBindingStager,
     ReferenceValueProvider,
-    ResourceIdentifierLookup,
 )
 from ..semantics import build_semantic_input_map
 from ..store import (
@@ -71,7 +73,7 @@ from ..generation import project_generated_input_value
 
 
 class _CandidateReferenceValues:
-    """Overlay unregistered response pools while deterministic samples run."""
+    """Overlay newly selected response values while validation samples run."""
 
     def __init__(
         self,
@@ -98,22 +100,35 @@ class _CandidateReferenceValues:
             self._captured[key] = tuple(self.delegate.values_for(strategy))
         return self._captured[key]
 
-    def identifier_records(
+    def resource_records(
         self,
-        *,
-        resource: str,
-        identifier: str,
+        strategy: ResourceIdentifierGenerator,
     ) -> Sequence[Mapping[str, object]]:
-        """Freeze complete Identifier Records for correlated component generation."""
+        """Return the validation-local frozen complete resource records."""
+
         if self.delegate is None:
             return ()
         return tuple(
             dict(item)
-            for item in self.delegate.identifier_records(
-                resource=resource,
-                identifier=identifier,
-            )
+            for item in self.delegate.resource_records(strategy)
         )
+
+    def resource_key(self, strategy: ResourceIdentifierGenerator) -> str:
+        """Delegate the canonical resource identity needed for shared seeding."""
+
+        if self.delegate is None:
+            raise ValueError("Resource evidence is unavailable")
+        return self.delegate.resource_key(strategy)
+
+    def resource_identity_fields(
+        self,
+        strategy: ResourceIdentifierGenerator,
+    ) -> Sequence[str]:
+        """Delegate immutable resource identity fields during validation."""
+
+        if self.delegate is None:
+            return ()
+        return self.delegate.resource_identity_fields(strategy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +158,11 @@ class AppliedReferenceBinding:
     input: str
     kind: str
     canonical_resource: str | None = None
-    identifier: str | None = None
-    component: str | None = None
-    producer_operation_key: str | None = None
-    producer_status_code: str | None = None
-    producer_media_type: str | None = None
-    source_field: str | None = None
+    producer_operation_id: str | None = None
+    status_code: int | None = None
+    media_type: str | None = None
+    selector: str | None = None
+    field_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,15 +178,6 @@ class AppliedParameterPatch:
     removed_response_value_inputs: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _UnchangedReferenceState:
-    """Provide the staged-update shape when a Patch has no reference writes."""
-
-    updates: tuple[InputGeneratorPatch, ...]
-    bindings: tuple[ReferenceValueBinding, ...]
-    removed_response_value_inputs: tuple[str, ...] = ()
-
-
 class RequestGenerationPatchRuntime:
     """Provide one coherent validation and application Interface to Tools."""
 
@@ -182,12 +187,12 @@ class RequestGenerationPatchRuntime:
         store: RequestGenerationConfigStore,
         ir_provider: Callable[[], OpenAPISpecIR],
         reference_values: ReferenceValueProvider | None = None,
-        resource_backend: ResourceIdentifierLookup | None = None,
+        reference_binding_stager: ReferenceBindingStager | None = None,
     ) -> None:
         self._store = store
         self._ir_provider = ir_provider
         self._reference_values = reference_values
-        self._resource_backend = resource_backend
+        self._reference_binding_stager = reference_binding_stager
 
     def read_state(
         self,
@@ -322,7 +327,7 @@ class RequestGenerationPatchRuntime:
         seed: int = 0,
         sample_count: int = 5,
     ) -> AppliedParameterPatch:
-        """Revalidate, stage durable pools, publish, and commit as one operation."""
+        """Revalidate, stage durable sources, publish, and commit atomically."""
         with self._store._replacement_transaction(
             operation_key=operation_key,
             expected_revision=expected_revision,
@@ -349,59 +354,37 @@ class RequestGenerationPatchRuntime:
                     "generator_patch_no_change",
                     "The validated Patch does not change Generator, Constraint, or reference state",
                 )
-            provider = self._reference_values
+            changed_input_ids = {
+                update.input_node_id
+                for update in validated.compiled_patch.updates
+            }
+            removed_response_value_inputs = tuple(
+                item.input_node_id
+                for item in state.reference_bindings
+                if item.input_node_id in changed_input_ids
+                and item.kind == "response_value"
+            )
             needs_reference_transaction = bool(
                 validated.compiled_patch.selected_reference_provenance
-                or any(
-                    item.input_node_id
-                    in {
-                        update.input_node_id
-                        for update in validated.compiled_patch.updates
-                    }
-                    for item in state.reference_bindings
-                    if item.kind == "response_value"
-                )
+                or removed_response_value_inputs
             )
             if needs_reference_transaction:
-                if provider is None or not hasattr(provider, "stage_updates"):
+                if self._reference_binding_stager is None:
                     raise ParameterPatchValidationError(
                         "reference_registration_unavailable",
                         "Reference-backed Patch application is unavailable",
                     )
-                staged = provider.stage_updates(
+                staged = self._reference_binding_stager.stage_bindings(
                     config=state.config,
-                    updates=validated.compiled_patch.updates,
-                    current_bindings=state.reference_bindings,
-                    selected_reference_provenance=list(
-                        validated.compiled_patch.selected_reference_provenance
-                    ),
+                    bindings=validated.final_reference_bindings,
                 )
             else:
-                staged = nullcontext(
-                    _UnchangedReferenceState(
-                        updates=tuple(validated.compiled_patch.updates),
-                        bindings=validated.final_reference_bindings,
-                    )
-                )
-            with staged as reference_update:
-                if tuple(reference_update.updates) != tuple(
-                    validated.compiled_patch.updates
-                ):
-                    raise ParameterPatchValidationError(
-                        "reference_registration_drift",
-                        "Registered response pool names differ from validated Generator state",
-                    )
-                if tuple(reference_update.bindings) != (
-                    validated.final_reference_bindings
-                ):
-                    raise ParameterPatchValidationError(
-                        "reference_registration_drift",
-                        "Staged reference bindings differ from validated state",
-                    )
+                staged = nullcontext()
+            with staged:
                 applied = replacement.publish(
                     config=validated.final_config,
                     constraints=validated.final_constraints,
-                    reference_bindings=reference_update.bindings,
+                    reference_bindings=validated.final_reference_bindings,
                     validation_digest=validation_digest,
                 )
             return AppliedParameterPatch(
@@ -419,7 +402,7 @@ class RequestGenerationPatchRuntime:
                 final_reference_bindings=_applied_reference_bindings(applied),
                 removed_response_value_inputs=tuple(
                     build_semantic_input_map(applied.config).handle_by_node[item]
-                    for item in reference_update.removed_response_value_inputs
+                    for item in removed_response_value_inputs
                 ),
             )
 
@@ -451,7 +434,24 @@ class RequestGenerationPatchRuntime:
                 )
             node_id = semantic.node_by_handle[change.input]
             strategy: object = change.strategy
-            if isinstance(strategy, ResourceIdentifierGenerator):
+            if isinstance(strategy, SemanticResourceIdentifierGenerator):
+                source = strategy.source
+                reference = ResponseFieldReference.from_handle(source.field)
+                if not reference.property_names:
+                    raise ParameterPatchValidationError(
+                        "resource_source_invalid",
+                        "Resource source must identify a response property",
+                    )
+                strategy = ResourceIdentifierGenerator(
+                    type="resource_identifier",
+                    source={
+                        "producer_operation_id": source.operation_key,
+                        "status_code": source.status_code,
+                        "media_type": source.media_type,
+                        "selector": reference.selector,
+                        "field_name": reference.property_names[-1],
+                    },
+                )
                 option, values = self._validate_resource_reference(
                     config=config,
                     input_node_id=node_id,
@@ -466,10 +466,9 @@ class RequestGenerationPatchRuntime:
                     input_node_id=node_id,
                     strategy=strategy,
                 )
-                assert option.value_name is not None
                 strategy = ResponseValueGenerator(
                     type="response_value",
-                    value_name=option.value_name,
+                    source=option.source,
                 )
                 provenance.append(option)
                 candidate_values[_strategy_cache_key(strategy)] = values
@@ -527,43 +526,24 @@ class RequestGenerationPatchRuntime:
         handle: str,
         strategy: ResourceIdentifierGenerator,
     ) -> tuple[SelectedReferenceProvenance, list[object]]:
-        """Require one canonical, populated, type-compatible resource pool."""
-        if self._resource_backend is None or self._reference_values is None:
+        """Require one unambiguous, populated, type-compatible resource source."""
+        if self._reference_values is None:
             raise ParameterPatchValidationError(
                 "resource_reference_unavailable",
                 "Resource Identifier evidence is unavailable",
             )
-        result = self._resource_backend.list_ids(resource=strategy.resource, limit=200)
-        structured = result.get("structured", {})
-        if (
-            structured.get("status") != "found"
-            or structured.get("canonical_resource") != strategy.resource
-        ):
+        try:
+            resource_name = self._reference_values.resource_key(strategy)
+            values = list(self._reference_values.values_for(strategy))
+        except ValueError as exc:
             raise ParameterPatchValidationError(
                 "resource_not_canonical",
-                f"{strategy.resource!r} is not a populated canonical resource",
-            )
-        records = [
-            item
-            for item in structured.get("ids", [])
-            if isinstance(item, dict) and item.get("identifier") == strategy.identifier
-        ]
-        component_names = {
-            component.get("name")
-            for record in records
-            for component in record.get("components", [])
-            if isinstance(component, dict)
-        }
-        if strategy.component not in component_names:
-            raise ParameterPatchValidationError(
-                "resource_component_unknown",
-                f"Identifier component is unavailable: {strategy.identifier}/{strategy.component}",
-            )
-        values = list(self._reference_values.values_for(strategy))
+                str(exc),
+            ) from exc
         if not values:
             raise ParameterPatchValidationError(
                 "resource_pool_empty",
-                f"Resource Identifier pool is empty: {strategy.resource}",
+                f"Resource Identifier source is empty: {resource_name}",
             )
         expected = reference_expected_type(config, input_node_id)
         types = [json_scalar_type(item) for item in values]
@@ -576,9 +556,8 @@ class RequestGenerationPatchRuntime:
             SelectedReferenceProvenance(
                 input_node_id=input_node_id,
                 kind="resource_identifier",
-                canonical_resource=strategy.resource,
-                identifier=strategy.identifier,
-                component=strategy.component,
+                canonical_resource=resource_name,
+                source=strategy.source,
                 compatible_scalar_type=expected or "|".join(sorted(set(types))),
                 value_count=len(values),
             ),
@@ -592,33 +571,26 @@ class RequestGenerationPatchRuntime:
         updates: list[InputGeneratorPatch],
     ) -> None:
         """Require each composite Definition to bind every path component once."""
-        groups: dict[tuple[str, str], list[tuple[str, ResourceIdentifierGenerator]]] = {}
+        groups: dict[str, list[tuple[str, ResourceIdentifierGenerator]]] = {}
         for update in updates:
             if isinstance(update.strategy, ResourceIdentifierGenerator):
-                groups.setdefault(
-                    (update.strategy.resource, update.strategy.identifier), []
-                ).append((update.input_node_id, update.strategy))
+                if self._reference_values is None:
+                    raise ParameterPatchValidationError(
+                        "resource_reference_unavailable",
+                        "Resource Identifier evidence is unavailable",
+                    )
+                resource_key = self._reference_values.resource_key(update.strategy)
+                groups.setdefault(resource_key, []).append(
+                    (update.input_node_id, update.strategy)
+                )
         if not groups:
             return
-        if self._resource_backend is None:
-            raise ParameterPatchValidationError(
-                "resource_reference_unavailable",
-                "Resource Identifier evidence is unavailable",
-            )
         parameters = {item.input_node_id: item for item in config.snapshot.parameters}
-        for (resource, identifier), bindings in groups.items():
-            result = self._resource_backend.list_ids(resource=resource, limit=200)
-            structured = result.get("structured", {})
-            records = [
-                item for item in structured.get("ids", [])
-                if isinstance(item, dict) and item.get("identifier") == identifier
-            ]
-            expected = {
-                component.get("name")
-                for record in records
-                for component in record.get("components", [])
-                if isinstance(component, dict)
-            }
+        assert self._reference_values is not None
+        for resource, bindings in groups.items():
+            expected = set(
+                self._reference_values.resource_identity_fields(bindings[0][1])
+            )
             # A one-component Definition behaves like the original scalar
             # reference and may satisfy any schema-compatible input. Only a
             # composite Definition has the atomic path-binding requirement.
@@ -633,11 +605,11 @@ class RequestGenerationPatchRuntime:
                     "resource_composite_requires_path",
                     "Composite Resource Identifier components may bind only path parameters",
                 )
-            supplied = [strategy.component for _node_id, strategy in bindings]
+            supplied = [strategy.source.field_name for _node_id, strategy in bindings]
             if not expected or len(supplied) != len(set(supplied)) or set(supplied) != expected:
                 raise ParameterPatchValidationError(
                     "resource_identifier_binding_incomplete",
-                    f"Patch must bind every component of {identifier} exactly once",
+                    f"Patch must bind every identity field of {resource} exactly once",
                 )
 
     def _validate_response_reference(
@@ -659,18 +631,18 @@ class RequestGenerationPatchRuntime:
             config=config,
             input_node_id=input_node_id,
             operation_key=source.operation_key,
-            matched_status_code=source.matched_status_code,
+            status_code=source.status_code,
             media_type=source.media_type,
             field=source.field,
             ir=self._ir_provider(),
         )
         expected_selector = ResponseFieldReference.from_handle(source.field).selector
         if (
-            option.producer_operation_keys != [source.operation_key]
-            or option.producer_status_code != source.matched_status_code
-            or option.producer_media_type != source.media_type
-            or option.source_field != source.field
-            or option.source_selector != expected_selector
+            option.source.producer_operation_id != source.operation_key
+            or option.source.status_code != source.status_code
+            or option.source.media_type
+            != normalize_media_type(source.media_type)
+            or option.source.selector != expected_selector
         ):
             raise ParameterPatchValidationError(
                 "response_source_identity_mismatch",
@@ -691,29 +663,16 @@ def _final_reference_bindings(
         item for item in state.reference_bindings if item.input_node_id not in changed
     ]
     for selected in provenance:
-        if selected.kind == "resource_identifier":
-            assert selected.canonical_resource is not None
-            output.append(
-                ReferenceValueBinding(
-                    input_node_id=selected.input_node_id,
-                    kind="resource_identifier",
-                    value_name=selected.canonical_resource,
-                    identifier=selected.identifier,
-                    component=selected.component,
-                )
-            )
-            continue
-        assert selected.value_name is not None
         output.append(
             ReferenceValueBinding(
                 input_node_id=selected.input_node_id,
-                kind="response_value",
-                value_name=selected.value_name,
-                producer_operation_key=selected.producer_operation_keys[0],
-                producer_status_code=selected.producer_status_code,
-                producer_media_type=selected.producer_media_type,
-                source_field=selected.source_field,
-                source_selector=selected.source_selector,
+                kind=selected.kind,
+                producer_operation_id=selected.source.producer_operation_id,
+                status_code=selected.source.status_code,
+                media_type=selected.source.media_type,
+                selector=selected.source.selector,
+                field_name=selected.source.field_name,
+                resource_name=selected.canonical_resource,
             )
         )
     return tuple(sorted(output, key=lambda item: item.input_node_id))
@@ -722,7 +681,7 @@ def _final_reference_bindings(
 def _strategy_cache_key(
     strategy: ResourceIdentifierGenerator | ResponseValueGenerator,
 ) -> str:
-    """Identify one reference strategy for a validation-local immutable pool."""
+    """Identify values captured for one validation-local reference strategy."""
     return json.dumps(
         strategy.model_dump(mode="json"),
         sort_keys=True,
@@ -739,15 +698,12 @@ def _applied_reference_bindings(
         AppliedReferenceBinding(
             input=handles[item.input_node_id],
             kind=item.kind,
-            canonical_resource=(
-                item.value_name if item.kind == "resource_identifier" else None
-            ),
-            identifier=item.identifier,
-            component=item.component,
-            producer_operation_key=item.producer_operation_key,
-            producer_status_code=item.producer_status_code,
-            producer_media_type=item.producer_media_type,
-            source_field=item.source_field,
+            canonical_resource=item.resource_name,
+            producer_operation_id=item.producer_operation_id,
+            status_code=item.status_code,
+            media_type=item.media_type,
+            selector=item.selector,
+            field_name=item.field_name,
         )
         for item in state.reference_bindings
     )
@@ -847,10 +803,12 @@ def _domain_analysis(
         strategy = {
             "type": "response_value",
             "source": {
-                "operation_key": binding.producer_operation_key,
-                "matched_status_code": binding.producer_status_code,
-                "media_type": binding.producer_media_type,
-                "field": binding.source_field,
+                "operation_key": binding.producer_operation_id,
+                "status_code": binding.status_code,
+                "media_type": binding.media_type,
+                "field": ResponseFieldReference.from_selector(
+                    binding.selector
+                ).handle,
             },
         }
     analysis: dict[str, object] = {

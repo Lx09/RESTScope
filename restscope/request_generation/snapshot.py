@@ -7,6 +7,7 @@ import math
 
 from pydantic import ValidationError
 
+from restscope.target_http.request import is_json_media_type, normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import OperationIR, ParameterIR, SchemaIR
 
@@ -719,7 +720,7 @@ def _is_supported_media_contract(
         or "*" in value
     ):
         return False
-    if value == "application/json" or value.endswith("+json"):
+    if is_json_media_type(value):
         return True
     if value == "application/x-www-form-urlencoded":
         return _ir_has_type(schema, "object") or bool(schema.properties)
@@ -772,9 +773,10 @@ def _ir_is_object_contract(schema: SchemaIR) -> bool:
 
 
 def _media_type_priority(value: str) -> tuple[int, str]:
-    if value == "application/json":
+    normalized = normalize_media_type(value) or value
+    if normalized == "application/json":
         return 0, value
-    if value.endswith("+json"):
+    if is_json_media_type(normalized):
         return 1, value
     if value == "application/x-www-form-urlencoded":
         return 2, value

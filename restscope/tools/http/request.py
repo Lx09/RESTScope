@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from restscope.target_http.request import is_json_media_type, normalize_media_type
 from restscope.tools.context import ToolContext
 from restscope.llm.schemas import ToolSpec
 from restscope.target_http import (
@@ -346,7 +347,7 @@ def _response_payload(
     """Convert a buffered transport response into the tool's public JSON result."""
     assert response.body is not None
     content = response.body
-    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    media_type = normalize_media_type(response.headers.get("content-type")) or ""
     body_format, body = _decode_response(response, content=content, media_type=media_type)
     payload = {
         "status_code": response.status_code,
@@ -389,7 +390,7 @@ def _decode_response(
     declaring JSON must actually decode as JSON; silently falling back to text
     would hide a target contract failure.
     """
-    if media_type == "application/json" or media_type.endswith("+json"):
+    if is_json_media_type(media_type):
         try:
             return "json", json.loads(content.decode(response.encoding or "utf-8"))
         except (LookupError, UnicodeDecodeError, json.JSONDecodeError) as exc:

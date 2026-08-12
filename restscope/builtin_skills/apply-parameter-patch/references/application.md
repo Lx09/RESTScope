@@ -16,20 +16,20 @@ and result:
 
 Apply obtains the operation write lock, checks revision and state digest,
 recompiles the Patch, revalidates reference evidence, regenerates the same
-samples, and recomputes the validation digest. It stages complete response-pool
+samples, and recomputes the validation digest. It stages complete response
 source replacements, publishes Generator, Constraint, reference-binding,
 revision, state-digest, and last-applied-digest state, then commits the durable
-pool transaction while still holding the Operation lock. If that commit fails,
+source transaction while still holding the Operation lock. If that commit fails,
 the previous in-memory state is restored before the lock is released. Any
-failure therefore leaves both visible Generation State and durable pool state
+failure therefore leaves both visible Generation State and durable source state
 unchanged. Two concurrent calls using the same old revision cannot both
 succeed.
 
 For every changed `response_value` input, the submitted source is the entire
 final source set. The runtime removes its previous sources and rebuilds values
 only from retained observations matching the new source. Changing away from
-`response_value` deletes that input's pool; mentioning an input only through a
-Constraint leaves its pool unchanged. An exact no-op is rejected before the
+`response_value` deletes that input's source; mentioning an input only through a
+Constraint leaves its source unchanged. An exact no-op is rejected before the
 durable write transaction opens.
 
 ## Handle conflicts and failures

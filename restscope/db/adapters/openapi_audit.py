@@ -54,7 +54,7 @@ class SqlAlchemyOpenAPIRepository:
         current.document = deepcopy(document)
         row = OpenAPIChangeEventORM(
             id=f"openapi_change_{uuid4().hex}",
-            operation_key=event.operation_key,
+            operation_id=event.operation_key,
             status_code=event.status_code,
             media_type=event.media_type,
             changes=list(event.changes),
@@ -73,7 +73,7 @@ class SqlAlchemyOpenAPIRepository:
 
         query = select(OpenAPIChangeEventORM)
         if operation_key is not None:
-            query = query.where(OpenAPIChangeEventORM.operation_key == operation_key)
+            query = query.where(OpenAPIChangeEventORM.operation_id == operation_key)
         rows = self.session.scalars(
             query.order_by(OpenAPIChangeEventORM.created_at, OpenAPIChangeEventORM.id)
         ).all()
@@ -85,7 +85,7 @@ def _event_record(row: OpenAPIChangeEventORM) -> OpenAPIChangeEventRecord:
 
     return OpenAPIChangeEventRecord(
         id=row.id,
-        operation_key=row.operation_key,
+        operation_key=row.operation_id,
         status_code=row.status_code,
         media_type=row.media_type,
         changes=list(row.changes),

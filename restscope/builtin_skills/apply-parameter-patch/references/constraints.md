@@ -67,7 +67,7 @@ eight candidates per referenced input:
 - false and true for Boolean;
 - range minimum, midpoint, maximum, then deterministic samples;
 - deterministic samples for random string, regex, and format;
-- current reference-pool values, truncated to the domain limit;
+- current reference values, truncated to the domain limit;
 - only presence states permitted by requiredness and inclusion probability.
 
 Despite an older code comment, Constraint literals do not inject values into

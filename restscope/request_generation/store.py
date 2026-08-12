@@ -18,7 +18,9 @@ import json
 from threading import RLock
 from typing import Iterator, Literal, TypeVar
 
+from restscope.target_http.request import normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
+from restscope.operation_references.response import ResponseSourceCoordinate
 
 from .models import (
     ArrayGenerator,
@@ -48,27 +50,18 @@ from .constraints import OperationConstraintRecord
 _T = TypeVar("_T")
 
 
-@dataclass(frozen=True, slots=True)
-class ReferenceValueBinding:
-    """Bind one Generator input to the exact external value identity it uses.
+class ReferenceValueBinding(ResponseSourceCoordinate):
+    """Bind one Generator input to its exact persisted response source.
 
-    Response bindings include the complete producer selector because a stable
-    pool name alone cannot distinguish replacement of one source by another.
-    Resource bindings retain the canonical resource name.  These immutable
-    facts participate in the Generation State digest and are safe to project
-    through request-generation Tools.
+    ``resource_name`` is present only for a resource identity source.  All
+    other coordinates are shared by resource and generic value reuse.  These
+    immutable facts participate in the Generation State digest; response
+    values remain in observations until a reader requests them.
     """
 
     input_node_id: str
     kind: Literal["resource_identifier", "response_value"]
-    value_name: str
-    identifier: str | None = None
-    component: str | None = None
-    producer_operation_key: str | None = None
-    producer_status_code: str | None = None
-    producer_media_type: str | None = None
-    source_field: str | None = None
-    source_selector: str | None = None
+    resource_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,7 +278,7 @@ class RequestGenerationConfigStore:
     ) -> tuple[RequestGenerationState, _T]:
         """Capture related volatile evidence under the operation read lock.
 
-        Batch execution uses this seam to freeze reference pools together with
+        Batch execution uses this seam to freeze reference values together with
         the revision whose Generators name them.  ``capture`` must perform only
         bounded reads and must not call back into Patch mutation.
         """
@@ -322,17 +315,7 @@ def generation_state_digest(
         "configs": [item.model_dump(mode="json") for item in config.configs],
         "constraints": [item.model_dump(mode="json") for item in constraints],
         "reference_bindings": [
-            {
-                "input_node_id": item.input_node_id,
-                "kind": item.kind,
-                "value_name": item.value_name,
-                "producer_operation_key": item.producer_operation_key,
-                "producer_status_code": item.producer_status_code,
-                "producer_media_type": item.producer_media_type,
-                "source_field": item.source_field,
-                "source_selector": item.source_selector,
-            }
-            for item in reference_bindings
+            item.model_dump(mode="json") for item in reference_bindings
         ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -819,7 +802,7 @@ def _media_body_strategy_errors(
     if media_node_id is None:
         return set()
     strategy = configs[media_node_id].strategy
-    normalized = media_type.split(";", 1)[0].strip().lower()
+    normalized = normalize_media_type(media_type) or ""
     if normalized.startswith("text/"):
         if isinstance(strategy, ConstantGenerator):
             return set() if isinstance(strategy.value, str) else {media_node_id}

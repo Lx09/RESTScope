@@ -7,6 +7,7 @@ Failure Memory, or persistence boundary behind them.
 
 from __future__ import annotations
 
+from restscope.target_http.request import is_json_media_type, normalize_media_type
 
 from .outcomes import HTTPFailure, TransportFailure
 
@@ -36,17 +37,11 @@ def parse_http_failure(
             else ""
         )
     )
-    normalized_media = (media_type or "").split(";", 1)[0].lower()
+    normalized_media = normalize_media_type(media_type)
     messages: list[str] = []
     if 400 <= status_code < 600 and body_truncated:
         messages = [fallback + " [failure body truncated]"]
-    elif (
-        400 <= status_code < 600
-        and (
-            normalized_media == "application/json"
-            or normalized_media.endswith("+json")
-        )
-    ):
+    elif 400 <= status_code < 600 and is_json_media_type(normalized_media):
         extracted = _extract_json_messages(response_body)[:_MAX_MESSAGES]
         messages = [
             _bound(f"HTTP {status_code}: {item}")
@@ -54,6 +49,7 @@ def parse_http_failure(
         ]
     elif (
         400 <= status_code < 600
+        and normalized_media is not None
         and normalized_media.startswith("text/")
         and isinstance(response_body, str)
     ):

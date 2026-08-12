@@ -51,17 +51,19 @@ operator.
 ## Look up target values
 
 For an ID, identifier, `*_id`, or input that must name an existing entity,
-prefer a compatible populated `resource_identifier` pool:
+prefer compatible current `resource_identifier` evidence:
 
 1. Call `resource.list_resources` with `limit=20`; follow `next_offset` only if
    the relevant resource is absent.
-2. Copy `canonical_resource` exactly, never an alias.
-3. Call `resource.list_ids` for that canonical resource.
-4. Copy the returned `identifier` name and the needed `components[].name`
-   exactly. Use them only when Records are non-empty and component scalar
+2. Call `resource.list_ids` using the exact normalized resource name; aliases
+   are not accepted.
+3. Use the result only when current IDs are non-empty and component scalar
    values are compatible.
-5. If the Definition has multiple components, bind only path parameters and
-   include one change for every component, exactly once, in the same Patch.
+4. For every needed identity field, call
+   `openapi.find_observed_response_fields` and copy its exact actual source
+   coordinates into a `resource_identifier` Generator.
+5. If the resource has multiple identity fields, bind only path parameters and
+   include one change for every field, exactly once, in the same Patch.
 
 Never randomly generate an existing identifier or copy one from unverified
 prose.
@@ -70,7 +72,9 @@ Call `openapi.find_observed_response_fields` only when `response_value` is
 justified. Search the affected leaf name, then full property path. If empty,
 try only a few Failure/OpenAPI-supported synonyms such as
 `commit_id -> sha or hash`; a synonym is only a search query, never evidence.
-Copy `operation_key`, `matched_status_code`, `media_type`, and `field` exactly.
+Copy `operation_key`, actual integer `status_code`, `media_type`, and `field`
+exactly. `matched_status_code` only explains which OpenAPI response contract
+describes that observation; it is not a Generator source coordinate.
 Use only a current non-empty scalar type-compatible source.
 
 ## Choose a Generator
@@ -103,7 +107,7 @@ Generator DSL:
 - `format(format)`
 - `array(min_items, max_items)`
 - `variant(branch_weights)`
-- `resource_identifier(resource, identifier, component)`
+- `resource_identifier(source)`
 - `response_value(source)`
 
 ## Express Constraints

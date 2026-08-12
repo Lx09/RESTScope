@@ -76,7 +76,8 @@ def build_candidate_domains(
     Each domain starts with the baseline assignment so the search preserves the
     originally generated request when it already works. Additional candidates
     come from the configured Generator, schema boundaries, constraint literals,
-    and observed-value pools. ``max_domain_size`` keeps work bounded.
+    and currently observed reference values. ``max_domain_size`` keeps work
+    bounded.
     """
 
     if max_domain_size < 1:
@@ -254,19 +255,16 @@ def _build_search_units(
     """Replace related component domains with bounded complete Record choices."""
     remaining = set(domains)
     units: list[_SearchUnit] = []
-    groups: dict[
-        tuple[str, str],
-        dict[str, tuple[str, ResourceIdentifierGenerator]],
-    ] = {}
+    groups: dict[str, dict[str, tuple[str, ResourceIdentifierGenerator]]] = {}
     for item in config.configs:
         strategy = item.strategy
-        if isinstance(strategy, ResourceIdentifierGenerator):
-            groups.setdefault((strategy.resource, strategy.identifier), {})[
-                strategy.component
+        if isinstance(strategy, ResourceIdentifierGenerator) and reference_values is not None:
+            groups.setdefault(reference_values.resource_key(strategy), {})[
+                strategy.source.field_name
             ] = (item.input_node_id, strategy)
 
     if reference_values is not None:
-        for (resource, identifier), components in groups.items():
+        for resource, components in groups.items():
             if len(components) <= 1 or not any(
                 node_id in remaining for node_id, _strategy in components.values()
             ):
@@ -275,10 +273,8 @@ def _build_search_units(
                 node_id for node_id, _strategy in components.values()
             )
             candidates: list[dict[str, InputNodeOverride]] = []
-            for record in reference_values.identifier_records(
-                resource=resource,
-                identifier=identifier,
-            ):
+            first_strategy = next(iter(components.values()))[1]
+            for record in reference_values.resource_records(first_strategy):
                 if any(component not in record for component in components):
                     continue
                 candidate = {
@@ -294,7 +290,7 @@ def _build_search_units(
             if not candidates:
                 raise ConstraintSolveError(
                     "constraint_empty_domain",
-                    f"No complete Identifier Records are available for {resource}/{identifier}",
+                    f"No complete resource instances are available for {resource}",
                     input_node_ids=node_ids,
                 )
             baseline_candidate = {
@@ -333,24 +329,22 @@ def _resource_identifier_records_match(
     """Reject component combinations that were never observed in one record."""
     if reference_values is None:
         return True
-    groups: dict[tuple[str, str], dict[str, str]] = {}
+    groups: dict[str, dict[str, tuple[str, ResourceIdentifierGenerator]]] = {}
     for item in config.configs:
         strategy = item.strategy
         if isinstance(strategy, ResourceIdentifierGenerator):
-            groups.setdefault((strategy.resource, strategy.identifier), {})[
-                strategy.component
-            ] = item.input_node_id
-    for (resource, identifier), component_nodes in groups.items():
+            groups.setdefault(reference_values.resource_key(strategy), {})[
+                strategy.source.field_name
+            ] = (item.input_node_id, strategy)
+    for _resource, component_nodes in groups.items():
         selected: dict[str, object] = {}
-        for component, node_id in component_nodes.items():
+        for component, (node_id, _strategy) in component_nodes.items():
             assignment = assignments.get(node_id)
             if assignment is None or not assignment.present or not assignment.has_value:
                 return False
             selected[component] = assignment.value
-        records = reference_values.identifier_records(
-            resource=resource,
-            identifier=identifier,
-        )
+        first_strategy = next(iter(component_nodes.values()))[1]
+        records = reference_values.resource_records(first_strategy)
         if not any(
             all(record.get(name) == value for name, value in selected.items())
             for record in records

@@ -24,8 +24,10 @@ from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
 )
-from restscope.api_behavior_monitor.resource_identifiers import ResourceCatalog
-from restscope.api_behavior_monitor.response_values import ResponseValueCatalog
+from restscope.api_behavior_monitor.catalog import (
+    OperationDefinition,
+    ResponseMonitorCatalog,
+)
 from restscope.harness import (
     AgentRuntimeDefinition,
     HarnessRuntime,
@@ -53,8 +55,7 @@ from restscope.request_generation import (
 from restscope.config import RESTScopeConfig
 from restscope.db import (
     SqlAlchemyOpenAPIUnitOfWork,
-    SqlAlchemyResourceCatalogUnitOfWork,
-    SqlAlchemyResponseValueCatalogUnitOfWork,
+    SqlAlchemyResponseMonitorUnitOfWork,
     create_engine_from_config,
     make_session_factory,
 )
@@ -68,15 +69,8 @@ from restscope.api_behavior_monitor.resource_identifiers.prompts import (
     identifier_system_output_schema,
     validate_identifier_system_output,
 )
-from restscope.api_behavior_monitor.response_values.prompts import (
-    RESPONSE_SOURCE_SYSTEM_AGENT_INSTRUCTIONS,
-    ResponseSourceSelectionDecision,
-    response_source_system_output_schema,
-    validate_response_source_system_output,
-)
 from restscope.api_behavior_monitor.system_agents import (
     RESOURCE_IDENTIFIER_PROFILE_NAME,
-    RESPONSE_SOURCE_PROFILE_NAME,
 )
 
 
@@ -260,6 +254,7 @@ class RESTScopeApp:
         api_behavior_monitor_coordinator = None
         target_transport: TargetHTTPTransport | None = None
         openapi_audit: OpenAPIAudit | None = None
+        response_monitor_catalog: ResponseMonitorCatalog | None = None
         database_engine: Engine | None = None
         try:
             config = _resolve_app_random_seed(config)
@@ -298,13 +293,8 @@ class RESTScopeApp:
                 database_engine = create_engine_from_config(config.db)
                 session_factory = make_session_factory(database_engine)
                 request_generation_store = RequestGenerationConfigStore()
-                resource_catalog = ResourceCatalog(
-                    lambda: SqlAlchemyResourceCatalogUnitOfWork(session_factory)
-                )
-                response_value_catalog = ResponseValueCatalog(
-                    lambda: SqlAlchemyResponseValueCatalogUnitOfWork(
-                        session_factory
-                    )
+                response_monitor_catalog = ResponseMonitorCatalog(
+                    lambda: SqlAlchemyResponseMonitorUnitOfWork(session_factory)
                 )
                 openapi_audit = OpenAPIAudit(
                     lambda: SqlAlchemyOpenAPIUnitOfWork(session_factory)
@@ -312,20 +302,16 @@ class RESTScopeApp:
                 system_agent_runner = _DeferredSystemAgentRunner()
                 api_behavior_monitor_coordinator = build_api_behavior_monitor_coordinator(
                     config,
-                    resource_catalog=resource_catalog,
-                    response_value_catalog=response_value_catalog,
+                    catalog=response_monitor_catalog,
                     openapi_audit=openapi_audit,
                     system_agent_runner=system_agent_runner,
                     tracing_runtime=self._tracing_runtime,
                 )
                 reference_values = BehaviorMonitorReferenceValues(
-                    api_behavior_monitor_coordinator
+                    response_monitor_catalog
                 )
                 resource_backend = ResourceToolBackend(
-                    catalog=resource_catalog
-                )
-                observed_response_fields_provider = (
-                    response_value_catalog.list_observed_response_fields
+                    catalog=response_monitor_catalog
                 )
                 target_transport = TargetHTTPTransport(
                     response_processor=APIBehaviorResponseProcessor(
@@ -338,12 +324,13 @@ class RESTScopeApp:
                     transport=target_transport,
                     tracing_runtime=self._tracing_runtime,
                     reference_values=reference_values,
+                    response_monitor_catalog=response_monitor_catalog,
                 )
                 request_generation_patch_runtime = RequestGenerationPatchRuntime(
                     store=request_generation_store,
                     ir_provider=lambda: self.harness_runtime.require_context().ir,
                     reference_values=reference_values,
-                    resource_backend=resource_backend,
+                    reference_binding_stager=reference_values,
                 )
                 # Production Bindings make domain Tools executable without
                 # granting them to the intentionally plan-only Main Profile.
@@ -354,9 +341,7 @@ class RESTScopeApp:
                 built_runtime = build_harness(
                     tracing_runtime=self._tracing_runtime,
                     target_http_transport=target_transport,
-                    observed_response_fields_provider=(
-                        observed_response_fields_provider
-                    ),
+                    observed_response_reader=response_monitor_catalog,
                     resource_tool_backend=resource_backend,
                     request_generation_patch_runtime=(
                         request_generation_patch_runtime
@@ -388,6 +373,11 @@ class RESTScopeApp:
             )
             self.openapi_audit: OpenAPIAudit | None = (
                 openapi_audit if harness_runtime is built_runtime else None
+            )
+            self.response_monitor_catalog: ResponseMonitorCatalog | None = (
+                response_monitor_catalog
+                if harness_runtime is built_runtime
+                else None
             )
             self._database_engine = (
                 database_engine if harness_runtime is built_runtime else None
@@ -534,6 +524,19 @@ class RESTScopeApp:
             base_url=base_url,
             headers=headers or {},
         )
+        if self.response_monitor_catalog is not None:
+            # Operation rows are current OpenAPI metadata and satisfy foreign
+            # keys for Contract events even when a caller invokes the exposed
+            # Contract Tracker before sending a response through Coordinator.
+            for operation in ir.operations.values():
+                self.response_monitor_catalog.ensure_operation(
+                    OperationDefinition(
+                        operation_id=operation.operation_key,
+                        method=operation.method,
+                        path=operation.path,
+                        description=operation.description,
+                    )
+                )
         if self.openapi_audit is not None:
             self.openapi_audit.initialize(
                 build_openapi_document(ir, list(ir.operations))
@@ -708,38 +711,21 @@ def _build_main_agent_runtime_definition(
         )
     if fast.enabled:
         models.append(fast)
-        profiles.extend(
-            (
-                AgentProfile(
-                    name=RESOURCE_IDENTIFIER_PROFILE_NAME,
-                    instructions=IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
-                    model_config_name="fast",
-                ),
-                AgentProfile(
-                    name=RESPONSE_SOURCE_PROFILE_NAME,
-                    instructions=RESPONSE_SOURCE_SYSTEM_AGENT_INSTRUCTIONS,
-                    model_config_name="fast",
-                ),
+        profiles.append(
+            AgentProfile(
+                name=RESOURCE_IDENTIFIER_PROFILE_NAME,
+                instructions=IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
+                model_config_name="fast",
             )
         )
-        system_agents.extend(
-            (
-                SystemAgentDefinition(
-                    profile_name=RESOURCE_IDENTIFIER_PROFILE_NAME,
-                    adapt_task=SystemAgentTask.model_validate,
-                    output_model=IdentifierSelectionDecision,
-                    build_output_schema=identifier_system_output_schema,
-                    validate_output=validate_identifier_system_output,
-                    output_schema_name="IdentifierSelectionDecision",
-                ),
-                SystemAgentDefinition(
-                    profile_name=RESPONSE_SOURCE_PROFILE_NAME,
-                    adapt_task=SystemAgentTask.model_validate,
-                    output_model=ResponseSourceSelectionDecision,
-                    build_output_schema=response_source_system_output_schema,
-                    validate_output=validate_response_source_system_output,
-                    output_schema_name="ResponseSourceSelectionDecision",
-                ),
+        system_agents.append(
+            SystemAgentDefinition(
+                profile_name=RESOURCE_IDENTIFIER_PROFILE_NAME,
+                adapt_task=SystemAgentTask.model_validate,
+                output_model=IdentifierSelectionDecision,
+                build_output_schema=identifier_system_output_schema,
+                validate_output=validate_identifier_system_output,
+                output_schema_name="IdentifierSelectionDecision",
             )
         )
     if not profiles:

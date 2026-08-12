@@ -6,6 +6,26 @@ import pytest
 
 
 @pytest.fixture
+def response_monitor_catalog():
+    """Provide a real in-memory Catalog for Batch persistence scenarios."""
+
+    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.db import (
+        Base,
+        SqlAlchemyResponseMonitorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+
+    engine = create_engine_from_url("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = make_session_factory(engine)
+    return ResponseMonitorCatalog(
+        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
+    )
+
+
+@pytest.fixture
 def tool_context():
     """Fixture: provide tool context for isolated scenarios."""
     from restscope.tools.context import ToolContext

@@ -1,36 +1,24 @@
-"""Public ORM registry for the final single-App database schema."""
+"""Public ORM registry for the current single-App database schema."""
 
 from .openapi_orm import OpenAPIChangeEventORM, OpenAPICurrentORM
-from .resource_catalog_orm import (
-    OperationResourceRuleORM,
-    ResourceAliasORM,
-    ResourceIdentifierORM,
-    ResourceIdentifierDefinitionORM,
-    ResourceMonitorErrorORM,
-    ResourceOperationUsageORM,
+from .response_monitor_orm import (
+    AbstractTestCaseORM,
+    ObservationORM,
+    OperationInputSourceORM,
+    OperationORM,
+    OperationResourceEdgeORM,
+    ResourceInstanceORM,
     ResourceORM,
-)
-from .response_value_orm import (
-    ResponseObservationORM,
-    ResponseObservationScalarORM,
-    ResponseValuePoolORM,
-    ResponseValuePoolValueORM,
-    ResponseValuePoolSourceORM,
 )
 
 __all__ = [
+    "AbstractTestCaseORM",
+    "ObservationORM",
     "OpenAPIChangeEventORM",
     "OpenAPICurrentORM",
-    "OperationResourceRuleORM",
-    "ResourceAliasORM",
-    "ResourceIdentifierORM",
-    "ResourceIdentifierDefinitionORM",
-    "ResourceMonitorErrorORM",
-    "ResourceOperationUsageORM",
+    "OperationInputSourceORM",
+    "OperationORM",
+    "OperationResourceEdgeORM",
+    "ResourceInstanceORM",
     "ResourceORM",
-    "ResponseObservationORM",
-    "ResponseObservationScalarORM",
-    "ResponseValuePoolORM",
-    "ResponseValuePoolValueORM",
-    "ResponseValuePoolSourceORM",
 ]

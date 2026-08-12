@@ -21,7 +21,7 @@ The deterministic validator:
 1. Parses the strict DTO and builds semantic handles for the active media type.
 2. Restricts all changes and Constraint references to exact `affected_inputs`.
 3. Revalidates reference choices against the current canonical resource or
-   observed response field, non-empty pools, scalar types, and exact provenance.
+   observed response field, available current values, scalar types, and exact provenance.
 4. Converts semantic changes to `InputGeneratorPatch` objects.
 5. Requires exclusive selection of every enclosing changed variant branch.
 6. Converts Constraint handles to stable node IDs, validates, normalizes,
@@ -69,7 +69,7 @@ complete Generator domains and Constraints.
 - Protocol errors identify wrong keys or recursive shapes.
 - Scope errors identify unknown or unauthorized semantic handles.
 - Reference errors identify an unqueried, stale, empty, incompatible, or
-  provenance-mismatched pool.
+  provenance-mismatched source.
 - Variant errors mean the changed branch is not guaranteed.
 - Preview errors mean the input tree cannot build structurally.
 - Constraint errors identify bad references, repeated nodes, types, regex, or

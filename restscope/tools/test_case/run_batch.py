@@ -63,6 +63,7 @@ class RunBatchOutput(BaseModel):
     mutating_operation: bool
     generation_revision: int = Field(ge=0)
     generation_state_digest: str
+    abstract_test_case_id: str
     seed: int = Field(ge=0)
     case_count: int = Field(ge=1, le=5)
     success_count: int = Field(ge=0, le=5)
@@ -121,6 +122,7 @@ class TestCaseBatchToolBackend:
                 mutating_operation=operation.method.upper() not in {"GET", "HEAD", "OPTIONS"},
                 generation_revision=result.generation_revision,
                 generation_state_digest=result.generation_state_digest,
+                abstract_test_case_id=result.abstract_test_case_id,
                 seed=result.seed,
                 case_count=len(cases),
                 success_count=result.success_count,

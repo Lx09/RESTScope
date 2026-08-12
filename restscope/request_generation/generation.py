@@ -270,23 +270,19 @@ def generate_strategy_value(
         return _format_value(strategy.format, generator)
     if isinstance(strategy, ResourceIdentifierGenerator):
         records = (
-            list(
-                reference_values.identifier_records(
-                    resource=strategy.resource,
-                    identifier=strategy.identifier,
-                )
-            )
+            list(reference_values.resource_records(strategy))
             if reference_values is not None
             else []
         )
         if not records:
-            raise GenerationError("Resource Identifier record pool is empty")
+            raise GenerationError("Resource Identifier records are unavailable")
         record = generator.choice(records)
-        if strategy.component not in record:
+        component = strategy.source.field_name
+        if component not in record:
             raise GenerationError(
-                f"Identifier component is absent: {strategy.component}"
+                f"Identifier component is absent: {component}"
             )
-        return deepcopy(record[strategy.component])
+        return deepcopy(record[component])
     if isinstance(strategy, ResponseValueGenerator):
         values = (
             list(reference_values.values_for(strategy))
@@ -295,7 +291,7 @@ def generate_strategy_value(
         )
         if not values:
             raise GenerationError(
-                f"Reference value pool is empty for {strategy.type}"
+                f"Reference values are unavailable for {strategy.type}"
             )
         return deepcopy(generator.choice(values))
     raise GenerationError(f"Strategy {strategy.type} does not generate a scalar value")
@@ -854,9 +850,11 @@ class _TestCaseGenerator:
 
     def _resource_identifier_seed(self, strategy: ResourceIdentifierGenerator) -> int:
         """Give every component of one definition the same per-case row choice."""
+        if self.reference_values is None:
+            raise GenerationError("Resource Identifier generation requires a reference provider")
+        resource_key = self.reference_values.resource_key(strategy)
         payload = (
-            f"{self.run_seed}\0{self.case_index}\0{strategy.resource}\0"
-            f"{strategy.identifier}\0identifier-record"
+            f"{self.run_seed}\0{self.case_index}\0{resource_key}\0identifier-record"
         )
         return int.from_bytes(hashlib.sha256(payload.encode()).digest()[:8], "big")
 

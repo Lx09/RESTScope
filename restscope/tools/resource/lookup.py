@@ -9,13 +9,14 @@ new evidence nor exposes operation usage, Monitor errors, or database keys.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
+from restscope.api_behavior_monitor.catalog import (
+    ResourceDefinitionRecord,
+    ResponseMonitorCatalog,
+    normalize_resource_name,
+)
 from restscope.llm import ToolSpec
 from restscope.tools.runtime import ToolBinding
-
-if TYPE_CHECKING:
-    from restscope.api_behavior_monitor.resource_identifiers import ResourceCatalog
 
 
 RESOURCE_LIST_RESOURCES_TOOL_NAME = "resource.list_resources"
@@ -81,7 +82,7 @@ def resource_list_ids_tool_spec() -> ToolSpec:
         name=RESOURCE_LIST_IDS_TOOL_NAME,
         description=(
             "List reusable typed identifiers for one canonical resource name "
-            "or learned alias. Results are paginated."
+            "using its exact normalized name. Results are paginated."
         ),
         kind="local_function",
         input_schema=_pagination_input_schema(
@@ -159,7 +160,7 @@ class ResourceToolBackend:
     constructing this Backend alone does not expose a tool to an Agent.
     """
 
-    def __init__(self, *, catalog: ResourceCatalog) -> None:
+    def __init__(self, *, catalog: ResponseMonitorCatalog) -> None:
         """Retain the existing Catalog without opening a database transaction."""
         self._catalog = catalog
 
@@ -180,16 +181,16 @@ class ResourceToolBackend:
             A structured tool payload with page metadata. An offset beyond the
             end succeeds with an empty ``resources`` list.
         """
-        names, total = self._catalog.list_resource_names(
+        resources, total = self._catalog.list_resources(
             offset=offset,
             limit=limit,
         )
         result: dict[str, object] = {
-            "resources": [{"name": name} for name in names],
+            "resources": [{"name": item.name} for item in resources],
             "total": total,
             "offset": offset,
         }
-        next_offset = offset + len(names)
+        next_offset = offset + len(resources)
         if next_offset < total:
             result["next_offset"] = next_offset
         return {"structured": result}
@@ -201,11 +202,11 @@ class ResourceToolBackend:
         offset: int = 0,
         limit: int = _DEFAULT_LIST_LIMIT,
     ) -> dict[str, object]:
-        """Return one typed-ID page for a canonical resource name or alias.
+        """Return one typed-ID page for an exact canonical resource name.
 
         Args:
-            resource: Name resolved through the Catalog's canonical alias map.
-            offset: Number of identifiers in recency order to skip.
+            resource: Exact normalized value stored in ``resources.name``.
+            offset: Number of stable composite identities to skip.
             limit: Maximum identifiers to include.
 
         Returns:
@@ -213,36 +214,63 @@ class ResourceToolBackend:
             with no identifiers. Raw database identities and timestamps never
             enter the tool payload.
         """
-        page = self._catalog.list_identifiers(
-            resource=resource,
+        definition = self._exact_resource(resource)
+        if definition is None:
+            return {
+                "structured": {
+                    "requested_resource": resource,
+                    "status": "not_found",
+                    "ids": [],
+                    "total": 0,
+                    "offset": offset,
+                }
+            }
+        instances, total = self._catalog.list_resource_instances(
+            resource_type=definition.name,
             offset=offset,
             limit=limit,
         )
         result: dict[str, object] = {
             "requested_resource": resource,
-            "status": page.status,
-            **(
-                {"canonical_resource": page.canonical_resource}
-                if page.canonical_resource is not None
-                else {}
-            ),
+            "status": "found",
+            "canonical_resource": definition.name,
             "ids": [
                 {
-                    "identifier": item.identifier,
+                    "identifier": item.resource_instance_id,
                     "components": [
-                        component.model_dump(mode="json")
-                        for component in item.components
+                        {
+                            "name": field_name,
+                            "value": item.current_state_json[field_name],
+                            "value_type": (
+                                "integer"
+                                if isinstance(
+                                    item.current_state_json[field_name], int
+                                )
+                                else "string"
+                            ),
+                        }
+                        for field_name in definition.identity_fields
                     ],
                 }
-                for item in page.identifiers
+                for item in instances
             ],
-            "total": page.total,
+            "total": total,
             "offset": offset,
         }
-        next_offset = offset + len(page.identifiers)
-        if next_offset < page.total:
+        next_offset = offset + len(instances)
+        if next_offset < total:
             result["next_offset"] = next_offset
         return {"structured": result}
+
+    def _exact_resource(self, name: str) -> ResourceDefinitionRecord | None:
+        """Find one exact normalized resource name without alias guessing."""
+
+        try:
+            if normalize_resource_name(name) != name:
+                return None
+        except ValueError:
+            return None
+        return self._catalog.get_resource(name)
 
 
 def _pagination_input_schema(

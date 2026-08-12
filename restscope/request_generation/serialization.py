@@ -6,6 +6,8 @@ import hashlib
 import json
 from urllib.parse import quote, urlencode
 
+from restscope.target_http.request import is_json_media_type, normalize_media_type
+
 from .models import (
     GeneratedTestCase,
     OperationTestSnapshot,
@@ -181,8 +183,8 @@ def _serialize_body(media_type: str, body: object) -> tuple[bytes, str]:
     the generated object and must be attached to the outgoing header.
     """
 
-    normalized = media_type.split(";", 1)[0].strip().lower()
-    if normalized == "application/json" or normalized.endswith("+json"):
+    normalized = normalize_media_type(media_type) or ""
+    if is_json_media_type(normalized):
         try:
             return (
                 json.dumps(

@@ -202,13 +202,14 @@ def test_two_concurrent_applies_of_one_revision_have_one_winner() -> None:
 def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() -> None:
     """Source identity is state, and a failed durable commit restores that state."""
     from restscope.operation_references import ResponseFieldReference
-    from restscope.request_generation.store import ReferenceValueBinding
-    from restscope.request_generation.parameter_patch import SemanticParameterPatch
+    from restscope.request_generation import OperationInputSourceReference
+    from restscope.request_generation.parameter_patch import (
+        ParameterPatchValidationError,
+        SemanticParameterPatch,
+    )
     from restscope.request_generation.parameter_patch.models import (
         SelectedReferenceProvenance,
     )
-    from restscope.request_generation.reference_values import StagedReferenceUpdate
-
     class ReferenceEvidence:
         """Model a staged database transaction whose commit can fail on exit."""
 
@@ -219,47 +220,34 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
 
         def resolve_response_source(self, *, input_node_id, field, **_arguments):
             selector = ResponseFieldReference.from_handle(field).selector
+            source = OperationInputSourceReference(
+                producer_operation_id="GET /producer",
+                status_code=200,
+                media_type="application/json",
+                selector=selector,
+                field_name=ResponseFieldReference.from_handle(field).property_names[-1],
+            )
             return (
                 SelectedReferenceProvenance(
                     input_node_id=input_node_id,
                     kind="response_value",
-                    value_name="response_consumer_value",
+                    source=source,
                     compatible_scalar_type="integer",
                     value_count=1,
-                    producer_operation_keys=["GET /producer"],
-                    producer_status_code="200",
-                    producer_media_type="application/json",
-                    source_field=field,
-                    source_selector=selector,
                 ),
                 [3],
             )
 
         @contextmanager
-        def stage_updates(
+        def stage_bindings(
             self,
             *,
-            updates,
-            selected_reference_provenance,
-            **_arguments,
+            config,
+            bindings,
         ):
-            selected = selected_reference_provenance[0]
-            yield StagedReferenceUpdate(
-                updates=tuple(updates),
-                bindings=(
-                    ReferenceValueBinding(
-                        input_node_id=selected.input_node_id,
-                        kind="response_value",
-                        value_name=selected.value_name,
-                        producer_operation_key=selected.producer_operation_keys[0],
-                        producer_status_code=selected.producer_status_code,
-                        producer_media_type=selected.producer_media_type,
-                        source_field=selected.source_field,
-                        source_selector=selected.source_selector,
-                    ),
-                ),
-                removed_response_value_inputs=(),
-            )
+            assert config.operation_key == "GET /items"
+            assert bindings[0].producer_operation_id == "GET /producer"
+            yield
             if self.fail_commit:
                 raise RuntimeError("database commit failed")
 
@@ -269,6 +257,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         store=store,
         ir_provider=original_runtime._ir_provider,
         reference_values=evidence,
+        reference_binding_stager=evidence,
     )
 
     def response_patch(field: str) -> SemanticParameterPatch:
@@ -282,7 +271,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
                             "type": "response_value",
                             "source": {
                                 "operation_key": "GET /producer",
-                                "matched_status_code": "200",
+                                "status_code": 200,
                                 "media_type": "application/json",
                                 "field": field,
                             },
@@ -291,6 +280,31 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
                 ]
             }
         )
+
+    reader_only_runtime = type(original_runtime)(
+        store=store,
+        ir_provider=original_runtime._ir_provider,
+        reference_values=evidence,
+    )
+    unavailable_patch = response_patch("body.old")
+    unavailable_validation = reader_only_runtime.validate(
+        operation_key="GET /items",
+        expected_revision=0,
+        affected_inputs=("query.minimum",),
+        patch=unavailable_patch,
+    )
+    with pytest.raises(
+        ParameterPatchValidationError,
+        match="Reference-backed Patch application is unavailable",
+    ):
+        reader_only_runtime.apply(
+            operation_key="GET /items",
+            expected_revision=0,
+            validation_digest=unavailable_validation.validation_digest,
+            affected_inputs=("query.minimum",),
+            patch=unavailable_patch,
+        )
+    assert store.require_state("GET /items").revision == 0
 
     first_patch = response_patch("body.old")
     first_validation = runtime.validate(
@@ -306,7 +320,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         affected_inputs=("query.minimum",),
         patch=first_patch,
     ).state
-    assert first.reference_bindings[0].source_field == "body.old"
+    assert first.reference_bindings[0].selector == "$.old"
 
     second_patch = response_patch("body.new")
     second_validation = runtime.validate(
@@ -336,7 +350,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
     ).state
     assert second.revision == 2
     assert second.state_digest != first.state_digest
-    assert second.reference_bindings[0].source_field == "body.new"
+    assert second.reference_bindings[0].selector == "$.new"
     projected = runtime.read_state(
         operation_key="GET /items",
         input_handles=("query.minimum",),
@@ -346,7 +360,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         "type": "response_value",
         "source": {
             "operation_key": "GET /producer",
-            "matched_status_code": "200",
+            "status_code": 200,
             "media_type": "application/json",
             "field": "body.new",
         },

@@ -22,9 +22,9 @@ from ..models import (
     NumberRangeGenerator,
     RandomStringGenerator,
     RegexGenerator,
-    ResourceIdentifierGenerator,
     InputGeneratorPatch,
     VariantGenerator,
+    OperationInputSourceReference,
 )
 
 
@@ -35,69 +35,39 @@ class _Model(BaseModel):
 
 
 class SelectedReferenceProvenance(_Model):
-    """Internal provenance for one selected, currently populated reference."""
+    """Internal provenance for one selected, currently populated source."""
 
     input_node_id: str = Field(min_length=1, max_length=1000)
     kind: Literal["resource_identifier", "response_value"]
     canonical_resource: str | None = Field(default=None, max_length=200)
-    identifier: str | None = Field(default=None, max_length=200)
-    component: str | None = Field(default=None, max_length=200)
-    value_name: str | None = Field(default=None, max_length=200)
+    source: OperationInputSourceReference
     compatible_scalar_type: str | None = Field(default=None, max_length=50)
     value_count: int = Field(ge=1)
-    producer_operation_keys: list[str] = Field(default_factory=list, max_length=100)
-    producer_status_code: str | None = Field(default=None, max_length=20)
-    producer_media_type: str | None = Field(default=None, max_length=200)
-    source_field: str | None = Field(default=None, max_length=1000)
-    source_selector: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def validate_source(self) -> "SelectedReferenceProvenance":
         """Require the source fields appropriate to the selected reference kind."""
-        if self.kind == "resource_identifier":
-            if (
-                not self.canonical_resource
-                or not self.identifier
-                or not self.component
-                or self.value_name is not None
-                or self.producer_operation_keys
-                or self.producer_status_code is not None
-                or self.producer_media_type is not None
-                or self.source_field is not None
-                or self.source_selector is not None
-            ):
-                raise ValueError(
-                    "resource_identifier requires only canonical provenance"
-                )
-        elif (
-            not self.value_name
-            or self.canonical_resource is not None
-            or self.identifier is not None
-            or self.component is not None
-            or len(self.producer_operation_keys) != 1
-            or not self.producer_status_code
-            or not self.producer_media_type
-            or not self.source_field
-            or not self.source_selector
-        ):
-            raise ValueError("response_value requires one complete producer source")
+        if self.kind == "resource_identifier" and not self.canonical_resource:
+            raise ValueError("resource_identifier requires a canonical resource")
+        if self.kind == "response_value" and self.canonical_resource is not None:
+            raise ValueError("response_value cannot name a canonical resource")
         return self
 
 
 # Reuse Testing's validation where model and runtime meanings are identical.
-# Response values keep a separate model-facing source because their persisted
-# pool name belongs to deterministic runtime, not to the Agent.
+# Response values keep a separate model-facing source because Agents choose a
+# semantic field handle while deterministic runtime owns its exact selector.
 class SemanticResponseValueSource(_Model):
-    """Name one observed producer field without exposing its internal pool.
+    """Name one observed producer field without exposing storage details.
 
     The four fields copy the globally unique response-field identity returned
     by ``openapi.find_observed_response_fields``. Compilation later verifies
-    the source against this Patch session and derives the consumer-owned
-    ``value_name`` owned by the API Behavior Monitor.
+    the source against this Patch session and stores its exact consumer-source
+    proposition only if application succeeds.
     """
 
     operation_key: str = Field(min_length=1, max_length=1000)
-    matched_status_code: str = Field(min_length=1, max_length=20)
+    status_code: int = Field(ge=200, le=299)
     media_type: str = Field(min_length=1, max_length=200)
     field: str = Field(min_length=1, max_length=1000)
 
@@ -106,6 +76,13 @@ class SemanticResponseValueGenerator(_Model):
     """Select values from one observed response field chosen through a tool."""
 
     type: Literal["response_value"]
+    source: SemanticResponseValueSource
+
+
+class SemanticResourceIdentifierGenerator(_Model):
+    """Select a resource identity field through one observed response source."""
+
+    type: Literal["resource_identifier"]
     source: SemanticResponseValueSource
 
 
@@ -120,7 +97,7 @@ SemanticGeneratorStrategy = Annotated[
     | FormatGenerator
     | ArrayGenerator
     | VariantGenerator
-    | ResourceIdentifierGenerator
+    | SemanticResourceIdentifierGenerator
     | SemanticResponseValueGenerator,
     Field(discriminator="type"),
 ]

@@ -678,7 +678,10 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     assert "runtime-secret" not in span.attributes["output.value"]
 
 
-def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> None:
+def test_generic_batch_emits_sanitized_batch_and_case_spans(
+    tmp_path: Path,
+    response_monitor_catalog,
+) -> None:
     """The generic Batch runner traces structure without target secrets."""
     import httpx
 
@@ -743,6 +746,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(tmp_path: Path) -> N
     runtime, exporter = _recording_runtime(secret_values=["llm-api-key"])
     service = OperationTestingService(
         config_store=catalog,
+        response_monitor_catalog=response_monitor_catalog,
         tracing_runtime=runtime,
         transport=TargetHTTPTransport(
             client_factory=lambda **kwargs: httpx.Client(

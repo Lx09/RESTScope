@@ -12,18 +12,13 @@ import pytest
 BUSINESS_TABLES = {
     "openapi_current",
     "openapi_change_events",
+    "operations",
     "resources",
-    "resource_aliases",
-    "operation_resource_rules",
-    "resource_identifiers",
-    "resource_identifier_definitions",
-    "resource_operation_usages",
-    "resource_monitor_errors",
-    "response_value_pools",
-    "response_value_pool_sources",
-    "response_value_pool_values",
-    "response_observations",
-    "response_observation_scalars",
+    "operation_resource_edges",
+    "resource_instances",
+    "observations",
+    "operation_input_sources",
+    "abstract_test_cases",
 }
 
 
@@ -34,7 +29,7 @@ def _config(database_url: str):
     return replace(RESTScopeConfig.from_environment(), db=DBConfig(url=database_url))
 
 
-def test_default_app_creates_only_the_fourteen_persistent_business_tables(
+def test_default_app_creates_only_the_nine_persistent_business_tables(
     monkeypatch,
     tmp_path: Path,
 ) -> None:

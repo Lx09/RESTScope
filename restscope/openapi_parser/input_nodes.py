@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 
+from restscope.target_http.request import normalize_media_type
+
 from .ir import InputNodeIR, InputNodeKind, OperationIR, ParameterIR, SchemaIR
 
 
@@ -49,7 +51,7 @@ def build_operation_input_nodes(operation: OperationIR) -> dict[str, InputNodeIR
     nodes[body_node.input_node_id] = body_node
 
     for media_type, media in sorted(body.contents.items()):
-        media_path = f"body/{_segment(_normalized_media_type(media_type))}"
+        media_path = f"body/{_segment(normalize_media_type(media_type) or '')}"
         media_node = _node(
             operation.operation_key,
             kind="media_type",
@@ -196,7 +198,3 @@ def _segment(value: str) -> str:
 def _parameter_path(parameter: ParameterIR) -> str:
     name = parameter.name.lower() if parameter.location == "header" else parameter.name
     return f"{_segment(parameter.location)}/{_segment(name)}"
-
-
-def _normalized_media_type(value: str) -> str:
-    return value.strip().lower()

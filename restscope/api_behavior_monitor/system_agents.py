@@ -1,6 +1,6 @@
 """Define the narrow System Agent runner seam used by behavior monitoring.
 
-Resource and response-value trackers submit bounded selection evidence through
+Resource tracking submits bounded selection evidence through
 this Interface and receive only Harness-validated JSON output. The production
 Adapter is ``HarnessRuntime``; tests use small scripted adapters. No model,
 prompt session, Tool catalog, or lifecycle state crosses this seam.
@@ -14,7 +14,6 @@ from restscope.agent import SystemAgentResult, SystemAgentTask
 
 
 RESOURCE_IDENTIFIER_PROFILE_NAME = "resource-identifier-selector"
-RESPONSE_SOURCE_PROFILE_NAME = "response-source-selector"
 
 
 class SystemAgentRunner(Protocol):

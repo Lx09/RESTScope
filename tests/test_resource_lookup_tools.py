@@ -6,44 +6,35 @@ from pathlib import Path
 
 
 def _catalog(tmp_path: Path):
-    """Create one isolated real Resource Catalog."""
-    from restscope.api_behavior_monitor.resource_identifiers.catalog import ResourceCatalog
-    from restscope.db import Base, SqlAlchemyResourceCatalogUnitOfWork, create_engine_from_url, make_session_factory
+    """Create one isolated unified Response Monitor Catalog."""
+    from restscope.api_behavior_monitor.catalog import ResponseMonitorCatalog
+    from restscope.db import Base, SqlAlchemyResponseMonitorUnitOfWork, create_engine_from_url, make_session_factory
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'tools.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = make_session_factory(engine)
-    return ResourceCatalog(lambda: SqlAlchemyResourceCatalogUnitOfWork(sessions))
+    return ResponseMonitorCatalog(lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions))
 
 
 def _record_resource(catalog, *, name: str = "assignment") -> None:
     """Record one real composite observation through the Catalog Interface."""
-    from restscope.api_behavior_monitor.resource_identifiers.schemas import DetectedResourceGroup, MonitoredOperation
+    from restscope.api_behavior_monitor.catalog import OperationDefinition, ResourceDerivation
 
-    catalog.record_groups(
-        operation=MonitoredOperation(operation_key="GET /assignments", method="GET", path="/assignments"),
-        groups=[
-            DetectedResourceGroup.model_validate(
-                {
-                    "group_path": "$[]",
-                    "resource_name": name,
-                    "resource_aliases": [name, "allocation"],
-                    "identifier_name": "employeeId/projectId",
-                    "identifier_path": "/assignments/{employeeId}/{projectId}",
-                    "identifier_fields": [
-                        {"component": "employeeId", "field_name": "employee_id", "selector": "$[].employee_id"},
-                        {"component": "projectId", "field_name": "project_id", "selector": "$[].project_id"},
-                    ],
-                    "identifier_records": [
-                        {
-                            "components": [
-                                {"name": "employeeId", "value": "e1", "value_type": "string"},
-                                {"name": "projectId", "value": 7, "value_type": "integer"},
-                            ]
-                        }
-                    ],
-                    "classification_source": "llm",
-                }
+    catalog.ensure_operation(
+        OperationDefinition(
+            operation_id="GET /assignments",
+            method="GET",
+            path="/assignments",
+        )
+    )
+    catalog.record_resource_derivations(
+        operation_id="GET /assignments",
+        derivations=[
+            ResourceDerivation(
+                resource_name=name,
+                identity_fields=["employee_id", "project_id"],
+                role="REFERENCED",
+                instances=[{"employee_id": "e1", "project_id": 7}],
             )
         ],
     )
@@ -68,14 +59,14 @@ def test_resource_id_list_returns_definition_and_ordered_components(tmp_path: Pa
     catalog = _catalog(tmp_path)
     _record_resource(catalog)
 
-    result = ResourceToolBackend(catalog=catalog).list_ids(resource="allocation")
+    result = ResourceToolBackend(catalog=catalog).list_ids(resource="assignment")
 
     assert result["structured"]["ids"] == [
         {
-            "identifier": "employeeId/projectId",
+            "identifier": '{"employee_id":"e1","project_id":7}',
             "components": [
-                {"name": "employeeId", "value": "e1", "value_type": "string"},
-                {"name": "projectId", "value": 7, "value_type": "integer"},
+                {"name": "employee_id", "value": "e1", "value_type": "string"},
+                {"name": "project_id", "value": 7, "value_type": "integer"},
             ],
         }
     ]
@@ -96,3 +87,22 @@ def test_resource_id_list_reports_unknown_alias_without_failure(tmp_path: Path) 
         "total": 0,
         "offset": 0,
     }
+
+
+def test_resource_id_list_uses_exact_lookup_without_scanning_pages(
+    tmp_path: Path,
+) -> None:
+    """Identifier lookup asks the Catalog for one name instead of paging all names."""
+    from restscope.tools.resource import ResourceToolBackend
+
+    catalog = _catalog(tmp_path)
+    _record_resource(catalog)
+
+    # If the identifier path still scans resource pages, this replacement
+    # turns that unnecessary work into an immediately visible test failure.
+    catalog.list_resources = lambda **_arguments: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        AssertionError("identifier lookup must not scan resource pages")
+    )
+    result = ResourceToolBackend(catalog=catalog).list_ids(resource="assignment")
+
+    assert result["structured"]["status"] == "found"

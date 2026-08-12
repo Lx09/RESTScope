@@ -1,15 +1,19 @@
-"""Send bounded requests to the App-configured target API.
+"""Send requests and separate complete Monitor facts from bounded Tool views.
 
 The transport accepts requests already normalized by the request boundary,
-opens isolated synchronous HTTP clients, reads only bounded response bodies,
-and optionally publishes those bodies to an advisory response processor and
-the live observer.
+opens isolated synchronous HTTP clients, reads a complete response when either
+the caller or Response Monitor needs it, and gives Agent-facing callers only
+their requested bounded projection. The Monitor receives the complete body and
+an actual request envelope before any slow semantic processing begins.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
+import base64
+import json
 
 import httpx
 
@@ -26,8 +30,13 @@ from .request import (
     PreparedTargetRequest,
     QueryItem,
     build_target_url,
+    is_json_media_type,
+    is_sensitive_header,
     merge_target_headers,
+    normalize_media_type,
 )
+
+from restscope.data_types import JSONObject, JSONValue
 
 
 ClientFactory = Callable[..., httpx.Client]
@@ -38,9 +47,9 @@ class TargetHTTPTransport:
 
     This is the shared network trust boundary for generated batches and HTTP
     tools. It refuses absolute/cross-host paths, unsafe per-call headers,
-    redirects, oversized response reads, and raw provider exceptions. An
-    optional synchronous processor lets the Behavior Monitor observe the same
-    bounded response before it is returned to the caller.
+    redirects and raw provider exceptions. An optional synchronous processor
+    receives the complete response independently from the bounded body returned
+    to a Tool, Batch, or UI observer.
     """
 
     def __init__(
@@ -166,7 +175,7 @@ class TargetHTTPTransport:
         buffer_success_body_only: bool = False,
         processor_context: TargetResponseOperationContext | None = None,
     ) -> BufferedTargetResponse:
-        """Execute one prepared request and publish its bounded live evidence.
+        """Execute one prepared request and publish bounded live evidence.
 
         Observation wraps the existing transport operation so request
         validation, target effects, response processing, and exception types
@@ -214,12 +223,11 @@ class TargetHTTPTransport:
         buffer_success_body_only: bool = False,
         processor_context: TargetResponseOperationContext | None = None,
     ) -> BufferedTargetResponse:
-        """Execute, optionally buffer, and synchronously process one response.
+        """Execute, project a bounded caller body, and process the complete body.
 
-        Body limits are selected by status because diagnostic failures may need
-        a smaller retained payload than successful responses used for behavior
-        learning. Processor failures become warnings and never replace the
-        original HTTP result.
+        Body limits apply only to the returned ``BufferedTargetResponse``. They
+        do not limit the Response Monitor observation. Processor failures become
+        warnings and never replace the original HTTP result.
         """
 
         with self.stream_prepared(
@@ -230,8 +238,8 @@ class TargetHTTPTransport:
             body: bytes | None = None
             body_truncated = False
             successful = 200 <= response.status_code < 300
-            # Choose exactly one read limit before consuming the streaming body.
-            # `None` means metadata-only and avoids reading body bytes.
+            # Choose the Agent-facing projection limit independently from the
+            # complete bytes required by the response processor.
             selected_body_limit = (
                 failure_response_body_limit
                 if not successful and failure_response_body_limit is not None
@@ -240,18 +248,19 @@ class TargetHTTPTransport:
                 and (not buffer_success_body_only or successful)
                 else None
             )
-            if selected_body_limit is not None:
-                body, body_truncated = _read_bounded_response(
-                    response,
-                    limit=selected_body_limit,
-                    truncate=truncate_response_body,
-                )
-            processor_result: TargetResponseProcessorResult | None = None
-            if (
+            processor_enabled = (
                 self.response_processor is not None
                 and processor_context is not None
-                and body is not None
-            ):
+            )
+            complete_body: bytes | None = None
+            if selected_body_limit is not None or processor_enabled:
+                complete_body = b"".join(response.iter_bytes())
+            if selected_body_limit is not None and complete_body is not None:
+                body_truncated = len(complete_body) > selected_body_limit
+                body = complete_body[:selected_body_limit]
+            processor_result: TargetResponseProcessorResult | None = None
+            if processor_enabled and complete_body is not None:
+                received_at = datetime.now(UTC)
                 observation = TargetResponseObservation(
                     method=prepared.method,
                     path=prepared.path,
@@ -262,8 +271,13 @@ class TargetHTTPTransport:
                         name.lower(): value
                         for name, value in response.headers.items()
                     },
-                    body=body,
-                    body_truncated=body_truncated,
+                    body=complete_body,
+                    body_truncated=False,
+                    received_at=received_at,
+                    request_json=_observation_request_json(
+                        prepared,
+                        request_kwargs=request_kwargs,
+                    ),
                 )
                 try:
                     # Monitoring is advisory to transport. A monitor defect is
@@ -301,6 +315,14 @@ class TargetHTTPTransport:
                             ),
                         ),
                     )
+            if body_truncated and not truncate_response_body:
+                # The complete body has already reached the advisory Monitor.
+                # A Tool that requires a complete bounded projection still
+                # fails closed instead of mistaking a prefix for the response.
+                raise TargetHTTPTransportError(
+                    "response_too_large",
+                    "HTTP response body exceeds the configured limit",
+                )
             return BufferedTargetResponse(
                 status_code=response.status_code,
                 reason_phrase=response.reason_phrase,
@@ -347,22 +369,97 @@ class TargetHTTPTransport:
             return None
 
 
-def _read_bounded_response(
-    response: httpx.Response,
+def _observation_request_json(
+    prepared: PreparedTargetRequest,
     *,
-    limit: int,
-    truncate: bool,
-) -> tuple[bytes, bool]:
-    content = bytearray()
-    for chunk in response.iter_bytes():
-        remaining = limit - len(content)
-        if len(chunk) > remaining:
-            if not truncate:
-                raise TargetHTTPTransportError(
-                    "response_too_large",
-                    f"HTTP response exceeds the {limit}-byte limit",
-                )
-            content.extend(chunk[: max(0, remaining)])
-            return bytes(content), True
-        content.extend(chunk)
-    return bytes(content), False
+    request_kwargs: Mapping[str, object] | None,
+) -> JSONObject:
+    """Build the actual persisted request view without secret-bearing headers."""
+
+    headers = {
+        name.lower(): value
+        for name, value in prepared.headers.items()
+        if not is_sensitive_header(name)
+    }
+    output: JSONObject = {
+        "path": prepared.path,
+        "query": [
+            [name, value]
+            for name, value in prepared.url.params.multi_items()
+        ],
+        "headers": headers,
+    }
+    body = _observation_request_body(
+        request_kwargs or {},
+        media_type=_request_media_type(prepared.headers),
+    )
+    if body is not None:
+        output["body"] = body
+    return output
+
+
+def _observation_request_body(
+    request_kwargs: Mapping[str, object],
+    *,
+    media_type: str | None,
+) -> JSONObject | None:
+    """Encode one caller-supplied body into JSON, text, or Base64 evidence."""
+
+    if "json" in request_kwargs:
+        value = _validated_json_value(request_kwargs["json"])
+        return {
+            "media_type": media_type or "application/json",
+            "encoding": "json",
+            "value": value,
+        }
+    if "content" not in request_kwargs:
+        return None
+    content = request_kwargs["content"]
+    if isinstance(content, str):
+        raw = content.encode("utf-8")
+    elif isinstance(content, bytes):
+        raw = content
+    else:
+        return None
+    if is_json_media_type(media_type):
+        try:
+            value = _validated_json_value(json.loads(raw.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        else:
+            return {
+                "media_type": media_type or "application/json",
+                "encoding": "json",
+                "value": value,
+            }
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "media_type": media_type or "application/octet-stream",
+            "encoding": "base64",
+            "value": base64.b64encode(raw).decode("ascii"),
+        }
+    return {
+        "media_type": media_type or "text/plain",
+        "encoding": "text",
+        "value": text,
+    }
+
+
+def _validated_json_value(value: object) -> JSONValue:
+    """Detach and validate one opaque caller value through standard JSON."""
+
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _request_media_type(headers: Mapping[str, str]) -> str | None:
+    """Return a normalized request Content-Type without parameters."""
+
+    value = next(
+        (item for name, item in headers.items() if name.lower() == "content-type"),
+        None,
+    )
+    if value is None:
+        return None
+    return normalize_media_type(value)

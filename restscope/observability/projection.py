@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
+from restscope.target_http.request import is_json_media_type, normalize_media_type
+
 
 EventKind = Literal["agent_turn", "tool_call"]
 HTTP_TOOL_NAME = "restscope.http.request"
@@ -123,7 +125,7 @@ def response_detail(response: object) -> dict[str, object]:
     """Convert one already-bounded response into JSON, text, or Base64 evidence."""
 
     headers = dict(getattr(response, "headers", {}) or {})
-    media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    media_type = normalize_media_type(headers.get("content-type")) or ""
     body = getattr(response, "body", None)
     retained_size = len(body) if isinstance(body, bytes | bytearray) else None
     size_bytes = reported_response_size(headers, retained_size)
@@ -177,7 +179,7 @@ def decode_body(
 ) -> dict[str, object]:
     """Decode bounded bytes without pretending binary evidence is text."""
 
-    if media_type == "application/json" or (media_type or "").endswith("+json"):
+    if is_json_media_type(media_type):
         try:
             return {"format": "json", "value": json.loads(content.decode(encoding))}
         except (LookupError, UnicodeDecodeError, json.JSONDecodeError):

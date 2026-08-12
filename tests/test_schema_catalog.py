@@ -8,18 +8,13 @@ from pathlib import Path
 BUSINESS_TABLES = {
     "openapi_current",
     "openapi_change_events",
+    "operations",
     "resources",
-    "resource_aliases",
-    "operation_resource_rules",
-    "resource_identifiers",
-    "resource_identifier_definitions",
-    "resource_operation_usages",
-    "resource_monitor_errors",
-    "response_value_pools",
-    "response_value_pool_sources",
-    "response_value_pool_values",
-    "response_observations",
-    "response_observation_scalars",
+    "operation_resource_edges",
+    "resource_instances",
+    "observations",
+    "operation_input_sources",
+    "abstract_test_cases",
 }
 
 
@@ -35,8 +30,8 @@ def _alembic_config(database: Path):
     return config
 
 
-def test_orm_metadata_contains_exactly_fourteen_business_tables() -> None:
-    """No retired Smoke or Generator persistence remains in ORM metadata."""
+def test_orm_metadata_contains_only_the_approved_response_monitor_tables() -> None:
+    """The fresh database exposes the approved facts and no retired value pools."""
     from restscope.db import Base
 
     assert set(Base.metadata.tables) == BUSINESS_TABLES
@@ -45,14 +40,16 @@ def test_orm_metadata_contains_exactly_fourteen_business_tables() -> None:
         for name in Base.metadata.tables
     )
     assert {
-        "response_value_monitors",
-        "response_value_sources",
-        "response_values",
+        "response_value_pools",
+        "response_value_pool_sources",
+        "response_value_pool_values",
+        "response_observations",
+        "response_observation_scalars",
     }.isdisjoint(Base.metadata.tables)
 
 
-def test_evidence_tables_enforce_scalar_status_position_and_rule_shapes() -> None:
-    """Database constraints reject impossible evidence even if an Adapter regresses."""
+def test_response_monitor_tables_enforce_status_source_and_prior_shapes() -> None:
+    """Database constraints reject impossible observations and input sources."""
     from sqlalchemy import CheckConstraint
 
     from restscope.db import Base
@@ -64,16 +61,56 @@ def test_evidence_tables_enforce_scalar_status_position_and_rule_shapes() -> Non
         if isinstance(constraint, CheckConstraint)
     }
     expected_suffixes = {
-        "resource_rule_shape",
-        "response_pool_scalar_type",
-        "response_observation_http_status",
-        "response_observation_scalar_type",
-        "response_observation_scalar_position",
+        "observation_success_status",
+        "operation_input_source_success_status",
+        "operation_input_source_consume_type",
+        "operation_input_source_alpha",
+        "operation_input_source_beta",
+        "operation_resource_edge_alpha",
+        "operation_resource_edge_beta",
     }
     assert all(
         any(name.endswith(suffix) for name in check_names)
         for suffix in expected_suffixes
     )
+
+
+def test_response_monitor_natural_primary_keys_match_the_approved_model() -> None:
+    """Composite identities prevent duplicate roles, instances, and sources."""
+
+    from restscope.db import Base
+
+    expected = {
+        "operations": ("operation_id",),
+        "resources": ("resource_id",),
+        "operation_resource_edges": (
+            "operation_id",
+            "resource_id",
+            "role",
+        ),
+        "resource_instances": ("resource_type", "resource_instance_id"),
+        "observations": ("observation_id",),
+        "operation_input_sources": (
+            "consumer_operation_id",
+            "consumer_input_node_id",
+            "producer_operation_id",
+            "status_code",
+            "media_type",
+            "selector",
+            "field_name",
+            "consume_type",
+        ),
+        "abstract_test_cases": ("abstract_test_case_id",),
+    }
+
+    for table_name, columns in expected.items():
+        table = Base.metadata.tables[table_name]
+        assert tuple(item.name for item in table.primary_key.columns) == columns
+
+    edge = Base.metadata.tables["operation_resource_edges"]
+    source = Base.metadata.tables["operation_input_sources"]
+    assert {"_alpha", "_beta"} <= {item.name for item in edge.columns}
+    assert {"_alpha", "_beta"} <= {item.name for item in source.columns}
 
 
 def test_alembic_baseline_creates_and_drops_the_exact_current_schema(

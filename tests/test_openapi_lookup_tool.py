@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -251,23 +252,74 @@ def _operation_candidate_capability():
 
 
 def _observed_catalog(tmp_path: Path):
-    """Create the real retained-response Catalog injected into OpenAPI lookup."""
-    from restscope.api_behavior_monitor.response_values.catalog import (
-        ResponseValueCatalog,
+    """Create a real bounded observation reader for OpenAPI intersection."""
+    from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
+        OperationDefinition,
+        ResponseMonitorCatalog,
     )
     from restscope.db import (
         Base,
-        SqlAlchemyResponseValueCatalogUnitOfWork,
+        SqlAlchemyResponseMonitorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
 
-    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'responses.sqlite'}")
+    engine = create_engine_from_url(f"sqlite:///{tmp_path / 'observed.sqlite'}")
     Base.metadata.create_all(engine)
-    session_factory = make_session_factory(engine)
-    return ResponseValueCatalog(
-        lambda: SqlAlchemyResponseValueCatalogUnitOfWork(session_factory)
+    sessions = make_session_factory(engine)
+    catalog = ResponseMonitorCatalog(
+        lambda: SqlAlchemyResponseMonitorUnitOfWork(sessions)
     )
+
+    class ObservedCatalog:
+        """Add concise test observations and expose the real Catalog reads."""
+
+        def __init__(self) -> None:
+            self.count = 0
+
+        def record_observation(
+            self,
+            *,
+            operation_key,
+            status_code,
+            media_type,
+            response_json,
+        ) -> None:
+            """Persist one exact successful response through the public seam."""
+
+            method, _separator, path = operation_key.partition(" ")
+            catalog.ensure_operation(
+                OperationDefinition(
+                    operation_id=operation_key,
+                    method=method,
+                    path=path,
+                )
+            )
+            catalog.record_observation(
+                ObservationWrite(
+                    operation_id=operation_key,
+                    timestamp=datetime(2026, 8, 11, tzinfo=UTC)
+                    + timedelta(seconds=self.count),
+                    status_code=status_code,
+                    media_type=media_type,
+                    request_json={"path": path},
+                    response_json=response_json,
+                )
+            )
+            self.count += 1
+
+        def list_observed_response_coordinates(self):
+            """Delegate coordinate discovery without loading response bodies."""
+
+            return catalog.list_observed_response_coordinates()
+
+        def list_observations(self, **arguments):
+            """Delegate one exact bounded observation page."""
+
+            return catalog.list_observations(**arguments)
+
+    return ObservedCatalog()
 
 
 def _grouped_observed_ir():
@@ -638,19 +690,15 @@ def test_find_observed_response_fields_returns_only_matching_current_ir_fields(
         operation_key="POST /projects/{id}",
         status_code=201,
         media_type="application/json",
-        scalars=[
-            ("$.id", 7),
-            ("$.items[].name", "visible but not similar"),
-            ("$.internal", "write-only"),
-            ("$.ghost", "not in current IR"),
-        ],
+        response_json=(
+            '{"id":7,"items":[{"name":"visible but not similar"}],'
+            '"internal":"write-only","ghost":"not in current IR"}'
+        ),
     )
     context = ToolContext(ir=_ir(), baseline_schema_source={})
     capability = OpenAPIToolBackend(
         context_provider=lambda: context,
-        observed_response_fields_provider=(
-            catalog.list_observed_response_fields
-        ),
+        observed_response_reader=catalog,
     )
     toolbox = AgentToolbox()
     toolbox.register(
@@ -672,6 +720,7 @@ def test_find_observed_response_fields_returns_only_matching_current_ir_fields(
         "responses": [
             {
                 "operation_key": "POST /projects/{id}",
+                "status_code": 201,
                 "matched_status_code": "201",
                 "media_type": "application/json",
                 "fields": [
@@ -710,18 +759,18 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
             operation_key="GET /projects",
             status_code=status_code,
             media_type="application/json",
-            scalars=[("$.project_id", 1), ("$.projectId", 2)],
+            response_json='{"project_id":1,"projectId":2}',
         )
     catalog.record_observation(
         operation_key="GET /repositories",
         status_code=204,
         media_type="application/json",
-        scalars=[("$.project-id", 3)],
+        response_json='{"project-id":3}',
     )
     context = ToolContext(ir=_grouped_observed_ir(), baseline_schema_source={})
     capability = OpenAPIToolBackend(
         context_provider=lambda: context,
-        observed_response_fields_provider=catalog.list_observed_response_fields,
+        observed_response_reader=catalog,
     )
     toolbox = AgentToolbox()
     toolbox.register(
@@ -743,6 +792,13 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
             arguments={"name": "project_id", "offset": 2, "limit": 2},
         )
     )
+    third = toolbox.execute(
+        ToolCall(
+            id="third",
+            name="openapi.find_observed_response_fields",
+            arguments={"name": "project_id", "offset": 4, "limit": 2},
+        )
+    )
 
     assert first.status == "succeeded"
     assert first.structured == {
@@ -750,6 +806,7 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
         "responses": [
             {
                 "operation_key": "GET /projects",
+                "status_code": 200,
                 "matched_status_code": "2XX",
                 "media_type": "application/json",
                 "fields": [
@@ -766,13 +823,36 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
                 ],
             }
         ],
-        "total": 3,
+        "total": 5,
         "offset": 0,
         "next_offset": 2,
     }
     assert second.structured["responses"] == [
         {
+            "operation_key": "GET /projects",
+            "status_code": 201,
+            "matched_status_code": "2XX",
+            "media_type": "application/json",
+            "fields": [
+                {
+                    "field": "body.projectId",
+                    "similarity_score": 1.0,
+                    "match_basis": "normalized_exact",
+                },
+                {
+                    "field": "body.project_id",
+                    "similarity_score": 1.0,
+                    "match_basis": "normalized_exact",
+                }
+            ],
+        }
+    ]
+    assert second.structured["total"] == 5
+    assert second.structured["next_offset"] == 4
+    assert third.structured["responses"] == [
+        {
             "operation_key": "GET /repositories",
+            "status_code": 204,
             "matched_status_code": "default",
             "media_type": "application/json",
             "fields": [
@@ -784,8 +864,6 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
             ],
         }
     ]
-    assert second.structured["total"] == 3
-    assert "next_offset" not in second.structured
 
 
 def test_observed_lookup_reuses_array_and_combiner_field_references(
@@ -800,12 +878,12 @@ def test_observed_lookup_reuses_array_and_combiner_field_references(
         operation_key="POST /projects/{id}",
         status_code=201,
         media_type="application/json",
-        scalars=[("$.items[].name", "one"), ("$.kind", "created")],
+        response_json='{"items":[{"name":"one"}],"kind":"created"}',
     )
     context = ToolContext(ir=_ir(), baseline_schema_source={})
     capability = OpenAPIToolBackend(
         context_provider=lambda: context,
-        observed_response_fields_provider=catalog.list_observed_response_fields,
+        observed_response_reader=catalog,
     )
 
     nested = capability.find_observed_response_fields(name="items_name")
@@ -839,12 +917,12 @@ def test_observed_lookup_keeps_only_high_precision_fuzzy_matches(
         operation_key="GET /projects",
         status_code=200,
         media_type="application/json",
-        scalars=[("$.project_name", "alpha")],
+        response_json='{"project_name":"alpha"}',
     )
     context = ToolContext(ir=_grouped_observed_ir(), baseline_schema_source={})
     capability = OpenAPIToolBackend(
         context_provider=lambda: context,
-        observed_response_fields_provider=catalog.list_observed_response_fields,
+        observed_response_reader=catalog,
     )
 
     close = capability.find_observed_response_fields(name="project_nam")

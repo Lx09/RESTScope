@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
@@ -18,7 +18,11 @@ from restscope.tools.external.mcp import (
 )
 from restscope.tools.runtime import AgentToolbox, ToolBinding
 from restscope.tools.http import HTTP_REQUEST_TOOL_NAME, TargetHTTPRequestTool
-from restscope.tools.openapi import OpenAPIToolBackend, openapi_tool_bindings
+from restscope.tools.openapi import (
+    ObservedResponseReader,
+    OpenAPIToolBackend,
+    openapi_tool_bindings,
+)
 from restscope.tools.resource import ResourceToolBackend, resource_tool_bindings
 from restscope.tools.context import ToolContext, ToolContextError
 from restscope.tools.external import register_tool_source
@@ -66,7 +70,7 @@ class HarnessRuntime:
     external_tools: AgentToolbox | None = None
     mcp_host: MCPHost | None = None
     agent_runtime: AgentRuntimeResolver | None = None
-    observed_response_fields_provider: Callable[..., object] | None = field(
+    observed_response_reader: ObservedResponseReader | None = field(
         default=None,
         repr=False,
     )
@@ -90,7 +94,7 @@ class HarnessRuntime:
         """Bind the OpenAPI Tool backend to this Harness's target context."""
         self.openapi_backend = OpenAPIToolBackend(
             context_provider=self.require_context,
-            observed_response_fields_provider=self.observed_response_fields_provider,
+            observed_response_reader=self.observed_response_reader,
         )
 
     def bind_tracing_runtime(self, tracing_runtime: TracingRuntime) -> None:
@@ -191,7 +195,7 @@ def build_harness(
     sources: Mapping[str, Mapping[str, object]] | None = None,
     tracing_runtime: TracingRuntime | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    observed_response_fields_provider: Callable[..., object] | None = None,
+    observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
@@ -230,7 +234,7 @@ def build_harness(
         built_in_tool_catalog=builtin_tool_catalog(),
         external_tool_catalog=ToolCatalog(external_definitions),
         external_tools=external_tools,
-        observed_response_fields_provider=observed_response_fields_provider,
+        observed_response_reader=observed_response_reader,
         resource_tool_backend=resource_tool_backend,
     )
     if agent_runtime is not None:
@@ -240,7 +244,7 @@ def build_harness(
             include_openapi=any(
                 item is not None
                 for item in (
-                    observed_response_fields_provider,
+                    observed_response_reader,
                     resource_tool_backend,
                     request_generation_patch_runtime,
                     operation_testing_service,
@@ -355,7 +359,7 @@ def build_harness_with_mcp_host(
     server_names: Iterable[str] | None = None,
     tracing_runtime: TracingRuntime | None = None,
     target_http_transport: TargetHTTPTransport | None = None,
-    observed_response_fields_provider: Callable[..., object] | None = None,
+    observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
@@ -381,7 +385,7 @@ def build_harness_with_mcp_host(
             sources=sources,
             tracing_runtime=tracing_runtime,
             target_http_transport=target_http_transport,
-            observed_response_fields_provider=observed_response_fields_provider,
+            observed_response_reader=observed_response_reader,
             resource_tool_backend=resource_tool_backend,
             request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,

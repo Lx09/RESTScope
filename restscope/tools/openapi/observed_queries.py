@@ -8,7 +8,13 @@ never stored values, timestamps, or database identities.
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
+from typing import Protocol
 
+from restscope.api_behavior_monitor.catalog import (
+    ObservationRecord,
+    ObservedResponseCoordinate,
+)
 from restscope.openapi_parser.ir import OpenAPISpecIR
 from restscope.operation_references import ResponseFieldReference
 from restscope.tools.runtime import ToolFailure
@@ -25,10 +31,31 @@ from .traversal import (
 )
 
 
+_OBSERVATION_PAGE_SIZE = 8
+
+
+class ObservedResponseReader(Protocol):
+    """Expose bounded response facts needed by observed OpenAPI lookup."""
+
+    def list_observed_response_coordinates(
+        self,
+    ) -> list[ObservedResponseCoordinate]: ...
+
+    def list_observations(
+        self,
+        *,
+        operation_id: str,
+        status_code: int | None = None,
+        media_type: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[ObservationRecord]: ...
+
+
 def find_observed_response_fields(
     *,
     ir_provider: Callable[[], OpenAPISpecIR],
-    observed_fields_provider: Callable[[], list[object]] | None,
+    observed_response_reader: ObservedResponseReader | None,
     name: str,
     offset: int = 0,
     limit: int = _DEFAULT_LIST_LIMIT,
@@ -50,7 +77,7 @@ def find_observed_response_fields(
         ToolFailure: No observation Catalog was injected or ``name`` has no
             alphanumeric identifier content.
     """
-    if observed_fields_provider is None:
+    if observed_response_reader is None:
         raise ToolFailure(
             code="openapi_observation_catalog_unavailable",
             message="Observed response-field evidence is unavailable.",
@@ -62,11 +89,15 @@ def find_observed_response_fields(
             message="Response field name must contain letters or numbers.",
         )
     ir = ir_provider()
-    matches: dict[
-        tuple[str, str, str, str],
+    candidates: dict[
+        tuple[str, int, str, str, str],
         _ObservedFieldMatch,
     ] = {}
-    for observed in observed_fields_provider():
+    references: dict[
+        tuple[str, int, str, str, str],
+        ResponseFieldReference,
+    ] = {}
+    for observed in observed_response_reader.list_observed_response_coordinates():
         operation = ir.operations.get(observed.operation_key)
         if operation is None:
             continue
@@ -97,7 +128,6 @@ def find_observed_response_fields(
             reference = entry.reference
             if (
                 not isinstance(reference, ResponseFieldReference)
-                or reference.selector != observed.selector
                 or not _scalar_schema(entry.schema)
             ):
                 continue
@@ -110,37 +140,48 @@ def find_observed_response_fields(
             score, basis = similarity
             key = (
                 operation.operation_key,
+                observed.status_code,
                 matched_status,
                 selected_media_type,
                 reference.handle,
             )
             candidate = _ObservedFieldMatch(
                 operation_key=operation.operation_key,
+                status_code=observed.status_code,
                 matched_status_code=matched_status,
                 media_type=selected_media_type,
                 field=reference.handle,
                 similarity_score=score,
                 match_basis=basis,
             )
-            current = matches.get(key)
+            current = candidates.get(key)
             if current is None or candidate.similarity_score > current.similarity_score:
-                matches[key] = candidate
+                candidates[key] = candidate
+                references[key] = reference
+
+    observed_keys = _observed_candidate_keys(
+        observed_response_reader,
+        candidates=candidates,
+        references=references,
+    )
 
     ranked = sorted(
-        matches.values(),
+        (candidates[key] for key in observed_keys),
         key=lambda item: (
             -item.similarity_score,
             item.operation_key,
+            item.status_code,
             item.matched_status_code,
             item.media_type,
             item.field,
         ),
     )
     page = ranked[offset : offset + limit]
-    groups: dict[tuple[str, str, str], dict[str, object]] = {}
+    groups: dict[tuple[str, int, str, str], dict[str, object]] = {}
     for item in page:
         group_key = (
             item.operation_key,
+            item.status_code,
             item.matched_status_code,
             item.media_type,
         )
@@ -148,6 +189,7 @@ def find_observed_response_fields(
             group_key,
             {
                 "operation_key": item.operation_key,
+                "status_code": item.status_code,
                 "matched_status_code": item.matched_status_code,
                 "media_type": item.media_type,
                 "fields": [],
@@ -170,3 +212,66 @@ def find_observed_response_fields(
     if next_offset < len(ranked):
         result["next_offset"] = next_offset
     return {"structured": result}
+
+
+def _observed_candidate_keys(
+    reader: ObservedResponseReader,
+    *,
+    candidates: dict[tuple[str, int, str, str, str], _ObservedFieldMatch],
+    references: dict[tuple[str, int, str, str, str], ResponseFieldReference],
+) -> set[tuple[str, int, str, str, str]]:
+    """Confirm OpenAPI-first candidates against exact retained observations.
+
+    Each page contains at most eight full responses. A coordinate stops reading
+    as soon as every similarly named candidate selector has produced one
+    non-null scalar value, or after its retained one-hundred-row window ends.
+    """
+
+    by_coordinate: dict[
+        tuple[str, int, str],
+        set[tuple[str, int, str, str, str]],
+    ] = {}
+    for key, candidate in candidates.items():
+        coordinate = (
+            candidate.operation_key,
+            candidate.status_code,
+            candidate.media_type,
+        )
+        by_coordinate.setdefault(coordinate, set()).add(key)
+
+    observed: set[tuple[str, int, str, str, str]] = set()
+    for (operation_key, status_code, media_type), keys in by_coordinate.items():
+        remaining = set(keys)
+        offset = 0
+        while remaining and offset < 100:
+            observations = reader.list_observations(
+                operation_id=operation_key,
+                status_code=status_code,
+                media_type=media_type,
+                offset=offset,
+                limit=_OBSERVATION_PAGE_SIZE,
+            )
+            if not observations:
+                break
+            for observation in observations:
+                document = json.loads(observation.response_json)
+                found = {
+                    key
+                    for key in remaining
+                    if any(
+                        _is_observed_scalar(value)
+                        for value in references[key].select_values(document)
+                    )
+                }
+                observed.update(found)
+                remaining.difference_update(found)
+                if not remaining:
+                    break
+            offset += len(observations)
+    return observed
+
+
+def _is_observed_scalar(value: object) -> bool:
+    """Return whether actual response evidence can back a scalar Generator."""
+
+    return value is not None and isinstance(value, (str, int, float, bool))

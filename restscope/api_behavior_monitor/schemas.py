@@ -1,17 +1,22 @@
-"""Public result contracts for API Behavior Monitor orchestration."""
+"""Public result contracts for one API response monitoring pass.
+
+The Coordinator reports the Contract Monitor outcome, the durable observation
+identity, optional resource updates, and bounded warnings.  It never returns a
+raw response body or resource state to Agent-facing callers.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .catalog import ResourceDerivationResult
 from .response_contracts import ContractCheckResult
-from .resource_identifiers.schemas import ResourceMonitorResult
-from .response_values.tracker import ResponseValueObservationResult
 
 
 @dataclass(frozen=True, slots=True)
 class APIBehaviorWarning:
-    """Expose one bounded monitor warning with a stable code, message, and optional issue list."""
+    """Expose one bounded monitor warning with a stable code and safe issues."""
+
     code: str
     message: str
     issues: tuple[str, ...] = ()
@@ -19,8 +24,10 @@ class APIBehaviorWarning:
 
 @dataclass(frozen=True, slots=True)
 class APIBehaviorMonitorResult:
-    """Summarize contract, resource-identifier, and response-value observations for one target response."""
-    contract: ContractCheckResult
-    resource_identifier: ResourceMonitorResult | None = None
-    response_values: ResponseValueObservationResult | None = None
+    """Summarize independent Contract, observation, and resource outcomes."""
+
+    operation_id: str
+    contract: ContractCheckResult | None
+    observation_id: str | None = None
+    resources: ResourceDerivationResult | None = None
     warnings: tuple[APIBehaviorWarning, ...] = ()

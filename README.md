@@ -434,40 +434,37 @@ response, a deterministic matcher resolves the concrete path to exactly one
 OpenAPI operation. An ambiguous or missing match adds a structured warning to
 the original HTTP result and does not write evidence.
 
-The Monitor coordinates three bounded responsibilities:
+The Monitor coordinates three ordered responsibilities:
 
 - Response Contract checks every first exact status/media observation. A real
   change updates the current App's OpenAPI representation and its durable audit
   document/event atomically.
-- Resource Identifier reuses the exact-`id` heuristic and bounded FAST
-  classification. Learned selectors, typed identifiers, resource aliases,
-  operation usage, and errors remain in the App database.
-- Response Value creates or exactly replaces a stable value pool when
-  `parameter_patch.apply` atomically accepts a validated `response_value`
-  Generator. Candidate producer
-  fields come from the latest IR; exact normalized names are selected locally
-  and an optional bounded FAST choice handles semantic names such as `commitId`
-  and `sha`.
-  Every valid, non-truncated 2xx JSON response contributes flattened scalar
-  evidence. The latest 100 observations per operation and the 100 most recently
-  active values per pool are retained, allowing a later pool replacement
-  to backfill a deduplicated typed value pool. A response with more than 1000
-  valid scalars is skipped in full and returns a structured warning; partial
-  evidence is never written.
+- Observation persistence accepts complete valid 2xx JSON responses after
+  sensitive request headers are removed. It keeps the original response text
+  and latest 100 observations per operation; there is no flattened-scalar or
+  per-response JSON-size limit.
+- Resource Monitor reuses unambiguous known identity fields or asks the bounded
+  FAST Resource Identifier System Agent for a new direct field combination. It
+  then stores operation roles and recursively merged current instance state.
+  DELETE observations mark instances logically deleted. Extraction rules and
+  model reasoning are not persisted.
 
-A learned Resource Identifier selector that previously produced an identifier
-but is later missing reports `expected_resource_id_missing`; it is not silently
-relearned. Distinct typed Resource Identifiers are retained without capacity
-eviction. Raw response bodies, LLM reasoning, and response-contract pending
-state are never persisted. The current normalized OpenAPI and append-only
-contract change events are the audit exception; bounded flattened response
-scalar evidence is another narrow exception, and all non-null scalar fields,
-including sensitive-looking names, may be retained. The public read-only
-Tool Backend exposes `resource.list_resources`, `resource.list_ids`, and
-`openapi.find_observed_response_fields`. Response Value pools are read without
-mutation during Patch validation. `parameter_patch.apply` stages the exact
-producer-to-consumer replacement, publishes matching Store state, then commits
-the pool or restores the old Store state before unlocking.
+`parameter_patch.apply` records one exact consumer input source using producer
+operation, concrete successful status, normalized media type, selector, and
+field name. Both RESOURCE and VALUE_REUSE meanings begin with a neutral
+Beta(1,1) prior. No shared response-value pool exists: VALUE_REUSE parses typed
+scalars from matching retained observations when needed, while RESOURCE reads
+complete non-deleted instances and keeps composite identity fields correlated.
+Batch preflight records or reuses one immutable abstract Generator/Constraint
+snapshot before the first request, and successful generated observations point
+to it.
+
+The public read-only Tool Backend exposes `resource.list_resources`,
+`resource.list_ids`, and `openapi.find_observed_response_fields`. The last Tool
+discovers scalar selectors directly from raw observations without returning
+their values. A source transaction stages exact producer-to-consumer rows,
+publishes matching in-memory Store state, and restores the old Store revision
+if the database commit fails.
 
 ## Failure Resolution and Parameter Patch workflow
 

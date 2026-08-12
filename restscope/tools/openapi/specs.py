@@ -265,6 +265,11 @@ def openapi_find_observed_response_fields_tool_spec() -> ToolSpec:
                         "type": "object",
                         "properties": {
                             "operation_key": {"type": "string"},
+                            "status_code": {
+                                "type": "integer",
+                                "minimum": 200,
+                                "maximum": 299,
+                            },
                             "matched_status_code": {"type": "string"},
                             "media_type": {"type": "string"},
                             "fields": {
@@ -298,6 +303,7 @@ def openapi_find_observed_response_fields_tool_spec() -> ToolSpec:
                         },
                         "required": [
                             "operation_key",
+                            "status_code",
                             "matched_status_code",
                             "media_type",
                             "fields",

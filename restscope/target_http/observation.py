@@ -9,8 +9,11 @@ its warnings accompany the real HTTP result and never replace it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Literal, Protocol
+
+from restscope.data_types import JSONObject
 
 
 @dataclass(slots=True, frozen=True)
@@ -21,11 +24,12 @@ class TargetResponseOperationContext:
     operation_key: str | None = None
     operation_method: str | None = None
     operation_path: str | None = None
+    abstract_test_case_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class TargetResponseObservation:
-    """Carry bounded response evidence to one synchronous processor."""
+    """Carry one completed response and its actual persisted request view."""
 
     method: str
     path: str
@@ -35,6 +39,8 @@ class TargetResponseObservation:
     headers: Mapping[str, str]
     body: bytes
     body_truncated: bool
+    received_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    request_json: JSONObject = field(default_factory=dict)
 
 
 @dataclass(slots=True, frozen=True)

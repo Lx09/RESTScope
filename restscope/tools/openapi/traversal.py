@@ -18,6 +18,7 @@ from restscope.openapi_parser.ir import (
     ResponseIR,
     SchemaIR,
 )
+from restscope.target_http.request import is_json_media_type, normalize_media_type
 from restscope.operation_references import RequestInputReference, ResponseFieldReference
 from restscope.tools.runtime import ToolFailure
 
@@ -45,6 +46,7 @@ class _ObservedFieldMatch:
     """Keep one globally unique observed field attached to its match score."""
 
     operation_key: str
+    status_code: int
     matched_status_code: str
     media_type: str
     field: str
@@ -262,7 +264,7 @@ def _select_media_schema(
     json_candidates = {
         name: schema
         for name, schema in candidates.items()
-        if _is_json_media_type(name)
+        if is_json_media_type(name)
     }
     if len(json_candidates) == 1:
         return next(iter(json_candidates.items()))
@@ -337,23 +339,18 @@ def _observed_media_schema(
     observed_media_type: str,
 ) -> tuple[str, SchemaIR] | None:
     """Map one normalized observation media type to one current Schema."""
-    normalized = _normalized_media_type(observed_media_type)
+    normalized = normalize_media_type(observed_media_type)
     candidates = [
         (name, media.schema)
         for name, media in contents.items()
         if media.schema is not None
-        and _normalized_media_type(name) == normalized
+        and normalize_media_type(name) == normalized
     ]
     if len(candidates) != 1:
         return None
     name, schema = candidates[0]
     assert schema is not None
     return name, schema
-
-
-def _normalized_media_type(value: str) -> str:
-    """Normalize one media type without importing Monitor workflow policy."""
-    return value.split(";", 1)[0].strip().casefold()
 
 
 def _scalar_schema(schema: SchemaIR | None) -> bool:
@@ -443,9 +440,3 @@ def _choice_text(values: Mapping[str, object]) -> str:
     retained = names[:_MAX_ERROR_CHOICES]
     suffix = f" (+{len(names) - len(retained)} more)" if len(names) > len(retained) else ""
     return ", ".join(retained) + suffix
-
-
-def _is_json_media_type(media_type: str) -> bool:
-    """Recognize ordinary and vendor-specific JSON media types."""
-    normalized = media_type.split(";", 1)[0].strip().casefold()
-    return normalized == "application/json" or normalized.endswith("+json")

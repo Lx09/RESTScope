@@ -1,121 +1,130 @@
 # RESTScope Database Design
 
-Status: Active exploratory design (2026-08-10)
+Status: Active exploratory design (2026-08-11)
 
-RESTScope creates one SQLite file for one App. The file is an audit artifact,
-not a recovery image: a later App always rejects that existing path and never
-deletes, migrates, overwrites, or resumes it. The current baseline contains 14
-business tables plus Alembic's `alembic_version` table.
+RESTScope creates one SQLite file for one App. The file is an evidence and audit
+artifact, not a recovery image: a later App rejects the existing path and never
+resumes it. The fresh baseline contains nine business tables plus Alembic's
+`alembic_version` table.
 
 ## Boundary
 
-- `restscope.openapi_audit` owns the database-independent current OpenAPI and
-  change-event contracts.
-- `restscope.request_generation` owns the App-memory operation snapshot and
-  revisioned current Generator/Constraint state. It has no database Adapter.
-- `restscope.harness.operation_testing` owns deterministic Batch execution and
-  run-local Test Case evidence; neither is persisted.
-- API Behavior Pool owns bounded Resource Identifier and Response Value
-  evidence.
-- `restscope.db` owns SQLAlchemy mappings, domain-adjacent persistence Adapters,
-  transactions, foreign-key setup, and the one baseline migration.
-- Raw responses, Test Cases, Batches, model messages, Patch samples, plans,
-  queues, and scheduler state never enter the database.
+- `restscope.openapi_audit` owns the current normalized OpenAPI document and
+  append-only response-contract change events.
+- `restscope.api_behavior_monitor.catalog` is the database-independent
+  Interface for operations, observations, resources, input sources, and
+  abstract test cases.
+- `restscope.request_generation` keeps the current revisioned
+  Generator/Constraint state in memory. Exact source bindings participate in
+  that state, but producer values are parsed from observations on demand.
+- `restscope.db` owns SQLAlchemy mappings, transactions, foreign-key setup, and
+  the one fresh baseline migration.
+- LLM reasoning, extraction rules, Patch history and samples, Failures, plans,
+  queues, scheduler state, and restorable Agent state never enter SQLite.
 
-Every SQLAlchemy and Alembic SQLite connection executes
-`PRAGMA foreign_keys=ON`. Fresh database creation finishes with
-`PRAGMA integrity_check` and `PRAGMA foreign_key_check`.
+Every SQLite connection enables foreign keys. Fresh database creation finishes
+with integrity and foreign-key checks. Request headers conventionally carrying
+authorization, cookies, tokens, API keys, or secrets are removed before an
+observation is written.
 
-## OpenAPI: 2 tables
+## OpenAPI audit: 2 tables
 
 ### `openapi_current`
 
-One row with primary key `singleton_id=1` stores the complete normalized
-OpenAPI 3.1 document. `RESTScopeApp.initialize()` inserts it after parsing the
-source. A real observed response-contract change replaces the whole document.
-`created_at` and `updated_at` record those boundaries.
+The singleton row stores the complete normalized OpenAPI document. A real
+observed response-contract change replaces it atomically with its change event.
 
 ### `openapi_change_events`
 
-Each real response-contract change appends one event containing the operation
-key, status, normalized media type, change labels, and the affected Response
-before and after the change. Matched, pending, and failed checks add no event.
-The tracker holds one lock while it backs up the affected in-memory Response,
-changes the IR, builds the complete document, and commits current state plus the
-event. A database failure restores both IR and tracker retry state.
+Each real response-contract change records operation text, actual status,
+normalized media type, change labels, and affected Response before/after data.
+Contract matches, pending retries, and internal check failures add no event.
 
-The App exposes read-only current-document export and operation-filtered event
-listing. Neither API restores an App.
+## Response Monitor: 7 tables
 
-## Generator and Constraint: no tables
+### `operations`
 
-`RequestGenerationConfigStore` initializes one revision-0 state for every
-OpenAPI operation and keeps it only for the current App lifetime. A Batch
-freezes one complete revision and every reference pool named by that revision.
-A validated Parameter Patch replaces Generator, Constraint, and exact
-reference-binding state under the operation lock and increments the revision.
-Restarting the App recreates defaults from OpenAPI.
+`operation_id` is the normalized `METHOD /path` primary key. `method + path` is
+also unique; `description` is refreshed from the current OpenAPI IR.
 
-The Store deliberately has no Patch history, candidate registry, rollback
-record, Failure memory, sample storage, or database mapping. Response-value
-pool sources used by a Patch remain API Behavior Pool evidence. Apply stages
-their durable replacement, publishes in-memory state, then commits; a commit
-failure restores the old state before unlocking.
+### `resources`
 
-## Resource Identifier: 7 tables
+`resource_id` is the database identity. `name` is the unique lowercase
+alphanumeric value formerly called `normalized_name`. `identity_fields` is an
+immutable sorted list of direct response properties. Each instance must contain
+every field as a string or non-Boolean integer.
 
-- `resources`: canonical and normalized resource identity.
-- `resource_aliases`: normalized alias primary key linked to one resource.
-- `resource_identifier_definitions`: one stable identifier name per resource
-  with its ordered component names. A Definition may have one component or a
-  path-ordered combination.
-- `operation_resource_rules`: latest classification for one operation/group,
-  including the referenced definition, selected full path, ordered response
-  field mappings, access mode, and classification source. Method, operation
-  path, aliases, and observed flags are derived rather than copied.
-- `resource_identifiers`: every distinct complete typed Identifier Record as
-  ordered JSON plus a type-sensitive digest and first/last seen timestamps.
-  Resource identifiers have no capacity eviction.
-- `resource_operation_usages`: composite identifier/rule key with only the
-  latest observation time.
-- `resource_monitor_errors`: latest error for one operation/group. A later
-  successful classification deterministically deletes that latest error.
+### `operation_resource_edges`
 
-## Response Value: 5 tables
+The primary key is `(operation_id, resource_id, role)`. Roles describe how the
+response uses the resource: `CREATED`, `REFERENCED`, `UPDATED`, or `DELETED`.
+`_alpha` and `_beta` store the neutral Beta(1,1) proposition evidence. This
+version defines no evidence-update policy or Tool.
 
-- `response_value_pools`: natural `value_name` primary key and one unique
-  consumer operation/input pool. Every stored pool is active.
-- `response_value_pool_sources`: natural composite key for the complete
-  producer status/media/selector set feeding one value pool. Patch replaces
-  this set instead of appending an implicit alternative.
-- `response_value_pool_values`: typed natural key plus first/last seen timestamps. Each
-  pool retains its 100 most recently active distinct values.
-- `response_observations`: successful JSON observation metadata. Each producer
-  operation retains its latest 100 observations.
-- `response_observation_scalars`: natural selector/type/value key under one
-  observation. Deleting an old observation cascades to its scalars.
+### `resource_instances`
 
-Flattening more than 1000 supported non-null scalars skips the whole response
-and returns a structured warning. At or below the limit, the observation,
-scalars, all matching pool updates, and both retention passes share one
-transaction. A failure cannot leave partial observation or pool evidence.
+The primary key is `(resource_type, resource_instance_id)`, where
+`resource_type` stores `resources.name` and the instance ID is canonical typed
+JSON over all identity fields. `current_state_json` is updated incrementally:
+missing properties stay, nested objects merge recursively, arrays replace as a
+whole, and a new null never overwrites old state. `_deleted=true` is logical
+deletion and deleted instances are hidden from ordinary generation and Tools.
+
+### `observations`
+
+Each eligible response stores `observation_id`, operation, completion time,
+actual status/media type, a sanitized actual request envelope, and the complete
+original valid JSON response text. An optional `abstract_test_case_id` links a
+generated request to its immutable configuration. In the same insertion
+transaction, rows older than the newest 100 for that operation are physically
+deleted. There is no per-response JSON-size or flattened-scalar limit.
+
+### `operation_input_sources`
+
+The composite primary key records consumer operation/input, producer
+operation, concrete successful status, normalized media type, selector,
+display field name, and `consume_type` (`RESOURCE` or `VALUE_REUSE`). `_alpha`
+and `_beta` start at Beta(1,1) and are not updated in this version. Two consume
+types may coexist for identical response coordinates.
+
+No response-value table exists. A VALUE_REUSE Generator selects typed scalars
+from matching retained observations when it needs values. A RESOURCE Generator
+reads current non-deleted instances and uses one shared per-case resource seed,
+so composite identity components never form an unobserved combination.
+
+### `abstract_test_cases`
+
+One immutable row per `(operation_id, state_digest)` stores the complete
+Generator configuration, exact reference bindings, and Constraints. Batch
+preflight writes or reuses it after every request is generated and serialized
+but before the first network call. It is audit metadata, not a restorable
+Generation Store or per-concrete-case registry.
+
+## Response processing order
+
+For every matched response, Contract Monitor runs first. Internal Contract
+Monitor failure becomes a warning and does not block a valid observation. A
+complete valid 2xx JSON response then commits as the factual observation. Only
+after that commit does Resource Monitor derive resource definitions, role
+edges, and current instances in a separate transaction; resource failure never
+removes the observation.
+
+Unknown resource groups ask the bounded Resource Identifier System Agent for
+direct identity fields. Existing unambiguous definitions are reused. No model
+reasoning or extraction rule is persisted.
 
 ## Lifecycle and compatibility
 
-The default App accepts only a nonexistent local file SQLite target. It claims
-that exact path before migration. Existing files, directories, and symlinks are
-rejected unchanged. Construction failure removes only a file and sidecars
-created by that construction; successful construction, initialization failure,
-and `close()` retain the artifact.
-
-Alembic has one `0001_current_baseline` that creates the final 14 tables. It
-contains no old-database data migration. Databases stamped with the retired
-exploratory chain are intentionally incompatible, and RESTScope provides no
-restore, reset, or automatic delete entrypoint.
+The default App accepts only a nonexistent local SQLite file, claims it before
+migration, and retains it after close. Existing files, directories, and
+symlinks are rejected unchanged. Alembic has one `0001_current_baseline` and no
+old-database data migration. Retired Resource Catalog and Response Value pool
+schemas are intentionally incompatible with this fresh baseline.
 
 ## Deferred design
 
-- Reopening, restoring, or comparing App artifacts.
-- Multi-API namespaces and long-term schema history.
-- Persisted plans, inferred operation graphs, queues, or progress UI.
-- Authentication material or target API path bindings.
+- Evidence update semantics, confidence-based selection, merging, or decay.
+- Database encryption, secure deletion, automatic vacuuming, and artifact
+  reopening or restoration.
+- Persisted extraction rules, plans, operation graphs, scheduler queues, or
+  Agent memory.

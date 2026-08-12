@@ -68,36 +68,31 @@ class APIBehaviorResponseProcessor:
         )
 
 
-def _result_details(result) -> dict:
-    """Convert monitor warnings and errors into bounded response-observation details."""
-    resource = result.resource_identifier
-    response_values = result.response_values
+def _result_details(result) -> dict[str, object]:
+    """Project stage outcomes without exposing persisted request or response JSON."""
+    resource = result.resources
     return {
-        "operation_key": result.contract.key.operation_key,
-        "status_code": result.contract.key.status_code,
-        "media_type": result.contract.key.media_type,
-        "contract_status": result.contract.status,
-        "contract_changes": list(result.contract.changes),
-        "resource_identifier": (
+        "operation_key": result.operation_id,
+        "status_code": (
+            result.contract.key.status_code if result.contract is not None else None
+        ),
+        "media_type": (
+            result.contract.key.media_type if result.contract is not None else None
+        ),
+        "contract_status": (
+            result.contract.status if result.contract is not None else "check_error"
+        ),
+        "contract_changes": (
+            list(result.contract.changes) if result.contract is not None else []
+        ),
+        "observation_id": result.observation_id,
+        "resources": (
             {
-                "status": resource.status,
-                "groups_processed": resource.groups_processed,
-                "identifiers_recorded": resource.identifiers_recorded,
-                "warning_code": (
-                    resource.warning.code
-                    if resource.warning is not None
-                    else None
-                ),
+                "resources_updated": len(resource.resources),
+                "instances_updated": len(resource.instances),
+                "conflicts": list(resource.conflicts),
             }
             if resource is not None
-            else None
-        ),
-        "response_values": (
-            {
-                "sources_processed": response_values.sources_processed,
-                "values_recorded": response_values.values_recorded,
-            }
-            if response_values is not None
             else None
         ),
         "warning_codes": [warning.code for warning in result.warnings],

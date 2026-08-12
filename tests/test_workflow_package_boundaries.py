@@ -103,7 +103,6 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
         / "api_behavior_monitor"
         / "resource_identifiers"
         / "prompts.py",
-        SOURCE_ROOT / "api_behavior_monitor" / "response_values" / "prompts.py",
     ):
         assert expected.is_file(), f"missing focused owner: {expected}"
 
@@ -338,9 +337,6 @@ def test_workflow_facades_export_only_the_approved_interfaces() -> None:
         "APIBehaviorMonitorResult",
         "APIBehaviorResponseProcessor",
         "APIBehaviorWarning",
-        "ResourceLookupRequest",
-        "ResourceLookupResult",
-        "ResponseValueSource",
         "build_api_behavior_monitor_coordinator",
     }
 

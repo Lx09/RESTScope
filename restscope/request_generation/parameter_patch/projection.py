@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Mapping, Sequence
 
+from restscope.operation_references import ResponseFieldReference
+
 from ..constraints import OperationConstraintRecord
 from ..models import OperationGeneratorConfig
 from ..semantics import build_semantic_input_map
@@ -193,10 +195,12 @@ def _project_generator_strategy(
         payload = {
             "type": "response_value",
             "source": {
-                "operation_key": binding.producer_operation_key,
-                "matched_status_code": binding.producer_status_code,
-                "media_type": binding.producer_media_type,
-                "field": binding.source_field,
+                "operation_key": binding.producer_operation_id,
+                "status_code": binding.status_code,
+                "media_type": binding.media_type,
+                "field": ResponseFieldReference.from_selector(
+                    binding.selector
+                ).handle,
             },
         }
     return payload

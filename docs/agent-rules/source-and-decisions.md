@@ -88,10 +88,13 @@ as the active project direction.
   solving, schema snapshots, serialization, validation, and App-lifetime
   revisioned configuration. `request_generation.validate_patch` is read only;
   `parameter_patch.apply` is the sole Tool that atomically changes that state.
-  Exact response-value producer bindings participate in state identity. Apply
-  replaces their complete durable pool source set and rolls back an in-memory
-  publication if the database commit fails. Batch execution freezes all named
-  reference pools with the selected revision.
+  Exact producer operation/status/media/selector bindings participate in state
+  identity. Apply records those operation input-source propositions and rolls
+  back an in-memory publication if the database commit fails. Values are not
+  materialized into shared pools: Batch execution freezes values parsed from
+  current observations or complete resource instances with the selected
+  revision. It persists or reuses one immutable abstract state snapshot before
+  sending the first request, and successful observations reference it.
   The Harness owns deterministic operation execution and mechanical Tool
   bindings. `test_case.run_batch` returns bounded inline evidence without a Test
   Case registry. Neither Module owns semantic test selection or retry decisions.
@@ -102,30 +105,22 @@ as the active project direction.
   schema source is a narrow input-storage capability, not a precedent for
   persisting parsed catalogs, plans, operation graphs, or Agent memory.
 - The user has separately approved a narrow API Behavior Monitor evidence
-  catalog: resource names and aliases, ordered Identifier Definitions, learned
-  operation field/path mappings, complete typed Identifier Records, latest
-  per-operation read/write usage, response-value
-  monitor registrations and selectors, deduplicated typed response values, and
-  latest monitor errors. The catalog also retains the latest 100 valid,
-  non-truncated 2xx JSON observations per operation as flattened, typed,
-  non-null scalar evidence so a later Response Value registration can backfill
-  its pool. This deliberately includes sensitive-looking fields and therefore
-  requires the same database protection as other target evidence. Full
-  response bodies are never retained. Response-contract checks and evolved
-  OpenAPI IR stay in memory for the current App lifetime. This exception does
-  not authorize raw-response, LLM-reasoning, evolved-IR snapshot, plan, queue,
-  or general Agent-memory persistence.
-  Its two ambiguous classifications—resource identifier selection and
-  response-value source selection—use registered no-Tool `fast` System Agent
-  Profiles. Dynamic `I*` and `S*` aliases are restricted by a per-invocation
-  Schema and local validation before Monitor state changes.
-  Resource Identifier evidence is limited to direct fields of a root object or
-  each root-array object item. One complete Agent request carries every
-  observed string/integer field and every related full OpenAPI path: the
-  current placeholder path plus strict descendants whose added segments are
-  all placeholders. Ordered multi-field choices persist and generate only as
-  complete jointly observed records; oversized evidence is skipped with a
-  warning rather than truncated or split.
+  catalog: normalized operations; resource names and immutable direct identity
+  fields; operation-resource role propositions; recursively merged current
+  resource instances with logical deletion; exact RESOURCE and VALUE_REUSE
+  consumer input-source propositions; and immutable abstract Batch state.
+  It retains the latest 100 complete valid 2xx JSON observations per operation,
+  including original response JSON text and an actual request envelope with
+  Authorization, Cookie, token, API-key, and similarly sensitive headers
+  removed. This local raw evidence requires the same database protection as
+  other target evidence. It does not authorize LLM reasoning, extraction rules,
+  evolved-IR recovery snapshots, plans, queues, or general Agent memory.
+  Unknown resource identity fields use one registered no-Tool `fast` System
+  Agent Profile. Its dynamic `I*` aliases are restricted by a per-invocation
+  Schema and local validation before Monitor state changes. Identity fields may
+  be composite; generation selects all components from one complete current
+  resource instance. Response values are discovered and parsed directly from
+  observations, never copied into a shared producer-value table.
 - Operation Smoke, its persistent Failure/Attempt/Generator tables, specialized
   Failure/Patch/Review Agents, candidate registry, Finalizer, and evaluation
   package are retired. Standard `resolve-operation-failures` and
