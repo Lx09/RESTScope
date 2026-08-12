@@ -1,5 +1,25 @@
 # Findings & Decisions
 
+## Generic evidence confidence (2026-08-11)
+
+- The approved public seam is `restscope.evidence.Evidence[T]`; existing
+  `AgentFinding.confidence`, API Behavior Monitor persistence, Tools, and the
+  database remain unchanged.
+- Every instance starts from the fixed Beta(1,1) prior. A supporting update
+  increments alpha, an opposing update increments beta, and the only public
+  estimate is `alpha / (alpha + beta)`.
+- The wrapper retains any Python payload by identity without interpreting,
+  copying, or serializing it. Confidence updates mutate the wrapper in place
+  and must be atomic across threads.
+- The established root-package contract permits only App composition and
+  configuration files. The complete implementation therefore lives in
+  `restscope/evidence/__init__.py` while preserving the approved
+  `restscope.evidence.Evidence` import.
+- The user explicitly requested implementation in the current local `main`
+  checkout instead of a dedicated feature worktree and later authorized the
+  scoped Evidence commit. Push and other external Git actions remain
+  unauthorized.
+
 ## Final conversation and Todo decisions (2026-08-09)
 
 - The conversation is not a general run timeline. It contains incremental LLM

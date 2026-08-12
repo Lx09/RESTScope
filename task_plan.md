@@ -4,9 +4,16 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 19 implementation and desktop browser verification complete; exact 375 px viewport confirmation remains pending
+Phase 20 evidence confidence is complete, verified, and authorized for a scoped commit on local `main`; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 20: Generic evidence confidence
+- [x] Confirm the public `Evidence[T]` seam and Beta(1,1) update semantics
+- [x] Add the first red public-interface test for payload identity and the neutral prior
+- [x] Implement the in-memory mutable confidence Module
+- [x] Run focused and complete verification
+- **Status:** complete and verified on local `main`; scoped commit authorized
 
 ### Phase 19: Codex-style Main Agent conversation observer
 - [x] Confirm the evolving conversation, Reasoning, Tool/Subagent expansion, floating Todo, history migration, and Git boundaries
@@ -164,6 +171,10 @@ Phase 19 implementation and desktop browser verification complete; exact 375 px 
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Final multi-file status patch used a progress heading as a findings anchor | 1 | No partial edit occurred; inspect each file and apply exact per-file anchors. |
+| Full suite rejected `restscope/evidence.py` at the root package seam | 1 | Preserve `restscope.evidence.Evidence` while moving the complete Module into `restscope/evidence/__init__.py`; do not weaken the boundary test. |
+| Four invalid-input scenarios changed confidence instead of raising | 1 | Expected TDD red state; validate the boolean before either Beta counter changes. |
+| Evidence focus initially failed because `restscope.evidence` did not exist | 1 | Expected first TDD red state; add only the constructor, payload, and initial confidence behavior next. |
 | New worklist tests failed because `failure_resolution` did not yet exist | 1 | Expected TDD red state; implement the new package contracts next. |
 | Candidate-registry patch used an outdated test-file anchor | 1 | No source change was applied; inspected the current tail and split the patch into exact edits. |
 | Five continuous-Agent tests failed because the new Agent Interface did not exist | 1 | Expected TDD red state; implement the session, prompt, and finish contracts next. |

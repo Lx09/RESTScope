@@ -22,6 +22,34 @@
 - Focused Observer/UI service checks pass 20 tests. The complete Python suite passes 792 tests with 6 skips in 9.46 seconds.
 - Browser security policy blocked an automated loopback reload, after which the user refreshed the fixture and loaded the deterministic built asset. Desktop inspection confirmed full-width document flow, equal left edges for prose/Reasoning/Tool rows, synthetic-oblique Chinese Reasoning without a label or copy control, interactive Todo, and the named Subagent Drawer. There was no horizontal overflow. A requested 375 px capability was rescaled to 169 px by the browser environment; that more constrained view still had no horizontal overflow, but exact 375 px visual confirmation remains pending. A final non-visual internal-class and accessibility-label cleanup then passed its focused component tests, lint, and two identical production builds.
 
+# Session: 2026-08-11
+
+### Phase 20: Generic evidence confidence
+- **Status:** complete and verified on local `main`; scoped commit authorized
+- Confirmed the existing checkout was clean before implementation.
+- Preserved the approved public seam: `Evidence(data)`, read-only `data`,
+  numeric `confidence`, and in-place `update(supports=...)`.
+- Reused the existing project planning files because they are the repository's
+  ongoing RESTScope evolution record; no prior phase was rewritten.
+- First TDD red run: `uv run pytest -q tests/test_evidence.py` failed one test
+  with the expected missing `restscope.evidence` Module.
+- The first green slice added only payload retention and the fixed Beta(1,1)
+  score; its focused test passed. The second red slice then failed on the
+  expected missing `Evidence.update` method before the in-place update was
+  added.
+- Input validation produced the expected four-case red state, then passed after
+  non-booleans were rejected before mutation. Payload/read-only and concurrency
+  acceptance coverage also passed under the current interpreter; the Module
+  now uses an internal lock so that guarantee does not rely on CPython timing.
+- The first complete suite ran 589 scenarios and found one package-boundary
+  failure: a new root-level `evidence.py` is not allowed. The unchanged public
+  import now resolves to the complete `restscope/evidence` package Module;
+  the established boundary assertion remains intact.
+- Final focused verification passed 30 evidence, `typing.Any`, and package-
+  boundary scenarios. The complete suite passed 586 tests with 3 skips;
+  bytecode compilation, tracked diff checking, and untracked-file whitespace
+  checks passed.
+
 ## Session: 2026-08-08
 
 ### Phase 18: Profile Agent Prompt Session
