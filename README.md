@@ -91,9 +91,7 @@ plans, queues, scheduler progress, or authentication material.
 Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
 delete the old run artifact before starting. RESTScope never overwrites or
-automatically deletes a successfully created database. A caller that injects a
-concrete `HarnessRuntime` created through `build_harness()` owns its persistence
-and bypasses this default database bootstrap.
+automatically deletes a successfully created database.
 
 Alembic now has one `0001_current_baseline` for fresh databases. Old exploratory
 database files and the former `0001`–`0006` chain are intentionally
@@ -101,19 +99,9 @@ incompatible. Every project-created SQLite connection enables foreign keys;
 fresh creation also runs integrity and foreign-key checks. There is no restore,
 resume, reset, migration-from-old, or automatic-delete API.
 
-```python
-from restscope import RESTScopeApp, RESTScopeConfig
-
-config = RESTScopeConfig.from_environment()
-app = RESTScopeApp.from_config(config)
-# After app.initialize(...):
-current_document = app.export_current_openapi()
-events = app.list_openapi_change_events("GET /projects/{projectId}")
-```
-
-These methods are read-only audit/export interfaces. They do not recover an
-App from the retained file. Detailed table ownership, keys, retention, and
-transaction rules are documented in `docs/database_design.md`.
+Current OpenAPI and change events are database audit artifacts, not App
+lifecycle methods and not recovery state. Detailed table ownership, keys,
+retention, and transaction rules are documented in `docs/database_design.md`.
 
 ## LLM
 
@@ -503,23 +491,26 @@ evidence for another explicit diagnosis and replacement.
 
 ## Program Startup
 
-`RESTScopeApp` is the Python entrypoint for the standalone runtime. It loads
-configuration, binds one API target, then starts one blocking generic Main
-Agent. Startup has no task argument and returns no result DTO:
+The installed `restscope` command is the standalone program entrypoint. It
+loads configuration, binds one local OpenAPI file and target, then starts one
+blocking generic Main Agent:
 
-```python
-from restscope import RESTScopeApp
-
-with RESTScopeApp.from_environment() as app:
-    app.initialize(
-        schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
-        base_url="http://localhost:8000",
-        headers={"Authorization": "Bearer ..."},
-    )
-    app.start()
+```bash
+restscope assets/openapi/petstore-v3.json \
+  --base-url http://localhost:8000 \
+  --header Authorization "Bearer ..."
 ```
 
-`app.start()` blocks until the Main Agent returns its internal bounded
+Repeat `--header NAME VALUE` for additional target headers. Header values may
+remain visible in shell history and process listings, so use this option only
+where that exposure is acceptable. Use `--env-file PATH` to select a dotenv
+file other than the repository default.
+
+Python embedders may instead construct `RESTScopeApp(config)`, or call
+`RESTScopeApp.from_environment()`, then use `initialize()`, `start()`, and
+`close()`. The App exposes no database, Harness, Context, or tracing objects.
+
+`RESTScopeApp.start()` blocks until the Main Agent returns its internal bounded
 `AgentCompletion`, is interrupted, or fails safely. The initial production
 Profile intentionally has only the private Plan pair: no testing Skills,
 OpenAPI discovery Tool, HTTP Tool, Context Source, or child Profile is yet

@@ -26,12 +26,18 @@ def _spec() -> dict:
     }
 
 
-def test_app_exports_full_current_document_and_filterable_change_events(
+def test_app_initialization_persists_the_normalized_openapi_document(
     tmp_path: Path,
 ) -> None:
-    """App initialization exposes the complete normalized persisted document."""
+    """App publishes audit state without adding an App-level query facade."""
 
     from restscope import RESTScopeApp
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.db import (
+        SqlAlchemyAPIBehaviorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
     from restscope.openapi_parser import OpenAPIParser
     from restscope.config import DBConfig, RESTScopeConfig
 
@@ -39,18 +45,24 @@ def test_app_exports_full_current_document_and_filterable_change_events(
         RESTScopeConfig.from_environment(),
         db=DBConfig(url=f"sqlite:///{tmp_path / 'audit.sqlite'}"),
     )
-    app = RESTScopeApp.from_config(config)
+    app = RESTScopeApp(config)
     try:
         app.initialize(
             schema_source={
                 "kind": "inline",
                 "format": "json",
                 "content": json.dumps(_spec()),
-            }
+            },
+            base_url="https://api.test",
         )
-        initial = app.export_current_openapi()
+        catalog = APIBehaviorCatalog(
+            lambda: SqlAlchemyAPIBehaviorUnitOfWork(
+                make_session_factory(create_engine_from_url(config.db.url))
+            )
+        )
+        initial = catalog.current_openapi()
         assert set(OpenAPIParser.parse(initial).operations) == {"POST /items"}
-        assert app.list_openapi_change_events() == []
+        assert catalog.list_openapi_changes() == []
     finally:
         app.close()
 

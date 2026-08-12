@@ -89,11 +89,10 @@ a stale or changed Patch from being applied.
 
 ## 3. Read the main runtime in this order
 
-1. `restscope/app/runtime.py` — public App lifecycle, OpenAPI initialization,
-   Main Agent startup, and audit reads. Then read
-   `restscope/app/composition.py` only when you need the default database,
-   Monitor, Target API, Request Generation, Harness, UI, tracing, or Agent
-   Profile object graph.
+1. `restscope/main.py` — installed command, target arguments, exit codes, and
+   complete process lifetime. Then read `restscope/app/runtime.py` for the
+   embeddable App lifecycle, `restscope/app/target.py` for target validation,
+   and `restscope/app/composition.py` only for the production object graph.
 2. `restscope/agent/profile.py` and `restscope/agent/runtime.py` — Profile
    authorization and the generic model/Tool loop.
 3. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
@@ -119,13 +118,12 @@ a stale or changed Patch from being applied.
 
 ### `restscope/app/`
 
-The App is the only production composition root. `runtime.py` owns the small
-public lifecycle Interface: it parses and binds one API, initializes revision
-`0`, exposes audit reads, and blocks in the Main Agent loop. `composition.py`
-privately creates and closes the database-backed API Behavior Catalog, in-memory
-Generation Store, Target API Client, generic Harness, optional UI/tracing, and
-plan-only Main Profile. Callers do not receive those composed domain objects as
-App attributes.
+The App is the only production composition root. `runtime.py` owns only
+initialize/start/close state and the optional UI URL. `target.py` validates the
+OpenAPI and target HTTP inputs. `profiles.py` owns App-specific Agent Profiles.
+`composition.py` privately creates and closes the database-backed Catalog,
+Generation Store, Target API Client, Harness, optional UI, and tracing. Audit
+data remains in the Catalog rather than becoming App query methods.
 
 ### `restscope/openapi_parser/`
 

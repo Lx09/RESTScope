@@ -26,41 +26,48 @@ def test_root_contains_only_the_app_facade_composition_and_config() -> None:
     assert {path.name for path in SOURCE_ROOT.glob("*.py")} == {
         "__init__.py",
         "config.py",
+        "main.py",
     }
     app_package = SOURCE_ROOT / "app"
     assert {path.name for path in app_package.glob("*.py")} == {
         "__init__.py",
         "composition.py",
+        "profiles.py",
         "runtime.py",
+        "target.py",
     }
 
 
 def test_app_exposes_lifecycle_not_composed_domain_objects() -> None:
-    """Callers use one lifecycle Interface instead of an App object registry."""
-    from restscope import RESTScopeApp
-    from restscope.config import RESTScopeConfig
-    from restscope.harness import build_harness
+    """Callers see only target lifecycle and the optional observer location."""
+    import inspect
 
-    app = RESTScopeApp.from_config(
-        RESTScopeConfig.from_environment(),
-        harness_runtime=build_harness(),
+    from restscope import RESTScopeApp
+
+    assert tuple(inspect.signature(RESTScopeApp).parameters) == ("config",)
+    assert tuple(inspect.signature(RESTScopeApp.from_environment).parameters) == (
+        "env_file",
     )
-    try:
-        assert all(
-            not hasattr(app, name)
-            for name in (
-                "api_behavior_catalog",
-                "api_behavior_monitor_coordinator",
-                "harness_runtime",
-                "operation_testing_service",
-                "random_source",
-                "request_generation_patch_runtime",
-                "request_generation_store",
-                "target_api_client",
-            )
-        )
-    finally:
-        app.close()
+    assert not hasattr(RESTScopeApp, "from_config")
+    assert {
+        name
+        for name in RESTScopeApp.__dict__
+        if not name.startswith("_")
+    } == {
+        "close",
+        "from_environment",
+        "initialize",
+        "start",
+        "ui_url",
+    }
+    for retired_name in (
+        "config",
+        "tool_context",
+        "tracing_runtime",
+        "export_current_openapi",
+        "list_openapi_change_events",
+    ):
+        assert not hasattr(RESTScopeApp, retired_name)
 
 
 def test_root_facade_is_exact_and_import_has_no_process_side_effects(
@@ -618,7 +625,6 @@ def test_retired_operation_test_contracts_remain_absent() -> None:
     for builder in (
         RESTScopeApp,
         RESTScopeApp.from_environment,
-        RESTScopeApp.from_config,
     ):
         parameters = inspect.signature(builder).parameters
         assert "operation_runner" not in parameters

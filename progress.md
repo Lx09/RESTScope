@@ -628,3 +628,29 @@
 - Final verification passed 572 tests with 2 skips. Focused App/navigation tests
   passed 51 tests; Python compilation, `typing.Any`, clean wheel import, retired
   path scans, and diff hygiene also passed.
+
+# 2026-08-12: RESTScopeApp lifecycle and CLI entrypoint
+
+- User approved an incompatible App Interface contraction and a real Click
+  entrypoint directly on local `main`, followed by one scoped Git commit.
+- The existing uncommitted `restscope/data_types/__init__.py` change remains
+  outside this task and will not be staged.
+- Confirmed there is currently no `main()`, `__main__.py`, or installed command;
+  startup exists only as README sample code.
+- Added the Click command, direct dependency and script registration. Command
+  tests cover successful input transfer, safe failures, duplicate/invalid
+  headers, unsafe base URLs, cleanup, and exit codes.
+- Reduced `RESTScopeApp` to production lifecycle state and moved target parsing
+  plus App Agent Profiles to focused private modules. Retired injection and
+  audit query tests now exercise Harness, Tracing, Catalog, or resource-owner
+  seams directly.
+- Removed the unlisted App context-manager methods and added an exact public
+  Interface guard. The CLI reuses Target API validation for a strict HTTP(S)
+  origin and rejects path prefixes, credentials, query state, and fragments.
+- Verified 68 focused scenarios and the complete suite with 576 passes and 2
+  skips. The precise `typing.Any` guard, Python compilation, lock check, diff
+  hygiene, clean wheel contents, console-script registration, and isolated
+  installed `restscope --help` all passed.
+- Moved generated wheel build directories to
+  `/tmp/restscope-cli-wheel.b4Y3nD`; no generated build output remains in the
+  worktree. The pre-existing data-types edit is still untouched and unstaged.

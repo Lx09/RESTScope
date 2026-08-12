@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 import re
-from urllib.parse import quote, unquote, urlsplit, urlunsplit
+from urllib.parse import SplitResult, quote, unquote, urlsplit, urlunsplit
 
 import httpx
 
@@ -32,6 +32,7 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
 @dataclass(slots=True, frozen=True)
@@ -67,6 +68,8 @@ def prepare_target_request(
     :class:`TargetAPIError` before any HTTP client exists.
     """
 
+    validate_target_headers(context_headers or {})
+    validate_target_headers(request_headers or {})
     return PreparedTargetRequest(
         method=method,
         path=path,
@@ -93,6 +96,28 @@ def build_target_url(
             configured target origin.
     """
 
+    parsed = validate_target_base_url(base_url)
+    validate_relative_target_path(path)
+    base_path = parsed.path.rstrip("/")
+    url = httpx.URL(
+        urlunsplit((parsed.scheme, parsed.netloc, f"{base_path}{path}", "", ""))
+    )
+    return url.copy_with(query=_encode_query(query_items)) if query_items else url
+
+
+def validate_target_base_url(base_url: str | None) -> SplitResult:
+    """Return a safe parsed target URL shared by App and request validation.
+
+    Args:
+        base_url: Candidate HTTP or HTTPS origin, optionally with a path prefix.
+
+    Returns:
+        Parsed URL parts suitable for same-origin request construction.
+
+    Raises:
+        TargetAPIError: The URL is missing, is not HTTP(S), lacks a host, or
+            carries credentials, hidden query state, or a fragment.
+    """
     if not base_url:
         raise TargetAPIError(
             "target_base_url_not_configured",
@@ -111,12 +136,30 @@ def build_target_url(
             "invalid_base_url",
             "The App target base URL is invalid",
         )
-    validate_relative_target_path(path)
-    base_path = parsed.path.rstrip("/")
-    url = httpx.URL(
-        urlunsplit((parsed.scheme, parsed.netloc, f"{base_path}{path}", "", ""))
-    )
-    return url.copy_with(query=_encode_query(query_items)) if query_items else url
+    return parsed
+
+
+def validate_target_origin(base_url: str | None) -> SplitResult:
+    """Return a safe origin for a standalone RESTScope target.
+
+    Args:
+        base_url: Candidate HTTP or HTTPS origin supplied at process startup.
+
+    Returns:
+        Parsed URL parts with no path beyond an optional trailing slash.
+
+    Raises:
+        TargetAPIError: General base URL validation fails or the URL contains a
+            path prefix. Request preparation may still use a validated base
+            path; the standalone command deliberately binds an origin.
+    """
+    parsed = validate_target_base_url(base_url)
+    if parsed.path not in {"", "/"}:
+        raise TargetAPIError(
+            "invalid_base_url",
+            "The App target base URL must be an HTTP or HTTPS origin",
+        )
+    return parsed
 
 
 def validate_relative_target_path(path: str) -> None:
@@ -194,6 +237,31 @@ def merge_target_headers(
         merged[name] = value
         existing[normalized] = name
     return merged
+
+
+def validate_target_headers(headers: Mapping[str, str]) -> None:
+    """Reject malformed names and values before target request persistence.
+
+    Args:
+        headers: App-level or per-request HTTP headers to inspect.
+
+    Raises:
+        ValueError: A name is not an HTTP token, or a name/value contains a NUL
+            or line break that could create another header field.
+    """
+    seen: set[str] = set()
+    for name, value in headers.items():
+        normalized = name.lower()
+        if not _HEADER_NAME_PATTERN.fullmatch(name):
+            raise ValueError("Target header names must be valid HTTP tokens")
+        if normalized in seen:
+            raise ValueError("Target header names must be unique ignoring case")
+        if any(
+            character in name or character in value
+            for character in ("\r", "\n", "\0")
+        ):
+            raise ValueError("Target headers cannot contain line breaks or NUL bytes")
+        seen.add(normalized)
 
 
 def is_sensitive_header(name: str) -> bool:

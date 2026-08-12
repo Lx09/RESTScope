@@ -2,6 +2,10 @@
 
 Status: Verified, uncommitted
 
+> Superseded on 2026-08-12 by
+> `docs/tasks/app-lifecycle-cli-entrypoint.md`. The later decision removes the
+> audit/query and injection Interface retained by this navigation-only pass.
+
 ## Objective
 
 Keep `RESTScopeApp` as RESTScope's small public lifecycle Interface while

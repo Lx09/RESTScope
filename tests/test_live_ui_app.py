@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from restscope.harness import HarnessRuntime
+    from restscope.harness import AgentRuntimeDefinition
 
 
-def _harness_with_interrupting_main() -> "HarnessRuntime":
-    """Build a real Harness whose Main Provider simulates local Ctrl-C."""
+def _interrupting_agent_definition() -> "AgentRuntimeDefinition":
+    """Build one production-shaped Main definition that simulates Ctrl-C."""
     from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.harness import AgentRuntimeDefinition
     from restscope.llm import LLMClient, LLMModelConfig
     from restscope.llm.registry import LLMProviderRegistry
 
@@ -36,20 +36,18 @@ def _harness_with_interrupting_main() -> "HarnessRuntime":
 
     registry = LLMProviderRegistry()
     registry.register(InterruptingProvider())
-    return build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-            models=(
-                LLMModelConfig(
-                    name="thinking",
-                    provider="interrupting",
-                    model="interrupting-model",
-                    max_tokens=128,
-                    context_window_tokens=2_048,
-                ),
+    return AgentRuntimeDefinition(
+        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        models=(
+            LLMModelConfig(
+                name="thinking",
+                provider="interrupting",
+                model="interrupting-model",
+                max_tokens=128,
+                context_window_tokens=2_048,
             ),
-            client=LLMClient(registry),
-        )
+        ),
+        client=LLMClient(registry),
     )
 
 
@@ -72,8 +70,7 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     """Scenario: enabled hosting exposes only the actual started loopback URL."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
-    from restscope.config import RESTScopeConfig, UIConfig
-    from restscope.harness import build_harness
+    from restscope.config import DBConfig, RESTScopeConfig, UIConfig
 
     from restscope.ui import UIService
 
@@ -90,15 +87,15 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     )
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
+        db=DBConfig(url=f"sqlite:///{tmp_path / 'ui.sqlite'}"),
         ui=UIConfig(enabled=True, port=9988),
     )
     tracing = TracingRuntime.disabled()
-    runtime = build_harness()
-    app = RESTScopeApp(
-        config=config,
-        harness_runtime=runtime,
-        tracing_runtime=tracing,
+    monkeypatch.setattr(
+        "restscope.app.composition._build_app_tracing_runtime",
+        lambda _config: tracing,
     )
+    app = RESTScopeApp(config)
 
     assert app.ui_url == "http://127.0.0.1:9988"
     assert tracing.run_observer is not None
@@ -114,7 +111,7 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     """Ctrl-C preserves the stopped snapshot until the App is closed."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
-    from restscope.config import RESTScopeConfig, UIConfig
+    from restscope.config import DBConfig, RESTScopeConfig, UIConfig
 
     from restscope.ui import UIService
 
@@ -127,14 +124,20 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     )
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
+        db=DBConfig(url=f"sqlite:///{tmp_path / 'interrupt.sqlite'}"),
         ui=UIConfig(enabled=True, port=9987),
     )
     tracing = TracingRuntime.disabled()
-    app = RESTScopeApp(
-        config=config,
-        harness_runtime=_harness_with_interrupting_main(),
-        tracing_runtime=tracing,
+    interrupting = _interrupting_agent_definition()
+    monkeypatch.setattr(
+        "restscope.app.composition._build_app_tracing_runtime",
+        lambda _config: tracing,
     )
+    monkeypatch.setattr(
+        "restscope.app.composition._build_agent_runtime_definition",
+        lambda *_args, **_kwargs: interrupting,
+    )
+    app = RESTScopeApp(config)
     app.initialize(
         schema_source={
             "kind": "inline",
@@ -167,8 +170,7 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     """Scenario: an optional server failure disables UI but not App construction."""
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
-    from restscope.config import RESTScopeConfig, UIConfig
-    from restscope.harness import build_harness
+    from restscope.config import DBConfig, RESTScopeConfig, UIConfig
 
     monkeypatch.setattr(
         "restscope.app.composition.start_ui_service",
@@ -176,15 +178,16 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     )
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
+        db=DBConfig(url=f"sqlite:///{tmp_path / 'failed-ui.sqlite'}"),
         ui=UIConfig(enabled=True, port=9989),
     )
     tracing = TracingRuntime.disabled()
 
-    app = RESTScopeApp(
-        config=config,
-        harness_runtime=build_harness(),
-        tracing_runtime=tracing,
+    monkeypatch.setattr(
+        "restscope.app.composition._build_app_tracing_runtime",
+        lambda _config: tracing,
     )
+    app = RESTScopeApp(config)
 
     assert app.ui_url is None
     assert tracing.run_observer is None

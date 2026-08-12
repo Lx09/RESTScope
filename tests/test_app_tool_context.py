@@ -25,57 +25,51 @@ def _spec(*, operation_id: str = "listPets") -> dict:
     }
 
 
-def _app_and_runtime(tmp_path):
-    """Return an App plus the caller-owned Harness used to inspect lifecycle effects."""
-    from restscope.agent import AgentProfile
+def _app_and_resources(monkeypatch, tmp_path):
+    """Return an App with minimal private resources for lifecycle scenarios."""
     from restscope import RESTScopeApp
-    from restscope.harness import AgentRuntimeDefinition, build_harness
-    from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
-    from restscope.llm.registry import LLMProviderRegistry
     from restscope.config import RESTScopeConfig
+    from restscope.observability import TracingRuntime
 
-    class Provider:
-        """Complete the blocking Main loop locally without external I/O."""
+    class MainAgent:
+        """Record completion through the same method the App invokes."""
 
-        name = "scripted"
+        def start(self) -> None:
+            resources.started += 1
 
-        def invoke(self, request):
-            return LLMResponse(
-                provider=self.name,
-                model=request.model,
-                parsed_json={"summary": "Main loop complete.", "findings": []},
-            )
+    class Resources:
+        """Implement only the private resource operations consumed by runtime."""
 
-    database = tmp_path / "app-context.sqlite"
-    env_file = tmp_path / ".env"
-    env_file.write_text(f"DB_URL=sqlite:///{database}\n", encoding="utf-8")
-    registry = LLMProviderRegistry()
-    registry.register(Provider())
-    runtime = build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-            models=(
-                LLMModelConfig(
-                    name="thinking",
-                    provider="scripted",
-                    model="thinking-model",
-                    max_tokens=512,
-                    context_window_tokens=8_192,
-                ),
-            ),
-            client=LLMClient(registry),
-        )
+        tracing = TracingRuntime.disabled()
+        run_observer = None
+        ui_url = None
+
+        def __init__(self) -> None:
+            self.context = None
+            self.started = 0
+            self.closed = False
+
+        def bind_target(self, context) -> None:
+            self.context = context
+
+        def start_main_agent(self) -> MainAgent:
+            return MainAgent()
+
+        def close(self) -> None:
+            self.context = None
+            self.closed = True
+
+    resources = Resources()
+    monkeypatch.setattr(
+        "restscope.app.runtime._compose_app_resources",
+        lambda _config: resources,
     )
-    app = RESTScopeApp.from_config(
-        RESTScopeConfig.from_environment(env_file),
-        harness_runtime=runtime,
-    )
-    return app, runtime
+    return RESTScopeApp(RESTScopeConfig.from_environment(tmp_path / ".env")), resources
 
 
-def _app(tmp_path):
-    """Build one App when a scenario needs no direct Harness observation."""
-    app, _runtime = _app_and_runtime(tmp_path)
+def _app(monkeypatch, tmp_path):
+    """Build one lifecycle App when no resource inspection is needed."""
+    app, _resources = _app_and_resources(monkeypatch, tmp_path)
     return app
 
 
@@ -84,7 +78,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
     tmp_path,
 ) -> None:
     """Unimplemented testing methods stay absent from the first Main Profile."""
-    from restscope.app.composition import _build_main_agent_runtime_definition
+    from restscope.app.profiles import _build_agent_runtime_definition
     from restscope.harness import build_harness
     from restscope.llm import LLMClient, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
@@ -112,7 +106,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
     registry.register(provider)
     client = LLMClient(registry)
     monkeypatch.setattr(
-        "restscope.app.composition.build_llm_client",
+        "restscope.app.profiles.build_llm_client",
         lambda *_args, **_kwargs: client,
     )
     env_file = tmp_path / ".env"
@@ -123,7 +117,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
         "THINK_CONTEXT_WINDOW_TOKENS=8192\n",
         encoding="utf-8",
     )
-    definition = _build_main_agent_runtime_definition(
+    definition = _build_agent_runtime_definition(
         RESTScopeConfig.from_environment(env_file),
         tracing_runtime=TracingRuntime.disabled(),
     )
@@ -225,12 +219,12 @@ def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp
         return original_parse(source)
 
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(counting_parse))
-    app = _app(tmp_path)
+    app, resources = _app_and_resources(monkeypatch, tmp_path)
 
     headers = {"Authorization": "Bearer runtime-secret"}
     source = {"kind": "inline", "format": "json", "content": json.dumps(_spec())}
 
-    context = app.initialize(
+    result = app.initialize(
         schema_source=source,
         base_url="https://api.example.test",
         headers=headers,
@@ -241,13 +235,16 @@ def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp
     assert app.start() is None
 
     assert len(seen) == 1
-    assert app.tool_context is context
-    assert context.baseline_schema_source["content"] != "changed"
-    assert context.headers["Authorization"] == "Bearer runtime-secret"
-    assert "runtime-secret" not in repr(context)
+    assert result is None
+    assert resources.context.baseline_schema_source["content"] != "changed"
+    assert resources.context.headers["Authorization"] == "Bearer runtime-secret"
+    assert "runtime-secret" not in repr(resources.context)
 
     with pytest.raises(ToolContextError) as exc_info:
-        app.initialize(schema_source={"kind": "inline", "content": json.dumps(_spec())})
+        app.initialize(
+            schema_source={"kind": "inline", "content": json.dumps(_spec())},
+            base_url="https://api.example.test",
+        )
     assert exc_info.value.code == "tool_context_already_initialized"
     with pytest.raises(RuntimeError, match="already started"):
         app.start()
@@ -273,17 +270,17 @@ def test_app_validates_and_forwards_supported_schema_sources(
     parsed = OpenAPIParser.parse(_spec())
     seen = []
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(lambda source: seen.append(source) or parsed))
-    app = _app(tmp_path)
+    app, resources = _app_and_resources(monkeypatch, tmp_path)
 
-    context = app.initialize(schema_source=schema_source)
+    result = app.initialize(schema_source=schema_source, base_url="https://api.test")
 
+    assert result is None
     assert seen == [parser_input]
-    assert dict(context.baseline_schema_source) == schema_source
+    assert dict(resources.context.baseline_schema_source) == schema_source
 
 
 def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app allows retry after initialization failure."""
-    from restscope.tools.context import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
 
     parsed = OpenAPIParser.parse(_spec())
@@ -296,19 +293,25 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) ->
         return result
 
     monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(parse))
-    app = _app(tmp_path)
+    app, resources = _app_and_resources(monkeypatch, tmp_path)
 
     with pytest.raises(ValueError, match="broken schema"):
-        app.initialize(schema_source={"kind": "inline", "content": "broken"})
-    assert app.tool_context is None
+        app.initialize(
+            schema_source={"kind": "inline", "content": "broken"},
+            base_url="https://api.test",
+        )
+    assert resources.context is None
 
-    context = app.initialize(schema_source={"kind": "inline", "content": "valid"})
-    assert context.ir is parsed
+    app.initialize(
+        schema_source={"kind": "inline", "content": "valid"},
+        base_url="https://api.test",
+    )
+    assert resources.context.ir is parsed
 
 
-def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(tmp_path) -> None:
+def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app rejects an openapi schema without operations and remains retryable."""
-    app = _app(tmp_path)
+    app, resources = _app_and_resources(monkeypatch, tmp_path)
     empty = {
         "openapi": "3.0.3",
         "info": {"title": "Empty", "version": "1.0"},
@@ -317,35 +320,45 @@ def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
 
     with pytest.raises(ValueError, match="no testable operations"):
         app.initialize(
-            schema_source={"kind": "inline", "format": "json", "content": json.dumps(empty)}
+            schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": json.dumps(empty),
+            },
+            base_url="https://api.test",
         )
 
-    assert app.tool_context is None
+    assert resources.context is None
     assert app.initialize(
-        schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())}
-    ).ir.operations
+        schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": json.dumps(_spec()),
+        },
+        base_url="https://api.test",
+    ) is None
+    assert resources.context.ir.operations
 
 
-def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> None:
+def test_app_requires_initialization_and_clears_context_on_close(monkeypatch, tmp_path) -> None:
     """Scenario: verify that app requires initialization and clears context on close."""
     from restscope.tools.context import ToolContextError
 
-    app, runtime = _app_and_runtime(tmp_path)
+    app, resources = _app_and_resources(monkeypatch, tmp_path)
 
     with pytest.raises(ToolContextError) as exc_info:
         app.start()
     assert exc_info.value.code == "tool_context_not_initialized"
 
-    context = app.initialize(
-        schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())}
+    app.initialize(
+        schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())},
+        base_url="https://api.test",
     )
-    assert runtime.require_context() is context
+    assert resources.context is not None
 
     app.close()
 
-    assert app.tool_context is None
-    with pytest.raises(ToolContextError) as exc_info:
-        runtime.require_context()
-    assert exc_info.value.code == "tool_context_not_initialized"
+    assert resources.context is None
+    assert resources.closed is True
     with pytest.raises(RuntimeError, match="closed"):
         app.start()

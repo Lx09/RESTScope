@@ -5,6 +5,7 @@ description = "OpenAPI and Swagger parser utilities."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "click>=8.4,<9",
     "pyyaml>=6.0.3",
     "packaging>=25.0",
     "sqlalchemy>=2.0.0",
@@ -17,6 +18,9 @@ dependencies = [
     "mcp>=1.0.0",
     "rstr>=3.2.2,<4",
 ]
+
+[project.scripts]
+restscope = "restscope.main:main"
 
 [project.optional-dependencies]
 tracing = [

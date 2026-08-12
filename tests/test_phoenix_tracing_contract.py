@@ -72,7 +72,11 @@ def _wait_for_traces(
 
 
 @pytest.mark.phoenix_contract
-def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path) -> None:
+def test_local_phoenix_accepts_restscope_trace_hierarchy(
+    request,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     """Scenario: verify that local phoenix accepts restscope trace hierarchy."""
     if "phoenix_contract" not in request.config.option.markexpr:
         pytest.skip("select -m phoenix_contract to run the local Phoenix contract")
@@ -128,21 +132,18 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
 
     main_registry = LLMProviderRegistry()
     main_registry.register(MainProvider())
-    capabilities = build_harness(
-        tracing_runtime=runtime,
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-            models=(
-                LLMModelConfig(
-                    name="thinking",
-                    provider="main-contract",
-                    model="main-contract-model",
-                    max_tokens=512,
-                    context_window_tokens=8_192,
-                ),
+    agent_definition = AgentRuntimeDefinition(
+        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        models=(
+            LLMModelConfig(
+                name="thinking",
+                provider="main-contract",
+                model="main-contract-model",
+                max_tokens=512,
+                context_window_tokens=8_192,
             ),
-            client=LLMClient(main_registry, tracing_runtime=runtime),
         ),
+        client=LLMClient(main_registry, tracing_runtime=runtime),
     )
     toolbox = AgentToolbox(tracing_runtime=runtime)
     toolbox.register(
@@ -155,7 +156,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         ),
         execute=lambda **arguments: {
             "structured": {
-                "operations": len(capabilities.require_context().ir.operations),
+                "operations": 1,
                 "argument_keys": sorted(arguments),
             }
         },
@@ -164,11 +165,15 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(request, tmp_path: Path
         RESTScopeConfig.from_environment(tmp_path / ".env"),
         tracing=tracing_config,
     )
-    app = RESTScopeApp.from_config(
-        config,
-        harness_runtime=capabilities,
-        tracing_runtime=runtime,
+    monkeypatch.setattr(
+        "restscope.app.composition._build_app_tracing_runtime",
+        lambda _config: runtime,
     )
+    monkeypatch.setattr(
+        "restscope.app.composition._build_agent_runtime_definition",
+        lambda *_args, **_kwargs: agent_definition,
+    )
+    app = RESTScopeApp(config)
     app.initialize(
         schema_source={"kind": "file", "path": "assets/openapi/petstore-v3.json"},
         base_url="http://example.test",

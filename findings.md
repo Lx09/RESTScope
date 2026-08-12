@@ -453,3 +453,21 @@
 - A clean packaging check exposed stale ignored setuptools output that still
   contained retired modules. After moving those exact generated directories,
   the wheel contained only the three new App package files.
+
+# 2026-08-12: RESTScopeApp lifecycle and CLI entrypoint
+
+- App audit reads, configuration, Context, and tracing properties have no
+  production consumers; their repository uses are README examples or tests.
+- The repository has no executable program entrypoint. A Click command must own
+  configuration loading, target arguments, lifecycle closure, and exit codes.
+- Click 8.4.2 is already locked indirectly, but direct production import still
+  requires declaring `click>=8.4,<9` in project dependencies.
+- `target_api.request` owns base URL and request-header safety, but it currently
+  lacks explicit HTTP token and CR/LF/NUL validation for App Context headers.
+- The lower-level Target API intentionally supports a base path for prepared
+  requests, while the standalone command promises an origin. A focused shared
+  `validate_target_origin()` check preserves both contracts without duplicating
+  URL parsing in the CLI.
+- Context-manager methods were not part of the user-approved exact App
+  Interface. Removing them leaves five public lifecycle names: initialization,
+  start, close, environment construction, and the optional UI URL.

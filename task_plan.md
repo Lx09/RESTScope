@@ -4,9 +4,17 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 26 RESTScopeApp runtime/composition navigation is verified and uncommitted on local `main`; Phase 19 exact 375 px confirmation remains pending
+Phase 27 RESTScopeApp lifecycle and CLI entrypoint is verified for its authorized scoped commit; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 27: RESTScopeApp lifecycle and CLI entrypoint
+- [x] Add red App Interface, target validation, and Click command contracts
+- [x] Extract target and Profile ownership; remove injection and audit facades
+- [x] Add the installed `restscope` command and direct Click dependency
+- [x] Update navigation documents and run complete verification
+- [x] Commit only scoped changes, preserving the pre-existing data-types edit
+- **Status:** verified for the authorized scoped commit on local `main`; 576 tests passed with 2 skips
 
 ### Phase 26: RESTScopeApp runtime/composition navigation
 - [x] Add red package-shape and narrowed-App Interface contracts

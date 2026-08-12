@@ -462,11 +462,11 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
     )
 
 
-def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
+def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: Path) -> None:
     """The blocking App, Main Agent, and model call form one trace hierarchy."""
     from restscope.agent import AgentProfile
     from restscope import RESTScopeApp
-    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.harness import AgentRuntimeDefinition
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.config import RESTScopeConfig
@@ -510,28 +510,29 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     runtime, exporter = _recording_runtime()
     registry = LLMProviderRegistry()
     registry.register(Provider())
-    capabilities = build_harness(
-        tracing_runtime=runtime,
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-            models=(
-                LLMModelConfig(
-                    name="thinking",
-                    provider="scripted",
-                    model="thinking-model",
-                    max_tokens=512,
-                    context_window_tokens=8_192,
-                ),
+    agent_definition = AgentRuntimeDefinition(
+        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        models=(
+            LLMModelConfig(
+                name="thinking",
+                provider="scripted",
+                model="thinking-model",
+                max_tokens=512,
+                context_window_tokens=8_192,
             ),
-            client=LLMClient(registry, tracing_runtime=runtime),
         ),
+        client=LLMClient(registry, tracing_runtime=runtime),
     )
-    app = RESTScopeApp.from_config(
-        RESTScopeConfig.from_environment(env_file),
-        harness_runtime=capabilities,
-        tracing_runtime=runtime,
+    monkeypatch.setattr(
+        "restscope.app.composition._build_app_tracing_runtime",
+        lambda _config: runtime,
     )
-    context = app.initialize(
+    monkeypatch.setattr(
+        "restscope.app.composition._build_agent_runtime_definition",
+        lambda *_args, **_kwargs: agent_definition,
+    )
+    app = RESTScopeApp(RESTScopeConfig.from_environment(env_file))
+    app.initialize(
         schema_source={"kind": "inline", "content": json.dumps(schema)},
         base_url="http://example.test",
         headers={"Authorization": "Bearer header-secret"},
@@ -558,9 +559,6 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
         default=str,
     )
 
-    assert app.tracing_runtime is runtime
-    with pytest.raises(AttributeError):
-        app.tracing_runtime = runtime
     assert agent_span.parent.span_id == app_span.context.span_id
     assert model_span.parent.span_id == agent_span.context.span_id
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
@@ -574,16 +572,13 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(tmp_path: Path) -> None:
     assert "header-secret" in rendered
     assert "thinking-secret" not in rendered
     assert "fast-secret" not in rendered
-    assert not hasattr(context, "tracing_runtime")
 
 
-def test_app_rebinds_only_harness_owned_trace_consumers(tmp_path: Path) -> None:
-    """Injected domain services are no longer reached through HarnessRuntime."""
-    from restscope import RESTScopeApp
+def test_harness_rebinds_only_its_owned_trace_consumers() -> None:
+    """Harness tracing replacement stays at the Harness ownership seam."""
     from restscope.harness import build_harness
     from restscope.observability import TracingRuntime
     from restscope.observability import Redactor
-    from restscope.config import RESTScopeConfig
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
     app_runtime = TracingRuntime.disabled(redactor=Redactor(["app-key"]))
@@ -603,17 +598,15 @@ def test_app_rebinds_only_harness_owned_trace_consumers(tmp_path: Path) -> None:
             }
         },
     )
-    app = RESTScopeApp.from_config(
-        RESTScopeConfig.from_environment(tmp_path / ".env"),
-        harness_runtime=capabilities,
-        tracing_runtime=app_runtime,
-    )
+    capabilities.bind_tracing_runtime(app_runtime)
 
     assert capabilities.external_tools is not None
     assert capabilities.external_tools.tracing_runtime is app_runtime
     assert not hasattr(capabilities, "operation_testing_service")
 
-    app.close()
+    if capabilities.mcp_host is not None:
+        capabilities.mcp_host.close()
+    app_runtime.close()
     old_runtime.close()
 
 
