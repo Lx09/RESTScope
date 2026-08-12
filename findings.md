@@ -418,3 +418,19 @@
   `SystemAgentRunner`, `ReferenceValueProvider`, Traversable, and ASGI/Uvicorn
   Protocols have distinct adapters or real cross-Module/third-party isolation
   value and must remain.
+# 2026-08-12: Python 3.12 baseline
+
+- The only active Python-version declarations are `.python-version`, the
+  `requires-python` field in `pyproject.toml`, and the generated `uv.lock`
+  requirement. The repository currently has no Python CI matrix or Python
+  container image.
+- Python 3.12.12 is already available through the local `uv` installation, so
+  the upgraded baseline can be tested with the real target interpreter.
+- Historical implementation plans mention Python 3.11 as their period-specific
+  technology stack. They are not active runtime configuration and should not be
+  rewritten.
+- Regenerating the lock at `>=3.12` kept every package name and version stable.
+  Its larger-looking diff removes wheels and resolution branches that exist only
+  for the retired Python 3.11 baseline.
+- The built wheel declares `Requires-Python: >=3.12`, so package installers will
+  enforce the same minimum as local development.

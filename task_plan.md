@@ -4,9 +4,16 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 24 redundant Protocol and Reference integration cleanup is complete on local `main`; Phase 19 exact 375 px confirmation remains pending
+Phase 25 Python 3.12 baseline is in progress in its dedicated feature worktree; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 25: Python 3.12 baseline
+- [x] Add a regression contract for active Python-version declarations
+- [x] Raise the local, package, and lock-file minimum to Python 3.12
+- [x] Verify the full suite and wheel metadata with Python 3.12
+- [x] Record the final diff and wait for separate Git delivery authorization
+- **Status:** implemented and verified on `codex/python-3-12`; uncommitted
 
 ### Phase 24: Redundant Protocol and Reference integration cleanup
 - [x] Add red concrete Reference, Resource Monitor, and UI navigation contracts
@@ -200,6 +207,8 @@ Phase 24 redundant Protocol and Reference integration cleanup is complete on loc
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Direct removal of the two ignored wheel-build directories was rejected by the environment's destructive-operation guard | 1 | Move only the exact `build/` and `restscope.egg-info/` directories into a new system temporary directory instead; keep `.venv`. |
+| Python 3.12 red test used `--no-sync` before the feature worktree had a virtual environment | 1 | Let `uv` sync the existing lock into the new Python 3.12 environment, then rerun the unchanged contract. |
 | Phase 24 UI tests patched the facade after App adopted a direct concrete import | 1 | Patch `restscope.app.start_ui_service`, the actual consumer binding; the production lifecycle behavior was unchanged. |
 | Phase 24 concrete Reference import created a package initialization cycle | 1 | `reference_values` already imports Parameter Patch models; keep the concrete forward type under `TYPE_CHECKING` because Runtime performs no runtime type test, then migrate old test doubles to the real collaborator. |
 | Phase 23 legacy-name scan used Markdown backticks inside a shell argument | 1 | The shell attempted to run the quoted name before the read-only scan; no file changed. Repeat scans with literal-safe patterns. |

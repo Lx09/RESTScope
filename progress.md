@@ -581,3 +581,28 @@
 - Final verification passed 565 tests with 2 skips. The 66-test integration
   suite, `typing.Any` guard, Python compilation, obsolete-name scan, exact
   Interface inspection, and `git diff --check` also passed.
+# 2026-08-12: Python 3.12 baseline
+
+- Created dedicated worktree `/Users/lixin/Workplace/RESTScope-python-3-12` on
+  branch `codex/python-3-12` from local `main` commit `3ef26ae`.
+- Confirmed the main worktree was clean and one commit ahead of `origin/main`.
+- Located the three active Python-version declarations and confirmed a local
+  Python 3.12.12 interpreter is available.
+- Added a regression contract before changing the version declarations.
+- The first red-test command deliberately avoided dependency sync, but this new
+  worktree had no pytest executable yet. No project state changed beyond the
+  empty virtual environment; the next run syncs the existing lock first.
+- Rebuilt the main worktree's ignored `.venv` with Python 3.12.12 and verified
+  its interpreter path and `(3, 12)` runtime version. This local environment
+  update did not change any tracked file on `main`.
+- The direct cleanup attempt for ignored wheel-build directories was blocked by
+  the environment before execution. The directories will be moved to a unique
+  system temporary directory instead of deleted.
+- Updated `.python-version`, package metadata, lock metadata, and README to the
+  Python 3.12 minimum. Added exact declaration regression tests.
+- Full verification on Python 3.12.12 passed 567 tests with 2 skips. Compile,
+  precise `typing.Any`, lock consistency, wheel metadata, and diff-hygiene
+  checks also passed.
+- Moved the exact ignored wheel-build outputs to
+  `/tmp/restscope-python312-build-artifacts.wcDSWk`; retained both Python 3.12
+  `.venv` environments.

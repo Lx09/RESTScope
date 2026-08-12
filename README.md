@@ -71,6 +71,9 @@ disables thinking for these compact structured decisions.
 
 ## Development
 
+RESTScope requires Python 3.12 or newer. With `uv` installed, the repository's
+`.python-version` selects a compatible Python 3.12 interpreter automatically:
+
 ```bash
 uv sync
 uv run pytest

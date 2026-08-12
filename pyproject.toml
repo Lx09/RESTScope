@@ -3,7 +3,7 @@ name = "restscope"
 version = "0.1.0"
 description = "OpenAPI and Swagger parser utilities."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0.3",
     "packaging>=25.0",
