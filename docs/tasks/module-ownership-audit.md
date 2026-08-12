@@ -265,6 +265,12 @@ otherwise remain intact.
 
 ## Root-directory ownership decisions
 
+> Superseded on 2026-08-12 by
+> `docs/tasks/app-runtime-composition-navigation.md`: the user later approved a
+> private `restscope.app` package so lifecycle and default composition are
+> navigable separately. The table below remains the historical decision that
+> governed the earlier consolidation.
+
 The root directory should be an application-facing entry, not a holding area
 for cross-package utilities. After the proposed migrations it contains only
 `__init__.py`, `app.py`, and `config.py`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import pytest
@@ -45,9 +46,27 @@ def test_default_app_creates_only_the_nine_persistent_business_tables(
             "alembic_version",
             *BUSINESS_TABLES,
         }
-        assert app.request_generation_store is not None
-        assert app.request_generation_patch_runtime is not None
-        assert app.operation_testing_service is not None
+        context = app.initialize(
+            schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": json.dumps(
+                    {
+                        "openapi": "3.0.3",
+                        "info": {"title": "Bootstrap", "version": "1"},
+                        "paths": {
+                            "/health": {
+                                "get": {
+                                    "responses": {"200": {"description": "ok"}}
+                                }
+                            }
+                        },
+                    }
+                ),
+            }
+        )
+        assert context.ir.operations
+        assert app.export_current_openapi()["info"]["title"] == "Bootstrap"
     finally:
         app.close()
 
@@ -100,8 +119,8 @@ def test_injected_harness_skips_database_creation(tmp_path: Path) -> None:
     )
     try:
         assert not database.exists()
-        assert app.request_generation_store is None
-        assert app.operation_testing_service is None
+        with pytest.raises(RuntimeError, match="no API Behavior Catalog"):
+            app.export_current_openapi()
     finally:
         app.close()
 
@@ -117,3 +136,116 @@ def test_successful_close_preserves_fresh_database(tmp_path: Path) -> None:
     assert database.is_file()
     with pytest.raises(DatabaseAlreadyExistsError):
         RESTScopeApp.from_config(_config(f"sqlite:///{database}"))
+
+
+def test_failed_default_composition_removes_database_and_closes_tracing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A late default-wiring failure leaves no half-owned App resources."""
+    from restscope import RESTScopeApp
+    from restscope.app import composition
+    from restscope.observability import TracingRuntime
+
+    database = tmp_path / "incomplete.sqlite"
+    tracing = TracingRuntime.disabled()
+    tracing_closed: list[bool] = []
+    monkeypatch.setattr(tracing, "close", lambda: tracing_closed.append(True))
+    monkeypatch.setattr(
+        composition,
+        "_build_app_tracing_runtime",
+        lambda _config: tracing,
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_harness",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("wiring failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="wiring failed"):
+        RESTScopeApp.from_config(_config(f"sqlite:///{database}"))
+
+    assert tracing_closed == [True]
+    assert not database.exists()
+
+
+def test_failed_injected_harness_binding_does_not_close_caller_tracing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Construction adopts caller tracing only after the whole App succeeds."""
+    from restscope import RESTScopeApp
+    from restscope.harness import build_harness
+    from restscope.observability import TracingRuntime
+
+    runtime = build_harness()
+    tracing = TracingRuntime.disabled()
+    tracing_closed: list[bool] = []
+    monkeypatch.setattr(tracing, "close", lambda: tracing_closed.append(True))
+    monkeypatch.setattr(
+        runtime,
+        "bind_tracing_runtime",
+        lambda _tracing: (_ for _ in ()).throw(RuntimeError("binding failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="binding failed"):
+        RESTScopeApp.from_config(
+            _config(f"sqlite:///{tmp_path / 'unused.sqlite'}"),
+            harness_runtime=runtime,
+            tracing_runtime=tracing,
+        )
+
+    assert tracing_closed == []
+
+
+def test_close_releases_later_resources_when_agent_cleanup_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A Main-Agent close error cannot strand Context or tracing resources."""
+    from restscope import RESTScopeApp
+    from restscope.harness import build_harness
+    from restscope.observability import TracingRuntime
+    from restscope.tools.context import ToolContextError
+
+    runtime = build_harness()
+    tracing = TracingRuntime.disabled()
+    tracing_closed: list[bool] = []
+    monkeypatch.setattr(
+        runtime,
+        "close_main_agent",
+        lambda: (_ for _ in ()).throw(RuntimeError("agent close failed")),
+    )
+    monkeypatch.setattr(tracing, "close", lambda: tracing_closed.append(True))
+    app = RESTScopeApp.from_config(
+        _config(f"sqlite:///{tmp_path / 'unused.sqlite'}"),
+        harness_runtime=runtime,
+        tracing_runtime=tracing,
+    )
+    app.initialize(
+        schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": json.dumps(
+                {
+                    "openapi": "3.0.3",
+                    "info": {"title": "Cleanup", "version": "1"},
+                    "paths": {
+                        "/health": {
+                            "get": {"responses": {"200": {"description": "ok"}}}
+                        }
+                    },
+                }
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="agent close failed"):
+        app.close()
+
+    with pytest.raises(ToolContextError) as exc_info:
+        runtime.require_context()
+    assert exc_info.value.code == "tool_context_not_initialized"
+    assert tracing_closed == [True]
+    with pytest.raises(RuntimeError, match="closed"):
+        app.start()

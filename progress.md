@@ -606,3 +606,25 @@
 - Moved the exact ignored wheel-build outputs to
   `/tmp/restscope-python312-build-artifacts.wcDSWk`; retained both Python 3.12
   `.venv` environments.
+# 2026-08-12: RESTScopeApp runtime/composition navigation
+
+- User approved direct implementation on local `main` without Git staging,
+  commit, or push.
+- Confirmed pre-existing user work in `restscope/data_types/__init__.py`; this
+  task will not edit or stage it.
+- Audited App callers and tests. The stable seam is construction,
+  initialization, lifecycle, tracing/UI views, and two audit reads; exposed
+  domain collaborators are test-only implementation details.
+- Began with package-shape and narrowed public-state regression contracts.
+- Replaced the 696-line `app.py` with a public lifecycle module and a private
+  composition module. The App now stores one `_AppResources` owner instead of
+  publishing its database, Monitor, Request Generation, Target API, and Harness
+  collaborators.
+- Moved the Contract Monitor persistence scenario to its domain test and made
+  App tests observe Context, database, UI, tracing, audit, and caller-retained
+  Harness behavior through supported seams.
+- Added failure-path coverage for incomplete default composition, caller-owned
+  tracing, and close-time cleanup continuation.
+- Final verification passed 572 tests with 2 skips. Focused App/navigation tests
+  passed 51 tests; Python compilation, `typing.Any`, clean wheel import, retired
+  path scans, and diff hygiene also passed.

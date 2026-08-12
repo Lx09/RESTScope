@@ -84,7 +84,10 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
         service.closed = True
 
     service.close = close_service
-    monkeypatch.setattr("restscope.app.start_ui_service", lambda **_kwargs: service)
+    monkeypatch.setattr(
+        "restscope.app.composition.start_ui_service",
+        lambda **_kwargs: service,
+    )
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         ui=UIConfig(enabled=True, port=9988),
@@ -118,7 +121,10 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     service = UIService(observer=object(), port=9987, static_root=tmp_path)
     service.closed = False
     service.close = lambda: setattr(service, "closed", True)
-    monkeypatch.setattr("restscope.app.start_ui_service", lambda **_kwargs: service)
+    monkeypatch.setattr(
+        "restscope.app.composition.start_ui_service",
+        lambda **_kwargs: service,
+    )
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         ui=UIConfig(enabled=True, port=9987),
@@ -164,7 +170,10 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     from restscope.config import RESTScopeConfig, UIConfig
     from restscope.harness import build_harness
 
-    monkeypatch.setattr("restscope.app.start_ui_service", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "restscope.app.composition.start_ui_service",
+        lambda **_kwargs: None,
+    )
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         ui=UIConfig(enabled=True, port=9989),

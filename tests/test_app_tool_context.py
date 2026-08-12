@@ -25,7 +25,8 @@ def _spec(*, operation_id: str = "listPets") -> dict:
     }
 
 
-def _app(tmp_path):
+def _app_and_runtime(tmp_path):
+    """Return an App plus the caller-owned Harness used to inspect lifecycle effects."""
     from restscope.agent import AgentProfile
     from restscope import RESTScopeApp
     from restscope.harness import AgentRuntimeDefinition, build_harness
@@ -65,10 +66,17 @@ def _app(tmp_path):
             client=LLMClient(registry),
         )
     )
-    return RESTScopeApp.from_config(
+    app = RESTScopeApp.from_config(
         RESTScopeConfig.from_environment(env_file),
         harness_runtime=runtime,
     )
+    return app, runtime
+
+
+def _app(tmp_path):
+    """Build one App when a scenario needs no direct Harness observation."""
+    app, _runtime = _app_and_runtime(tmp_path)
+    return app
 
 
 def test_production_main_profile_is_thinking_and_capability_light(
@@ -76,7 +84,7 @@ def test_production_main_profile_is_thinking_and_capability_light(
     tmp_path,
 ) -> None:
     """Unimplemented testing methods stay absent from the first Main Profile."""
-    from restscope.app import _build_main_agent_runtime_definition
+    from restscope.app.composition import _build_main_agent_runtime_definition
     from restscope.harness import build_harness
     from restscope.llm import LLMClient, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
@@ -103,7 +111,10 @@ def test_production_main_profile_is_thinking_and_capability_light(
     registry = LLMProviderRegistry()
     registry.register(provider)
     client = LLMClient(registry)
-    monkeypatch.setattr("restscope.app.build_llm_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(
+        "restscope.app.composition.build_llm_client",
+        lambda *_args, **_kwargs: client,
+    )
     env_file = tmp_path / ".env"
     env_file.write_text(
         "THINK_PROVIDER=scripted\n"
@@ -231,7 +242,6 @@ def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp
 
     assert len(seen) == 1
     assert app.tool_context is context
-    assert app.harness_runtime.require_context() is context
     assert context.baseline_schema_source["content"] != "changed"
     assert context.headers["Authorization"] == "Bearer runtime-secret"
     assert "runtime-secret" not in repr(context)
@@ -291,9 +301,6 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) ->
     with pytest.raises(ValueError, match="broken schema"):
         app.initialize(schema_source={"kind": "inline", "content": "broken"})
     assert app.tool_context is None
-    with pytest.raises(ToolContextError) as exc_info:
-        app.harness_runtime.require_context()
-    assert exc_info.value.code == "tool_context_not_initialized"
 
     context = app.initialize(schema_source={"kind": "inline", "content": "valid"})
     assert context.ir is parsed
@@ -323,8 +330,7 @@ def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> No
     """Scenario: verify that app requires initialization and clears context on close."""
     from restscope.tools.context import ToolContextError
 
-    app = _app(tmp_path)
-    assert app.harness_runtime is not None
+    app, runtime = _app_and_runtime(tmp_path)
 
     with pytest.raises(ToolContextError) as exc_info:
         app.start()
@@ -333,7 +339,6 @@ def test_app_requires_initialization_and_clears_context_on_close(tmp_path) -> No
     context = app.initialize(
         schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())}
     )
-    runtime = app.harness_runtime
     assert runtime.require_context() is context
 
     app.close()

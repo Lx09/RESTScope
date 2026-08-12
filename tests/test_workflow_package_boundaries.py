@@ -25,9 +25,42 @@ def test_root_contains_only_the_app_facade_composition_and_config() -> None:
     """Scenario: unrelated domains cannot drift back into the package root."""
     assert {path.name for path in SOURCE_ROOT.glob("*.py")} == {
         "__init__.py",
-        "app.py",
         "config.py",
     }
+    app_package = SOURCE_ROOT / "app"
+    assert {path.name for path in app_package.glob("*.py")} == {
+        "__init__.py",
+        "composition.py",
+        "runtime.py",
+    }
+
+
+def test_app_exposes_lifecycle_not_composed_domain_objects() -> None:
+    """Callers use one lifecycle Interface instead of an App object registry."""
+    from restscope import RESTScopeApp
+    from restscope.config import RESTScopeConfig
+    from restscope.harness import build_harness
+
+    app = RESTScopeApp.from_config(
+        RESTScopeConfig.from_environment(),
+        harness_runtime=build_harness(),
+    )
+    try:
+        assert all(
+            not hasattr(app, name)
+            for name in (
+                "api_behavior_catalog",
+                "api_behavior_monitor_coordinator",
+                "harness_runtime",
+                "operation_testing_service",
+                "random_source",
+                "request_generation_patch_runtime",
+                "request_generation_store",
+                "target_api_client",
+            )
+        )
+    finally:
+        app.close()
 
 
 def test_root_facade_is_exact_and_import_has_no_process_side_effects(
@@ -180,7 +213,9 @@ def test_behavior_coordinator_uses_the_concrete_resource_tracker() -> None:
 def test_app_retains_the_concrete_ui_service_without_a_host_protocol() -> None:
     """The optional viewer lifecycle uses its sole concrete implementation."""
 
-    app_source = (SOURCE_ROOT / "app.py").read_text(encoding="utf-8")
+    app_source = (
+        SOURCE_ROOT / "app" / "composition.py"
+    ).read_text(encoding="utf-8")
 
     assert "_UIServiceHost" not in app_source
     assert "from restscope.ui import UIService, start_ui_service" in app_source
@@ -340,7 +375,10 @@ def test_app_uses_the_concrete_harness_runtime_without_a_duplicate_protocol() ->
     from restscope.harness import HarnessRuntime, build_harness
 
     runtime = build_harness()
-    app_source = (SOURCE_ROOT / "app.py").read_text(encoding="utf-8")
+    app_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (SOURCE_ROOT / "app").glob("*.py")
+    )
     harness_source = (SOURCE_ROOT / "harness" / "runtime.py").read_text(
         encoding="utf-8"
     )
@@ -350,7 +388,7 @@ def test_app_uses_the_concrete_harness_runtime_without_a_duplicate_protocol() ->
     assert "_AppHarnessRuntime" not in app_source
     assert "_StartableRuntimeLoop" not in app_source
     assert "_ClosableHost" not in app_source
-    assert "getattr(self.harness_runtime" not in app_source
+    assert "getattr(" not in app_source
     assert "target_http_tool" not in harness_source
 
 

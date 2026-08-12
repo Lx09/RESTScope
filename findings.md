@@ -434,3 +434,22 @@
   for the retired Python 3.11 baseline.
 - The built wheel declares `Requires-Python: >=3.12`, so package installers will
   enforce the same minimum as local development.
+# 2026-08-12: RESTScopeApp runtime/composition navigation
+
+- `RESTScopeApp` has a small useful public Interface, but the 696-line
+  `restscope/app.py` combines target initialization, production object graph,
+  Agent Profile declarations, UI/tracing lifecycle, database rollback, Main
+  execution, and audit delegation.
+- The Harness, Generation Store, Patch Runtime, Monitor Coordinator, Target API
+  Client, and Catalog attributes are read only by tests. Production callers do
+  not need them on the App Interface.
+- Existing public behavior can cover those tests: `app.tool_context`, caller-
+  retained injected Harnesses, database/audit results, and the real response
+  processing seam.
+- Profile composition remains App-specific and should move to private App
+  composition rather than into the reusable Harness package.
+- `_AppResources` is enough to hide the default-versus-injected Harness split;
+  no second public runtime, Builder, Protocol, or generic container is needed.
+- A clean packaging check exposed stale ignored setuptools output that still
+  contained retired modules. After moving those exact generated directories,
+  the wheel contained only the three new App package files.

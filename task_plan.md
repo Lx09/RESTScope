@@ -4,9 +4,16 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 25 Python 3.12 baseline is in progress in its dedicated feature worktree; Phase 19 exact 375 px confirmation remains pending
+Phase 26 RESTScopeApp runtime/composition navigation is verified and uncommitted on local `main`; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 26: RESTScopeApp runtime/composition navigation
+- [x] Add red package-shape and narrowed-App Interface contracts
+- [x] Move default composition and owned resources behind `_AppResources`
+- [x] Keep lifecycle, initialization, audit, and failure behavior stable
+- [x] Update navigation records and run complete verification
+- **Status:** verified and uncommitted on local `main`; pre-existing data-types edit preserved
 
 ### Phase 25: Python 3.12 baseline
 - [x] Add a regression contract for active Python-version declarations
