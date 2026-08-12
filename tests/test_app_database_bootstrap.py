@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -91,12 +90,9 @@ def test_existing_database_is_preserved_and_rejected(tmp_path: Path) -> None:
 def test_injected_harness_skips_database_creation(tmp_path: Path) -> None:
     """An embedder-owned runtime does not silently acquire App persistence."""
     from restscope import RESTScopeApp
+    from restscope.harness import build_harness
 
-    runtime = SimpleNamespace(
-        bind_tracing_runtime=lambda _runtime: None,
-        clear_context=lambda: None,
-        mcp_host=None,
-    )
+    runtime = build_harness()
     database = tmp_path / "unused.sqlite"
     app = RESTScopeApp.from_config(
         _config(f"sqlite:///{database}"),

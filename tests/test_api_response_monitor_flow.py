@@ -65,7 +65,7 @@ def _ir():
 def test_valid_success_response_is_saved_even_when_resource_derivation_is_absent() -> None:
     """Observation is the independent fact boundary after contract checking."""
     from restscope.openapi_parser import build_openapi_document
-    from restscope.target_http import (
+    from restscope.target_api import (
         TargetResponseObservation,
         TargetResponseOperationContext,
     )
@@ -133,7 +133,7 @@ def test_internal_contract_failure_warns_but_does_not_block_valid_observation() 
     """Contract Monitor availability is independent from factual response intake."""
 
     from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
-    from restscope.target_http import (
+    from restscope.target_api import (
         TargetResponseObservation,
         TargetResponseOperationContext,
     )

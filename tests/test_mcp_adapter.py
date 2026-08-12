@@ -246,7 +246,7 @@ def test_build_harness_defaults_to_no_model_visible_tools() -> None:
     runtime = build_harness()
 
     assert runtime.external_tools is None
-    assert runtime.target_http_tool is not None
+    assert runtime.http_request_tool is not None
 
 
 def test_retired_capabilities_package_is_not_public_api() -> None:

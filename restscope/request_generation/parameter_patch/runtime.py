@@ -10,13 +10,13 @@ and applies only an exact previously validated revision/digest pair.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Protocol
+from typing import TYPE_CHECKING
 
-from restscope.target_http.request import normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 from restscope.operation_references import ResponseFieldReference
 from restscope.openapi_parser import OpenAPISpecIR
 
@@ -69,24 +69,8 @@ from ..store import (
 from ..constraint_solver import assignments_from_generated_case
 from ..generation import project_generated_input_value
 
-
-class _ReferenceBindingStager(Protocol):
-    """Stage durable bindings while this Runtime publishes in-memory state.
-
-    This private port sits beside its only consumer.  A concrete behavior
-    catalog may satisfy it structurally without making the persistence detail
-    part of Request Generation's shared integration Interface.
-    """
-
-    def stage_bindings(
-        self,
-        *,
-        config: OperationGeneratorConfig,
-        bindings: Sequence[ReferenceValueBinding],
-    ) -> AbstractContextManager[None]:
-        """Keep one durable transaction open until publication completes."""
-
-        ...
+if TYPE_CHECKING:
+    from ..reference_values import BehaviorMonitorReferences
 
 
 class _CandidateReferenceValues:
@@ -203,13 +187,18 @@ class RequestGenerationPatchRuntime:
         *,
         store: RequestGenerationConfigStore,
         ir_provider: Callable[[], OpenAPISpecIR],
-        reference_values: ReferenceValueProvider | None = None,
-        reference_binding_stager: _ReferenceBindingStager | None = None,
+        references: BehaviorMonitorReferences | None = None,
     ) -> None:
+        """Bind generation state, current IR, and optional Monitor references.
+
+        ``references`` is required only for validating or applying
+        reference-backed Generator changes. Ordinary Generator and Constraint
+        Patches remain available without API Behavior Monitor persistence.
+        """
+
         self._store = store
         self._ir_provider = ir_provider
-        self._reference_values = reference_values
-        self._reference_binding_stager = reference_binding_stager
+        self._references = references
 
     def read_state(
         self,
@@ -289,7 +278,7 @@ class RequestGenerationPatchRuntime:
             constraints=final_constraints,
             affected_inputs=affected,
             reference_values=_CandidateReferenceValues(
-                delegate=self._reference_values,
+                delegate=self._references,
                 selected_values=selected_values,
             ),
             seed=seed,
@@ -386,12 +375,12 @@ class RequestGenerationPatchRuntime:
                 or removed_response_value_inputs
             )
             if needs_reference_transaction:
-                if self._reference_binding_stager is None:
+                if self._references is None:
                     raise ParameterPatchValidationError(
                         "reference_registration_unavailable",
                         "Reference-backed Patch application is unavailable",
                     )
-                staged = self._reference_binding_stager.stage_bindings(
+                staged = self._references.stage_bindings(
                     config=state.config,
                     bindings=validated.final_reference_bindings,
                 )
@@ -544,14 +533,14 @@ class RequestGenerationPatchRuntime:
         strategy: ResourceIdentifierGenerator,
     ) -> tuple[SelectedReferenceProvenance, list[object]]:
         """Require one unambiguous, populated, type-compatible resource source."""
-        if self._reference_values is None:
+        if self._references is None:
             raise ParameterPatchValidationError(
                 "resource_reference_unavailable",
                 "Resource Identifier evidence is unavailable",
             )
         try:
-            resource_name = self._reference_values.resource_key(strategy)
-            values = list(self._reference_values.values_for(strategy))
+            resource_name = self._references.resource_key(strategy)
+            values = list(self._references.values_for(strategy))
         except ValueError as exc:
             raise ParameterPatchValidationError(
                 "resource_not_canonical",
@@ -591,22 +580,22 @@ class RequestGenerationPatchRuntime:
         groups: dict[str, list[tuple[str, ResourceIdentifierGenerator]]] = {}
         for update in updates:
             if isinstance(update.strategy, ResourceIdentifierGenerator):
-                if self._reference_values is None:
+                if self._references is None:
                     raise ParameterPatchValidationError(
                         "resource_reference_unavailable",
                         "Resource Identifier evidence is unavailable",
                     )
-                resource_key = self._reference_values.resource_key(update.strategy)
+                resource_key = self._references.resource_key(update.strategy)
                 groups.setdefault(resource_key, []).append(
                     (update.input_node_id, update.strategy)
                 )
         if not groups:
             return
         parameters = {item.input_node_id: item for item in config.snapshot.parameters}
-        assert self._reference_values is not None
+        assert self._references is not None
         for resource, bindings in groups.items():
             expected = set(
-                self._reference_values.resource_identity_fields(bindings[0][1])
+                self._references.resource_identity_fields(bindings[0][1])
             )
             # A one-component Definition behaves like the original scalar
             # reference and may satisfy any schema-compatible input. Only a
@@ -638,13 +627,13 @@ class RequestGenerationPatchRuntime:
     ) -> tuple[SelectedReferenceProvenance, list[object]]:
         """Require one current observed producer with compatible non-empty data."""
         source = strategy.source
-        provider = self._reference_values
-        if provider is None or not hasattr(provider, "resolve_response_source"):
+        references = self._references
+        if references is None:
             raise ParameterPatchValidationError(
                 "response_value_evidence_unavailable",
                 "Response Value evidence is unavailable",
             )
-        option, values = provider.resolve_response_source(
+        option, values = references.resolve_response_source(
             config=config,
             input_node_id=input_node_id,
             operation_key=source.operation_key,

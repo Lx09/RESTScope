@@ -4,9 +4,30 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 21 code-navigation and API Behavior persistence consolidation is complete and verified on local `main`; Phase 19 exact 375 px confirmation remains pending
+Phase 24 redundant Protocol and Reference integration cleanup is complete on local `main`; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 24: Redundant Protocol and Reference integration cleanup
+- [x] Add red concrete Reference, Resource Monitor, and UI navigation contracts
+- [x] Replace the split Reference Provider/Stager injection with one concrete collaborator
+- [x] Remove the duplicate Resource Tracker and UI Host Protocols
+- [x] Update current navigation records and run complete verification
+- **Status:** complete and verified on local `main`; 565 tests passed with 2 skips
+
+### Phase 23: Harness Runtime navigation cleanup
+- [x] Add red concrete-runtime and navigation contracts
+- [x] Remove the App-private Harness Protocol and dynamic method probing
+- [x] Rename the retained HTTP Tool field and migrate tests to real Harness instances
+- [x] Update navigation records and run complete verification
+- **Status:** complete and verified on local `main`; 561 tests passed with 2 skips
+
+### Phase 22: Target API request foundation refactor
+- [x] Add red public Interface, response projection, and navigation contracts
+- [x] Replace `target_http` with the focused top-level `target_api` Module
+- [x] Migrate Tool, Batch, Monitor, Harness, OpenAPI, and Request Generation callers
+- [x] Update current navigation records and run complete verification
+- **Status:** complete and verified on local `main`; 560 tests passed with 2 skips
 
 ### Phase 21: Code navigation and API Behavior persistence consolidation
 - [x] Audit current top-level Modules, ports, facades, and persistence ownership
@@ -179,6 +200,12 @@ Phase 21 code-navigation and API Behavior persistence consolidation is complete 
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Phase 24 UI tests patched the facade after App adopted a direct concrete import | 1 | Patch `restscope.app.start_ui_service`, the actual consumer binding; the production lifecycle behavior was unchanged. |
+| Phase 24 concrete Reference import created a package initialization cycle | 1 | `reference_values` already imports Parameter Patch models; keep the concrete forward type under `TYPE_CHECKING` because Runtime performs no runtime type test, then migrate old test doubles to the real collaborator. |
+| Phase 23 legacy-name scan used Markdown backticks inside a shell argument | 1 | The shell attempted to run the quoted name before the read-only scan; no file changed. Repeat scans with literal-safe patterns. |
+| Phase 23 first concrete-Harness focused run found the intended partial `SimpleNamespace` fixture | 1 | Replace it with `build_harness()` so the database-bypass behavior crosses the supported seam. |
+| Phase 22 combined source/docs polish used a pre-Phase-21 reading-guide anchor | 1 | No partial edit occurred; inspect current guide text and apply exact source and documentation patches separately. |
+| Phase 22 combined test migration used an inexact `test_generic_batch_tool.py` import anchor | 1 | No partial edit occurred; migrate each test file against its exact current snippets. |
 | Phase 21 Catalog test patch expected `_catalog(tmp_path)` instead of the current `_catalog()` | 1 | No partial test edit occurred; append the new scenarios against the current in-memory fixture shape. |
 | Final multi-file status patch used a progress heading as a findings anchor | 1 | No partial edit occurred; inspect each file and apply exact per-file anchors. |
 | Full suite rejected `restscope/evidence.py` at the root package seam | 1 | Preserve `restscope.evidence.Evidence` while moving the complete Module into `restscope/evidence/__init__.py`; do not weaken the boundary test. |

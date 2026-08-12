@@ -8,7 +8,7 @@ import json
 from threading import RLock
 from typing import Literal
 
-from restscope.target_http.request import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
 from restscope.openapi_parser.ir import MediaTypeIR, ResponseIR, SchemaIR
 

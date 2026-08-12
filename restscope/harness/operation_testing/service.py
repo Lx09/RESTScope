@@ -21,12 +21,13 @@ from restscope.api_behavior_monitor.catalog import (
     OperationDefinition,
     APIBehaviorCatalog,
 )
-from restscope.target_http import (
+from restscope.target_api import (
     PreparedTargetRequest,
-    TargetHTTPTimeout,
-    TargetHTTPTransport,
-    TargetHTTPTransportError,
+    TargetAPIClient,
+    TargetAPIError,
+    TargetAPITimeout,
     TargetResponseOperationContext,
+    prepare_target_request,
 )
 from restscope.observability import TracingRuntime
 from .failure import parse_http_failure, parse_transport_failure
@@ -50,7 +51,6 @@ from restscope.request_generation.ports import ReferenceValueProvider
 from restscope.request_generation.serialization import serialize_test_case
 
 
-BEHAVIOR_MONITOR_RESPONSE_BYTES = 1024 * 1024
 FAILURE_RESPONSE_BYTES = 10 * 1024 * 1024
 MAX_INLINE_REQUEST_CHARACTERS = 2_400
 
@@ -143,12 +143,12 @@ class OperationTestingService:
         *,
         config_store: RequestGenerationConfigStore,
         api_behavior_catalog: APIBehaviorCatalog,
-        transport: TargetHTTPTransport | None = None,
+        target_api_client: TargetAPIClient | None = None,
         tracing_runtime: TracingRuntime | None = None,
         reference_values: ReferenceValueProvider | None = None,
     ) -> None:
         self.config_store = config_store
-        self.transport = transport or TargetHTTPTransport()
+        self.target_api_client = target_api_client or TargetAPIClient()
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
         self.reference_values = reference_values
         self.api_behavior_catalog = api_behavior_catalog
@@ -274,7 +274,7 @@ class OperationTestingService:
                     constraints=constraints,
                 )
                 request = serialize_test_case(operation, generated)
-                target_request = self.transport.prepare(
+                target_request = prepare_target_request(
                     method=request.method,
                     base_url=context.base_url,
                     path=request.path,
@@ -442,7 +442,7 @@ class OperationTestingService:
             },
         ) as span:
             try:
-                response = self.transport.request_prepared(
+                response = self.target_api_client.send(
                     target_request,
                     timeout_seconds=30,
                     request_kwargs=(
@@ -450,16 +450,10 @@ class OperationTestingService:
                         if request.content is not None
                         else {}
                     ),
-                    response_body_limit=(
-                        BEHAVIOR_MONITOR_RESPONSE_BYTES
-                        if self.transport.has_response_processor
-                        or getattr(self.transport, "run_observer", None) is not None
-                        else None
-                    ),
-                    failure_response_body_limit=FAILURE_RESPONSE_BYTES,
-                    truncate_response_body=True,
-                    buffer_success_body_only=True,
-                    processor_context=TargetResponseOperationContext(
+                    success_body_limit=None,
+                    failure_body_limit=FAILURE_RESPONSE_BYTES,
+                    truncate_body=True,
+                    response_context=TargetResponseOperationContext(
                         ir=context.ir,
                         operation_key=generated.operation_key,
                         operation_method=request.method,
@@ -502,13 +496,13 @@ class OperationTestingService:
                     }
                 )
                 return result
-            except TargetHTTPTimeout:
+            except TargetAPITimeout:
                 failure = parse_transport_failure(
                     code="request_timeout",
                     message="HTTP request timed out",
                 )
                 span.mark_error(failure.messages[0])
-            except TargetHTTPTransportError as exc:
+            except TargetAPIError as exc:
                 failure = parse_transport_failure(
                     code=exc.code,
                     message=str(exc),

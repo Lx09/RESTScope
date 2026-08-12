@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from restscope.target_http.request import normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 
 from .ir import InputNodeIR, InputNodeKind, OperationIR, ParameterIR, SchemaIR
 

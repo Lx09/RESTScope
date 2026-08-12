@@ -32,7 +32,7 @@ def test_response_values_are_parsed_from_exact_observations_on_demand() -> None:
         OperationDefinition,
     )
     from restscope.request_generation import (
-        BehaviorMonitorReferenceValues,
+        BehaviorMonitorReferences,
     )
     from restscope.request_generation.models import (
         OperationInputSourceReference,
@@ -73,7 +73,7 @@ def test_response_values_are_parsed_from_exact_observations_on_demand() -> None:
         ),
     )
 
-    values = BehaviorMonitorReferenceValues(catalog).values_for(strategy)
+    values = BehaviorMonitorReferences(catalog).values_for(strategy)
 
     # Boolean true and integer one compare equal in Python, so retaining type
     # in the de-duplication key is part of the JSON evidence contract.
@@ -94,7 +94,7 @@ def test_response_values_keep_only_eight_latest_distinct_candidates() -> None:
         OperationDefinition,
     )
     from restscope.request_generation import (
-        BehaviorMonitorReferenceValues,
+        BehaviorMonitorReferences,
     )
     from restscope.request_generation.models import (
         OperationInputSourceReference,
@@ -144,7 +144,7 @@ def test_response_values_keep_only_eight_latest_distinct_candidates() -> None:
         ),
     )
 
-    values = BehaviorMonitorReferenceValues(catalog).values_for(strategy)
+    values = BehaviorMonitorReferences(catalog).values_for(strategy)
 
     assert values == (11, 10, 9, 8, 7, 6, 5, 4)
 
@@ -221,7 +221,7 @@ def test_resource_source_returns_complete_correlated_current_instances() -> None
         ResourceDerivation,
     )
     from restscope.request_generation import (
-        BehaviorMonitorReferenceValues,
+        BehaviorMonitorReferences,
     )
     from restscope.request_generation.models import (
         OperationInputSourceReference,
@@ -261,7 +261,7 @@ def test_resource_source_returns_complete_correlated_current_instances() -> None
         type="resource_identifier",
         source=source,
     )
-    provider = BehaviorMonitorReferenceValues(catalog)
+    provider = BehaviorMonitorReferences(catalog)
 
     assert provider.resource_key(strategy) == "memberships"
     assert list(provider.resource_records(strategy)) == [
@@ -285,7 +285,7 @@ def test_patch_staging_persists_only_the_exact_consumer_source_proposition() -> 
 
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
-        BehaviorMonitorReferenceValues,
+        BehaviorMonitorReferences,
         RequestGenerationConfigStore,
     )
     from restscope.request_generation.models import (
@@ -335,7 +335,7 @@ def test_patch_staging_persists_only_the_exact_consumer_source_proposition() -> 
         field_name=source.field_name,
     )
     catalog = _catalog()
-    provider = BehaviorMonitorReferenceValues(catalog)
+    provider = BehaviorMonitorReferences(catalog)
 
     with pytest.raises(RuntimeError, match="publication failed"):
         with provider.stage_bindings(

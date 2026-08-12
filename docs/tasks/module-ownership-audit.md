@@ -11,6 +11,10 @@ folded into `api_behavior_monitor.APIBehaviorCatalog`, and the shallow Behavior
 Monitor subject packages were flattened. The recommendations below preserve
 the historical decision path and no longer describe those current locations.
 
+The same navigation pass later renamed the shared target request foundation
+from `target_http` to `target_api.TargetAPIClient`. References below retain the
+historical implementation name only to explain the earlier decision.
+
 Baseline commit: `9f3e50e55f48a7fda85d9d4e7f89304efa33989c`
 
 ## Objective

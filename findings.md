@@ -369,3 +369,52 @@
 - Unicode preview length must count code points rather than JavaScript UTF-16
   units; otherwise an emoji can be split into an invalid half-character at the
   160-character boundary.
+# 2026-08-12: Target API request foundation navigation
+
+- `target_http` is correctly a top-level shared Module: the HTTP Tool and Batch
+  execution both consume it independently, while Harness only assembles or
+  invokes those consumers.
+- Its package facade exports 15 names, including low-level URL/header helpers
+  and `ClientFactory`; production consumers instead need one Client, one pure
+  prepare function, stable errors, and response-processing records.
+- `normalize_media_type()` and `is_json_media_type()` have 14 cross-domain
+  production consumers, so `request.py` is a misleading owner. A focused
+  `media_type.py` gives them one discoverable implementation.
+- Batch currently reads `has_response_processor` and `run_observer` to decide
+  body buffering. This leaks Client configuration. The new Client must produce
+  independent Monitor, Observer, and caller projections internally.
+- The existing uncommitted `transport.py` change only makes `prepare()` static;
+  the approved pure `prepare_target_request()` function subsumes that intent.
+
+# 2026-08-12: Harness Runtime navigation
+
+- `HarnessRuntime` still exists as the public concrete class returned by both
+  Harness builders; `_AppHarnessRuntime` is a second, App-private description
+  of the same production object.
+- The private Protocol promises six required capabilities, while App cleanup
+  and context access use `getattr` as though those capabilities were optional.
+  Tests exploit that mismatch with a partial `SimpleNamespace`.
+- There is only one real Harness implementation. Tests can obtain the same
+  concrete Module through `build_harness()` and vary Agent behavior through
+  `AgentRuntimeDefinition`, so the extra Protocol does not buy a real seam.
+- `target_http_tool` is the one Harness field left with the retired transport
+  vocabulary; `http_request_tool` describes its current Tool ownership.
+
+# 2026-08-12: Redundant Protocol and Reference integration
+
+- `_ReferenceBindingStager` has one production implementation and duplicates
+  the same `BehaviorMonitorReferenceValues` object already injected for reads.
+  Its context-manager return annotation also differs from the decorated
+  implementation and triggers an IDE structural-typing warning.
+- Parameter Patch additionally uses `hasattr(resolve_response_source)`, so its
+  current collaborator is neither a complete Interface nor a consistently
+  narrow read port. A concrete `BehaviorMonitorReferences` integration removes
+  both the split injection and the capability probe.
+- The Coordinator declares `ResourceResponseTracker(Protocol)` beside a
+  concrete class with the identical name and only one production Adapter.
+- App `_UIServiceHost` likewise describes the sole concrete `UIService`; tests
+  can return a real instance while intercepting only its close call.
+- Database Repository/UoW, Agent ports, Batch/OpenAPI/Target Client seams,
+  `SystemAgentRunner`, `ReferenceValueProvider`, Traversable, and ASGI/Uvicorn
+  Protocols have distinct adapters or real cross-Module/third-party isolation
+  value and must remain.

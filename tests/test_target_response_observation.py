@@ -1,10 +1,10 @@
-"""Transport behavior that feeds complete facts into the Response Monitor."""
+"""Target API Client behavior that feeds complete facts into the Monitor."""
 
 from __future__ import annotations
 
 
 class _CapturingProcessor:
-    """Retain the single observation offered by the transport boundary."""
+    """Retain the single observation offered by the Client."""
 
     def __init__(self) -> None:
         self.observation = None
@@ -19,9 +19,10 @@ def test_monitor_receives_full_body_and_sanitized_actual_request_view() -> None:
     """Agent-facing truncation cannot truncate the independently persisted fact."""
     import httpx
 
-    from restscope.target_http import (
-        TargetHTTPTransport,
+    from restscope.target_api import (
+        TargetAPIClient,
         TargetResponseOperationContext,
+        prepare_target_request,
     )
 
     response_body = b'{"value":"abcdefghijklmnopqrstuvwxyz"}'
@@ -42,11 +43,11 @@ def test_monitor_receives_full_body_and_sanitized_actual_request_view() -> None:
         return httpx.Client(transport=httpx.MockTransport(handler), **kwargs)
 
     processor = _CapturingProcessor()
-    transport = TargetHTTPTransport(
+    client = TargetAPIClient(
         client_factory=client_factory,
         response_processor=processor,
     )
-    prepared = transport.prepare(
+    prepared = prepare_target_request(
         method="POST",
         base_url="https://example.test",
         path="/items",
@@ -59,12 +60,12 @@ def test_monitor_receives_full_body_and_sanitized_actual_request_view() -> None:
         request_headers={"Content-Type": "application/json"},
     )
 
-    response = transport.request_prepared(
+    response = client.send(
         prepared,
         request_kwargs={"content": b'{"name":"Ada"}'},
-        response_body_limit=12,
-        truncate_response_body=True,
-        processor_context=TargetResponseOperationContext(ir=object()),
+        success_body_limit=12,
+        truncate_body=True,
+        response_context=TargetResponseOperationContext(ir=object()),
     )
 
     assert response.body == response_body[:12]

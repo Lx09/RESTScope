@@ -19,7 +19,7 @@ from typing import Annotated, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import Engine
 
-from restscope.agent import AgentProfile, SystemAgentResult, SystemAgentTask
+from restscope.agent import Agent, AgentProfile, SystemAgentResult, SystemAgentTask
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
@@ -38,7 +38,7 @@ from restscope.harness import (
 from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.tools.context import ToolContext, ToolContextError
 from restscope.tools.resource import ResourceToolBackend
-from restscope.target_http import TargetHTTPTransport
+from restscope.target_api import TargetAPIClient
 from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 from restscope.observability import (
     LiveRunObserver,
@@ -48,7 +48,7 @@ from restscope.observability import (
     configure_logging,
 )
 from restscope.request_generation import (
-    BehaviorMonitorReferenceValues,
+    BehaviorMonitorReferences,
     RequestGenerationPatchRuntime,
     SeededRandom,
 )
@@ -69,6 +69,7 @@ from restscope.api_behavior_monitor.resource_identity import (
     identifier_system_output_schema,
     validate_identifier_system_output,
 )
+from restscope.ui import UIService, start_ui_service
 
 
 _MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent.
@@ -173,50 +174,12 @@ _SchemaSource = Annotated[
 ]
 
 
-class _StartableRuntimeLoop(Protocol):
-    """Describe the sole Main Agent behavior used by the App lifecycle."""
-
-    def start(self) -> None: ...
-
-
-class _ClosableHost(Protocol):
-    """Describe an optional runtime-owned host that can be closed."""
-
-    def close(self) -> None: ...
-
-
-class _AppHarnessRuntime(Protocol):
-    """Describe the Harness capabilities required by App composition and tests."""
-
-    mcp_host: _ClosableHost | None
-
-    def bind_context(self, context: ToolContext) -> None: ...
-
-    def require_context(self) -> ToolContext: ...
-
-    def start_main_agent(self, profile_name: str) -> _StartableRuntimeLoop: ...
-
-    def close_main_agent(self) -> None: ...
-
-    def clear_context(self) -> None: ...
-
-    def bind_tracing_runtime(self, runtime: TracingRuntime) -> None: ...
-
-
-class _UIServiceHost(Protocol):
-    """Describe the optional UI handle retained by the App."""
-
-    url: str
-
-    def close(self) -> None: ...
-
-
 class RESTScopeApp:
     """Own all long-lived services used by one RESTScope process.
 
     Creating the app is intentionally more than constructing a data object.  It
     opens the App-lifetime database, tracing exporter, behavior monitor, HTTP
-    transport, testing service, shared Tool implementations, and deterministic
+    Client, testing service, shared Tool implementations, and deterministic
     Agent Harness.
     The app also records which resources it created so :meth:`close` can release
     them if startup succeeds *or* fails part-way through.
@@ -226,14 +189,15 @@ class RESTScopeApp:
         self,
         *,
         config: RESTScopeConfig,
-        harness_runtime: _AppHarnessRuntime | None = None,
+        harness_runtime: HarnessRuntime | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> None:
-        """Build runtime collaborators, or adopt explicitly injected test doubles.
+        """Build collaborators or adopt a caller-constructed concrete Harness.
 
         ``harness_runtime`` is the only runtime injection point used by tests
-        and embedders. In the normal path RESTScope wires all App-owned Tool
-        backends and the generic Agent Harness itself.
+        and embedders. It must be a :class:`HarnessRuntime` created through the
+        normal Harness builder. Without one, RESTScope wires every App-owned
+        Tool backend and the generic Agent Harness itself.
         """
 
         # Keep local ownership markers until construction completes.  If any
@@ -244,12 +208,12 @@ class RESTScopeApp:
         built_tracing_runtime = tracing_runtime is None
         trace_runtime: TracingRuntime | None = None
         run_observer: LiveRunObserver | None = None
-        ui_service: _UIServiceHost | None = None
+        ui_service: UIService | None = None
         operation_testing_service: OperationTestingService | None = None
         request_generation_store: RequestGenerationConfigStore | None = None
         request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None
         api_behavior_monitor_coordinator = None
-        target_transport: TargetHTTPTransport | None = None
+        target_api_client: TargetAPIClient | None = None
         api_behavior_catalog: APIBehaviorCatalog | None = None
         database_engine: Engine | None = None
         try:
@@ -281,10 +245,18 @@ class RESTScopeApp:
                     redactor=self._tracing_runtime.redactor
                 )
                 self._tracing_runtime.bind_run_observer(run_observer)
+                ui_service = start_ui_service(
+                    observer=run_observer,
+                    port=config.ui.port,
+                )
+                if ui_service is None:
+                    run_observer.close()
+                    self._tracing_runtime.bind_run_observer(None)
+                    run_observer = None
             if harness_runtime is None:
                 # The Store holds only current per-input Generators. The
                 # behavior monitor supplies observed identifiers/response values to
-                # generators, while the transport sends requests and returns
+                # generators, while the Client sends requests and returns
                 # every response to that monitor.
                 database_engine = create_engine_from_config(config.db)
                 session_factory = make_session_factory(database_engine)
@@ -299,13 +271,13 @@ class RESTScopeApp:
                     system_agent_runner=system_agent_runner,
                     tracing_runtime=self._tracing_runtime,
                 )
-                reference_values = BehaviorMonitorReferenceValues(
+                references = BehaviorMonitorReferences(
                     api_behavior_catalog
                 )
                 resource_backend = ResourceToolBackend(
                     catalog=api_behavior_catalog
                 )
-                target_transport = TargetHTTPTransport(
+                target_api_client = TargetAPIClient(
                     response_processor=APIBehaviorResponseProcessor(
                         api_behavior_monitor_coordinator
                     ),
@@ -313,16 +285,15 @@ class RESTScopeApp:
                 )
                 operation_testing_service = OperationTestingService(
                     config_store=request_generation_store,
-                    transport=target_transport,
+                    target_api_client=target_api_client,
                     tracing_runtime=self._tracing_runtime,
-                    reference_values=reference_values,
+                    reference_values=references,
                     api_behavior_catalog=api_behavior_catalog,
                 )
                 request_generation_patch_runtime = RequestGenerationPatchRuntime(
                     store=request_generation_store,
                     ir_provider=lambda: self.harness_runtime.require_context().ir,
-                    reference_values=reference_values,
-                    reference_binding_stager=reference_values,
+                    references=references,
                 )
                 # Production Bindings make domain Tools executable without
                 # granting them to the intentionally plan-only Main Profile.
@@ -332,7 +303,7 @@ class RESTScopeApp:
                 )
                 built_runtime = build_harness(
                     tracing_runtime=self._tracing_runtime,
-                    target_http_transport=target_transport,
+                    target_api_client=target_api_client,
                     observed_response_reader=api_behavior_catalog,
                     resource_tool_backend=resource_backend,
                     request_generation_patch_runtime=(
@@ -360,8 +331,8 @@ class RESTScopeApp:
                 if harness_runtime is built_runtime
                 else None
             )
-            self.target_http_transport = (
-                target_transport if harness_runtime is built_runtime else None
+            self.target_api_client = (
+                target_api_client if harness_runtime is built_runtime else None
             )
             self.api_behavior_catalog: APIBehaviorCatalog | None = (
                 api_behavior_catalog
@@ -371,37 +342,10 @@ class RESTScopeApp:
             self._database_engine = (
                 database_engine if harness_runtime is built_runtime else None
             )
-            bind_tracing_runtime = getattr(
-                self.harness_runtime,
-                "bind_tracing_runtime",
-                None,
-            )
-            if callable(bind_tracing_runtime):
-                bind_tracing_runtime(self._tracing_runtime)
-            _bind_run_observer(
-                target_transport=self.target_http_transport,
-                testing_service=self.operation_testing_service,
-                observer=run_observer,
-            )
-            if run_observer is not None:
-                from restscope.ui import start_ui_service
-
-                ui_service = start_ui_service(
-                    observer=run_observer,
-                    port=config.ui.port,
-                )
-                if ui_service is None:
-                    run_observer.close()
-                    self._tracing_runtime.bind_run_observer(None)
-                    _bind_run_observer(
-                        target_transport=self.target_http_transport,
-                        testing_service=self.operation_testing_service,
-                        observer=None,
-                    )
-                    run_observer = None
+            self.harness_runtime.bind_tracing_runtime(self._tracing_runtime)
             self._run_observer = run_observer
             self._ui_service = ui_service
-            self._main_agent: _StartableRuntimeLoop | None = None
+            self._main_agent: Agent | None = None
             self._main_loop_started = False
             self._closed = False
         except BaseException:
@@ -426,7 +370,7 @@ class RESTScopeApp:
         cls,
         *,
         env_file: str | Path | None = None,
-        harness_runtime: _AppHarnessRuntime | None = None,
+        harness_runtime: HarnessRuntime | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
         """Load `.env`/environment config and build the program runtime."""
@@ -443,7 +387,7 @@ class RESTScopeApp:
         cls,
         config: RESTScopeConfig,
         *,
-        harness_runtime: _AppHarnessRuntime | None = None,
+        harness_runtime: HarnessRuntime | None = None,
         tracing_runtime: TracingRuntime | None = None,
     ) -> "RESTScopeApp":
         """Build RESTScope through the same composition path as direct use."""
@@ -457,11 +401,8 @@ class RESTScopeApp:
     @property
     def tool_context(self) -> ToolContext | None:
         """Return the initialized target snapshot, or ``None`` before startup."""
-        require_context = getattr(self.harness_runtime, "require_context", None)
-        if not callable(require_context):
-            return None
         try:
-            return require_context()
+            return self.harness_runtime.require_context()
         except ToolContextError as exc:
             if exc.code == "tool_context_not_initialized":
                 return None
@@ -607,13 +548,9 @@ class RESTScopeApp:
 
         if self._closed:
             return
-        close_main_agent = getattr(self.harness_runtime, "close_main_agent", None)
-        if callable(close_main_agent):
-            close_main_agent()
-        clear_context = getattr(self.harness_runtime, "clear_context", None)
-        if callable(clear_context):
-            clear_context()
-        mcp_host = getattr(self.harness_runtime, "mcp_host", None)
+        self.harness_runtime.close_main_agent()
+        self.harness_runtime.clear_context()
+        mcp_host = self.harness_runtime.mcp_host
         try:
             if mcp_host is not None:
                 mcp_host.close()
@@ -746,25 +683,14 @@ def _resolve_app_random_seed(config: RESTScopeConfig) -> RESTScopeConfig:
     )
 
 
-def _close_runtime_host(runtime: _AppHarnessRuntime | None) -> None:
+def _close_runtime_host(runtime: HarnessRuntime | None) -> None:
+    """Close an owned Harness MCP Host after partial App construction."""
+
     if runtime is None:
         return
-    host = getattr(runtime, "mcp_host", None)
+    host = runtime.mcp_host
     if host is not None:
         try:
             host.close()
         except Exception:
             pass
-
-
-def _bind_run_observer(
-    *,
-    target_transport: TargetHTTPTransport | None,
-    testing_service: OperationTestingService | None,
-    observer: LiveRunObserver | None,
-) -> None:
-    """Attach live observation to the App-owned target transports."""
-    if target_transport is not None:
-        target_transport.run_observer = observer
-    if testing_service is not None:
-        testing_service.transport.run_observer = observer

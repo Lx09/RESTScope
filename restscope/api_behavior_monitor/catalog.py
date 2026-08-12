@@ -20,7 +20,7 @@ from typing import Literal, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from restscope.data_types import JSONObject
-from restscope.target_http.request import normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 from restscope.operation_references.response import ResponseSourceCoordinate
 
 

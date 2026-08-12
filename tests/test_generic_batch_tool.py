@@ -36,7 +36,7 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
     )
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import RequestGenerationConfigStore
-    from restscope.target_http import TargetHTTPTransport
+    from restscope.target_api import TargetAPIClient
     from restscope.tools.context import ToolContext
     from restscope.tools.test_case import TestCaseBatchToolBackend
 
@@ -70,7 +70,7 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
         lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
     )
     sent: list[str] = []
-    transport = TargetHTTPTransport(
+    client = TargetAPIClient(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
                 lambda request: sent.append(str(request.url)) or httpx.Response(200)
@@ -87,7 +87,7 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
     backend = TestCaseBatchToolBackend(
         service=OperationTestingService(
             config_store=store,
-            transport=transport,
+            target_api_client=client,
             api_behavior_catalog=catalog,
         ),
         context_provider=lambda: context,
@@ -115,16 +115,15 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
 def test_batch_freezes_reference_values_with_generation_revision() -> None:
     """All cases use one value snapshot even if live evidence changes later."""
     import httpx
-    from contextlib import contextmanager
-
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
+        BehaviorMonitorReferences,
         RequestGenerationConfigStore,
         RequestGenerationPatchRuntime,
     )
     from restscope.request_generation.parameter_patch import SemanticParameterPatch
-    from restscope.target_http import TargetHTTPTransport
+    from restscope.target_api import TargetAPIClient
     from restscope.tools.context import ToolContext
 
     class ChangingValues:
@@ -149,12 +148,6 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
         def resource_identity_fields(self, _strategy):
             return ("limit",)
 
-        @contextmanager
-        def stage_bindings(self, *, config, bindings):
-            assert config.operation_key == "GET /items/{limit}"
-            assert bindings[0].resource_name == "limits"
-            yield
-
     ir = OpenAPIParser.parse(
         {
             "openapi": "3.0.3",
@@ -178,12 +171,35 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
     )
     store = RequestGenerationConfigStore()
     store.initialize_once(ir)
+    catalog = _api_behavior_catalog()
+    from restscope.api_behavior_monitor.catalog import (
+        OperationDefinition,
+        ResourceDerivation,
+    )
+
+    catalog.ensure_operation(
+        OperationDefinition(
+            operation_id="GET /limits",
+            method="GET",
+            path="/limits",
+        )
+    )
+    catalog.record_resource_derivations(
+        operation_id="GET /limits",
+        derivations=[
+            ResourceDerivation(
+                resource_name="limits",
+                identity_fields=["limit"],
+                role="REFERENCED",
+                instances=[{"limit": 1}],
+            )
+        ],
+    )
     values = ChangingValues()
     runtime = RequestGenerationPatchRuntime(
         store=store,
         ir_provider=lambda: ir,
-        reference_values=values,
-        reference_binding_stager=values,
+        references=BehaviorMonitorReferences(catalog),
     )
     patch = SemanticParameterPatch.model_validate(
         {
@@ -221,7 +237,7 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
     values.pools = [[7], [8]]
     values.calls = 0
     sent: list[str] = []
-    transport = TargetHTTPTransport(
+    client = TargetAPIClient(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
                 lambda request: sent.append(str(request.url)) or httpx.Response(200)
@@ -231,8 +247,8 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
     )
     service = OperationTestingService(
         config_store=store,
-        api_behavior_catalog=_api_behavior_catalog(),
-        transport=transport,
+        api_behavior_catalog=catalog,
+        target_api_client=client,
         reference_values=values,
     )
     service.run_batch(
@@ -260,7 +276,7 @@ def test_abstract_case_persistence_failure_stops_batch_before_network() -> None:
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import RequestGenerationConfigStore
-    from restscope.target_http import TargetHTTPTransport
+    from restscope.target_api import TargetAPIClient
     from restscope.tools.context import ToolContext
 
     class FailingCatalog:
@@ -286,7 +302,7 @@ def test_abstract_case_persistence_failure_stops_batch_before_network() -> None:
     store = RequestGenerationConfigStore()
     store.initialize_once(ir)
     sent: list[str] = []
-    transport = TargetHTTPTransport(
+    client = TargetAPIClient(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
                 lambda request: sent.append(str(request.url)) or httpx.Response(200)
@@ -297,7 +313,7 @@ def test_abstract_case_persistence_failure_stops_batch_before_network() -> None:
     service = OperationTestingService(
         config_store=store,
         api_behavior_catalog=FailingCatalog(),
-        transport=transport,
+        target_api_client=client,
     )
 
     with pytest.raises(RuntimeError, match="abstract case storage failed"):

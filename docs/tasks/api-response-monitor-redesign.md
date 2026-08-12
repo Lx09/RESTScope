@@ -78,8 +78,9 @@ materialized into shared pools.
   and the same value now traverses parsed JSON directly through
   `select_values()`.
 - `ResponseMonitorCatalog` owns its Unit of Work privately and exposes one
-  staged source transaction. Request Generation depends separately on a
-  read-only `ReferenceValueProvider` and a mutating `ReferenceBindingStager`.
+  staged source transaction. The later navigation cleanup consolidated Patch
+  reads and writes into concrete `BehaviorMonitorReferences`; the shared
+  `ReferenceValueProvider` remains only for value-generation consumers.
 - Patch application computes final bindings once, stages their operation/source
   rows, publishes the in-memory state, then commits; publication or commit
   failure restores both boundaries.

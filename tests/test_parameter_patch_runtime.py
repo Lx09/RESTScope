@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-
 import pytest
 
 
@@ -35,9 +33,44 @@ def _runtime():
                                 "schema": {"type": "integer", "minimum": 0, "maximum": 10},
                             },
                         ],
-                        "responses": {"200": {"description": "ok"}},
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "old": {"type": "integer"},
+                                                "new": {"type": "integer"},
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
                     }
-                }
+                },
+                "/producer": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "ok",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "old": {"type": "integer"},
+                                                "new": {"type": "integer"},
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    }
+                },
             },
         }
     )
@@ -201,63 +234,63 @@ def test_two_concurrent_applies_of_one_revision_have_one_winner() -> None:
 
 def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() -> None:
     """Source identity is state, and a failed durable commit restores that state."""
-    from restscope.operation_references import ResponseFieldReference
-    from restscope.request_generation.models import OperationInputSourceReference
+    from datetime import UTC, datetime
+
+    from restscope.api_behavior_monitor.catalog import (
+        APIBehaviorCatalog,
+        ObservationWrite,
+        OperationDefinition,
+    )
+    from restscope.db import (
+        Base,
+        SqlAlchemyAPIBehaviorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+    from restscope.request_generation import BehaviorMonitorReferences
     from restscope.request_generation.parameter_patch import (
         ParameterPatchValidationError,
         SemanticParameterPatch,
     )
-    from restscope.request_generation.parameter_patch.models import (
-        SelectedReferenceProvenance,
-    )
-    class ReferenceEvidence:
-        """Model a staged database transaction whose commit can fail on exit."""
+    engine = create_engine_from_url("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = make_session_factory(engine)
+
+    class CommitControlledUnitOfWork(SqlAlchemyAPIBehaviorUnitOfWork):
+        """Fail only the explicitly selected staged binding commit."""
 
         fail_commit = False
 
-        def values_for(self, _strategy):
-            return [3]
-
-        def resolve_response_source(self, *, input_node_id, field, **_arguments):
-            selector = ResponseFieldReference.from_handle(field).selector
-            source = OperationInputSourceReference(
-                producer_operation_id="GET /producer",
-                status_code=200,
-                media_type="application/json",
-                selector=selector,
-                field_name=ResponseFieldReference.from_handle(field).property_names[-1],
-            )
-            return (
-                SelectedReferenceProvenance(
-                    input_node_id=input_node_id,
-                    kind="response_value",
-                    source=source,
-                    compatible_scalar_type="integer",
-                    value_count=1,
-                ),
-                [3],
-            )
-
-        @contextmanager
-        def stage_bindings(
-            self,
-            *,
-            config,
-            bindings,
-        ):
-            assert config.operation_key == "GET /items"
-            assert bindings[0].producer_operation_id == "GET /producer"
-            yield
+        def commit(self) -> None:
             if self.fail_commit:
                 raise RuntimeError("database commit failed")
+            super().commit()
+
+    catalog = APIBehaviorCatalog(lambda: CommitControlledUnitOfWork(sessions))
+    catalog.ensure_operation(
+        OperationDefinition(
+            operation_id="GET /producer",
+            method="GET",
+            path="/producer",
+        )
+    )
+    catalog.record_observation(
+        ObservationWrite(
+            operation_id="GET /producer",
+            timestamp=datetime(2026, 8, 12, tzinfo=UTC),
+            status_code=200,
+            media_type="application/json",
+            request_json={"path": "/producer"},
+            response_json='{"old":3,"new":4}',
+        )
+    )
 
     store, original_runtime = _runtime()
-    evidence = ReferenceEvidence()
+    references = BehaviorMonitorReferences(catalog)
     runtime = type(original_runtime)(
         store=store,
         ir_provider=original_runtime._ir_provider,
-        reference_values=evidence,
-        reference_binding_stager=evidence,
+        references=references,
     )
 
     def response_patch(field: str) -> SemanticParameterPatch:
@@ -281,26 +314,18 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
             }
         )
 
-    reader_only_runtime = type(original_runtime)(
+    unavailable_runtime = type(original_runtime)(
         store=store,
         ir_provider=original_runtime._ir_provider,
-        reference_values=evidence,
     )
     unavailable_patch = response_patch("body.old")
-    unavailable_validation = reader_only_runtime.validate(
-        operation_key="GET /items",
-        expected_revision=0,
-        affected_inputs=("query.minimum",),
-        patch=unavailable_patch,
-    )
     with pytest.raises(
         ParameterPatchValidationError,
-        match="Reference-backed Patch application is unavailable",
+        match="Response Value evidence is unavailable",
     ):
-        reader_only_runtime.apply(
+        unavailable_runtime.validate(
             operation_key="GET /items",
             expected_revision=0,
-            validation_digest=unavailable_validation.validation_digest,
             affected_inputs=("query.minimum",),
             patch=unavailable_patch,
         )
@@ -322,6 +347,36 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
     ).state
     assert first.reference_bindings[0].selector == "$.old"
 
+    remove_reference_patch = SemanticParameterPatch.model_validate(
+        {
+            "changes": [
+                {
+                    "input": "query.minimum",
+                    "inclusion_probability": 1,
+                    "strategy": {"type": "constant", "value": 5},
+                }
+            ]
+        }
+    )
+    removal_validation = unavailable_runtime.validate(
+        operation_key="GET /items",
+        expected_revision=1,
+        affected_inputs=("query.minimum",),
+        patch=remove_reference_patch,
+    )
+    with pytest.raises(
+        ParameterPatchValidationError,
+        match="Reference-backed Patch application is unavailable",
+    ):
+        unavailable_runtime.apply(
+            operation_key="GET /items",
+            expected_revision=1,
+            validation_digest=removal_validation.validation_digest,
+            affected_inputs=("query.minimum",),
+            patch=remove_reference_patch,
+        )
+    assert store.require_state("GET /items") == first
+
     second_patch = response_patch("body.new")
     second_validation = runtime.validate(
         operation_key="GET /items",
@@ -329,7 +384,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         affected_inputs=("query.minimum",),
         patch=second_patch,
     )
-    evidence.fail_commit = True
+    CommitControlledUnitOfWork.fail_commit = True
     with pytest.raises(RuntimeError, match="database commit failed"):
         runtime.apply(
             operation_key="GET /items",
@@ -340,7 +395,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         )
     assert store.require_state("GET /items") == first
 
-    evidence.fail_commit = False
+    CommitControlledUnitOfWork.fail_commit = False
     second = runtime.apply(
         operation_key="GET /items",
         expected_revision=1,

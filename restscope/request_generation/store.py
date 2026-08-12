@@ -18,7 +18,7 @@ import json
 from threading import RLock
 from typing import Iterator, Literal, TypeVar
 
-from restscope.target_http.request import normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.operation_references.response import ResponseSourceCoordinate
 

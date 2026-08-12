@@ -7,7 +7,7 @@ Failure Memory, or persistence boundary behind them.
 
 from __future__ import annotations
 
-from restscope.target_http.request import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 
 from .outcomes import HTTPFailure, TransportFailure
 

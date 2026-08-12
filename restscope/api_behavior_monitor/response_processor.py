@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from restscope.target_http import (
+from restscope.target_api import (
     TargetResponseObservation,
     TargetResponseOperationContext,
     TargetResponseProcessorResult,

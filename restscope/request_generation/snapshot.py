@@ -7,7 +7,7 @@ import math
 
 from pydantic import ValidationError
 
-from restscope.target_http.request import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import OperationIR, ParameterIR, SchemaIR
 

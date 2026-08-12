@@ -89,8 +89,8 @@ Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
 delete the old run artifact before starting. RESTScope never overwrites or
 automatically deletes a successfully created database. A caller that injects a
-complete custom `HarnessRuntime` owns its persistence and bypasses this
-default database bootstrap.
+concrete `HarnessRuntime` created through `build_harness()` owns its persistence
+and bypasses this default database bootstrap.
 
 Alembic now has one `0001_current_baseline` for fresh databases. Old exploratory
 database files and the former `0001`–`0006` chain are intentionally

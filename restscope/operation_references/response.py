@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from restscope.target_http.request import normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 
 
 _SchemaVariant = Literal["oneOf", "anyOf", "allOf"]

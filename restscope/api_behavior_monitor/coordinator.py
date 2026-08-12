@@ -10,10 +10,9 @@ monitor cannot replace the target's real HTTP result.
 from __future__ import annotations
 
 import json
-from typing import Protocol
 
 from restscope.data_types import JSONValue
-from restscope.target_http.request import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.openapi_parser import (
     OpenAPIOperationMatchError,
     OpenAPISpecIR,
@@ -21,7 +20,7 @@ from restscope.openapi_parser import (
 )
 from restscope.openapi_parser.ir import OperationIR
 from restscope.observability import TracingRuntime
-from restscope.target_http import (
+from restscope.target_api import (
     TargetResponseObservation,
     TargetResponseOperationContext,
 )
@@ -37,17 +36,7 @@ from .contract_monitor import (
     ResponseContractTracker,
 )
 from .results import APIBehaviorMonitorResult, APIBehaviorWarning
-
-
-class ResourceResponseTracker(Protocol):
-    """Derive resources from one already-persisted successful JSON response."""
-
-    def observe(
-        self,
-        *,
-        operation: OperationDefinition,
-        body: JSONValue,
-    ) -> ResourceDerivationResult: ...
+from .resource_monitor import ResourceResponseTracker
 
 
 class APIBehaviorMonitorError(RuntimeError):

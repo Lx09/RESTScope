@@ -95,7 +95,9 @@ a stale or changed Patch from being applied.
    authorization and the generic model/Tool loop.
 3. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
    Context, Subagent lifecycle, and repeatable synchronous System Agent roots.
-   App-owned domain runtimes arrive already constructed.
+   App-owned domain runtimes arrive already constructed. `build_harness()`
+   returns the concrete `HarnessRuntime` used directly by the App; there is no
+   second App-private Harness Protocol.
 4. `restscope/request_generation/store.py` — revisioned operation state,
    snapshots, locks, and atomic replacement.
 5. `restscope/request_generation/parameter_patch/models.py` — semantic Patch
@@ -115,8 +117,8 @@ a stale or changed Patch from being applied.
 ### `restscope/app.py`
 
 The App is the only production composition root. It creates one database-backed
-API Behavior Catalog, the in-memory generation Store, HTTP
-transport, generic Harness, and plan-only Main Profile. `initialize()` parses
+API Behavior Catalog, the in-memory generation Store, Target API Client,
+generic Harness, and plan-only Main Profile. `initialize()` parses
 one API and initializes revision `0`; `start()` blocks in the Main Agent loop.
 
 ### `restscope/openapi_parser/`
@@ -144,8 +146,10 @@ This is the owner of the whole request-generation language:
 - `parameter_patch/compiler.py` owns pure semantic and Constraint compilation.
 - `parameter_patch/projection.py` owns bounded model-facing output.
 - `parameter_patch/runtime.py` exposes state read, validation, and atomic Apply.
-- `reference_values.py` resolves exact input sources from retained observations
-  or complete current resource instances without a shared value pool.
+- `reference_values.py` owns `BehaviorMonitorReferences`: it resolves exact
+  input sources from retained observations or complete current resource
+  instances, then stages the final source rows around Patch publication. It
+  does not maintain a shared value pool.
 
 The Store is not persistent and records no Patch history or rollback state.
 
@@ -224,12 +228,13 @@ parsers, Monitor observations, and model result contracts. It exists so JSON is
 described precisely without the forbidden `typing.Any`; opaque non-JSON
 provider objects remain `object` until their owning Adapter validates them.
 
-### `restscope/target_http/`
+### `restscope/target_api/`
 
-This package prepares and sends target requests, reads the complete response
-for the Monitor, and returns a separately bounded Tool/Batch projection. Both
-`restscope.http.request` and generated Batch execution use this same transport
-boundary with different Tool contracts.
+This top-level Module is the shared foundation for every request to the tested
+API. `request.py` prepares and validates a request without network effects;
+`client.py` sends it and independently supplies the complete Monitor fact, a
+bounded Live Observer view, and the caller's requested body. The HTTP Tool and
+generated Batch execution consume the same Client; Harness does not own it.
 
 ### `restscope/db/`
 
@@ -276,7 +281,8 @@ every semantic predicate was correct. A failed Batch does not roll back state.
 - Change authorization in a Profile; never infer it from Catalog discovery.
 - Change persistence only in the API Behavior Adapter and baseline
   migration after explicit approval.
-- Change target request transport in `target_http`, not inside a Skill or Agent.
+- Change tested-API request behavior in `target_api`, not inside a Tool, Skill,
+  Agent, or Harness.
 
 When a proposed shortcut would recreate a dedicated workflow Agent, candidate
 Registry, Test Case Registry, or persistent Generation state, stop and compare

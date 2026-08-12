@@ -10,8 +10,8 @@ neutral Beta prior; it never stores a copied producer-value collection.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
 import json
 
 from restscope.api_behavior_monitor.catalog import (
@@ -20,7 +20,7 @@ from restscope.api_behavior_monitor.catalog import (
     ResourceDefinitionRecord,
     APIBehaviorCatalog,
 )
-from restscope.target_http.request import normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.operation_references import ResponseFieldReference
 
@@ -40,8 +40,13 @@ _SCALAR_REFERENCE_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _MAX_RESPONSE_VALUE_CANDIDATES = 8
 
 
-class BehaviorMonitorReferenceValues:
-    """Adapt the API Behavior Catalog to Generator value reads."""
+class BehaviorMonitorReferences:
+    """Read and stage the Monitor references used by Parameter Patches.
+
+    The same Catalog-backed collaborator resolves current resource/response
+    values during validation and stages final input-source rows around the
+    in-memory publication performed by ``RequestGenerationPatchRuntime``.
+    """
 
     def __init__(self, catalog: APIBehaviorCatalog) -> None:
         """Bind the durable response facts used by later request generation."""
@@ -219,13 +224,12 @@ class BehaviorMonitorReferenceValues:
             values,
         )
 
-    @contextmanager
     def stage_bindings(
         self,
         *,
         config: OperationGeneratorConfig,
         bindings: Sequence[ReferenceValueBinding],
-    ) -> Iterator[None]:
+    ) -> AbstractContextManager[None]:
         """Stage exact input-source rows in the Patch publication transaction.
 
         The database transaction stays open while the caller publishes the new
@@ -259,11 +263,10 @@ class BehaviorMonitorReferenceValues:
             )
             for binding in bindings
         ]
-        with self.catalog.stage_input_sources(
+        return self.catalog.stage_input_sources(
             operations=operations,
             sources=sources,
-        ):
-            yield
+        )
 
 
 def _operation_definition(operation_id: str) -> OperationDefinition:

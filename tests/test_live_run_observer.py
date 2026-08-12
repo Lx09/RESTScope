@@ -779,11 +779,11 @@ def test_live_only_hidden_phase_does_not_add_a_phoenix_or_timeline_span() -> Non
     assert backend.names == []
 
 
-def test_target_transport_keeps_binary_response_evidence_inside_the_tool() -> None:
+def test_target_api_client_keeps_binary_response_evidence_inside_the_tool() -> None:
     """Scenario: final headers/query and truncated binary bytes enrich one HTTP tool."""
     import httpx
 
-    from restscope.target_http import TargetHTTPTransport
+    from restscope.target_api import TargetAPIClient, prepare_target_request
     from restscope.observability import LiveRunObserver, TracingRuntime
 
     observer = LiveRunObserver()
@@ -800,14 +800,14 @@ def test_target_transport_keeps_binary_response_evidence_inside_the_tool() -> No
             request=request,
         )
 
-    transport = TargetHTTPTransport(
+    client = TargetAPIClient(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(handler),
             **kwargs,
         ),
         run_observer=observer,
     )
-    prepared = transport.prepare(
+    prepared = prepare_target_request(
         method="POST",
         base_url="https://api.test",
         path="/projects",
@@ -823,11 +823,11 @@ def test_target_transport_keeps_binary_response_evidence_inside_the_tool() -> No
         kind="TOOL",
         input_value={"arguments": {"method": "POST", "path": "/projects"}},
     ) as tool:
-        response = transport.request_prepared(
+        response = client.send(
             prepared,
             request_kwargs={"json": {"name": "demo"}},
-            failure_response_body_limit=2,
-            truncate_response_body=True,
+            failure_body_limit=2,
+            truncate_body=True,
         )
         tool.set_output(
             {"name": "restscope.http.request", "status": "succeeded"}
@@ -845,19 +845,25 @@ def test_target_transport_keeps_binary_response_evidence_inside_the_tool() -> No
     assert event["detail"]["input"]["request"]["headers"]["Authorization"] == (
         "Bearer target-token"
     )
+    # Live Observer owns a separate one-MiB view; the caller's two-byte
+    # diagnostic limit cannot silently reduce human observability evidence.
     assert event["detail"]["output"]["response"]["body"] == {
         "format": "base64",
-        "value": "AAE=",
+        "value": "AAECAw==",
     }
-    assert event["detail"]["output"]["response"]["body_truncated"] is True
+    assert event["detail"]["output"]["response"]["body_truncated"] is False
 
 
-def test_target_transport_marks_timeout_without_replacing_the_public_error() -> None:
+def test_target_api_client_marks_timeout_without_replacing_the_public_error() -> None:
     """Scenario: timeout evidence is visible while callers receive the same timeout."""
     import httpx
     import pytest
 
-    from restscope.target_http import TargetHTTPTimeout, TargetHTTPTransport
+    from restscope.target_api import (
+        TargetAPIClient,
+        TargetAPITimeout,
+        prepare_target_request,
+    )
     from restscope.observability import LiveRunObserver, TracingRuntime
 
     observer = LiveRunObserver()
@@ -867,14 +873,14 @@ def test_target_transport_marks_timeout_without_replacing_the_public_error() -> 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("provider detail", request=request)
 
-    transport = TargetHTTPTransport(
+    client = TargetAPIClient(
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(handler),
             **kwargs,
         ),
         run_observer=observer,
     )
-    prepared = transport.prepare(
+    prepared = prepare_target_request(
         method="GET",
         base_url="https://api.test",
         path="/slow",
@@ -885,11 +891,11 @@ def test_target_transport_marks_timeout_without_replacing_the_public_error() -> 
         kind="TOOL",
         input_value={"arguments": {"method": "GET", "path": "/slow"}},
     ):
-        with pytest.raises(TargetHTTPTimeout, match="timed out"):
-            transport.request_prepared(prepared, response_body_limit=1024)
+        with pytest.raises(TargetAPITimeout, match="timed out"):
+            client.send(prepared, success_body_limit=1024)
 
     event = observer.snapshot()["events"][0]
     assert event["status"] == "failed"
     assert event["detail"]["output"]["transport_error"]["type"] == (
-        "TargetHTTPTimeout"
+        "TargetAPITimeout"
     )

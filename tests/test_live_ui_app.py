@@ -8,57 +8,49 @@ import sys
 from dataclasses import replace
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 
+if TYPE_CHECKING:
+    from restscope.harness import HarnessRuntime
 
-class _InjectedCapabilities:
-    """Provide only the composition hooks used by an injected App runtime."""
 
-    mcp_host = None
+def _harness_with_interrupting_main() -> "HarnessRuntime":
+    """Build a real Harness whose Main Provider simulates local Ctrl-C."""
+    from restscope.agent import AgentProfile
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.llm import LLMClient, LLMModelConfig
+    from restscope.llm.registry import LLMProviderRegistry
 
-    def __init__(self, *, main_agent=None) -> None:
-        self.tracing_runtime = None
-        self.context_cleared = False
-        self.context = None
-        self.main_agent = main_agent
+    class InterruptingProvider:
+        """Raise KeyboardInterrupt from the normal Main Agent model seam."""
 
-    def bind_tracing_runtime(self, runtime) -> None:
-        """Record the App's trace facade as a normal injected runtime would."""
-        self.tracing_runtime = runtime
+        name = "interrupting"
 
-    def clear_context(self) -> None:
-        """Record App cleanup without owning a real ToolContext."""
-        self.context_cleared = True
+        def invoke(self, request):
+            """Interrupt the blocking Main loop before it can return output."""
 
-    def bind_context(self, context) -> None:
-        """Retain the initialized target context for App run scenarios."""
-        self.context = context
+            del request
+            raise KeyboardInterrupt()
 
-    def require_context(self):
-        """Return the initialized context or match the production error contract."""
-        from restscope.tools.context import ToolContextError
-
-        if self.context is None:
-            raise ToolContextError(
-                "tool_context_not_initialized",
-                "Tool context is not initialized",
-            )
-        return self.context
-
-    def start_main_agent(self, profile_name):
-        """Return the injected Main loop after checking its stable name."""
-        assert profile_name == "main"
-        if self.main_agent is None:
-            raise RuntimeError("No Main Agent was injected")
-        return self.main_agent
-
-    def close_main_agent(self) -> None:
-        """Close the injected loop when it exposes the normal lifecycle hook."""
-        close = getattr(self.main_agent, "close", None)
-        if callable(close):
-            close()
+    registry = LLMProviderRegistry()
+    registry.register(InterruptingProvider())
+    return build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+            models=(
+                LLMModelConfig(
+                    name="thinking",
+                    provider="interrupting",
+                    model="interrupting-model",
+                    max_tokens=128,
+                    context_window_tokens=2_048,
+                ),
+            ),
+            client=LLMClient(registry),
+        )
+    )
 
 
 _ONE_GET_SCHEMA = json.dumps(
@@ -81,23 +73,27 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
     from restscope.config import RESTScopeConfig, UIConfig
+    from restscope.harness import build_harness
 
-    service = SimpleNamespace(url="http://127.0.0.1:9988", closed=False)
+    from restscope.ui import UIService
+
+    service = UIService(observer=object(), port=9988, static_root=tmp_path)
+    service.closed = False
 
     def close_service() -> None:
         service.closed = True
 
     service.close = close_service
-    monkeypatch.setattr("restscope.ui.start_ui_service", lambda **_kwargs: service)
+    monkeypatch.setattr("restscope.app.start_ui_service", lambda **_kwargs: service)
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         ui=UIConfig(enabled=True, port=9988),
     )
     tracing = TracingRuntime.disabled()
-    capabilities = _InjectedCapabilities()
+    runtime = build_harness()
     app = RESTScopeApp(
         config=config,
-        harness_runtime=capabilities,
+        harness_runtime=runtime,
         tracing_runtime=tracing,
     )
 
@@ -105,7 +101,6 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     assert tracing.run_observer is not None
     app.close()
     assert service.closed is True
-    assert capabilities.context_cleared is True
     assert tracing.run_observer.snapshot()["run"] is None
 
 
@@ -118,15 +113,12 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     from restscope.observability import TracingRuntime
     from restscope.config import RESTScopeConfig, UIConfig
 
-    class InterruptingMain:
-        """Represent a blocking Main loop interrupted by its local caller."""
+    from restscope.ui import UIService
 
-        def start(self):
-            raise KeyboardInterrupt()
-
-    service = SimpleNamespace(url="http://127.0.0.1:9987", closed=False)
+    service = UIService(observer=object(), port=9987, static_root=tmp_path)
+    service.closed = False
     service.close = lambda: setattr(service, "closed", True)
-    monkeypatch.setattr("restscope.ui.start_ui_service", lambda **_kwargs: service)
+    monkeypatch.setattr("restscope.app.start_ui_service", lambda **_kwargs: service)
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         ui=UIConfig(enabled=True, port=9987),
@@ -134,7 +126,7 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     tracing = TracingRuntime.disabled()
     app = RESTScopeApp(
         config=config,
-        harness_runtime=_InjectedCapabilities(main_agent=InterruptingMain()),
+        harness_runtime=_harness_with_interrupting_main(),
         tracing_runtime=tracing,
     )
     app.initialize(
@@ -170,8 +162,9 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     from restscope.app import RESTScopeApp
     from restscope.observability import TracingRuntime
     from restscope.config import RESTScopeConfig, UIConfig
+    from restscope.harness import build_harness
 
-    monkeypatch.setattr("restscope.ui.start_ui_service", lambda **_kwargs: None)
+    monkeypatch.setattr("restscope.app.start_ui_service", lambda **_kwargs: None)
     config = replace(
         RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         ui=UIConfig(enabled=True, port=9989),
@@ -180,7 +173,7 @@ def test_app_continues_without_collection_when_ui_startup_fails(
 
     app = RESTScopeApp(
         config=config,
-        harness_runtime=_InjectedCapabilities(),
+        harness_runtime=build_harness(),
         tracing_runtime=tracing,
     )
 

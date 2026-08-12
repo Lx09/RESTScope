@@ -130,6 +130,96 @@ def test_parameter_patch_is_one_request_generation_runtime_capability() -> None:
     assert "runtime._store" not in tool_sources
 
 
+def test_parameter_patch_uses_one_concrete_reference_collaborator() -> None:
+    """Patch reads and staged writes enter through one complete integration."""
+
+    from restscope.request_generation import BehaviorMonitorReferences
+    from restscope.request_generation.parameter_patch.runtime import (
+        RequestGenerationPatchRuntime,
+    )
+
+    parameters = inspect.signature(RequestGenerationPatchRuntime).parameters
+    facade = __import__("restscope.request_generation", fromlist=["__all__"])
+    runtime_source = (
+        SOURCE_ROOT / "request_generation" / "parameter_patch" / "runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert BehaviorMonitorReferences.__name__ == "BehaviorMonitorReferences"
+    assert "BehaviorMonitorReferences" in facade.__all__
+    assert "BehaviorMonitorReferenceValues" not in facade.__all__
+    assert "references" in parameters
+    assert "reference_values" not in parameters
+    assert "reference_binding_stager" not in parameters
+    assert "_ReferenceBindingStager" not in runtime_source
+    assert "hasattr(provider" not in runtime_source
+
+
+def test_behavior_coordinator_uses_the_concrete_resource_tracker() -> None:
+    """Resource derivation has one owner rather than a duplicate Protocol name."""
+
+    from restscope.api_behavior_monitor.coordinator import (
+        APIBehaviorMonitorCoordinator,
+    )
+    from restscope.api_behavior_monitor.resource_monitor import (
+        ResourceResponseTracker,
+    )
+
+    annotation = inspect.signature(APIBehaviorMonitorCoordinator).parameters[
+        "resource_tracker"
+    ].annotation
+    coordinator_source = (
+        SOURCE_ROOT / "api_behavior_monitor" / "coordinator.py"
+    ).read_text(encoding="utf-8")
+
+    assert "ResourceResponseTracker" in str(annotation)
+    assert "class ResourceResponseTracker(Protocol)" not in coordinator_source
+    assert "from .resource_monitor import ResourceResponseTracker" in coordinator_source
+    assert ResourceResponseTracker.__module__.endswith("resource_monitor")
+
+
+def test_app_retains_the_concrete_ui_service_without_a_host_protocol() -> None:
+    """The optional viewer lifecycle uses its sole concrete implementation."""
+
+    app_source = (SOURCE_ROOT / "app.py").read_text(encoding="utf-8")
+
+    assert "_UIServiceHost" not in app_source
+    assert "from restscope.ui import UIService, start_ui_service" in app_source
+    assert "ui_service: UIService | None" in app_source
+
+
+def test_protocol_inventory_contains_only_reviewed_real_seams() -> None:
+    """Every retained Protocol has multiple adapters or third-party isolation."""
+
+    retained: set[tuple[str, str]] = set()
+    for path in SOURCE_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if any(
+                isinstance(base, ast.Name) and base.id == "Protocol"
+                for base in node.bases
+            ):
+                retained.add((str(path.relative_to(SOURCE_ROOT)), node.name))
+
+    assert retained == {
+        ("agent/ports.py", "AgentToolExecutor"),
+        ("agent/ports.py", "AgentTreeControlPort"),
+        ("agent/ports.py", "BudgetChargeView"),
+        ("api_behavior_monitor/catalog.py", "_APIBehaviorRepository"),
+        ("api_behavior_monitor/catalog.py", "_APIBehaviorUnitOfWork"),
+        ("api_behavior_monitor/resource_identity.py", "SystemAgentRunner"),
+        ("request_generation/ports.py", "ReferenceValueProvider"),
+        ("skills/loader.py", "_Traversable"),
+        ("target_api/observation.py", "TargetResponseProcessor"),
+        ("tools/openapi/observed_queries.py", "ObservedResponseReader"),
+        ("tools/test_case/run_batch.py", "BatchExecutionBackend"),
+        ("ui/server.py", "_ASGIApplication"),
+        ("ui/server.py", "_CursorRequest"),
+        ("ui/server.py", "_ServerHandle"),
+    }
+
+
 def test_top_level_production_dependencies_are_acyclic() -> None:
     """Scenario: ownership moves cannot recreate a mutually dependent package set."""
     graph: dict[str, set[str]] = {}
@@ -214,6 +304,54 @@ def test_core_runtime_language_has_explicit_global_packages() -> None:
     for retired_package in ("capabilities", "supervisor", "testing"):
         assert not (SOURCE_ROOT / retired_package).exists()
         assert importlib.util.find_spec(f"restscope.{retired_package}") is None
+
+
+def test_target_api_is_the_only_target_request_foundation() -> None:
+    """Readers find one top-level target Client and no retired transport path."""
+
+    import restscope.target_api as target_api
+
+    assert importlib.util.find_spec("restscope.target_http") is None
+    assert (SOURCE_ROOT / "target_api" / "client.py").is_file()
+    assert (SOURCE_ROOT / "target_api" / "request.py").is_file()
+    assert (SOURCE_ROOT / "target_api" / "media_type.py").is_file()
+    assert not hasattr(target_api, "TargetHTTPTransport")
+    assert not hasattr(target_api, "TargetHTTPTransportError")
+    assert not hasattr(target_api, "TargetHTTPTimeout")
+
+    batch_source = (
+        SOURCE_ROOT / "harness" / "operation_testing" / "service.py"
+    ).read_text(encoding="utf-8")
+    assert "has_response_processor" not in batch_source
+    assert ".run_observer" not in batch_source
+
+    media_sources = [
+        path
+        for path in SOURCE_ROOT.rglob("*.py")
+        if "def normalize_media_type(" in path.read_text(encoding="utf-8")
+        or "def is_json_media_type(" in path.read_text(encoding="utf-8")
+    ]
+    assert media_sources == [SOURCE_ROOT / "target_api" / "media_type.py"]
+
+
+def test_app_uses_the_concrete_harness_runtime_without_a_duplicate_protocol() -> None:
+    """Readers find one concrete Harness type and no duck-typed App seam."""
+
+    from restscope.harness import HarnessRuntime, build_harness
+
+    runtime = build_harness()
+    app_source = (SOURCE_ROOT / "app.py").read_text(encoding="utf-8")
+    harness_source = (SOURCE_ROOT / "harness" / "runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert type(runtime) is HarnessRuntime
+    assert runtime.http_request_tool is not None
+    assert "_AppHarnessRuntime" not in app_source
+    assert "_StartableRuntimeLoop" not in app_source
+    assert "_ClosableHost" not in app_source
+    assert "getattr(self.harness_runtime" not in app_source
+    assert "target_http_tool" not in harness_source
 
 
 def test_only_the_generic_agent_remains() -> None:
@@ -374,7 +512,7 @@ def test_request_generation_facade_exposes_only_integration_entries() -> None:
     import restscope.request_generation as request_generation
 
     assert set(request_generation.__all__) == {
-        "BehaviorMonitorReferenceValues",
+        "BehaviorMonitorReferences",
         "RequestGenerationConfigStore",
         "RequestGenerationPatchRuntime",
         "SeededRandom",

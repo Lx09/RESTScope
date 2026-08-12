@@ -88,7 +88,7 @@ def test_harness_runtime_has_shared_http_implementation_without_global_tools() -
 
     runtime = build_harness()
 
-    assert runtime.target_http_tool is not None
+    assert runtime.http_request_tool is not None
     assert not hasattr(runtime, "tool_registry")
     assert not hasattr(runtime, "tool_policy")
     assert not hasattr(runtime, "tool_selector")

@@ -31,7 +31,7 @@ from restscope.tools import (
     ToolDefinition,
     builtin_tool_catalog,
 )
-from restscope.target_http import TargetHTTPTransport
+from restscope.target_api import TargetAPIClient
 from restscope.observability import TracingRuntime
 from restscope.openapi_parser.ir import OperationIR
 
@@ -64,7 +64,7 @@ class HarnessRuntime:
     implementations and App-bound context stay inside the Harness.
     """
 
-    target_http_tool: TargetHTTPRequestTool
+    http_request_tool: TargetHTTPRequestTool
     built_in_tool_catalog: ToolCatalog = field(default_factory=builtin_tool_catalog)
     external_tool_catalog: ToolCatalog = field(default_factory=ToolCatalog)
     external_tools: AgentToolbox | None = None
@@ -194,7 +194,7 @@ def build_harness(
     *,
     sources: Mapping[str, Mapping[str, object]] | None = None,
     tracing_runtime: TracingRuntime | None = None,
-    target_http_transport: TargetHTTPTransport | None = None,
+    target_api_client: TargetAPIClient | None = None,
     observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
@@ -228,8 +228,8 @@ def build_harness(
         )
 
     runtime = HarnessRuntime(
-        target_http_tool=TargetHTTPRequestTool(
-            transport=target_http_transport,
+        http_request_tool=TargetHTTPRequestTool(
+            client=target_api_client,
         ),
         built_in_tool_catalog=builtin_tool_catalog(),
         external_tool_catalog=ToolCatalog(external_definitions),
@@ -240,7 +240,7 @@ def build_harness(
     if agent_runtime is not None:
         production_factories = _production_tool_binding_factories(
             runtime,
-            include_http=target_http_transport is not None,
+            include_http=target_api_client is not None,
             include_openapi=any(
                 item is not None
                 for item in (
@@ -287,7 +287,7 @@ def _production_tool_binding_factories(
         bindings.append(
             ToolBinding(
                 name=HTTP_REQUEST_TOOL_NAME,
-                execute=lambda **arguments: runtime.target_http_tool.execute(
+                execute=lambda **arguments: runtime.http_request_tool.execute(
                     runtime.require_context(),
                     **arguments,
                 ),
@@ -358,7 +358,7 @@ def build_harness_with_mcp_host(
     mcp_host: MCPHost | None = None,
     server_names: Iterable[str] | None = None,
     tracing_runtime: TracingRuntime | None = None,
-    target_http_transport: TargetHTTPTransport | None = None,
+    target_api_client: TargetAPIClient | None = None,
     observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
@@ -384,7 +384,7 @@ def build_harness_with_mcp_host(
         runtime = build_harness(
             sources=sources,
             tracing_runtime=tracing_runtime,
-            target_http_transport=target_http_transport,
+            target_api_client=target_api_client,
             observed_response_reader=observed_response_reader,
             resource_tool_backend=resource_tool_backend,
             request_generation_patch_runtime=request_generation_patch_runtime,

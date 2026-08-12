@@ -10,15 +10,16 @@ from urllib.parse import urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from restscope.target_http.request import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.tools.context import ToolContext
 from restscope.llm.schemas import ToolSpec
-from restscope.target_http import (
+from restscope.target_api import (
     BufferedTargetResponse,
-    TargetHTTPTimeout,
-    TargetHTTPTransport,
-    TargetHTTPTransportError,
+    TargetAPIClient,
+    TargetAPIError,
+    TargetAPITimeout,
     TargetResponseOperationContext,
+    prepare_target_request,
 )
 
 
@@ -235,9 +236,9 @@ class TargetHTTPRequestTool:
         self,
         *,
         client_factory: ClientFactory = httpx.Client,
-        transport: TargetHTTPTransport | None = None,
+        client: TargetAPIClient | None = None,
     ) -> None:
-        self.transport = transport or TargetHTTPTransport(
+        self.client = client or TargetAPIClient(
             client_factory=client_factory
         )
 
@@ -253,7 +254,7 @@ class TargetHTTPRequestTool:
             request_headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         try:
-            prepared = self.transport.prepare(
+            prepared = prepare_target_request(
                 method=request.method,
                 base_url=context.base_url,
                 path=request.path,
@@ -265,18 +266,19 @@ class TargetHTTPRequestTool:
                     set()
                 ),
             )
-            response = self.transport.request_prepared(
+            response = self.client.send(
                 prepared,
                 timeout_seconds=request.timeout_seconds,
                 request_kwargs=request_kwargs,
-                response_body_limit=MAX_RESPONSE_BYTES,
-                truncate_response_body=False,
-                processor_context=TargetResponseOperationContext(ir=context.ir),
+                success_body_limit=MAX_RESPONSE_BYTES,
+                failure_body_limit=MAX_RESPONSE_BYTES,
+                truncate_body=False,
+                response_context=TargetResponseOperationContext(ir=context.ir),
             )
             payload = _response_payload(response)
-        except TargetHTTPTimeout as exc:
+        except TargetAPITimeout as exc:
             raise HTTPRequestTimeoutError("HTTP request timed out") from exc
-        except TargetHTTPTransportError as exc:
+        except TargetAPIError as exc:
             raise HTTPRequestToolError(
                 exc.code,
                 str(exc),

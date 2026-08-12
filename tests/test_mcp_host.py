@@ -321,7 +321,7 @@ def test_build_harness_with_empty_mcp_host_has_no_external_tools() -> None:
     )
 
     assert runtime.external_tools is None
-    assert runtime.target_http_tool is not None
+    assert runtime.http_request_tool is not None
 
 
 def test_build_harness_with_mcp_host_closes_owned_host_on_discovery_failure(

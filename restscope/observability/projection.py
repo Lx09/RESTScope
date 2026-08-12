@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
-from restscope.target_http.request import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 
 
 EventKind = Literal["agent_turn", "tool_call"]

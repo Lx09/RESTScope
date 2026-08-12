@@ -9,6 +9,23 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .runtime import (
+        HarnessRuntime,
+        AgentRuntimeNotConfiguredError,
+        SystemAgentNotConfiguredError,
+        build_harness,
+        build_harness_with_mcp_host,
+    )
+    from .agent_runtime import (
+        AgentRuntimeDefinition,
+        ContextSourceBinding,
+        SystemAgentDefinition,
+        ToolBindingFactory,
+    )
+
 
 __all__ = [
     "HarnessRuntime",

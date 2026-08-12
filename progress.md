@@ -515,3 +515,69 @@
 - Final verification passed 556 tests with 2 skips. The 44-test focused suite,
   `typing.Any` guard, Python compilation, unchanged migration, diff hygiene,
   and wheel old-path inspection also passed.
+# 2026-08-12: Target API request foundation refactor
+
+- User approved direct implementation on local `main`, with simplicity and
+  code navigation as the highest code rules. Git staging, commit, and push are
+  not authorized.
+- Confirmed TDD seams: `prepare_target_request()`, `TargetAPIClient.send()`,
+  independent Monitor/Observer/caller response projections, and exact package
+  navigation. The existing `transport.py` edit will be absorbed rather than
+  discarded.
+- Replaced the retired `target_http` package with the six-file `target_api`
+  Module and migrated Tool, Batch, Monitor, Harness, OpenAPI, and Request
+  Generation consumers without compatibility aliases.
+- The Client now owns independent complete Monitor, 1 MiB Observer, and
+  caller-selected response projections. Batch no longer reads Client
+  configuration and leaves successful response bodies unread when no internal
+  consumer needs them.
+- Final verification passed 560 tests with 2 skips. The 101-test focused suite,
+  `typing.Any` guard, Python compilation, wheel content check, retired-name
+  scan, and `git diff --check` also passed.
+- The first migrated focused suite passed 66 tests and found two expected
+  navigation changes: Observer now retains its own one-MiB response view, and
+  the retired source directory remained visible only through generated
+  `__pycache__` files. Updated the behavior assertion and removed that exact
+  retired cache directory.
+
+# 2026-08-12: Harness Runtime navigation cleanup
+
+- User approved retaining concrete `HarnessRuntime` as the only App injection
+  type and deleting the duplicate App-private Protocol.
+- Confirmed public seams before TDD: `build_harness() -> HarnessRuntime`, App
+  lifecycle through that concrete runtime, and the renamed
+  `HarnessRuntime.http_request_tool` field.
+- Existing Target API refactor changes remain untouched, unstaged, and
+  uncommitted on local `main`.
+- Added a red package-navigation contract, then removed `_AppHarnessRuntime`,
+  `_StartableRuntimeLoop`, `_ClosableHost`, and all App-side Harness method
+  probing. `RESTScopeApp` now accepts and calls concrete `HarnessRuntime`
+  directly.
+- Renamed `target_http_tool` to `http_request_tool`. Database and UI lifecycle
+  tests now build real Harness instances; KeyboardInterrupt enters through a
+  controlled Provider on the existing Agent runtime seam.
+- Final verification passed 561 tests with 2 skips. The cross-module focused
+  suite passed 129 tests with 1 skip; the `typing.Any` guard, Python
+  compilation, retired-name scan, and `git diff --check` also passed.
+
+# 2026-08-12: Redundant Protocol and Reference integration cleanup
+
+- User approved deleting `_ReferenceBindingStager`, renaming the complete
+  integration to `BehaviorMonitorReferences`, and removing the duplicate
+  Resource Tracker and UI Host Protocols.
+- Confirmed TDD seams: the Request Generation facade and Patch constructor,
+  atomic reference publication behavior, concrete Resource Tracker injection,
+  and concrete UI lifecycle.
+- Detected pre-existing user edits in the API Behavior Monitor and Harness
+  facades; they are preserved outside this cleanup.
+- Renamed the concrete integration to `BehaviorMonitorReferences` and replaced
+  the Patch Runtime's read Provider plus Stager parameters with one optional
+  `references` argument. Staging now returns the Catalog Context Manager
+  directly, so the IDE-visible type matches exactly.
+- Removed the duplicate Resource Tracker Protocol and App UI Host Protocol.
+  Resource monitoring and UI lifecycle now use their concrete owner classes.
+- Added a reviewed inventory contract for the 14 retained Protocols with real
+  database, Agent, Tool, multi-implementation, or third-party Adapter seams.
+- Final verification passed 565 tests with 2 skips. The 66-test integration
+  suite, `typing.Any` guard, Python compilation, obsolete-name scan, exact
+  Interface inspection, and `git diff --check` also passed.

@@ -686,7 +686,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
     import httpx
 
     from restscope.tools.context import ToolContext
-    from restscope.target_http import TargetHTTPTransport
+    from restscope.target_api import TargetAPIClient
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
         RequestGenerationPatchRuntime,
@@ -748,7 +748,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
         config_store=catalog,
         api_behavior_catalog=api_behavior_catalog,
         tracing_runtime=runtime,
-        transport=TargetHTTPTransport(
+        target_api_client=TargetAPIClient(
             client_factory=lambda **kwargs: httpx.Client(
                 transport=httpx.MockTransport(
                     lambda request: httpx.Response(
