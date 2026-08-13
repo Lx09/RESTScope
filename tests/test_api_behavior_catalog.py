@@ -58,13 +58,12 @@ def test_api_behavior_catalog_initializes_document_and_operations_atomically() -
     catalog.initialize_api(document=document, operations=[operation])
 
     assert catalog.current_openapi() == document
-    assert catalog.baseline_openapi() == document
     assert catalog.list_openapi_changes() == []
     assert catalog.list_operation_resources(operation_id="GET /items") == []
 
 
-def test_current_openapi_changes_without_mutating_oracle_baseline() -> None:
-    """Contract evolution changes only the current document used by Monitor."""
+def test_current_openapi_changes_and_keeps_an_audit_event() -> None:
+    """Contract evolution replaces the sole document and preserves its event."""
 
     from restscope.api_behavior_monitor.catalog import OpenAPIChangeEventWrite
 
@@ -84,7 +83,7 @@ def test_current_openapi_changes_without_mutating_oracle_baseline() -> None:
     )
 
     assert catalog.current_openapi() == evolved
-    assert catalog.baseline_openapi() == original
+    assert len(catalog.list_openapi_changes()) == 1
 
 
 def test_api_behavior_catalog_rejects_reinitialization_without_partial_changes() -> None:
@@ -234,38 +233,32 @@ def test_catalog_persists_one_replay_and_immutable_oracle_assessment() -> None:
         ObservationWrite,
         OperationDefinition,
         OracleAssessment,
-        OracleCheckNoCandidate,
-        OracleCheckNotApplicable,
         OracleCheckReproduced,
     )
 
     catalog = _catalog()
     catalog.ensure_operation(OperationDefinition(operation_id="GET /items", method="GET", path="/items"))
-    common = dict(
-        operation_id="GET /items",
-        timestamp=datetime(2026, 8, 13, tzinfo=UTC),
-        outcome_kind="http",
-        request_json={"path": "/items", "query": []},
-        status_code=500,
-        response_headers={"content-type": "application/json"},
-        response_body=b'{}',
-        body_format="json",
-    )
+    common = {
+        "operation_id": "GET /items",
+        "timestamp": datetime(2026, 8, 13, tzinfo=UTC),
+        "outcome_kind": "http",
+        "request_json": {"path": "/items", "query": []},
+        "status_code": 500,
+        "response_headers": {"content-type": "application/json"},
+        "response_body": b"{}",
+        "body_format": "json",
+    }
     primary = catalog.record_observation(ObservationWrite(**common))
     replay = catalog.record_observation(
         ObservationWrite(**common, replay_of_observation_id=primary.observation_id)
     )
     assessment = OracleAssessment(
-        checks=(
-            OracleCheckReproduced(
-                name="valid_input_server_error",
-                status="reproduced",
-                agent_session_id="session-1",
-                reason="Valid input repeatedly received a server error.",
-            ),
-            OracleCheckNotApplicable(name="invalid_input_accepted", status="not_applicable"),
-            OracleCheckNoCandidate(name="response_schema_mismatch", status="no_candidate"),
-        )
+        checks=(OracleCheckReproduced(
+            name="unexpected_response_status",
+            status="reproduced",
+            primary_reasons=("server_error",),
+            replay_reasons=("server_error",),
+        ),)
     )
 
     saved = catalog.record_oracle_assessment(

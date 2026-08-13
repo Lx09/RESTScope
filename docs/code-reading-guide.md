@@ -71,7 +71,7 @@ created before network execution, and every persisted Case links to both its
 Batch index and the abstract state. Only complete valid 2xx JSON Observations
 enter learning readers, which select at most the latest 100 per operation.
 An Oracle Assessment is the immutable Primary-request verdict after deterministic
-candidate detection, isolated System Agent confirmation, and one Replay.
+status classification and one exact-request Replay.
 
 ### Constraint
 
@@ -217,13 +217,13 @@ Skills cannot be used by it until a later approved Profile change.
 ### `restscope/api_behavior_monitor/`
 
 The API Behavior Monitor first persists every matched HTTP or transport
-Observation, checks current and baseline response Contracts, and then allows only
-complete valid 2xx JSON evidence to derive resource state in a separate
-transaction. `catalog.py` owns all eleven persisted tables, including immutable
-baseline/current OpenAPI and final Oracle Assessments. `contract_validation.py`
-decodes once and validates both Contracts; `contract_monitor.py` updates current
-responses; `oracle.py` confirms and finalizes bugs; `coordinator.py` owns stage
-ordering; `resource_monitor.py` derives resources;
+Observation, evolves the current response Contract, and then allows only complete
+valid 2xx JSON evidence to derive resource state in a separate transaction.
+`catalog.py` owns all eleven persisted tables, including the current OpenAPI and
+final Oracle Assessments. `response_evidence.py` decodes each response once;
+`contract_monitor.py` updates current responses; `oracle.py` classifies statuses
+and finalizes replay-confirmed bugs; `coordinator.py` owns stage ordering;
+`resource_monitor.py` derives resources;
 and `resource_identity.py` contains the bounded System Agent contract used for
 an unknown identity. The Monitor never calls an LLM client directly and does
 not persist extraction rules or reasoning.

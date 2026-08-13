@@ -9,21 +9,17 @@ generic database value.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
 
-from .contract_validation import ContractValidationResult, ResponseEvidence
-
-
-T = TypeVar("T")
+from .response_evidence import ResponseEvidence
 
 
 @dataclass(frozen=True, slots=True)
-class AnnotationKey(Generic[T]):
+class AnnotationKey[ValueT]:
     """Name one typed fact and the sole Pipeline Module allowed to write it."""
 
     name: str
     owner: str
-    value_type: type[T]
+    value_type: type[ValueT]
 
 
 class PipelineAnnotations:
@@ -34,7 +30,12 @@ class PipelineAnnotations:
 
         self._values: dict[str, object] = {}
 
-    def write(self, owner: str, key: AnnotationKey[T], value: T) -> None:
+    def write[ValueT](
+        self,
+        owner: str,
+        key: AnnotationKey[ValueT],
+        value: ValueT,
+    ) -> None:
         """Publish a fact once after checking namespace ownership and runtime type."""
 
         if owner != key.owner:
@@ -45,7 +46,7 @@ class PipelineAnnotations:
             raise TypeError(f"Annotation {key.name!r} has the wrong value type")
         self._values[key.name] = value
 
-    def read(self, key: AnnotationKey[T]) -> T | None:
+    def read[ValueT](self, key: AnnotationKey[ValueT]) -> ValueT | None:
         """Return one typed fact when its owner published it earlier in the Pipeline."""
 
         value = self._values.get(key.name)
@@ -61,14 +62,4 @@ RESPONSE_EVIDENCE = AnnotationKey(
     "observation.response_evidence",
     "observation",
     ResponseEvidence,
-)
-CURRENT_CONTRACT_VALIDATION = AnnotationKey(
-    "monitor.current_contract_validation",
-    "contract_monitor",
-    ContractValidationResult,
-)
-BASELINE_CONTRACT_VALIDATION = AnnotationKey(
-    "oracle.baseline_contract_validation",
-    "oracle",
-    ContractValidationResult,
 )

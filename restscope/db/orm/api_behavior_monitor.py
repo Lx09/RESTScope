@@ -14,14 +14,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    CheckConstraint,
+    JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
-    JSON,
     LargeBinary,
     String,
     Text,
@@ -41,8 +41,7 @@ class OpenAPICurrentORM(CreatedAtMixin, UpdatedAtMixin, Base):
     )
 
     singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    baseline_document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
-    current_document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class OpenAPIChangeEventORM(CreatedAtMixin, Base):

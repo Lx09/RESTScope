@@ -8,11 +8,11 @@ its warnings accompany the real HTTP result and never replace it.
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import base64
-import json
 from typing import Literal, Protocol
 
 from restscope.data_types import JSONObject, JSONValue
@@ -33,12 +33,7 @@ class TargetResponseOperationContext:
     batch_id: str | None = None
     batch_case_index: int | None = None
     input_validity: Literal["valid", "invalid"] | None = None
-    validity_provenance: Literal[
-        "positive_generator",
-        "negative_generator",
-        "ignored_constraint",
-    ] | None = None
-    replay_directive: "TargetReplayDirective | None" = None
+    replay_directive: TargetReplayDirective | None = None
 
 
 @dataclass(slots=True, frozen=True)

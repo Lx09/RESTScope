@@ -4,17 +4,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-import json
 from threading import RLock
 from typing import Literal
 
-from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
 from restscope.openapi_parser.ir import MediaTypeIR, ResponseIR, SchemaIR
+from restscope.target_api.media_type import normalize_media_type
 
 from .catalog import APIBehaviorCatalog, OpenAPIChangeEventWrite
-from .contract_validation import ResponseEvidence
-
+from .response_evidence import ResponseEvidence
 
 ContractCheckStatus = Literal[
     "matched",
@@ -67,14 +65,12 @@ class ResponseContractTracker:
         *,
         ir: OpenAPISpecIR,
         operation_key: str,
-        status_code: int,
-        media_type: str | None,
-        body: bytes,
-        body_truncated: bool = False,
-        evidence: ResponseEvidence | None = None,
+        evidence: ResponseEvidence,
     ) -> ContractCheckResult:
-        """Compare one target response with the current contract and atomically record a real Schema change."""
-        normalized_media = normalize_media_type(media_type)
+        """Compare decoded evidence with current Contract and record a real change."""
+
+        status_code = evidence.status_code
+        normalized_media = normalize_media_type(evidence.media_type)
         key = ResponseContractKey(
             operation_key=operation_key,
             status_code=status_code,
@@ -99,15 +95,7 @@ class ResponseContractTracker:
                 status_code=status_code,
             )
             self._states[key] = "checking"
-            observed_schema, body_kind = (
-                _observed_schema_from_evidence(evidence)
-                if evidence is not None
-                else _observed_body_schema(
-                    media_type=normalized_media,
-                    body=body,
-                    body_truncated=body_truncated,
-                )
-            )
+            observed_schema, body_kind = _observed_schema_from_evidence(evidence)
             if body_kind == "pending":
                 self._states[key] = "pending"
                 return ContractCheckResult(key=key, status="pending_retry")
@@ -174,27 +162,6 @@ def _document_response(
     operation = path_item.get(operation_method.lower(), {})
     response = operation.get("responses", {}).get(str(status_code))
     return deepcopy(response) if isinstance(response, dict) else None
-
-
-def _observed_body_schema(
-    *,
-    media_type: str | None,
-    body: bytes,
-    body_truncated: bool,
-) -> tuple[SchemaIR | None, Literal["json", "text", "empty", "binary", "pending"]]:
-    if not body:
-        return None, "empty"
-    if is_json_media_type(media_type):
-        if body_truncated:
-            return None, "pending"
-        try:
-            value = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return None, "pending"
-        return _infer_schema(value), "json"
-    if _is_text_media_type(media_type):
-        return _new_schema("string"), "text"
-    return None, "binary"
 
 
 def _observed_schema_from_evidence(
@@ -413,7 +380,3 @@ def _new_schema(schema_type: str | None) -> SchemaIR:
         source_pointer=None,
         raw={},
     )
-
-
-def _is_text_media_type(media_type: str | None) -> bool:
-    return bool(media_type and media_type.startswith("text/"))

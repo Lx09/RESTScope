@@ -1,8 +1,11 @@
-"""Production registration contracts for the three Bug Oracle System Agents."""
+"""Production Profile registration after the deterministic Oracle simplification."""
 
 
-def test_fast_runtime_registers_three_capability_free_oracle_profiles(tmp_path, monkeypatch) -> None:
-    """Each category has one no-Tool Profile and strict confirmation result contract."""
+def test_fast_runtime_registers_only_the_resource_monitor_system_agent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Bug Oracle status checks require no model Profile or result contract."""
 
     from restscope.app.profiles import _build_agent_runtime_definition
     from restscope.config import RESTScopeConfig
@@ -27,23 +30,9 @@ def test_fast_runtime_registers_three_capability_free_oracle_profiles(tmp_path, 
     )
 
     assert definition is not None
-    names = {
-        "valid-input-server-error-oracle",
-        "invalid-input-success-oracle",
-        "response-schema-mismatch-oracle",
-    }
-    profiles = {profile.name: profile for profile in definition.profiles}
-    assert names <= set(profiles)
-    for name in names:
-        profile = profiles[name]
-        assert profile.model_config_name == "fast"
-        assert profile.tool_names == ()
-        assert profile.skill_names == ()
-        assert profile.context_sources == ()
-        assert profile.subagent_profile_names == ()
-    definitions = {item.profile_name: item for item in definition.system_agents}
-    assert names <= set(definitions)
-    assert all(
-        definitions[name].output_schema_name == "OracleConfirmationDecision"
-        for name in names
-    )
+    assert [profile.name for profile in definition.profiles] == [
+        "resource-identifier-selector"
+    ]
+    assert [item.profile_name for item in definition.system_agents] == [
+        "resource-identifier-selector"
+    ]

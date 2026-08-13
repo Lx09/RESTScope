@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from .catalog import OracleAssessment, ResourceDerivationResult
 from .contract_monitor import ContractCheckResult
-from .contract_validation import ContractValidationResult
 from .oracle import OraclePrimaryDecision
 
 
@@ -33,7 +32,5 @@ class APIBehaviorMonitorResult:
     observation_id: str | None = None
     resources: ResourceDerivationResult | None = None
     warnings: tuple[APIBehaviorWarning, ...] = ()
-    current_validation: ContractValidationResult | None = None
-    baseline_validation: ContractValidationResult | None = None
     oracle_primary: OraclePrimaryDecision | None = None
     oracle_assessment: OracleAssessment | None = None

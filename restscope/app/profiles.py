@@ -11,26 +11,16 @@ from __future__ import annotations
 from restscope.agent import AgentProfile, SystemAgentTask
 from restscope.api_behavior_monitor.resource_identity import (
     IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
-    IdentifierSelectionDecision,
     RESOURCE_IDENTIFIER_PROFILE_NAME,
+    IdentifierSelectionDecision,
     identifier_system_output_schema,
     validate_identifier_system_output,
-)
-from restscope.api_behavior_monitor.oracle import (
-    INVALID_INPUT_ACCEPTED_PROFILE,
-    ORACLE_SYSTEM_AGENT_INSTRUCTIONS,
-    RESPONSE_SCHEMA_MISMATCH_PROFILE,
-    VALID_INPUT_SERVER_ERROR_PROFILE,
-    OracleConfirmationDecision,
-    oracle_output_schema,
-    validate_oracle_output,
 )
 from restscope.config import RESTScopeConfig
 from restscope.harness import AgentRuntimeDefinition, SystemAgentDefinition
 from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.observability import TracingRuntime
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
-
 
 _PATCH_PROFILE_NAME = "parameter-patch"
 _MAIN_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
@@ -159,28 +149,6 @@ def _build_agent_runtime_definition(
                 output_schema_name="IdentifierSelectionDecision",
             )
         )
-        for profile_name in (
-            VALID_INPUT_SERVER_ERROR_PROFILE,
-            INVALID_INPUT_ACCEPTED_PROFILE,
-            RESPONSE_SCHEMA_MISMATCH_PROFILE,
-        ):
-            profiles.append(
-                AgentProfile(
-                    name=profile_name,
-                    instructions=ORACLE_SYSTEM_AGENT_INSTRUCTIONS,
-                    model_config_name="fast",
-                )
-            )
-            system_agents.append(
-                SystemAgentDefinition(
-                    profile_name=profile_name,
-                    adapt_task=SystemAgentTask.model_validate,
-                    output_model=OracleConfirmationDecision,
-                    build_output_schema=oracle_output_schema,
-                    validate_output=validate_oracle_output,
-                    output_schema_name="OracleConfirmationDecision",
-                )
-            )
     if not profiles:
         return None
     return AgentRuntimeDefinition(

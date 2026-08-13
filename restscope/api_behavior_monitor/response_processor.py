@@ -17,7 +17,8 @@ from .coordinator import APIBehaviorMonitorCoordinator, APIBehaviorMonitorError
 
 
 class APIBehaviorResponseProcessor:
-    """Adapt completed target responses to the three API Behavior Monitor subjects without owning their state."""
+    """Adapt target results to the ordered API Behavior Monitor pipeline."""
+
     def __init__(self, coordinator: APIBehaviorMonitorCoordinator) -> None:
         """Store the workflow coordinator that receives each target response."""
         self.coordinator = coordinator
@@ -40,7 +41,7 @@ class APIBehaviorResponseProcessor:
                     ),
                 ),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return TargetResponseProcessorResult(
                 response_validation="partial",
                 warnings=(
@@ -95,7 +96,7 @@ class APIBehaviorResponseProcessor:
                     TargetResponseProcessorWarning(code=exc.code, message=str(exc)),
                 ),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return TargetResponseProcessorResult(
                 response_validation="partial",
                 warnings=(

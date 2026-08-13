@@ -143,7 +143,10 @@ explicit project decision:
   complete headers and body bytes. It may also persist Batch identities and
   bounded summaries, immutable abstract Generator/Constraint snapshots used by
   Batches, the complete current normalized OpenAPI, and append-only response
-  change events. Only the latest 100 complete valid 2xx JSON Observations per
+  change events. It may persist one immutable final Bug Oracle Assessment for a
+  Primary HTTP Observation, linked to at most one same-request Replay. The
+  Assessment contains one deterministic unexpected-response-status Check and no
+  Agent reasoning. Only the latest 100 complete valid 2xx JSON Observations per
   operation are eligible inputs to resource extraction, response-field
   discovery, and value reuse. The response check registry and resource
   extraction decisions remain App-lifetime only.

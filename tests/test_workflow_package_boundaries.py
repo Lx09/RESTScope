@@ -6,10 +6,9 @@ import ast
 import importlib.util
 import inspect
 import os
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "restscope"
 REPOSITORY_ROOT = SOURCE_ROOT.parent
@@ -127,6 +126,9 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
     assert not (SOURCE_ROOT / "harness" / "testing").exists()
     assert not (SOURCE_ROOT / "skills" / "registry.py").exists()
     assert not (SOURCE_ROOT / "api_behavior_monitor" / "prompts.py").exists()
+    assert not (
+        SOURCE_ROOT / "api_behavior_monitor" / "contract_validation.py"
+    ).exists()
     assert not (SOURCE_ROOT / "tools" / "openapi" / "lookup.py").exists()
     assert not (SOURCE_ROOT / "tools" / "test_case" / "runtime.py").exists()
     assert not (SOURCE_ROOT / "tools" / "test_case" / "specs.py").exists()
@@ -140,6 +142,7 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
         SOURCE_ROOT / "tools" / "openapi" / "observed_queries.py",
         SOURCE_ROOT / "tools" / "test_case" / "run_batch.py",
         SOURCE_ROOT / "api_behavior_monitor" / "resource_identity.py",
+        SOURCE_ROOT / "api_behavior_monitor" / "response_evidence.py",
     ):
         assert expected.is_file(), f"missing focused owner: {expected}"
 
@@ -351,7 +354,7 @@ def test_core_runtime_language_has_explicit_global_packages() -> None:
 def test_target_api_is_the_only_target_request_foundation() -> None:
     """Readers find one top-level target Client and no retired transport path."""
 
-    import restscope.target_api as target_api
+    from restscope import target_api
 
     assert importlib.util.find_spec("restscope.target_http") is None
     assert (SOURCE_ROOT / "target_api" / "client.py").is_file()
@@ -483,8 +486,7 @@ def test_current_sources_do_not_restore_retired_agent_names_or_paths() -> None:
 def test_main_agent_replacement_removes_run_harness_and_graph_dependencies() -> None:
     """The blocking Main loop has no legacy FIFO module or graph framework."""
     import restscope
-    import restscope.harness as harness
-    from restscope import RESTScopeApp
+    from restscope import RESTScopeApp, harness
 
     project = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     production = "\n".join(
@@ -554,7 +556,7 @@ def test_api_behavior_monitor_owns_its_complete_persistence_navigation() -> None
 def test_request_generation_facade_exposes_only_integration_entries() -> None:
     """The package doorway points readers to four cross-Module entry points."""
 
-    import restscope.request_generation as request_generation
+    from restscope import request_generation
 
     assert set(request_generation.__all__) == {
         "BehaviorMonitorReferences",
@@ -588,7 +590,7 @@ def test_top_level_facade_hides_workflow_implementation_types() -> None:
 def test_new_subject_facades_expose_only_the_approved_shared_interfaces() -> None:
     """Scenario: broad root modules are replaced by precise package doorways."""
     import restscope.operation_references as references
-    import restscope.tools as tools
+    from restscope import tools
 
     assert set(references.__all__) == {
         "RequestInputLocation",

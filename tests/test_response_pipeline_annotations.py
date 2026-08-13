@@ -6,7 +6,10 @@ def test_annotation_owner_writes_once_and_later_modules_read_typed_value() -> No
 
     import pytest
 
-    from restscope.api_behavior_monitor.pipeline import AnnotationKey, PipelineAnnotations
+    from restscope.api_behavior_monitor.pipeline import (
+        AnnotationKey,
+        PipelineAnnotations,
+    )
 
     key = AnnotationKey("observation.id", "observation", str)
     annotations = PipelineAnnotations()

@@ -8,6 +8,7 @@ bodies, classifying resources, or choosing Generator sources.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Self
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -21,13 +22,13 @@ from restscope.api_behavior_monitor.catalog import (
     BatchWrite,
     ObservationRecord,
     ObservationWrite,
-    OracleAssessment,
-    OracleAssessmentRecord,
     ObservedResponseCoordinate,
     OpenAPIChangeEventRecord,
     OpenAPIChangeEventWrite,
     OperationDefinition,
     OperationInputSource,
+    OracleAssessment,
+    OracleAssessmentRecord,
     ResourceDefinitionRecord,
     ResourceDerivation,
     ResourceDerivationResult,
@@ -40,12 +41,12 @@ from ..orm import (
     AbstractTestCaseORM,
     BatchORM,
     ObservationORM,
-    OracleAssessmentORM,
     OpenAPIChangeEventORM,
     OpenAPICurrentORM,
     OperationInputSourceORM,
     OperationORM,
     OperationResourceEdgeORM,
+    OracleAssessmentORM,
     ResourceInstanceORM,
     ResourceORM,
 )
@@ -74,8 +75,7 @@ class _SqlAlchemyAPIBehaviorRepository:
         self.session.add(
             OpenAPICurrentORM(
                 singleton_id=1,
-                baseline_document=deepcopy(document),
-                current_document=deepcopy(document),
+                document=deepcopy(document),
             )
         )
         try:
@@ -91,13 +91,7 @@ class _SqlAlchemyAPIBehaviorRepository:
         """Return the current normalized OpenAPI document detached from ORM state."""
 
         row = self.session.get(OpenAPICurrentORM, 1)
-        return deepcopy(row.current_document) if row is not None else None
-
-    def get_baseline_openapi(self) -> dict[str, object] | None:
-        """Return the immutable initial document detached from ORM state."""
-
-        row = self.session.get(OpenAPICurrentORM, 1)
-        return deepcopy(row.baseline_document) if row is not None else None
+        return deepcopy(row.document) if row is not None else None
 
     def record_openapi_change(
         self,
@@ -110,7 +104,7 @@ class _SqlAlchemyAPIBehaviorRepository:
         current = self.session.get(OpenAPICurrentORM, 1)
         if current is None:
             raise RuntimeError("The API Behavior Catalog has not been initialized")
-        current.current_document = deepcopy(document)
+        current.document = deepcopy(document)
         row = OpenAPIChangeEventORM(
             id=f"openapi_change_{uuid4().hex}",
             operation_id=event.operation_key,
@@ -490,7 +484,7 @@ class _SqlAlchemyAPIBehaviorRepository:
         if not include_deleted:
             query = query.where(
                 ResourceInstanceORM.current_state_json["_deleted"].as_boolean()
-                == False  # noqa: E712 - SQLAlchemy overloads comparison.
+                == False
             )
         count_query = select(func.count()).select_from(query.subquery())
         total = self.session.scalar(count_query) or 0
@@ -738,7 +732,7 @@ def _abstract_test_case(row: AbstractTestCaseORM) -> AbstractTestCaseRecord:
 class SqlAlchemyAPIBehaviorUnitOfWork(_SqlAlchemyUnitOfWork):
     """Open one transaction containing the complete API Behavior repository."""
 
-    def __enter__(self) -> "SqlAlchemyAPIBehaviorUnitOfWork":
+    def __enter__(self) -> Self:
         """Open the session and expose its repository."""
 
         self.api_behavior = _SqlAlchemyAPIBehaviorRepository(self._open_session())

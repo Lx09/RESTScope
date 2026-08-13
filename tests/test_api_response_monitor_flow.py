@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 def _runtime():
     """Build real Monitor and OpenAPI persistence over one in-memory database."""
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
@@ -238,33 +238,23 @@ def test_transport_failure_is_saved_without_an_http_status() -> None:
     assert saved.transport_code == "request_timeout"
 
 
-def test_confirmed_schema_bug_persists_only_after_linked_replay_reproduces() -> None:
-    """The full response processor records Primary, Replay, and final reproduced Check."""
+def test_invalid_server_error_replays_once_and_persists_exact_reason_set() -> None:
+    """The full pipeline monitors Primary and Replay before storing one status Bug."""
 
     import httpx
 
-    from restscope.agent import SystemAgentResult
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.api_behavior_monitor.oracle import BugOracle
-    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
     from restscope.openapi_parser import build_openapi_document
-    from restscope.target_api import TargetAPIClient, TargetResponseOperationContext, prepare_target_request
-
-    class ConfirmingRunner:
-        """Confirm the one response Schema candidate without external model I/O."""
-
-        def __init__(self):
-            self.calls = []
-
-        def run_system_agent(self, profile_name, task):
-            self.calls.append((profile_name, task))
-            return SystemAgentResult(
-                session_id="schema-session",
-                profile_name=profile_name,
-                status="completed",
-                output={"confirmed_bug": True, "reason": "id has the wrong type"},
-            )
+    from restscope.target_api import (
+        TargetAPIClient,
+        TargetResponseOperationContext,
+        prepare_target_request,
+    )
 
     _old, catalog = _runtime()
     ir = _ir()
@@ -272,20 +262,19 @@ def test_confirmed_schema_bug_persists_only_after_linked_replay_reproduces() -> 
         document=build_openapi_document(ir, list(ir.operations)),
         operations=[],
     )
-    runner = ConfirmingRunner()
     coordinator = APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(catalog),
         catalog=catalog,
-        bug_oracle=BugOracle(catalog=catalog, system_agent_runner=runner),
+        bug_oracle=BugOracle(catalog=catalog),
     )
     sent = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return httpx.Response(
-            200,
+            500,
             headers={"content-type": "application/json"},
-            content=b'{"id":"wrong"}',
+            content=b'{"error":"failure"}',
             request=request,
         )
 
@@ -296,7 +285,7 @@ def test_confirmed_schema_bug_persists_only_after_linked_replay_reproduces() -> 
         ),
         response_processor=APIBehaviorResponseProcessor(coordinator),
     )
-    client.send(
+    response = client.send(
         prepare_target_request(
             method="GET",
             base_url="https://example.test",
@@ -304,24 +293,198 @@ def test_confirmed_schema_bug_persists_only_after_linked_replay_reproduces() -> 
         ),
         success_body_limit=100,
         failure_body_limit=100,
-        response_context=TargetResponseOperationContext(ir=ir),
+        response_context=TargetResponseOperationContext(
+            ir=ir,
+            input_validity="invalid",
+        ),
     )
 
-    observations = catalog.list_observations(operation_id="GET /items")
     assert len(sent) == 2
-    assert len(runner.calls) == 1
-    assert len(observations) == 2
-    replay = observations[0]
-    primary = observations[1]
-    assert replay.replay_of_observation_id == primary.observation_id
-    assert replay.batch_id is None
+    assert (
+        sent[0].method,
+        sent[0].url,
+        sent[0].headers,
+        sent[0].content,
+    ) == (
+        sent[1].method,
+        sent[1].url,
+        sent[1].headers,
+        sent[1].content,
+    )
+    assert response.processor_result is not None
+    assert response.processor_result.details is not None
+    primary_id = response.processor_result.details["observation_id"]
+    assert isinstance(primary_id, str)
+    primary = catalog.get_observation(primary_id)
+    assert primary is not None
     assessment = catalog.get_oracle_assessment(primary.observation_id)
     assert assessment is not None
+    assert assessment.replay_observation_id is not None
+    replay = catalog.get_observation(assessment.replay_observation_id)
+    assert replay is not None
+    assert replay.replay_of_observation_id == primary.observation_id
+    assert replay.batch_id is None
     assert assessment.replay_observation_id == replay.observation_id
     assert assessment.is_bug is True
-    assert [check.status for check in assessment.assessment.checks] == [
-        "not_applicable",
-        "not_applicable",
-        "reproduced",
-    ]
+    check = assessment.assessment.checks[0]
+    assert check.name == "unexpected_response_status"
+    assert check.status == "reproduced"
+    assert check.primary_reasons == (
+        "server_error",
+        "invalid_input_unexpected_status",
+    )
+    assert check.replay_reasons == check.primary_reasons
+    assert len(catalog.list_openapi_changes("GET /items")) == 1
     assert catalog.get_oracle_assessment(replay.observation_id) is None
+
+
+def test_contract_revision_does_not_trigger_oracle_replay() -> None:
+    """A changed 2xx response Schema remains Monitor evidence, not an Oracle Bug."""
+
+    import httpx
+
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.oracle import BugOracle
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
+    from restscope.openapi_parser import build_openapi_document
+    from restscope.target_api import (
+        TargetAPIClient,
+        TargetResponseOperationContext,
+        prepare_target_request,
+    )
+
+    _old, catalog = _runtime()
+    ir = _ir()
+    catalog.initialize_api(
+        document=build_openapi_document(ir, list(ir.operations)),
+        operations=[],
+    )
+    coordinator = APIBehaviorMonitorCoordinator(
+        contract_tracker=ResponseContractTracker(catalog),
+        catalog=catalog,
+        bug_oracle=BugOracle(catalog=catalog),
+    )
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """Return a widened successful body that changes the current Contract."""
+
+        sent.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=b'{"id":"wrong","new_field":true}',
+            request=request,
+        )
+
+    response = TargetAPIClient(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+        response_processor=APIBehaviorResponseProcessor(coordinator),
+    ).send(
+        prepare_target_request(
+            method="GET",
+            base_url="https://example.test",
+            path="/items",
+        ),
+        success_body_limit=100,
+        response_context=TargetResponseOperationContext(
+            ir=ir,
+            input_validity="valid",
+        ),
+    )
+
+    assert len(sent) == 1
+    assert len(catalog.list_openapi_changes("GET /items")) == 1
+    assert response.processor_result is not None
+    assert response.processor_result.details is not None
+    assert response.processor_result.details["bug_found"] is False
+    assert response.processor_result.details["bug_categories"] == []
+
+
+def test_invalid_success_replay_runs_resource_monitor_twice() -> None:
+    """Both eligible 2xx passes reach Resource Monitor before Oracle finalizes."""
+
+    import httpx
+
+    from restscope.api_behavior_monitor.catalog import ResourceDerivationResult
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.oracle import BugOracle
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
+    from restscope.openapi_parser import build_openapi_document
+    from restscope.target_api import (
+        TargetAPIClient,
+        TargetResponseOperationContext,
+        prepare_target_request,
+    )
+
+    class RecordingResourceTracker:
+        """Record the public Resource Monitor inputs without model I/O."""
+
+        def __init__(self) -> None:
+            self.bodies: list[object] = []
+
+        def observe(self, *, operation, body):
+            """Capture each eligible response and report no derived resources."""
+
+            self.bodies.append(body)
+            return ResourceDerivationResult()
+
+    _old, catalog = _runtime()
+    ir = _ir()
+    catalog.initialize_api(
+        document=build_openapi_document(ir, list(ir.operations)),
+        operations=[],
+    )
+    resources = RecordingResourceTracker()
+    coordinator = APIBehaviorMonitorCoordinator(
+        contract_tracker=ResponseContractTracker(catalog),
+        catalog=catalog,
+        resource_tracker=resources,
+        bug_oracle=BugOracle(catalog=catalog),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """Return the same invalidly accepted response on Primary and Replay."""
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=b'{"id":7}',
+            request=request,
+        )
+
+    response = TargetAPIClient(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+        response_processor=APIBehaviorResponseProcessor(coordinator),
+    ).send(
+        prepare_target_request(
+            method="GET",
+            base_url="https://example.test",
+            path="/items",
+        ),
+        success_body_limit=100,
+        response_context=TargetResponseOperationContext(
+            ir=ir,
+            input_validity="invalid",
+        ),
+    )
+
+    assert resources.bodies == [{"id": 7}, {"id": 7}]
+    assert response.processor_result is not None
+    assert response.processor_result.details is not None
+    assert response.processor_result.details["bug_found"] is True
+    assert response.processor_result.details["bug_categories"] == [
+        "unexpected_response_status"
+    ]

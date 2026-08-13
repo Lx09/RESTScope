@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import replace
-import json
 from pathlib import Path
 
 import pytest
@@ -33,13 +33,13 @@ def test_app_initialization_persists_the_normalized_openapi_document(
 
     from restscope import RESTScopeApp
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.config import DBConfig, RESTScopeConfig
     from restscope.db import (
         SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
     from restscope.openapi_parser import OpenAPIParser
-    from restscope.config import DBConfig, RESTScopeConfig
 
     config = replace(
         RESTScopeConfig.from_environment(),
@@ -71,6 +71,9 @@ def test_contract_tracker_persists_one_filterable_change_event(tmp_path: Path) -
     """The Contract Monitor owns durable change publication and deduplication."""
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_evidence import (
+        decode_response_evidence,
+    )
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
@@ -92,16 +95,20 @@ def test_contract_tracker_persists_one_filterable_change_event(tmp_path: Path) -
     changed = tracker.observe(
         ir=ir,
         operation_key="POST /items",
-        status_code=201,
-        media_type="application/json",
-        body=b'{"id": 7}',
+        evidence=decode_response_evidence(
+            status_code=201,
+            headers={"content-type": "application/json"},
+            body=b'{"id": 7}',
+        ),
     )
     repeated = tracker.observe(
         ir=ir,
         operation_key="POST /items",
-        status_code=201,
-        media_type="application/json",
-        body=b'{"id": 7}',
+        evidence=decode_response_evidence(
+            status_code=201,
+            headers={"content-type": "application/json"},
+            body=b'{"id": 7}',
+        ),
     )
 
     events = catalog.list_openapi_changes("POST /items")
@@ -172,6 +179,9 @@ def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
     """A failed durable update leaves the in-memory Response exactly retryable."""
 
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_evidence import (
+        decode_response_evidence,
+    )
     from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
     class FailingCatalog:
@@ -186,9 +196,11 @@ def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
         tracker.observe(
             ir=ir,
             operation_key="POST /items",
-            status_code=201,
-            media_type="application/json",
-            body=b'{"id": 7}',
+            evidence=decode_response_evidence(
+                status_code=201,
+                headers={"content-type": "application/json"},
+                body=b'{"id": 7}',
+            ),
         )
 
     assert build_openapi_document(ir, list(ir.operations)) == before
@@ -196,8 +208,10 @@ def test_tracker_restores_ir_and_retry_state_when_catalog_write_fails() -> None:
     retried = tracker.observe(
         ir=ir,
         operation_key="POST /items",
-        status_code=201,
-        media_type="application/json",
-        body=b'{"id": 7}',
+        evidence=decode_response_evidence(
+            status_code=201,
+            headers={"content-type": "application/json"},
+            body=b'{"id": 7}',
+        ),
     )
     assert retried.status == "updated"

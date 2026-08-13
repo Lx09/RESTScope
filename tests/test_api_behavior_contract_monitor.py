@@ -5,6 +5,20 @@ from __future__ import annotations
 from restscope.openapi_parser import OpenAPIParser
 
 
+def _evidence(status_code: int, media_type: str, body: bytes):
+    """Decode one complete response exactly as the production pipeline does."""
+
+    from restscope.api_behavior_monitor.response_evidence import (
+        decode_response_evidence,
+    )
+
+    return decode_response_evidence(
+        status_code=status_code,
+        headers={"content-type": media_type},
+        body=body,
+    )
+
+
 def _ir_with_wildcard_response():
     return OpenAPIParser.parse(
         {
@@ -52,9 +66,11 @@ def test_first_exact_status_materializes_from_wildcard_and_widens_ir() -> None:
     result = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=201,
-        media_type="Application/JSON; charset=utf-8",
-        body=b'{"id": "generated", "name": "first"}',
+        evidence=_evidence(
+            201,
+            "Application/JSON; charset=utf-8",
+            b'{"id": "generated", "name": "first"}',
+        ),
     )
 
     assert result.status == "updated"
@@ -83,16 +99,12 @@ def test_checked_response_key_is_not_merged_twice() -> None:
     first = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=200,
-        media_type="application/json",
-        body=b'{"id": 1}',
+        evidence=_evidence(200, "application/json", b'{"id": 1}'),
     )
     second = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=200,
-        media_type="application/json",
-        body=b'{"id": 2, "late": true}',
+        evidence=_evidence(200, "application/json", b'{"id": 2, "late": true}'),
     )
 
     assert first.status in {"matched", "updated"}
@@ -103,8 +115,8 @@ def test_checked_response_key_is_not_merged_twice() -> None:
     assert "late" not in schema.properties
 
 
-def test_invalid_or_truncated_json_remains_pending_and_retries() -> None:
-    """Scenario: verify that invalid or truncated json remains pending and retries."""
+def test_invalid_json_remains_pending_and_retries() -> None:
+    """Invalid complete JSON remains retryable until later valid evidence arrives."""
     from restscope.api_behavior_monitor.contract_monitor import (
         ResponseContractTracker,
     )
@@ -115,28 +127,21 @@ def test_invalid_or_truncated_json_remains_pending_and_retries() -> None:
     invalid = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=202,
-        media_type="application/json",
-        body=b"{",
+        evidence=_evidence(202, "application/json", b"{"),
     )
-    truncated = tracker.observe(
+    incomplete = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=202,
-        media_type="application/json",
-        body=b'{"id":',
-        body_truncated=True,
+        evidence=_evidence(202, "application/json", b'{"id":'),
     )
     valid = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=202,
-        media_type="application/json",
-        body=b'{"id": 7, "accepted": true}',
+        evidence=_evidence(202, "application/json", b'{"id": 7, "accepted": true}'),
     )
 
     assert invalid.status == "pending_retry"
-    assert truncated.status == "pending_retry"
+    assert incomplete.status == "pending_retry"
     assert valid.status == "updated"
     exact = ir.operations["GET /items"].responses.by_status["202"]
     schema = exact.contents["application/json"].schema
@@ -156,23 +161,17 @@ def test_text_empty_and_binary_responses_create_conservative_exact_contracts() -
     text = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=400,
-        media_type="text/plain; charset=utf-8",
-        body=b"bad request",
+        evidence=_evidence(400, "text/plain; charset=utf-8", b"bad request"),
     )
     empty = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=204,
-        media_type="application/json",
-        body=b"",
+        evidence=_evidence(204, "application/json", b""),
     )
     binary = tracker.observe(
         ir=ir,
         operation_key="GET /items",
-        status_code=503,
-        media_type="application/octet-stream",
-        body=b"\x00\x01",
+        evidence=_evidence(503, "application/octet-stream", b"\x00\x01"),
     )
 
     assert text.status == "updated"

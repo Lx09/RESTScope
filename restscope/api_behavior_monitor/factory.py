@@ -6,11 +6,11 @@ from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
 from restscope.config import RESTScopeConfig
 from restscope.observability import TracingRuntime
 
-from .coordinator import APIBehaviorMonitorCoordinator
 from .contract_monitor import ResponseContractTracker
+from .coordinator import APIBehaviorMonitorCoordinator
+from .oracle import BugOracle
 from .resource_identity import SystemAgentRunner
 from .resource_monitor import ResourceResponseTracker
-from .oracle import BugOracle
 
 
 def build_api_behavior_monitor_coordinator(
@@ -43,9 +43,6 @@ def build_api_behavior_monitor_coordinator(
             system_agent_runner=system_agent_runner,
             tracing_runtime=runtime,
         ),
-        bug_oracle=BugOracle(
-            catalog=catalog,
-            system_agent_runner=system_agent_runner,
-        ),
+        bug_oracle=BugOracle(catalog=catalog),
         tracing_runtime=runtime,
     )

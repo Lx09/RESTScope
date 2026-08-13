@@ -9,20 +9,20 @@ statements remain in :mod:`restscope.db`.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
-import json
-import re
 from types import TracebackType
-from typing import Annotated, Literal, Protocol, TypeAlias, Union
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from restscope.data_types import JSONObject
-from restscope.target_api.media_type import normalize_media_type
 from restscope.operation_references.response import ResponseSourceCoordinate
+from restscope.target_api.media_type import normalize_media_type
 
 
 class _CatalogModel(BaseModel):
@@ -65,7 +65,7 @@ class OperationDefinition(_CatalogModel):
         return value.strip().upper()
 
     @model_validator(mode="after")
-    def require_normalized_identity(self) -> "OperationDefinition":
+    def require_normalized_identity(self) -> OperationDefinition:
         """Prevent a row identity from disagreeing with its method and path."""
 
         if self.operation_id != f"{self.method} {self.path}":
@@ -124,7 +124,7 @@ class ObservationWrite(_CatalogModel):
         return normalized
 
     @model_validator(mode="after")
-    def require_consistent_outcome(self) -> "ObservationWrite":
+    def require_consistent_outcome(self) -> ObservationWrite:
         """Reject mixed HTTP/transport fields and partial Batch identities."""
 
         if (self.batch_id is None) != (self.batch_case_index is None):
@@ -179,30 +179,27 @@ class ObservationRecord(ObservationWrite):
         return self.response_body.decode("utf-8")
 
 
-OracleCheckName = Literal[
-    "valid_input_server_error",
-    "invalid_input_accepted",
-    "response_schema_mismatch",
-]
+OracleCheckName = Literal["unexpected_response_status"]
+OracleReason = Literal["server_error", "invalid_input_unexpected_status"]
 
 
 class _OracleCheckBase(_CatalogModel):
-    """Carry the category shared by every strict Oracle Check state."""
+    """Carry the one status Check and its Primary/Replay trigger evidence."""
 
     name: OracleCheckName
+    primary_reasons: tuple[OracleReason, ...] = Field(default=(), max_length=2)
+    replay_reasons: tuple[OracleReason, ...] = Field(default=(), max_length=2)
 
+    @model_validator(mode="after")
+    def require_canonical_reason_sets(self) -> _OracleCheckBase:
+        """Reject duplicate or reordered reasons so Replay equality is unambiguous."""
 
-class OracleCheckNotApplicable(_OracleCheckBase):
-    """Record that the request lacks the input meaning needed by this rule."""
-
-    status: Literal["not_applicable"]
-
-
-class OracleCheckNotEvaluated(_OracleCheckBase):
-    """Record an internal deterministic evaluation failure."""
-
-    status: Literal["not_evaluated"]
-    error: str = Field(min_length=1, max_length=500)
+        expected_order = ("server_error", "invalid_input_unexpected_status")
+        for reasons in (self.primary_reasons, self.replay_reasons):
+            canonical = tuple(reason for reason in expected_order if reason in reasons)
+            if reasons != canonical:
+                raise ValueError("Oracle reasons must be unique and canonically ordered")
+        return self
 
 
 class OracleCheckNoCandidate(_OracleCheckBase):
@@ -211,58 +208,27 @@ class OracleCheckNoCandidate(_OracleCheckBase):
     status: Literal["no_candidate"]
 
 
-class OracleCheckDismissed(_OracleCheckBase):
-    """Record a candidate rejected by its isolated System Agent."""
-
-    status: Literal["dismissed"]
-    agent_session_id: str = Field(min_length=1, max_length=160)
-    reason: str = Field(min_length=1, max_length=2000)
-
-
-class OracleCheckConfirmationFailed(_OracleCheckBase):
-    """Record a candidate whose System Agent ended without a decision."""
-
-    status: Literal["confirmation_failed"]
-    error: str = Field(min_length=1, max_length=500)
-
-
-class _ConfirmedOracleCheck(_OracleCheckBase):
-    """Carry the bounded confirmation evidence shared by Replay outcomes."""
-
-    agent_session_id: str = Field(min_length=1, max_length=160)
-    reason: str = Field(min_length=1, max_length=2000)
-
-
-class OracleCheckNotReproduced(_ConfirmedOracleCheck):
-    """Record a confirmed candidate absent from the Replay response."""
+class OracleCheckNotReproduced(_OracleCheckBase):
+    """Record that Replay produced a different deterministic reason set."""
 
     status: Literal["not_reproduced"]
 
 
-class OracleCheckReplayFailed(_ConfirmedOracleCheck):
-    """Record a confirmed candidate whose Replay produced no HTTP evidence."""
+class OracleCheckReplayFailed(_OracleCheckBase):
+    """Record a candidate whose Replay produced no HTTP response."""
 
     status: Literal["replay_failed"]
     error: str = Field(min_length=1, max_length=500)
 
 
-class OracleCheckReproduced(_ConfirmedOracleCheck):
-    """Record a confirmed category that the one Replay reproduced."""
+class OracleCheckReproduced(_OracleCheckBase):
+    """Record that Replay produced the exact Primary reason set."""
 
     status: Literal["reproduced"]
 
 
 OracleCheck = Annotated[
-    Union[
-        OracleCheckNotApplicable,
-        OracleCheckNotEvaluated,
-        OracleCheckNoCandidate,
-        OracleCheckDismissed,
-        OracleCheckConfirmationFailed,
-        OracleCheckNotReproduced,
-        OracleCheckReplayFailed,
-        OracleCheckReproduced,
-    ],
+    OracleCheckNoCandidate | OracleCheckNotReproduced | OracleCheckReplayFailed | OracleCheckReproduced,
     Field(discriminator="status"),
 ]
 
@@ -270,21 +236,33 @@ OracleCheck = Annotated[
 class OracleAssessment(_CatalogModel):
     """Describe the immutable final verdict for one Primary HTTP Observation."""
 
-    schema_version: Literal[1] = 1
-    checks: tuple[OracleCheck, OracleCheck, OracleCheck]
+    schema_version: Literal[2] = 2
+    checks: tuple[OracleCheck]
     errors: tuple[str, ...] = Field(default=(), max_length=20)
 
     @model_validator(mode="after")
-    def require_fixed_check_order(self) -> "OracleAssessment":
+    def require_fixed_check_order(self) -> OracleAssessment:
         """Keep every stored Assessment complete, ordered, and internally derived."""
 
-        expected = (
-            "valid_input_server_error",
-            "invalid_input_accepted",
-            "response_schema_mismatch",
-        )
-        if tuple(check.name for check in self.checks) != expected:
-            raise ValueError("Oracle checks must use the fixed category order")
+        check = self.checks[0]
+        if check.name != "unexpected_response_status":
+            raise ValueError("Oracle Assessment requires its one fixed status Check")
+        if check.status == "no_candidate" and (
+            check.primary_reasons or check.replay_reasons
+        ):
+            raise ValueError("A no-candidate Check cannot contain trigger reasons")
+        if check.status != "no_candidate" and not check.primary_reasons:
+            raise ValueError("A Replay outcome requires Primary trigger reasons")
+        if check.status == "reproduced" and (
+            check.primary_reasons != check.replay_reasons
+        ):
+            raise ValueError("A reproduced Check requires identical reason sets")
+        if check.status == "not_reproduced" and (
+            check.primary_reasons == check.replay_reasons
+        ):
+            raise ValueError("A not-reproduced Check requires different reason sets")
+        if check.status == "replay_failed" and check.replay_reasons:
+            raise ValueError("A failed Replay cannot contain response reasons")
         return self
 
     @property
@@ -369,14 +347,14 @@ class ResourceDerivation(_CatalogModel):
         return normalized
 
     @model_validator(mode="after")
-    def require_complete_instance_identities(self) -> "ResourceDerivation":
+    def require_complete_instance_identities(self) -> ResourceDerivation:
         """Require every candidate object to carry the complete typed identity."""
 
         for instance in self.instances:
             for field_name in self.identity_fields:
                 value = instance.get(field_name)
                 if isinstance(value, bool) or not isinstance(value, (str, int)):
-                    raise ValueError(
+                    raise TypeError(
                         "resource identity values must be strings or integers"
                     )
         return self
@@ -500,8 +478,6 @@ class _APIBehaviorRepository(Protocol):
     ) -> None: ...
 
     def get_current_openapi(self) -> dict[str, object] | None: ...
-
-    def get_baseline_openapi(self) -> dict[str, object] | None: ...
 
     def record_openapi_change(
         self,
@@ -627,7 +603,7 @@ class _APIBehaviorUnitOfWork(Protocol):
 
     api_behavior: _APIBehaviorRepository
 
-    def __enter__(self) -> "_APIBehaviorUnitOfWork": ...
+    def __enter__(self) -> Self: ...
 
     def __exit__(
         self,
@@ -639,7 +615,7 @@ class _APIBehaviorUnitOfWork(Protocol):
     def commit(self) -> None: ...
 
 
-_APIBehaviorUnitOfWorkFactory: TypeAlias = Callable[[], _APIBehaviorUnitOfWork]
+type _APIBehaviorUnitOfWorkFactory = Callable[[], _APIBehaviorUnitOfWork]
 
 
 class APIBehaviorCatalog:
@@ -678,15 +654,6 @@ class APIBehaviorCatalog:
 
         with self._unit_of_work_factory() as uow:
             document = uow.api_behavior.get_current_openapi()
-        if document is None:
-            raise RuntimeError("The API Behavior Catalog has not been initialized")
-        return deepcopy(document)
-
-    def baseline_openapi(self) -> dict[str, object]:
-        """Return an isolated copy of the immutable initial normalized document."""
-
-        with self._unit_of_work_factory() as uow:
-            document = uow.api_behavior.get_baseline_openapi()
         if document is None:
             raise RuntimeError("The API Behavior Catalog has not been initialized")
         return deepcopy(document)
@@ -1042,31 +1009,28 @@ def _require_page(*, offset: int, limit: int) -> None:
 
 
 __all__ = [
-    "BatchRecord",
-    "BatchWrite",
+    "APIBehaviorCatalog",
     "AbstractTestCaseRecord",
     "AbstractTestCaseWrite",
+    "BatchRecord",
+    "BatchWrite",
     "ObservationRecord",
     "ObservationWrite",
-    "OracleAssessment",
-    "OracleAssessmentRecord",
-    "OracleCheck",
-    "OracleCheckConfirmationFailed",
-    "OracleCheckDismissed",
-    "OracleCheckNoCandidate",
-    "OracleCheckNotApplicable",
-    "OracleCheckNotEvaluated",
-    "OracleCheckNotReproduced",
-    "OracleCheckReplayFailed",
-    "OracleCheckReproduced",
     "ObservedResponseCoordinate",
     "OpenAPIChangeEventRecord",
     "OpenAPIChangeEventWrite",
     "OperationDefinition",
     "OperationInputSource",
+    "OracleAssessment",
+    "OracleAssessmentRecord",
+    "OracleCheck",
+    "OracleCheckNoCandidate",
+    "OracleCheckNotReproduced",
+    "OracleCheckReplayFailed",
+    "OracleCheckReproduced",
+    "OracleReason",
     "ResourceDefinitionRecord",
     "ResourceDerivation",
     "ResourceDerivationResult",
     "ResourceInstanceRecord",
-    "APIBehaviorCatalog",
 ]

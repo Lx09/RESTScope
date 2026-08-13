@@ -12,15 +12,13 @@ from __future__ import annotations
 from typing import Literal
 
 from restscope.data_types import JSONValue
-from restscope.target_api.media_type import normalize_media_type
+from restscope.observability import TracingRuntime
 from restscope.openapi_parser import (
     OpenAPIOperationMatchError,
     OpenAPISpecIR,
     match_operation,
-    build_openapi_document,
 )
 from restscope.openapi_parser.ir import OperationIR
-from restscope.observability import TracingRuntime
 from restscope.target_api import (
     TargetResponseObservation,
     TargetResponseOperationContext,
@@ -28,31 +26,21 @@ from restscope.target_api import (
 )
 
 from .catalog import (
+    APIBehaviorCatalog,
     ObservationWrite,
     OperationDefinition,
-    ResourceDerivationResult,
-    APIBehaviorCatalog,
     OracleAssessment,
+    ResourceDerivationResult,
 )
 from .contract_monitor import (
     ContractCheckResult,
     ResponseContractTracker,
 )
-from .contract_validation import (
-    ContractValidator,
-    ResponseEvidence,
-    decode_response_evidence,
-)
 from .oracle import BugOracle, OraclePrimaryDecision
-from .pipeline import (
-    BASELINE_CONTRACT_VALIDATION,
-    CURRENT_CONTRACT_VALIDATION,
-    OBSERVATION_ID,
-    RESPONSE_EVIDENCE,
-    PipelineAnnotations,
-)
-from .results import APIBehaviorMonitorResult, APIBehaviorWarning
+from .pipeline import OBSERVATION_ID, RESPONSE_EVIDENCE, PipelineAnnotations
 from .resource_monitor import ResourceResponseTracker
+from .response_evidence import ResponseEvidence, decode_response_evidence
+from .results import APIBehaviorMonitorResult, APIBehaviorWarning
 
 
 class APIBehaviorMonitorError(RuntimeError):
@@ -66,7 +54,7 @@ class APIBehaviorMonitorError(RuntimeError):
 
 
 class APIBehaviorMonitorCoordinator:
-    """Run the three response stages without sharing their transactions."""
+    """Run Observation, current Contract, Resource, and Oracle stages in order."""
 
     def __init__(
         self,
@@ -75,7 +63,6 @@ class APIBehaviorMonitorCoordinator:
         catalog: APIBehaviorCatalog,
         resource_tracker: ResourceResponseTracker | None = None,
         tracing_runtime: TracingRuntime | None = None,
-        contract_validator: ContractValidator | None = None,
         bug_oracle: BugOracle | None = None,
     ) -> None:
         """Retain App-owned collaborators without opening persistent state."""
@@ -84,7 +71,6 @@ class APIBehaviorMonitorCoordinator:
         self.catalog = catalog
         self.resource_tracker = resource_tracker
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
-        self.contract_validator = contract_validator or ContractValidator()
         self.bug_oracle = bug_oracle
 
     def observe_response(
@@ -120,7 +106,12 @@ class APIBehaviorMonitorCoordinator:
             path=operation_ir.path,
             description=operation_ir.description,
         )
-        media_type = normalize_media_type(observation.headers.get("content-type"))
+        evidence = decode_response_evidence(
+            status_code=observation.status_code,
+            headers=dict(observation.headers),
+            body=observation.body,
+        )
+        media_type = evidence.media_type
         warnings: list[APIBehaviorWarning] = []
 
         with self.tracing_runtime.span(
@@ -142,11 +133,6 @@ class APIBehaviorMonitorCoordinator:
                     "Failed to persist matched operation metadata",
                 ) from exc
 
-            evidence = decode_response_evidence(
-                status_code=observation.status_code,
-                headers=dict(observation.headers),
-                body=observation.body,
-            )
             annotations = PipelineAnnotations()
             annotations.write("observation", RESPONSE_EVIDENCE, evidence)
             observation_id, parsed_body = self._record_observation(
@@ -159,47 +145,13 @@ class APIBehaviorMonitorCoordinator:
                 ),
                 context=context,
                 operation=operation,
-                media_type=media_type,
                 warnings=warnings,
             )
             if observation_id is not None:
                 annotations.write("observation", OBSERVATION_ID, observation_id)
-            current_validation = self.contract_validator.validate(
-                document=build_openapi_document(context.ir, list(context.ir.operations)),
-                operation_path=operation.path,
-                operation_method=operation.method,
-                evidence=evidence,
-            )
-            annotations.write(
-                "contract_monitor",
-                CURRENT_CONTRACT_VALIDATION,
-                current_validation,
-            )
-            try:
-                baseline_document = self.catalog.baseline_openapi()
-            except RuntimeError:
-                # Pure or legacy-focused tests may intentionally omit Catalog
-                # initialization. Production initializes before any Tool call.
-                baseline_document = build_openapi_document(
-                    context.ir,
-                    list(context.ir.operations),
-                )
-            baseline_validation = self.contract_validator.validate(
-                document=baseline_document,
-                operation_path=operation.path,
-                operation_method=operation.method,
-                evidence=evidence,
-            )
-            annotations.write(
-                "oracle",
-                BASELINE_CONTRACT_VALIDATION,
-                baseline_validation,
-            )
             contract = self._check_contract(
-                observation=observation,
-                evidence=evidence,
+                evidence=annotations.read(RESPONSE_EVIDENCE) or evidence,
                 operation=operation,
-                media_type=media_type,
                 ir=context.ir,
                 warnings=warnings,
             )
@@ -216,7 +168,7 @@ class APIBehaviorMonitorCoordinator:
                         operation=operation,
                         body=parsed_body,
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     warnings.append(
                         APIBehaviorWarning(
                             code="resource_derivation_failed",
@@ -231,14 +183,8 @@ class APIBehaviorMonitorCoordinator:
                 if context.replay_directive is None:
                     oracle_primary = self.bug_oracle.evaluate_primary(
                         primary_observation_id=annotations.read(OBSERVATION_ID),
-                        operation_id=operation.operation_id,
                         status_code=observation.status_code,
                         input_validity=context.input_validity,
-                        validity_provenance=context.validity_provenance,
-                        baseline_validation=(
-                            annotations.read(BASELINE_CONTRACT_VALIDATION)
-                            or baseline_validation
-                        ),
                     )
                     oracle_assessment = oracle_primary.assessment
                     persistence_failed = oracle_primary.persistence_failed
@@ -250,7 +196,7 @@ class APIBehaviorMonitorCoordinator:
                         primary=context.replay_directive.state,
                         replay_observation_id=observation_id,
                         status_code=observation.status_code,
-                        baseline_validation=baseline_validation,
+                        input_validity=context.input_validity,
                         replay_persisted=observation_id is not None,
                     )
                     oracle_assessment = finalization.assessment
@@ -271,8 +217,6 @@ class APIBehaviorMonitorCoordinator:
                 observation_id=observation_id,
                 resources=resources,
                 warnings=tuple(warnings),
-                current_validation=current_validation,
-                baseline_validation=baseline_validation,
                 oracle_primary=oracle_primary,
                 oracle_assessment=oracle_assessment,
             )
@@ -288,10 +232,8 @@ class APIBehaviorMonitorCoordinator:
     def _check_contract(
         self,
         *,
-        observation: TargetResponseObservation,
         evidence: ResponseEvidence,
         operation: OperationDefinition,
-        media_type: str | None,
         ir: OpenAPISpecIR,
         warnings: list[APIBehaviorWarning],
     ) -> ContractCheckResult | None:
@@ -301,13 +243,9 @@ class APIBehaviorMonitorCoordinator:
             result = self.contract_tracker.observe(
                 ir=ir,
                 operation_key=operation.operation_id,
-                status_code=observation.status_code,
-                media_type=media_type,
-                body=observation.body,
-                body_truncated=observation.body_truncated,
                 evidence=evidence,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             warnings.append(
                 APIBehaviorWarning(
                     code="response_contract_check_failed",
@@ -336,7 +274,6 @@ class APIBehaviorMonitorCoordinator:
         replay_of_observation_id: str | None,
         context: TargetResponseOperationContext,
         operation: OperationDefinition,
-        media_type: str | None,
         warnings: list[APIBehaviorWarning],
     ) -> tuple[str | None, JSONValue | None]:
         """Store every HTTP response and return eligible 2xx JSON for learning."""
@@ -366,7 +303,7 @@ class APIBehaviorMonitorCoordinator:
                     outcome_kind="http",
                     status_code=observation.status_code,
                     reason_phrase=observation.reason_phrase or None,
-                    media_type=media_type,
+                    media_type=evidence.media_type,
                     request_json=observation.request_json,
                     response_headers=dict(observation.headers),
                     response_body=observation.body,
@@ -377,7 +314,7 @@ class APIBehaviorMonitorCoordinator:
                     replay_of_observation_id=replay_of_observation_id,
                 )
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             warnings.append(
                 APIBehaviorWarning(
                     code="response_observation_persistence_failed",
@@ -448,20 +385,20 @@ class APIBehaviorMonitorCoordinator:
         try:
             record = self.catalog.record_observation(
                 ObservationWrite(
-                operation_id=operation.operation_id,
-                timestamp=observation.occurred_at,
-                outcome_kind="transport",
-                request_json=observation.request_json,
-                transport_code=observation.code,
-                transport_message=observation.message,
-                abstract_test_case_id=context.abstract_test_case_id,
-                batch_id=context.batch_id,
-                batch_case_index=context.batch_case_index,
-                replay_of_observation_id=(
-                    context.replay_directive.primary_observation_id
-                    if context.replay_directive is not None
-                    else None
-                ),
+                    operation_id=operation.operation_id,
+                    timestamp=observation.occurred_at,
+                    outcome_kind="transport",
+                    request_json=observation.request_json,
+                    transport_code=observation.code,
+                    transport_message=observation.message,
+                    abstract_test_case_id=context.abstract_test_case_id,
+                    batch_id=context.batch_id,
+                    batch_case_index=context.batch_case_index,
+                    replay_of_observation_id=(
+                        context.replay_directive.primary_observation_id
+                        if context.replay_directive is not None
+                        else None
+                    ),
                 )
             )
         except Exception as exc:

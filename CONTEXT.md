@@ -80,14 +80,15 @@ response or ended in a transport failure. A Replay is a new Observation linked
 to the Primary request it repeats.
 
 **Oracle Check**
-One fixed bug category evaluated for a Primary HTTP Observation. A Check moves
-from deterministic candidate detection through an isolated System Agent
-confirmation and, when confirmed, one same-request Replay.
+The one deterministic `unexpected_response_status` rule evaluated for a Primary
+HTTP Observation. It records `server_error` for any 5xx response and
+`invalid_input_unexpected_status` when an invalid generated input receives 2xx
+or 5xx, then compares that complete reason set with one same-request Replay.
 
 **Oracle Assessment**
-The immutable final result for one Primary HTTP Observation. It contains all
-three Oracle Checks and is a Bug exactly when at least one Check is reproduced
-by Replay.
+The immutable final result for one Primary HTTP Observation. It contains the
+single Oracle Check and is a Bug exactly when Replay reproduces the Primary's
+complete reason set.
 
 ## Core relationships
 

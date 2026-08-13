@@ -37,10 +37,9 @@ runtime repositories or App collaborators.
 
 #### `openapi_current`
 
-The singleton row stores both the immutable initial normalized OpenAPI document
-used by Bug Oracle and the mutable current document used by Contract Monitor. A
-real observed response-contract change replaces only current document atomically
-with its change event.
+The singleton row stores the mutable current normalized OpenAPI document used by
+Contract Monitor. A real observed response-contract change replaces the document
+atomically with its change event. Bug Oracle does not read OpenAPI.
 
 #### `openapi_change_events`
 
@@ -94,9 +93,9 @@ operation as its Primary Observation.
 #### `oracle_assessments`
 
 One immutable row belongs to one Primary HTTP Observation and may reference its
-single Replay. It stores the derived Boolean Bug verdict and the fixed three
-strict Check states. Only `reproduced` is a Bug. System Agent session IDs and
-bounded reasons are retained; prompts, provider payloads, and reasoning are not.
+single Replay. Assessment schema version 2 stores the derived Boolean Bug verdict
+and one strict `unexpected_response_status` Check. Primary and Replay each retain
+their canonical trigger reason set; only exact `reproduced` equality is a Bug.
 
 Persistence has no retention deletion or per-response body limit. Learning
 queries independently select no more than the latest 100 complete valid 2xx
@@ -136,12 +135,12 @@ the first network call. It is evidence, not a resumable queue or scheduler.
 ## Response processing order
 
 For every matched response, Observation commits its complete factual result
-first. One decoded response evidence value then feeds current Contract Monitor,
-Resource Monitor, and immutable-baseline Bug Oracle. Confirmed Oracle candidates
-share one identical-request Replay through the same processing path. Only a
-candidate that the Replay reproduces becomes a Bug. Matched transport failures
-commit without a Contract check, and Replay failures finalize confirmed Checks
-without replacing the Primary target result.
+first. One decoded response evidence value then feeds current Contract Monitor
+and Resource Monitor. Bug Oracle reads only status and Generator validity after
+those stages. A candidate triggers one identical-request Replay through the same
+processing path and becomes a Bug only when its complete reason set repeats.
+Matched transport failures commit without a Contract check, and Replay failures
+finalize the Check without replacing the Primary target result.
 
 Ordinary HTTP Tool calls use no Batch fields. Batch execution creates one
 running summary before its first send, updates progress best-effort, and ends as

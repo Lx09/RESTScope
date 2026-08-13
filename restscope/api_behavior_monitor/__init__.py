@@ -9,15 +9,14 @@ the facade small and preserves the intended dependency direction.
 from __future__ import annotations
 
 from importlib import import_module
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .catalog import APIBehaviorCatalog
     from .coordinator import APIBehaviorMonitorCoordinator, APIBehaviorMonitorError
-    from .results import APIBehaviorMonitorResult, APIBehaviorWarning
-    from .response_processor import APIBehaviorResponseProcessor
     from .factory import build_api_behavior_monitor_coordinator
+    from .response_processor import APIBehaviorResponseProcessor
+    from .results import APIBehaviorMonitorResult, APIBehaviorWarning
 
 __all__ = [
     "APIBehaviorCatalog",

@@ -11,37 +11,24 @@ identity and its stable zero-based Case index.
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
 import json
 import secrets
+from copy import deepcopy
+from dataclasses import dataclass
 
-from restscope.tools.context import ToolContext
 from restscope.api_behavior_monitor.catalog import (
     AbstractTestCaseWrite,
+    APIBehaviorCatalog,
     BatchWrite,
     OperationDefinition,
-    APIBehaviorCatalog,
-)
-from restscope.target_api import (
-    PreparedTargetRequest,
-    TargetAPIClient,
-    TargetAPIError,
-    TargetAPITimeout,
-    TargetResponseOperationContext,
-    prepare_target_request,
 )
 from restscope.observability import TracingRuntime
-from .failure import parse_http_failure, parse_transport_failure
-from .outcomes import BatchCaseOutcome
-
 from restscope.request_generation import RequestGenerationConfigStore
-from restscope.request_generation.store import RequestGenerationState
+from restscope.request_generation.constraint_solver import ConstraintSolveError
 from restscope.request_generation.constraints import (
     ConstraintSet,
     ConstraintValidationError,
 )
-from restscope.request_generation.constraint_solver import ConstraintSolveError
 from restscope.request_generation.generation import GenerationError, generate_test_case
 from restscope.request_generation.models import (
     GeneratedTestCase,
@@ -60,7 +47,19 @@ from restscope.request_generation.serialization import (
     SerializationError,
     serialize_test_case,
 )
+from restscope.request_generation.store import RequestGenerationState
+from restscope.target_api import (
+    PreparedTargetRequest,
+    TargetAPIClient,
+    TargetAPIError,
+    TargetAPITimeout,
+    TargetResponseOperationContext,
+    prepare_target_request,
+)
+from restscope.tools.context import ToolContext
 
+from .failure import parse_http_failure, parse_transport_failure
+from .outcomes import BatchCaseOutcome
 
 FAILURE_RESPONSE_BYTES = 10 * 1024 * 1024
 MAX_INLINE_REQUEST_CHARACTERS = 2_400
@@ -563,7 +562,7 @@ class OperationTestingService:
             )
             if updated is None:
                 raise RuntimeError("Batch disappeared during execution")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             warning = f"batch_summary_persistence_failed:{type(exc).__name__}"
             if warning not in persistence_warnings:
                 persistence_warnings.append(warning)
@@ -705,11 +704,6 @@ class OperationTestingService:
                             "valid"
                             if selection.action == "happy_path"
                             else "invalid"
-                        ),
-                        validity_provenance=(
-                            "positive_generator"
-                            if selection.action == "happy_path"
-                            else selection.action
                         ),
                     ),
                 )
