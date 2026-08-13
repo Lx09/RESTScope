@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import math
+import re
 
 from pydantic import ValidationError
 
@@ -15,6 +17,7 @@ from .models import (
     GeneratorDisabledReason,
     InputGeneratorConfig,
     InputNodeSnapshot,
+    NegativeInputGeneratorConfig,
     OperationGeneratorConfig,
     OperationTestSnapshot,
     ParameterSnapshot,
@@ -35,7 +38,8 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
     # ordering chooses JSON-compatible contracts before form encodings.
     active_media_type = snapshot.available_media_types[0] if snapshot.available_media_types else None
     selected_node_ids = _selected_node_ids(snapshot, active_media_type)
-    configs: list[InputGeneratorConfig] = []
+    positive_generators: list[InputGeneratorConfig] = []
+    negative_generators: list[NegativeInputGeneratorConfig] = []
     for node in snapshot.input_nodes:
         strategy, reason = _default_strategy(node)
         if reason is not None and node.input_node_id in selected_node_ids:
@@ -69,7 +73,8 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
                     "strategy": _fallback_strategy(node),
                 }
             )
-        configs.append(config)
+        positive_generators.append(config)
+        negative_generators.extend(_negative_generators(node, config))
     if snapshot.request_body_node_id is not None and active_media_type is None:
         reasons.append(
             GeneratorDisabledReason(
@@ -83,7 +88,8 @@ def build_initial_operation_config(operation: OperationIR) -> OperationGenerator
         enabled=not reasons,
         disabled_reasons=_deduplicate_reasons(reasons),
         active_media_type=active_media_type,
-        configs=configs,
+        positive_generators=positive_generators,
+        negative_generators=negative_generators,
     )
 
 
@@ -502,6 +508,186 @@ def _fallback_strategy(node: InputNodeSnapshot) -> dict[str, object]:
     if _has_type(schema, "array") or schema.items is not None:
         return {"type": "array", "min_items": 0, "max_items": 0}
     return {"type": "constant", "value": None}
+
+
+def _negative_generators(
+    node: InputNodeSnapshot,
+    positive: InputGeneratorConfig,
+) -> list[NegativeInputGeneratorConfig]:
+    """Derive bounded scalar violations directly from the frozen OpenAPI schema.
+
+    Containers and variant schemas are intentionally excluded from this first
+    version. Required omission reuses the positive strategy because its value
+    is irrelevant when inclusion is zero; every other rule uses a constant so
+    the invalid request is deterministic and easy to audit.
+    """
+
+    schema = node.schema_contract
+    if schema is None or not _is_scalar_schema(schema):
+        return []
+
+    candidates: list[tuple[str, float, object]] = []
+    if node.required:
+        candidates.append(("required_omission", 0.0, positive.strategy))
+
+    wrong_type = _wrong_scalar_type(schema)
+    if wrong_type is not _NO_NEGATIVE_VALUE:
+        candidates.append(("wrong_type", 1.0, wrong_type))
+    if not _allows_null(schema):
+        candidates.append(("null_for_non_nullable", 1.0, None))
+
+    if schema.minimum is not None:
+        candidates.append(("below_minimum", 1.0, schema.minimum - 1))
+    if schema.maximum is not None:
+        candidates.append(("above_maximum", 1.0, schema.maximum + 1))
+    if not isinstance(schema.exclusive_minimum, bool) and schema.exclusive_minimum is not None:
+        candidates.append(("exclusive_minimum", 1.0, schema.exclusive_minimum))
+    if not isinstance(schema.exclusive_maximum, bool) and schema.exclusive_maximum is not None:
+        candidates.append(("exclusive_maximum", 1.0, schema.exclusive_maximum))
+
+    if schema.min_length is not None and schema.min_length > 0:
+        candidates.append(("below_min_length", 1.0, ""))
+    if schema.max_length is not None and schema.max_length < 1_000:
+        candidates.append(("above_max_length", 1.0, "x" * (schema.max_length + 1)))
+    if schema.pattern is not None:
+        mismatch = _pattern_mismatch(schema.pattern)
+        if mismatch is not None:
+            candidates.append(("pattern_mismatch", 1.0, mismatch))
+    if schema.format is not None:
+        candidates.append(("format_mismatch", 1.0, f"not-a-{schema.format}"))
+
+    outside = _outside_enumeration(schema)
+    if outside is not _NO_NEGATIVE_VALUE:
+        candidates.append(("enum_or_const_mismatch", 1.0, outside))
+    non_multiple = _non_multiple(schema)
+    if non_multiple is not _NO_NEGATIVE_VALUE:
+        candidates.append(("multiple_of_mismatch", 1.0, non_multiple))
+
+    # Different schema rules can suggest the same request value. Keep the
+    # first rule so e-greedy never learns two indistinguishable arms.
+    seen: set[str] = set()
+    result: list[NegativeInputGeneratorConfig] = []
+    for rule, inclusion_probability, value_or_strategy in candidates:
+        strategy = (
+            value_or_strategy
+            if rule == "required_omission"
+            else {"type": "constant", "value": value_or_strategy}
+        )
+        identity = json.dumps(
+            {
+                "inclusion_probability": inclusion_probability,
+                "strategy": (
+                    strategy.model_dump(mode="json")
+                    if hasattr(strategy, "model_dump")
+                    else strategy
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(
+            NegativeInputGeneratorConfig(
+                input_node_id=node.input_node_id,
+                inclusion_probability=inclusion_probability,
+                strategy=strategy,
+                rule=rule,
+            )
+        )
+    return result
+
+
+_NO_NEGATIVE_VALUE = object()
+
+
+def _is_scalar_schema(schema: SchemaSnapshot) -> bool:
+    """Return whether v1 can violate this schema with one scalar or omission."""
+
+    return not (
+        schema.properties
+        or schema.items is not None
+        or schema.all_of
+        or schema.any_of
+        or schema.one_of
+        or _has_type(schema, "object")
+        or _has_type(schema, "array")
+    )
+
+
+def _allows_null(schema: SchemaSnapshot) -> bool:
+    """Interpret OpenAPI nullable and JSON Schema union types."""
+
+    return schema.nullable is True or _has_type(schema, "null")
+
+
+def _wrong_scalar_type(schema: SchemaSnapshot) -> object:
+    """Return one small JSON scalar outside the declared primitive type."""
+
+    if _has_type(schema, "string"):
+        return 0
+    if _has_type(schema, "integer") or _has_type(schema, "number"):
+        return "not-a-number"
+    if _has_type(schema, "boolean"):
+        return "not-a-boolean"
+    if _has_type(schema, "null"):
+        return "not-null"
+    return _NO_NEGATIVE_VALUE
+
+
+def _outside_enumeration(schema: SchemaSnapshot) -> object:
+    """Return a same-type value outside an enum or const when one exists."""
+
+    if schema.enum is None and not schema.has_const:
+        return _NO_NEGATIVE_VALUE
+    forbidden = list(schema.enum or ())
+    if schema.has_const:
+        forbidden.append(schema.const)
+    for candidate in ("__restscope_outside__", 0, 1, -1, False, True, None):
+        if candidate not in forbidden and _matches_declared_scalar_type(schema, candidate):
+            return candidate
+    return _NO_NEGATIVE_VALUE
+
+
+def _matches_declared_scalar_type(schema: SchemaSnapshot, value: object) -> bool:
+    """Check only primitive type compatibility, excluding other schema rules."""
+
+    if value is None:
+        return _allows_null(schema)
+    if _has_type(schema, "string"):
+        return isinstance(value, str)
+    if _has_type(schema, "integer"):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if _has_type(schema, "number"):
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if _has_type(schema, "boolean"):
+        return isinstance(value, bool)
+    return True
+
+
+def _pattern_mismatch(pattern: str) -> str | None:
+    """Find a tiny deterministic string that does not satisfy ``re.search``."""
+
+    expression = re.compile(pattern)
+    return next(
+        (candidate for candidate in ("", "x", "invalid", "0") if not expression.search(candidate)),
+        None,
+    )
+
+
+def _non_multiple(schema: SchemaSnapshot) -> object:
+    """Return a same-type number that violates ``multipleOf`` when practical."""
+
+    multiple = schema.multiple_of
+    if multiple is None or multiple <= 0:
+        return _NO_NEGATIVE_VALUE
+    if _has_type(schema, "integer"):
+        integer_multiple = int(multiple)
+        if integer_multiple > 1 and integer_multiple == multiple:
+            return integer_multiple - 1
+        return _NO_NEGATIVE_VALUE
+    return multiple / 2
 
 
 def _integer_bounds(schema: SchemaSnapshot) -> tuple[int, int]:

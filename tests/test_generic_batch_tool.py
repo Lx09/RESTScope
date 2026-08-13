@@ -105,10 +105,15 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
         context_provider=lambda: context,
     )
 
-    result = backend.run_batch(operation_key="GET /items", case_count=2, seed=9)["structured"]
+    result = backend.run_batch(
+        operation_key="GET /items",
+        test_mode="happy_path",
+        case_count=2,
+        seed=9,
+    )["structured"]
 
     assert result["generation_revision"] == 0
-    assert result["case_count"] == 2
+    assert result["executed_case_count"] == 2
     assert result["batch_id"].startswith("batch_")
     assert result["batch_persistence_warnings"] == []
     assert result["success_count"] == 2
@@ -131,6 +136,7 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
 
     repeated = backend.run_batch(
         operation_key="GET /items",
+        test_mode="happy_path",
         case_count=1,
         seed=10,
     )["structured"]
@@ -284,6 +290,7 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
             headers={},
         ),
         operation_key="GET /items/{limit}",
+        test_mode="happy_path",
         case_count=2,
         seed=5,
     )
@@ -350,6 +357,7 @@ def test_abstract_case_persistence_failure_stops_batch_before_network() -> None:
                 headers={},
             ),
             operation_key="GET /items",
+            test_mode="happy_path",
             case_count=1,
             seed=3,
         )
@@ -425,6 +433,7 @@ def test_observation_failure_does_not_stop_later_batch_cases() -> None:
             headers={},
         ),
         operation_key="GET /items",
+        test_mode="happy_path",
         case_count=2,
         seed=4,
     )
@@ -500,6 +509,7 @@ def test_final_batch_summary_failure_returns_inline_results_with_warning() -> No
             headers={},
         ),
         operation_key="GET /items",
+        test_mode="happy_path",
         case_count=1,
         seed=5,
     )
@@ -568,6 +578,7 @@ def test_unexpected_batch_interruption_marks_summary_failed() -> None:
                 headers={},
             ),
             operation_key="GET /items",
+            test_mode="happy_path",
             case_count=1,
             seed=6,
         )

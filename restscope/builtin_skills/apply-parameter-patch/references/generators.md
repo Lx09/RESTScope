@@ -10,12 +10,14 @@
 
 ## Configuration and Patch boundary
 
-Every active input node owns one strategy plus an `inclusion_probability` from
-0 through 1. Required and structural nodes must use 1. A proposal addresses a
-node with the supplied semantic `input` handle, never runtime `input_node_id`,
-and must supply the complete final `strategy` and `inclusion_probability`.
-Include only Generators that actually change; validation combines them with
-every unchanged current configuration.
+Every active input node owns one to eight positive Generator candidates. Each
+candidate has a strategy plus an `inclusion_probability` from 0 through 1;
+required and structural nodes must use 1. A proposal addresses a node with the
+supplied semantic `input` handle, never runtime `input_node_id`. One or more
+`changes` entries may repeat that handle, and together they replace its complete
+positive candidate set. Include only inputs that actually change; validation
+combines them with every unchanged input. Negative Generators are derived
+deterministically from OpenAPI and cannot be changed by a Parameter Patch.
 
 ## Scalar strategies
 
@@ -98,12 +100,11 @@ parameters serialize scalars as text but still reject objects, arrays, or null.
 For `response_value`, copy all four source fields exactly from a successful
 `openapi.find_observed_response_fields` result. Compilation re-runs current
 observation lookup, resolves the exact selector, checks complete provenance,
-and requires non-empty type-compatible scalar values. The selected source is
-the complete final source identity for that input. Replacing it removes the old
-source; later reads parse values only from observations at the new coordinate.
-It never appends another alternative. Changing the Generator away from
-`response_value` removes the old response source. Prefer `resource_identifier`
-when it represents the same entity.
+and requires non-empty type-compatible scalar values. Each selected source is
+one candidate's complete source identity. The repeated entries for that input
+define the final set, so omitted sources are removed. Later reads parse values
+only from retained coordinates. Prefer `resource_identifier` when it represents
+the same entity.
 
 ## Presence and minimal repair
 

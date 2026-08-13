@@ -1,5 +1,16 @@
 # Progress Log
 
+## Phase 29: Positive/negative Generator exploration (2026-08-13)
+
+- **Status:** implemented and verified on local `main`; no Git staging or commit.
+- Split operation state into explicit positive and deterministic negative
+  Generator candidates; Parameter Patch replaces 1–8 positive arms per input.
+- Added seeded epsilon-greedy selection, exceptional action split, full
+  Constraint-component removal, skip accounting, and revision-local feedback.
+- Added explicit Batch mode, inline action/Bug evidence, and replay-final reward.
+- Activated production Main exploration/failure-resolution Skills and one
+  Patch-only child Profile.
+
 ## Phase 19: Codex-style Main Agent conversation observer (2026-08-09)
 
 - **Status:** implementation, automated verification, and desktop browser confirmation complete; exact 375 px viewport confirmation pending
@@ -698,3 +709,13 @@
 - Final fresh verification: `uv run pytest -q` passed 590 tests with 2 skips;
   Python compilation, the precise `typing.Any` guard, and `git diff --check`
   also passed.
+# 2026-08-13: Phase 29 positive/negative Generator exploration
+
+- Confirmed a clean local `main` at `9a2ecd7`; no pre-existing tracked changes.
+- Read the current project rules, navigation guide, Generator/Patch/Batch/Oracle
+  implementations, and codebase-design, file-planning, diagram, and TDD skills.
+- User approved direct implementation on `main` with simplicity, readable
+  navigation, no duplicated logic, and no unnecessary intermediate Modules.
+- Confirmed behavior through interactive pseudocode and flow review, including
+  complete connected-Constraint removal for a negative input and one fallback
+  generation attempt with all Constraints removed.

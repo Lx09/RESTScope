@@ -587,7 +587,13 @@ class _TestCaseGenerator:
         self.nodes_by_id = {
             node.input_node_id: node for node in operation.input_nodes
         }
-        self.configs = {item.input_node_id: item for item in config.configs}
+        self.positive_generators = {
+            item.input_node_id: item for item in config.positive_generators
+        }
+        if len(self.positive_generators) != len(config.positive_generators):
+            raise GenerationError(
+                "A concrete test case requires one selected positive Generator per input"
+            )
         # Store children in canonical-path order.  Stable traversal is required
         # because node-specific seeds depend on a reproducible visit sequence.
         self.children: dict[str, list[InputNodeSnapshot]] = {}
@@ -840,7 +846,7 @@ class _TestCaseGenerator:
 
     def _config(self, node: InputNodeSnapshot):
         try:
-            return self.configs[node.input_node_id]
+            return self.positive_generators[node.input_node_id]
         except KeyError as exc:
             raise GenerationError(f"Missing generator configuration: {node.input_node_id}") from exc
 

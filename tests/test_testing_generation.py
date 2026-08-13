@@ -313,7 +313,7 @@ def test_patterned_text_body_uses_its_default_regex_generator() -> None:
     media_node_id = config.snapshot.media_type_node_ids["text/plain"]
     media_config = next(
         item
-        for item in config.configs
+        for item in config.positive_generators
         if item.input_node_id == media_node_id
     )
 
@@ -480,9 +480,9 @@ def test_manual_scalar_generator_overrides_the_frozen_schema_type() -> None:
     initial = build_initial_operation_config(operation)
     manual = initial.model_copy(
         update={
-            "configs": [
+            "positive_generators": [
                 InputGeneratorConfig(
-                    input_node_id=initial.configs[0].input_node_id,
+                    input_node_id=initial.positive_generators[0].input_node_id,
                     inclusion_probability=1,
                     strategy={
                         "type": "random_string",
@@ -565,7 +565,7 @@ def _constrained_generation_config():
     ).operations["POST /search"]
     initial = build_initial_operation_config(operation)
     configs = []
-    for item in initial.configs:
+    for item in initial.positive_generators:
         node = next(
             node
             for node in initial.snapshot.input_nodes
@@ -579,7 +579,7 @@ def _constrained_generation_config():
         elif node.canonical_path == "query/nullable":
             update["inclusion_probability"] = 1
         configs.append(InputGeneratorConfig.model_validate(update))
-    return initial.model_copy(update={"configs": configs})
+    return initial.model_copy(update={"positive_generators": configs})
 
 
 def _node_id(config, canonical_path: str) -> str:
@@ -948,7 +948,7 @@ def test_test_case_generator_builds_configured_request_inputs_and_omits_optional
         operation_key=operation.operation_key,
         snapshot=snapshot,
         active_media_type="application/json",
-        configs=[
+        positive_generators=[
             configured("path/orderId", 1, {"type": "constant", "value": 12}),
             configured("query/verbose", 0, {"type": "boolean"}),
             configured("body", 1, {"type": "request_body"}),
@@ -1086,7 +1086,7 @@ def test_test_case_generator_supports_weighted_variants_and_all_of_objects() -> 
             operation_key=operation.operation_key,
             snapshot=snapshot,
             active_media_type="application/json",
-            configs=configs,
+            positive_generators=configs,
         ),
         run_seed=1,
         case_index=0,
@@ -1145,7 +1145,7 @@ def test_nullable_object_can_generate_an_explicit_json_null_body() -> None:
             operation_key=operation.operation_key,
             snapshot=snapshot,
             active_media_type="application/json",
-            configs=configs,
+            positive_generators=configs,
         ),
         run_seed=1,
         case_index=0,
@@ -1218,7 +1218,7 @@ def test_feedback_variant_generator_does_not_revalidate_one_of_membership() -> N
             operation_key=operation.operation_key,
             snapshot=snapshot,
             active_media_type="application/json",
-            configs=configs,
+            positive_generators=configs,
         ),
         run_seed=1,
         case_index=0,

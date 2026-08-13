@@ -36,6 +36,7 @@ class TargetResponseOperationContext:
     validity_provenance: Literal[
         "positive_generator",
         "negative_generator",
+        "ignored_constraint",
     ] | None = None
     replay_directive: "TargetReplayDirective | None" = None
 

@@ -180,17 +180,23 @@ class TargetAPIClient:
                     response_context=replay_context,
                 )
                 replay_processor = replay_result.processor_result
-                if (
-                    replay_processor is not None
-                    and replay_processor.warnings
-                    and result.processor_result is not None
-                ):
+                if replay_processor is not None and result.processor_result is not None:
+                    replay_details = replay_processor.details or {}
+                    primary_details = result.processor_result.details or {}
                     merged_processor = replace(
                         result.processor_result,
                         warnings=(
                             *result.processor_result.warnings,
                             *replay_processor.warnings,
                         ),
+                        details={
+                            **primary_details,
+                            "bug_found": replay_details.get("bug_found"),
+                            "bug_categories": replay_details.get(
+                                "bug_categories",
+                                [],
+                            ),
+                        },
                     )
                     result = replace(result, processor_result=merged_processor)
             except (TargetAPIError, TargetAPITimeout):

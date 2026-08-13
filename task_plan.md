@@ -4,9 +4,17 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 28 persistent Batch results is complete; Phase 19 exact 375 px confirmation remains pending
+Phase 29 positive/negative Generator exploration is complete; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 29: Positive/negative Generator exploration
+- [x] Confirm Generator categories, e-greedy rewards, exceptional relaxation, and Main-Agent ownership
+- [x] Add red request-generation and Batch behavior tests
+- [x] Implement compact candidate state, deterministic negative derivation, and App-lifetime selection feedback
+- [x] Extend the Batch Tool and activate the production Main/Patch Profiles
+- [x] Update navigation/task records and run focused plus complete verification
+- **Status:** complete and verified on local `main`; no branch, worktree, staging, commit, merge, or push
 
 ### Phase 28: Persistent Batch and Test Case results
 - [x] Confirm persistence, query, retention, security, and Profile-authorization contracts

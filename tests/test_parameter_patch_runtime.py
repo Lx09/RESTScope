@@ -414,7 +414,7 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         operation_key="GET /items",
         input_handles=("query.minimum",),
     )
-    strategy = projected["inputs"][0]["generator"]["strategy"]
+    strategy = projected["inputs"][0]["positive_generators"][0]["strategy"]
     assert strategy == {
         "type": "response_value",
         "source": {

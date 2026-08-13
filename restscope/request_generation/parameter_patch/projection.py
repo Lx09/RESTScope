@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 from restscope.operation_references import ResponseFieldReference
 
 from ..constraints import OperationConstraintRecord
-from ..models import OperationGeneratorConfig
+from ..models import InputGeneratorConfig, OperationGeneratorConfig
 from ..semantics import build_semantic_input_map
 from ..store import ReferenceValueBinding, RequestGenerationState
 from .errors import ParameterPatchValidationError
@@ -61,7 +61,9 @@ def semantic_state_payload(
     """Project selected Generators and their complete Constraint closure."""
     selected = _validate_affected_inputs(state.config, input_handles)
     semantic = build_semantic_input_map(state.config)
-    configs = {item.input_node_id: item for item in state.config.configs}
+    configs: dict[str, list[InputGeneratorConfig]] = {}
+    for item in state.config.positive_generators:
+        configs.setdefault(item.input_node_id, []).append(item)
     closure, extra = constraint_closure(state, selected)
     handles = tuple(dict.fromkeys((*selected, *extra)))
     payload = {
@@ -72,18 +74,20 @@ def semantic_state_payload(
         "inputs": [
             {
                 "input": handle,
-                "generator": {
-                    "inclusion_probability": configs[
-                        semantic.node_by_handle[handle]
-                    ].inclusion_probability,
-                    "strategy": _project_generator_strategy(
-                        configs[semantic.node_by_handle[handle]].strategy,
-                        binding=_binding_for(
-                            state.reference_bindings,
-                            semantic.node_by_handle[handle],
+                "positive_generators": [
+                    {
+                        "inclusion_probability": candidate.inclusion_probability,
+                        "strategy": _project_generator_strategy(
+                            candidate.strategy,
+                            binding=_binding_for(
+                                state.reference_bindings,
+                                semantic.node_by_handle[handle],
+                                candidate.strategy,
+                            ),
                         ),
-                    ),
-                },
+                    }
+                    for candidate in configs[semantic.node_by_handle[handle]]
+                ],
             }
             for handle in handles
         ],
@@ -100,7 +104,9 @@ def semantic_state_payload(
 def validation_payload(validated: "ValidatedPatch") -> dict[str, object]:
     """Project complete post-Patch state and bounded deterministic witnesses."""
     semantic = build_semantic_input_map(validated.final_config)
-    configs = {item.input_node_id: item for item in validated.final_config.configs}
+    configs: dict[str, list[InputGeneratorConfig]] = {}
+    for item in validated.final_config.positive_generators:
+        configs.setdefault(item.input_node_id, []).append(item)
     final_handles = tuple(
         dict.fromkeys(
             (
@@ -121,16 +127,20 @@ def validation_payload(validated: "ValidatedPatch") -> dict[str, object]:
         "final_generators": [
             {
                 "input": handle,
-                "inclusion_probability": configs[
-                    semantic.node_by_handle[handle]
-                ].inclusion_probability,
-                "strategy": _project_generator_strategy(
-                    configs[semantic.node_by_handle[handle]].strategy,
-                    binding=_binding_for(
-                        validated.final_reference_bindings,
-                        semantic.node_by_handle[handle],
-                    ),
-                ),
+                "positive_generators": [
+                    {
+                        "inclusion_probability": candidate.inclusion_probability,
+                        "strategy": _project_generator_strategy(
+                            candidate.strategy,
+                            binding=_binding_for(
+                                validated.final_reference_bindings,
+                                semantic.node_by_handle[handle],
+                                candidate.strategy,
+                            ),
+                        ),
+                    }
+                    for candidate in configs[semantic.node_by_handle[handle]]
+                ],
             }
             for handle in final_handles
         ],
@@ -176,10 +186,21 @@ def _validate_affected_inputs(
 def _binding_for(
     bindings: Sequence[ReferenceValueBinding],
     input_node_id: str,
+    strategy: object,
 ) -> ReferenceValueBinding | None:
-    """Find the immutable reference identity for one projected input."""
+    """Find the exact binding for one reference-backed candidate."""
+    source = getattr(strategy, "source", None)
     return next(
-        (item for item in bindings if item.input_node_id == input_node_id),
+        (
+            item
+            for item in bindings
+            if item.input_node_id == input_node_id
+            and source is not None
+            and item.producer_operation_id == source.producer_operation_id
+            and item.status_code == source.status_code
+            and item.media_type == source.media_type
+            and item.selector == source.selector
+        ),
         None,
     )
 

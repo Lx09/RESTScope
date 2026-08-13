@@ -84,7 +84,7 @@ def build_candidate_domains(
         raise ValueError("max_domain_size must be positive")
     validate_constraint_set(constraints, operation)
     nodes = {node.input_node_id: node for node in operation.input_nodes}
-    configs = {item.input_node_id: item for item in config.configs}
+    configs = {item.input_node_id: item for item in config.positive_generators}
     baseline_assignments = assignments_from_generated_case(operation, baseline)
     result: dict[str, tuple[InputNodeOverride, ...]] = {}
     for input_node_id in referenced_input_node_ids(constraints):
@@ -256,7 +256,7 @@ def _build_search_units(
     remaining = set(domains)
     units: list[_SearchUnit] = []
     groups: dict[str, dict[str, tuple[str, ResourceIdentifierGenerator]]] = {}
-    for item in config.configs:
+    for item in config.positive_generators:
         strategy = item.strategy
         if isinstance(strategy, ResourceIdentifierGenerator) and reference_values is not None:
             groups.setdefault(reference_values.resource_key(strategy), {})[
@@ -330,7 +330,7 @@ def _resource_identifier_records_match(
     if reference_values is None:
         return True
     groups: dict[str, dict[str, tuple[str, ResourceIdentifierGenerator]]] = {}
-    for item in config.configs:
+    for item in config.positive_generators:
         strategy = item.strategy
         if isinstance(strategy, ResourceIdentifierGenerator):
             groups.setdefault(reference_values.resource_key(strategy), {})[

@@ -1,0 +1,8 @@
+version: "1.0"
+risk_level: medium
+required_tools:
+  - openapi.list_operations
+  - test_case.run_batch
+  - test_case.get_batch_results
+  - test_case.get
+required_context_sources: []

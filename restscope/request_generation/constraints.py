@@ -363,6 +363,36 @@ def referenced_input_node_ids(constraints: ConstraintSet) -> tuple[str, ...]:
     return tuple(result)
 
 
+def associated_constraint_ids(
+    constraints: Sequence[OperationConstraintRecord],
+    input_node_id: str,
+) -> tuple[str, ...]:
+    """Return the whole Constraint–input component containing one input.
+
+    A Constraint links every input it references. Starting from the selected
+    negative input, this traversal follows those links until no newly reached
+    input can pull in another Constraint. Exceptional generation removes the
+    returned set in one step; it never weakens the component layer by layer.
+    """
+
+    connected_inputs = {input_node_id}
+    connected_constraints: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for item in constraints:
+            if item.id in connected_constraints:
+                continue
+            owners = set(item.owner_input_node_ids)
+            if owners & connected_inputs:
+                connected_constraints.add(item.id)
+                connected_inputs.update(owners)
+                changed = True
+    return tuple(
+        item.id for item in constraints if item.id in connected_constraints
+    )
+
+
 def _validate_boolean(
     expression: BooleanExpression,
     nodes: Mapping[str, InputNodeSnapshot],

@@ -43,6 +43,15 @@ class BatchCaseOutcome(_Model):
     """Carry one canonical request and its bounded inline outcome."""
 
     case_number: int = Field(ge=1, le=5)
+    test_action: Literal[
+        "happy_path",
+        "negative_generator",
+        "ignored_constraint",
+    ]
+    negative_rule: str | None = Field(default=None, max_length=100)
+    ignored_constraint_count: int = Field(default=0, ge=0, le=20)
+    bug_found: bool = False
+    bug_categories: list[str] = Field(default_factory=list, max_length=3)
     request: dict[str, object]
     status_code: int | None = Field(default=None, ge=100, le=599)
     reason_phrase: str | None = Field(default=None, max_length=200)

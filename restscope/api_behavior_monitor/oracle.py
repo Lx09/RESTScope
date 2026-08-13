@@ -118,7 +118,11 @@ class BugOracle:
         operation_id: str,
         status_code: int,
         input_validity: Literal["valid", "invalid"] | None,
-        validity_provenance: Literal["positive_generator", "negative_generator"] | None,
+        validity_provenance: Literal[
+            "positive_generator",
+            "negative_generator",
+            "ignored_constraint",
+        ] | None,
         baseline_validation: ContractValidationResult,
     ) -> OraclePrimaryDecision:
         """Detect and confirm every candidate, persisting immediately when no Replay is needed."""

@@ -115,6 +115,7 @@ class APIBehaviorResponseProcessor:
 def _result_details(result) -> dict[str, object]:
     """Project stage outcomes without exposing persisted request or response JSON."""
     resource = result.resources
+    assessment = result.oracle_assessment
     return {
         "operation_key": result.operation_id,
         "status_code": (
@@ -130,6 +131,16 @@ def _result_details(result) -> dict[str, object]:
             list(result.contract.changes) if result.contract is not None else []
         ),
         "observation_id": result.observation_id,
+        "bug_found": assessment.is_bug if assessment is not None else None,
+        "bug_categories": (
+            [
+                check.name
+                for check in assessment.checks
+                if check.status == "reproduced"
+            ]
+            if assessment is not None
+            else []
+        ),
         "resources": (
             {
                 "resources_updated": len(resource.resources),

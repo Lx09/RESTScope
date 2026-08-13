@@ -45,6 +45,11 @@ from .models import (
 )
 from .snapshot import build_initial_catalog
 from .constraints import OperationConstraintRecord
+from .selection import (
+    BanditKey,
+    GeneratorChoice,
+    RewardStatistics,
+)
 
 
 _T = TypeVar("_T")
@@ -185,6 +190,9 @@ class RequestGenerationConfigStore:
 
     def __init__(self) -> None:
         self._states: dict[str, _MutableOperationState] = {}
+        self._selection_statistics: dict[
+            tuple[str, int, BanditKey], RewardStatistics
+        ] = {}
         self._catalog_lock = RLock()
 
     def get_operation(self, operation_key: str) -> OperationGeneratorConfig | None:
@@ -275,7 +283,11 @@ class RequestGenerationConfigStore:
         self,
         operation_key: str,
         capture: Callable[[RequestGenerationState], _T],
-    ) -> tuple[RequestGenerationState, _T]:
+    ) -> tuple[
+        RequestGenerationState,
+        _T,
+        dict[BanditKey, RewardStatistics],
+    ]:
         """Capture related volatile evidence under the operation read lock.
 
         Batch execution uses this seam to freeze reference values together with
@@ -291,7 +303,47 @@ class RequestGenerationConfigStore:
             )
         with state.lock:
             frozen = _freeze_state(state)
-            return frozen, capture(frozen)
+            with self._catalog_lock:
+                statistics = {
+                    key: value
+                    for (stored_operation, revision, key), value
+                    in self._selection_statistics.items()
+                    if stored_operation == operation_key
+                    and revision == frozen.revision
+                }
+            return frozen, capture(frozen), statistics
+
+    def _record_generator_feedback(
+        self,
+        *,
+        operation_key: str,
+        revision: int,
+        feedback: Sequence[tuple[GeneratorChoice, int]],
+    ) -> None:
+        """Apply completed Batch rewards to the exact frozen revision.
+
+        Feedback is App-lifetime only. The revision is part of every key, so a
+        Parameter Patch starts with fresh statistics without cleanup or a
+        second lifecycle. Callers submit feedback only after all requests in a
+        Batch have finished, keeping selection fixed within that Batch.
+        """
+
+        with self._catalog_lock:
+            for choice, reward in feedback:
+                key: BanditKey = (
+                    choice.kind,
+                    choice.input_node_id,
+                    choice.candidate_id,
+                )
+                storage_key = (operation_key, revision, key)
+                current = self._selection_statistics.get(
+                    storage_key,
+                    RewardStatistics(),
+                )
+                self._selection_statistics[storage_key] = RewardStatistics(
+                    attempts=current.attempts + 1,
+                    rewards=current.rewards + int(bool(reward)),
+                )
 
     def _require_existing(self, operation_key: str) -> OperationGeneratorConfig:
         current = self.get_operation(operation_key)
@@ -312,7 +364,10 @@ def generation_state_digest(
     payload = {
         "operation_key": config.operation_key,
         "active_media_type": config.active_media_type,
-        "configs": [item.model_dump(mode="json") for item in config.configs],
+        "positive_generators": [item.model_dump(mode="json") for item in config.positive_generators],
+        "negative_generators": [
+            item.model_dump(mode="json") for item in config.negative_generators
+        ],
         "constraints": [item.model_dump(mode="json") for item in constraints],
         "reference_bindings": [
             item.model_dump(mode="json") for item in reference_bindings
@@ -359,33 +414,51 @@ def _apply_patches(
             "At least one generator patch is required",
         )
     counts = Counter(item.input_node_id for item in patches)
-    duplicates = sorted(
-        node_id for node_id, count in counts.items() if count > 1
-    )
-    current_by_id = {item.input_node_id: item for item in current.configs}
+    current_by_id: dict[str, list[InputGeneratorConfig]] = {}
+    for item in current.positive_generators:
+        current_by_id.setdefault(item.input_node_id, []).append(item)
     unknown = sorted(set(counts) - set(current_by_id))
-    if duplicates or unknown:
+    oversized = sorted(node_id for node_id, count in counts.items() if count > 8)
+    if unknown or oversized:
         raise GeneratorConfigError(
             "generator_patch_invalid_nodes",
-            f"Invalid generator patch nodes; unknown={unknown}, duplicates={duplicates}",
+            f"Invalid generator patch nodes; unknown={unknown}, more_than_eight={oversized}",
         )
-    for patch in patches:
-        existing = current_by_id[patch.input_node_id]
-        payload = existing.model_dump()
-        if patch.inclusion_probability is not None:
-            payload["inclusion_probability"] = patch.inclusion_probability
-        if patch.strategy is not None:
-            payload["strategy"] = patch.strategy
-        current_by_id[patch.input_node_id] = InputGeneratorConfig.model_validate(
-            payload
-        )
+    replacements: dict[str, list[InputGeneratorConfig]] = {}
+    for node_id in counts:
+        existing = current_by_id[node_id][0]
+        replacements[node_id] = []
+        for patch in (item for item in patches if item.input_node_id == node_id):
+            payload = existing.model_dump()
+            if patch.inclusion_probability is not None:
+                payload["inclusion_probability"] = patch.inclusion_probability
+            if patch.strategy is not None:
+                payload["strategy"] = patch.strategy
+            replacements[node_id].append(
+                InputGeneratorConfig.model_validate(payload)
+            )
+        if len(set(map(_generator_candidate_json, replacements[node_id]))) != len(
+            replacements[node_id]
+        ):
+            raise GeneratorConfigError(
+                "generator_patch_duplicate_candidate",
+                f"Positive Generator candidates must be unique for {node_id}",
+            )
+    node_order = list(dict.fromkeys(item.input_node_id for item in current.positive_generators))
     return (
         [
-            current_by_id[item.input_node_id]
-            for item in current.configs
+            candidate
+            for node_id in node_order
+            for candidate in replacements.get(node_id, current_by_id[node_id])
         ],
         set(counts),
     )
+
+
+def _generator_candidate_json(candidate: InputGeneratorConfig) -> str:
+    """Return stable candidate content for duplicate detection."""
+
+    return json.dumps(candidate.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
 
 
 def expand_generator_patch_presence(
@@ -408,21 +481,23 @@ def expand_generator_patch_presence(
             "At least one generator patch is required",
         )
     counts = Counter(item.input_node_id for item in patches)
-    duplicates = sorted(
-        node_id for node_id, count in counts.items() if count > 1
-    )
-    current_by_id = {item.input_node_id: item for item in current.configs}
+    current_by_id: dict[str, list[InputGeneratorConfig]] = {}
+    for item in current.positive_generators:
+        current_by_id.setdefault(item.input_node_id, []).append(item)
     unknown = sorted(set(counts) - set(current_by_id))
-    if duplicates or unknown:
+    oversized = sorted(node_id for node_id, count in counts.items() if count > 8)
+    if oversized or unknown:
         raise GeneratorConfigError(
             "generator_patch_invalid_nodes",
-            f"Invalid generator patch nodes; unknown={unknown}, duplicates={duplicates}",
+            f"Invalid generator patch nodes; unknown={unknown}, more_than_eight={oversized}",
         )
 
     nodes_by_id = {
         item.input_node_id: item for item in current.snapshot.input_nodes
     }
-    explicit_by_id = {item.input_node_id: item for item in patches}
+    explicit_by_id: dict[str, list[InputGeneratorPatch]] = {}
+    for item in patches:
+        explicit_by_id.setdefault(item.input_node_id, []).append(item)
     required_ancestor_ids: list[str] = []
     for patch in patches:
         if patch.inclusion_probability != 1:
@@ -433,8 +508,11 @@ def expand_generator_patch_presence(
             explicit_ancestor = explicit_by_id.get(ancestor_id)
             if (
                 explicit_ancestor is not None
-                and explicit_ancestor.inclusion_probability is not None
-                and explicit_ancestor.inclusion_probability < 1
+                and any(
+                    item.inclusion_probability is not None
+                    and item.inclusion_probability < 1
+                    for item in explicit_ancestor
+                )
             ):
                 raise GeneratorConfigError(
                     "presence_closure_conflict",
@@ -446,30 +524,39 @@ def expand_generator_patch_presence(
                 required_ancestor_ids.append(ancestor_id)
             node = nodes_by_id.get(ancestor_id)
 
-    expanded_by_id = dict(explicit_by_id)
+    expanded_by_id = {key: list(value) for key, value in explicit_by_id.items()}
     for ancestor_id in required_ancestor_ids:
         explicit = expanded_by_id.get(ancestor_id)
         if explicit is not None:
-            if (
-                explicit.inclusion_probability == 1
+            if all(
+                item.inclusion_probability == 1
                 or (
-                    explicit.inclusion_probability is None
-                    and current_by_id[ancestor_id].inclusion_probability == 1
+                    item.inclusion_probability is None
+                    and all(
+                        current.inclusion_probability == 1
+                        for current in current_by_id[ancestor_id]
+                    )
                 )
+                for item in explicit
             ):
                 continue
-            expanded_by_id[ancestor_id] = explicit.model_copy(
-                update={"inclusion_probability": 1}
+            expanded_by_id[ancestor_id] = [
+                item.model_copy(update={"inclusion_probability": 1})
+                for item in explicit
+            ]
+            continue
+        if all(item.inclusion_probability == 1 for item in current_by_id[ancestor_id]):
+            continue
+        expanded_by_id[ancestor_id] = [
+            InputGeneratorPatch(
+                input_node_id=ancestor_id,
+                inclusion_probability=1,
+                strategy=item.strategy,
             )
-            continue
-        if current_by_id[ancestor_id].inclusion_probability == 1:
-            continue
-        expanded_by_id[ancestor_id] = InputGeneratorPatch(
-            input_node_id=ancestor_id,
-            inclusion_probability=1,
-        )
+            for item in current_by_id[ancestor_id]
+        ]
 
-    original_ids = [item.input_node_id for item in patches]
+    original_ids = list(dict.fromkeys(item.input_node_id for item in patches))
     synthetic_ids = [
         node_id
         for node_id in required_ancestor_ids
@@ -477,8 +564,9 @@ def expand_generator_patch_presence(
         and node_id in expanded_by_id
     ]
     return [
-        expanded_by_id[node_id]
+        item
         for node_id in [*original_ids, *synthetic_ids]
+        for item in expanded_by_id[node_id]
     ]
 
 
@@ -497,7 +585,7 @@ def preview_generator_patch(
         configs=updated,
         enforce_schema=False,
     )
-    return current.model_copy(update={"configs": updated})
+    return current.model_copy(update={"positive_generators": updated})
 
 
 def prepare_accepted_generator_patch(
@@ -538,7 +626,7 @@ def rebuild_generator_config(
         baseline.active_media_type,
     )
     baseline_by_id = {
-        item.input_node_id: item for item in baseline.configs
+        item.input_node_id: item for item in baseline.positive_generators
     }
     changed_input_ids = {
         item.input_node_id
@@ -562,7 +650,7 @@ def rebuild_generator_config(
     reasons = [*contract_reasons, *remaining_recoverable]
     candidate = baseline.model_copy(
         update={
-            "configs": configs,
+            "positive_generators": configs,
             "enabled": not reasons,
             "disabled_reasons": reasons,
         }
@@ -570,7 +658,7 @@ def rebuild_generator_config(
     _validate_configs(
         candidate,
         media_type=candidate.active_media_type,
-        configs=candidate.configs,
+        configs=candidate.positive_generators,
         enforce_schema=False,
     )
     return candidate
@@ -619,7 +707,7 @@ def _validate_initial_record(
         _validate_configs(
             record,
             media_type=record.active_media_type,
-            configs=record.configs,
+            configs=record.positive_generators,
             enforce_schema=True,
         )
     except GeneratorConfigError as exc:
@@ -671,14 +759,15 @@ def _validate_configs(
         for node in current.snapshot.input_nodes
     }
     counts = Counter(config.input_node_id for config in configs)
-    duplicates = sorted(node_id for node_id, count in counts.items() if count > 1)
+    oversized = sorted(node_id for node_id, count in counts.items() if count > 8)
     supplied_ids = set(counts)
     missing = sorted(set(nodes) - supplied_ids)
     extra = sorted(supplied_ids - set(nodes))
-    if duplicates or missing or extra:
+    if oversized or missing or extra:
         raise GeneratorConfigError(
             "generator_config_incomplete",
-            f"Invalid input node set; missing={missing}, extra={extra}, duplicates={duplicates}",
+            "Invalid input node set; "
+            f"missing={missing}, extra={extra}, more_than_eight={oversized}",
         )
     invalid_inclusion = sorted(
         config.input_node_id
@@ -693,7 +782,13 @@ def _validate_configs(
             f"{invalid_inclusion}",
         )
     selected_node_ids = _selected_node_ids(current, media_type)
-    configs_by_id = {item.input_node_id: item for item in configs}
+    # Container topology is shared by every candidate for an input. Its first
+    # candidate is sufficient for ancestor traversal, while compatibility
+    # below still checks every candidate independently.
+    configs_by_id = {
+        node_id: next(item for item in configs if item.input_node_id == node_id)
+        for node_id in counts
+    }
     selected_node_ids = _effective_node_ids(
         selected_node_ids,
         nodes=nodes,

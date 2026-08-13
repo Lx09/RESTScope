@@ -24,7 +24,7 @@ def build_semantic_input_map(
 ) -> SemanticInputMap:
     """Map active configurable nodes to request-shaped handles."""
 
-    configured_ids = {item.input_node_id for item in config.configs}
+    configured_ids = {item.input_node_id for item in config.positive_generators}
     active_root_id = (
         config.snapshot.media_type_node_ids.get(config.active_media_type)
         if config.active_media_type is not None

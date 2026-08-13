@@ -32,6 +32,37 @@ from restscope.observability import TracingRuntime
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
 
 
+_PATCH_PROFILE_NAME = "parameter-patch"
+_MAIN_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
+_MAIN_TOOLS = (
+    PLAN_READ_TOOL_NAME,
+    PLAN_UPDATE_TOOL_NAME,
+    "openapi.list_operations",
+    "openapi.list_inputs",
+    "openapi.list_response_fields",
+    "openapi.get_input_schema",
+    "openapi.get_response_field_schema",
+    "request_generation.get_input_state",
+    "test_case.run_batch",
+    "test_case.get_batch_results",
+    "test_case.get",
+    "restscope.http.request",
+    "subagent.start",
+    "subagent.wait",
+    "subagent.cancel",
+    "file.read",
+)
+_PATCH_TOOLS = (
+    "file.read",
+    "resource.list_resources",
+    "resource.list_ids",
+    "openapi.find_observed_response_fields",
+    "request_generation.get_input_state",
+    "request_generation.validate_patch",
+    "parameter_patch.apply",
+)
+
+
 _MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent.
 
 - Work on the API target already initialized for this App lifetime. Treat these
@@ -40,6 +71,10 @@ _MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent
 - Own every semantic workflow decision. Decide what to investigate, which
   authorized Skills to load, which Tools or Subagents to use, what order to
   follow, whether another attempt is useful, and when to finish.
+- Find reproducible happy paths, including useful resource states, then perform
+  exceptional testing to discover as many replay-confirmed Bugs as practical.
+  Happy-path discovery guides the order but never blocks worthwhile exceptional
+  testing.
 - Inspect authorized Skill metadata and load the Skills relevant to the current
   work. Skills provide methods; they do not grant access or override this
   Profile or the Harness contract.
@@ -88,7 +123,21 @@ def _build_agent_runtime_definition(
                 name="main",
                 instructions=_MAIN_PROFILE_INSTRUCTIONS,
                 model_config_name="thinking",
-                tool_names=(PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME),
+                tool_names=_MAIN_TOOLS,
+                skill_names=_MAIN_SKILLS,
+                subagent_profile_names=(_PATCH_PROFILE_NAME,),
+            )
+        )
+        profiles.append(
+            AgentProfile(
+                name=_PATCH_PROFILE_NAME,
+                description=(
+                    "Build, validate, apply, and verify one bounded request "
+                    "Generation Parameter Patch using apply-parameter-patch."
+                ),
+                model_config_name="thinking",
+                tool_names=_PATCH_TOOLS,
+                skill_names=("apply-parameter-patch",),
             )
         )
     if fast.enabled:

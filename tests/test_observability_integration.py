@@ -772,6 +772,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
     result = service.run_batch(
         context,
         operation_key=operation.operation_key,
+        test_mode="happy_path",
         case_count=2,
         seed=4,
     )

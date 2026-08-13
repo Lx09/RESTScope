@@ -68,6 +68,7 @@ from ..store import (
 )
 from ..constraint_solver import assignments_from_generated_case
 from ..generation import project_generated_input_value
+from ..selection import TestMode, choose_case_generators
 
 if TYPE_CHECKING:
     from ..reference_values import BehaviorMonitorReferences
@@ -424,10 +425,14 @@ class RequestGenerationPatchRuntime:
         semantic = build_semantic_input_map(config)
         allowed = set(affected_inputs)
         supplied = [change.input for change in patch.changes]
-        if len(supplied) != len(set(supplied)):
+        oversized = sorted(
+            handle for handle in set(supplied) if supplied.count(handle) > 8
+        )
+        if oversized:
             raise ParameterPatchValidationError(
-                "duplicate_patch_input",
-                "Each semantic input may be changed at most once",
+                "too_many_positive_generators",
+                "Each input may define at most eight positive Generators: "
+                + ", ".join(oversized),
             )
         updates: list[InputGeneratorPatch] = []
         provenance: list[SelectedReferenceProvenance] = []
@@ -720,8 +725,18 @@ def _generator_change_count(
     current: OperationGeneratorConfig,
 ) -> int:
     """Count complete per-input Generator changes for the Apply result."""
-    old = {item.input_node_id: item for item in previous.configs}
-    return sum(old.get(item.input_node_id) != item for item in current.configs)
+    def grouped(config: OperationGeneratorConfig) -> dict[str, tuple[object, ...]]:
+        result: dict[str, list[object]] = {}
+        for item in config.positive_generators:
+            result.setdefault(item.input_node_id, []).append(item)
+        return {key: tuple(value) for key, value in result.items()}
+
+    old = grouped(previous)
+    new = grouped(current)
+    return sum(
+        old.get(input_node_id) != new.get(input_node_id)
+        for input_node_id in old.keys() | new.keys()
+    )
 
 
 def _constraint_change_count(
@@ -759,9 +774,18 @@ def _sample(
     semantic = build_semantic_input_map(config)
     samples: list[dict[str, object]] = []
     for case_index in range(sample_count):
+        selection = choose_case_generators(
+            config=config,
+            constraints=constraints,
+            test_mode=TestMode.HAPPY_PATH,
+            statistics={},
+            run_seed=seed,
+            case_index=case_index,
+        )
+        assert selection is not None
         generated = generate_test_case(
             config.snapshot,
-            config,
+            selection.config,
             run_seed=seed,
             case_index=case_index,
             reference_values=reference_values,
@@ -796,44 +820,62 @@ def _domain_analysis(
     provenance: Sequence[SelectedReferenceProvenance],
     bindings: Sequence[ReferenceValueBinding],
 ) -> dict[str, object]:
-    """Describe the entire possible domain of one final Generator."""
+    """Describe every final positive candidate for one affected input."""
     semantic = build_semantic_input_map(config)
     node_id = semantic.node_by_handle[handle]
-    item = next(value for value in config.configs if value.input_node_id == node_id)
-    strategy = item.strategy.model_dump(mode="json")
-    binding = next(
-        (value for value in bindings if value.input_node_id == node_id),
-        None,
-    )
-    if binding is not None and binding.kind == "response_value":
-        strategy = {
-            "type": "response_value",
-            "source": {
-                "operation_key": binding.producer_operation_id,
-                "status_code": binding.status_code,
-                "media_type": binding.media_type,
-                "field": ResponseFieldReference.from_selector(
-                    binding.selector
-                ).handle,
-            },
+    candidates: list[dict[str, object]] = []
+    selected = [value for value in provenance if value.input_node_id == node_id]
+    for item in (
+        value
+        for value in config.positive_generators
+        if value.input_node_id == node_id
+    ):
+        strategy = item.strategy.model_dump(mode="json")
+        source = getattr(item.strategy, "source", None)
+        binding = next(
+            (
+                value
+                for value in bindings
+                if value.input_node_id == node_id
+                and source is not None
+                and value.selector == source.selector
+                and value.producer_operation_id == source.producer_operation_id
+            ),
+            None,
+        )
+        if binding is not None and binding.kind == "response_value":
+            strategy = {
+                "type": "response_value",
+                "source": {
+                    "operation_key": binding.producer_operation_id,
+                    "status_code": binding.status_code,
+                    "media_type": binding.media_type,
+                    "field": ResponseFieldReference.from_selector(
+                        binding.selector
+                    ).handle,
+                },
+            }
+        candidate: dict[str, object] = {
+            "inclusion_probability": item.inclusion_probability,
+            "strategy_type": strategy["type"],
+            "domain": strategy,
         }
-    analysis: dict[str, object] = {
-        "input": handle,
-        "inclusion_probability": item.inclusion_probability,
-        "strategy_type": strategy["type"],
-        "domain": strategy,
-    }
-    selected = next(
-        (value for value in provenance if value.input_node_id == node_id),
-        None,
-    )
-    if selected is not None:
-        analysis["reference"] = {
-            key: value
-            for key, value in selected.model_dump(mode="json").items()
-            if key != "input_node_id" and value not in (None, [], {})
-        }
-    return analysis
+        provenance_item = next(
+            (
+                value
+                for value in selected
+                if source is not None and value.source == source
+            ),
+            None,
+        )
+        if provenance_item is not None:
+            candidate["reference"] = {
+                key: value
+                for key, value in provenance_item.model_dump(mode="json").items()
+                if key != "input_node_id" and value not in (None, [], {})
+            }
+        candidates.append(candidate)
+    return {"input": handle, "positive_generators": candidates}
 
 
 def _validation_digest(

@@ -1,5 +1,16 @@
 # Findings & Decisions
 
+## Positive/negative Generator exploration (2026-08-13)
+
+- Reusing `InputGeneratorConfig` as one positive arm avoids a wrapper DTO;
+  repeated entries are grouped by input in operation state.
+- Negative derivation belongs to the frozen OpenAPI snapshot and v1 deliberately
+  excludes arrays, objects, and variants.
+- Selection is a focused pure module. The Store owns only App-lifetime reward
+  state; Batch execution owns preflight, HTTP effects, and feedback.
+- Replay-final Bug details flow back to the Primary response. A Catalog lookup
+  remains as a fallback for alternate response processors.
+
 ## Persistent Batch and Test Case results (2026-08-12)
 
 - The approved public seams are `APIBehaviorCatalog`, target response processing,
@@ -490,3 +501,28 @@
 - Context-manager methods were not part of the user-approved exact App
   Interface. Removing them leaves five public lifecycle names: initialization,
   start, close, environment construction, and the optional UI URL.
+# 2026-08-13: Positive/negative Generator exploration
+
+- User explicitly approved implementation directly on local `main`, overriding
+  the normal feature-worktree rule. Git delivery remains unauthorized.
+- Keep the deep seam in `restscope.request_generation`: Batch execution asks it
+  for selected candidates and reports factual outcomes; it must not duplicate
+  e-greedy, negative derivation, or Constraint graph logic.
+- Every input starts with the existing Generator as its sole positive candidate.
+  Parameter Patch may replace the complete positive candidate list. Negative
+  candidates are deterministic OpenAPI-derived missing/scalar violations and
+  cannot be patched.
+- Happy mode rewards selected positive candidates only for 2xx. Exceptional
+  mode chooses negative-generator versus ignored-Constraint behavior 50/50.
+- A negative mutation selects its input uniformly, selects that input's
+  negative candidate with epsilon 0.1, and uses positive candidates elsewhere.
+  It ignores the complete Constraint/Input connected component containing the
+  negative input in one step. If the remaining Constraints cannot generate a
+  request, it retries once with every Constraint ignored.
+- Negative reward is one for every final replay-confirmed Bug, including a
+  repeated Bug, and zero otherwise. Selection statistics are App-lifetime only,
+  isolated by operation revision, and never persisted.
+- Same-Batch cases use statistics frozen at Batch start; feedback affects the
+  next Batch. Resource-instance/state-level learning is intentionally deferred.
+- TDD seams are the Generation Store frozen state, the public Batch execution
+  result/Tool contract, and exact production Profile authorization.

@@ -73,13 +73,12 @@ def _app(monkeypatch, tmp_path):
     return app
 
 
-def test_production_main_profile_is_thinking_and_capability_light(
+def test_production_main_profile_owns_exploration_and_one_patch_child(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Unimplemented testing methods stay absent from the first Main Profile."""
+    """Production Main can explore while Patch mutation stays in one child."""
     from restscope.app.profiles import _build_agent_runtime_definition
-    from restscope.harness import build_harness
     from restscope.llm import LLMClient, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.observability import TracingRuntime
@@ -126,19 +125,21 @@ def test_production_main_profile_is_thinking_and_capability_light(
 
     assert profile.name == "main"
     assert profile.model_config_name == "thinking"
-    assert profile.tool_names == ("plan.read", "plan.update")
-    assert profile.skill_names == ()
-    assert profile.context_sources == ()
-    assert profile.subagent_profile_names == ()
-
-    build_harness(agent_runtime=definition).start_main_agent("main").start()
-    request = provider.requests[0]
-    assert request.model == "thinking-model"
-    assert [tool.name for tool in request.tools] == ["plan.read", "plan.update"]
-    assert any(
-        "single long-lived Main Agent" in message.content
-        for message in request.messages
+    assert "test_case.run_batch" in profile.tool_names
+    assert "parameter_patch.apply" not in profile.tool_names
+    assert profile.skill_names == (
+        "explore-api-behavior",
+        "resolve-operation-failures",
     )
+    assert profile.context_sources == ()
+    assert profile.subagent_profile_names == ("parameter-patch",)
+    patch_profile = next(
+        item for item in definition.profiles if item.name == "parameter-patch"
+    )
+    assert patch_profile.skill_names == ("apply-parameter-patch",)
+    assert "parameter_patch.apply" in patch_profile.tool_names
+
+    assert "single long-lived Main Agent" in profile.instructions
 
 
 def test_harness_binds_new_domain_tools_without_granting_them_to_main(

@@ -189,7 +189,7 @@ def validate_variant_branch_updates(
 ) -> None:
     """Require exclusive parent Variant selection for every changed branch."""
     nodes = {item.input_node_id: item for item in config.snapshot.input_nodes}
-    current_configs = {item.input_node_id: item for item in config.configs}
+    current_configs = {item.input_node_id: item for item in config.positive_generators}
     updates_by_node = {item.input_node_id: item for item in updates}
     for changed_node_id in updates_by_node:
         branch_node_id = changed_node_id

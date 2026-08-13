@@ -274,7 +274,11 @@ for _recursive_model in (
 
 
 class SemanticGeneratorChange(_Model):
-    """One complete final Generator state using a semantic input path."""
+    """One positive Generator candidate using a semantic input path.
+
+    One to eight entries may share the same ``input``. Together they replace
+    that input's complete positive candidate set in the listed order.
+    """
 
     input: str = Field(min_length=1, max_length=1000)
     inclusion_probability: float = Field(ge=0, le=1)
@@ -324,15 +328,14 @@ class CompiledParameterPatch(_Model):
 
     @model_validator(mode="after")
     def validate_patch(self) -> "CompiledParameterPatch":
-        """Reject empty, duplicate, or mismatched reference-backed content."""
+        """Reject oversized candidate sets or unrelated reference content."""
         changed = [item.input_node_id for item in self.updates]
-        if len(changed) != len(set(changed)):
-            raise ValueError("each input may be changed at most once")
+        counts = {node_id: changed.count(node_id) for node_id in set(changed)}
+        if any(count > 8 for count in counts.values()):
+            raise ValueError("each input may define at most eight positive candidates")
         selected = [
             item.input_node_id for item in self.selected_reference_provenance
         ]
-        if len(selected) != len(set(selected)):
-            raise ValueError("each input may select at most one reference option")
         if not set(selected).issubset(set(changed)):
             raise ValueError("reference options must belong to changed inputs")
         return self

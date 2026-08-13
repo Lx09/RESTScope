@@ -42,7 +42,7 @@ from restscope.request_generation.constraints import (
     ConstraintValidationError,
 )
 from restscope.request_generation.constraint_solver import ConstraintSolveError
-from restscope.request_generation.generation import generate_test_case
+from restscope.request_generation.generation import GenerationError, generate_test_case
 from restscope.request_generation.models import (
     GeneratedTestCase,
     PreparedTestRequest,
@@ -50,7 +50,16 @@ from restscope.request_generation.models import (
     ResponseValueGenerator,
 )
 from restscope.request_generation.ports import ReferenceValueProvider
-from restscope.request_generation.serialization import serialize_test_case
+from restscope.request_generation.selection import (
+    CaseGeneratorSelection,
+    GeneratorChoice,
+    TestMode,
+    choose_case_generators,
+)
+from restscope.request_generation.serialization import (
+    SerializationError,
+    serialize_test_case,
+)
 
 
 FAILURE_RESPONSE_BYTES = 10 * 1024 * 1024
@@ -67,6 +76,9 @@ class BatchExecutionResult:
     abstract_test_case_id: str
     batch_id: str
     seed: int
+    test_mode: TestMode
+    requested_case_count: int
+    skipped_case_count: int
     cases: tuple[BatchCaseOutcome, ...]
     batch_persistence_warnings: tuple[str, ...] = ()
 
@@ -163,14 +175,17 @@ class OperationTestingService:
         /,
         *,
         operation_key: str,
+        test_mode: TestMode,
         case_count: int = 1,
         seed: int | None = None,
     ) -> BatchExecutionResult:
         """Execute 1–5 cases from one frozen Generation Store revision."""
 
+        mode = TestMode(test_mode)
         return self._run_batch_traced(
             context,
             operation_key=operation_key,
+            test_mode=mode,
             case_count=case_count,
             seed=seed,
         )
@@ -181,6 +196,7 @@ class OperationTestingService:
         /,
         *,
         operation_key: str,
+        test_mode: TestMode,
         case_count: int,
         seed: int | None,
     ) -> BatchExecutionResult:
@@ -192,6 +208,7 @@ class OperationTestingService:
             kind="CHAIN",
             input_value={
                 "operation_key": operation_key,
+                "test_mode": test_mode.value,
                 "case_count": case_count,
                 "seed": seed,
             },
@@ -203,6 +220,7 @@ class OperationTestingService:
             outcome = self._execute_batch(
                 context,
                 operation_key=operation_key,
+                test_mode=test_mode,
                 case_count=case_count,
                 seed=seed,
             )
@@ -235,6 +253,7 @@ class OperationTestingService:
         /,
         *,
         operation_key: str,
+        test_mode: TestMode,
         case_count: int = 1,
         seed: int | None = None,
     ) -> BatchExecutionResult:
@@ -244,18 +263,12 @@ class OperationTestingService:
                 "invalid_case_count",
                 "case_count must be between 1 and 5",
             )
-        generation_state, frozen_references = self.config_store._snapshot_with(
+        generation_state, frozen_references, statistics = self.config_store._snapshot_with(
             operation_key,
             self._capture_reference_values,
         )
         config = generation_state.config
         operation = config.snapshot
-        expressions = [
-            expression
-            for item in generation_state.constraints
-            for expression in item.constraint.constraints
-        ]
-        constraints = ConstraintSet(constraints=expressions) if expressions else None
         run_seed = seed if seed is not None else secrets.randbits(63)
         # Build the complete request list before any network call. If one case
         # cannot be solved or serialized, the target sees none of the batch.
@@ -265,17 +278,29 @@ class OperationTestingService:
                 PreparedTestRequest,
                 PreparedTargetRequest,
                 dict[str, object],
+                CaseGeneratorSelection,
             ]
         ] = []
-        try:
-            for case_index in range(case_count):
-                generated = generate_test_case(
-                    operation,
-                    config,
+        skipped_case_count = 0
+        for case_index in range(case_count):
+            selection = choose_case_generators(
+                config=config,
+                constraints=generation_state.constraints,
+                test_mode=test_mode,
+                statistics=statistics,
+                run_seed=run_seed,
+                case_index=case_index,
+            )
+            if selection is None:
+                skipped_case_count += 1
+                continue
+            try:
+                generated = self._generate_selected_case(
+                    operation=operation,
+                    selection=selection,
                     run_seed=run_seed,
                     case_index=case_index,
-                    reference_values=frozen_references,
-                    constraints=constraints,
+                    frozen_references=frozen_references,
                 )
                 request = serialize_test_case(operation, generated)
                 target_request = prepare_target_request(
@@ -300,9 +325,36 @@ class OperationTestingService:
                         "test_case_request_too_large",
                         "Generated request evidence exceeds 2400 characters",
                     )
-                prepared.append((generated, request, target_request, inline_request))
-        except (ConstraintValidationError, ConstraintSolveError) as exc:
-            raise TestingExecutionError(exc.code, str(exc)) from exc
+                prepared.append(
+                    (
+                        generated,
+                        request,
+                        target_request,
+                        inline_request,
+                        selection,
+                    )
+                )
+            except (
+                ConstraintValidationError,
+                ConstraintSolveError,
+                GenerationError,
+                SerializationError,
+            ) as exc:
+                if test_mode is TestMode.HAPPY_PATH:
+                    raise TestingExecutionError(
+                        getattr(exc, "code", "test_case_preflight_failed"),
+                        str(exc),
+                    ) from exc
+                # A negative rule can be meaningful but unrepresentable for a
+                # particular OpenAPI serialization, such as omitting a path
+                # placeholder. Preserve the requested branch by skipping only
+                # that slot instead of substituting another test action.
+                skipped_case_count += 1
+        if not prepared:
+            raise TestingExecutionError(
+                "test_batch_has_no_executable_cases",
+                "No requested Batch slot produced an executable test case",
+            )
 
         # The audit identity is created only after every request has passed
         # generation and serialization preflight, but still before the first
@@ -317,7 +369,9 @@ class OperationTestingService:
             generation_state_digest=generation_state.state_digest,
             abstract_test_case_id=abstract_test_case_id,
             seed=run_seed,
+            test_mode=test_mode,
             requested_case_count=case_count,
+            skipped_case_count=skipped_case_count,
             cases=(),
             persisted_observation_count=0,
             persistence_warnings=(),
@@ -330,26 +384,29 @@ class OperationTestingService:
         cases: list[BatchCaseOutcome] = []
         persistence_warnings: list[str] = []
         try:
-            for case_index, (
+            feedback: list[tuple[GeneratorChoice, int]] = []
+            for (
                 generated,
                 request,
                 target_request,
                 inline_request,
-            ) in enumerate(prepared):
-                cases.append(
-                    self._execute_case(
-                        context,
-                        case_number=case_index + 1,
-                        case_index=case_index,
-                        generated=generated,
-                        request=request,
-                        target_request=target_request,
-                        catalog_request=inline_request,
-                        operation_path=operation.path,
-                        abstract_test_case_id=abstract_test_case_id,
-                        batch_id=batch.batch_id,
-                    )
+                selection,
+            ) in prepared:
+                case = self._execute_case(
+                    context,
+                    case_number=generated.case_index + 1,
+                    case_index=generated.case_index,
+                    generated=generated,
+                    request=request,
+                    target_request=target_request,
+                    catalog_request=inline_request,
+                    operation_path=operation.path,
+                    abstract_test_case_id=abstract_test_case_id,
+                    batch_id=batch.batch_id,
+                    selection=selection,
                 )
+                cases.append(case)
+                feedback.extend(_case_feedback(generated, selection, case))
                 self._update_batch_summary(
                     batch_id=batch.batch_id,
                     status="running",
@@ -358,6 +415,8 @@ class OperationTestingService:
                     abstract_test_case_id=abstract_test_case_id,
                     seed=run_seed,
                     requested_case_count=case_count,
+                    test_mode=test_mode,
+                    skipped_case_count=skipped_case_count,
                     cases=tuple(cases),
                     persistence_warnings=persistence_warnings,
                 )
@@ -373,6 +432,8 @@ class OperationTestingService:
                 abstract_test_case_id=abstract_test_case_id,
                 seed=run_seed,
                 requested_case_count=case_count,
+                test_mode=test_mode,
+                skipped_case_count=skipped_case_count,
                 cases=tuple(cases),
                 persistence_warnings=persistence_warnings,
             )
@@ -386,8 +447,16 @@ class OperationTestingService:
             abstract_test_case_id=abstract_test_case_id,
             seed=run_seed,
             requested_case_count=case_count,
+            test_mode=test_mode,
+            skipped_case_count=skipped_case_count,
             cases=tuple(cases),
             persistence_warnings=persistence_warnings,
+        )
+
+        self.config_store._record_generator_feedback(
+            operation_key=operation_key,
+            revision=generation_state.revision,
+            feedback=feedback,
         )
 
         return BatchExecutionResult(
@@ -397,9 +466,52 @@ class OperationTestingService:
             abstract_test_case_id=abstract_test_case_id,
             batch_id=batch.batch_id,
             seed=run_seed,
+            test_mode=test_mode,
+            requested_case_count=case_count,
+            skipped_case_count=skipped_case_count,
             cases=tuple(cases),
             batch_persistence_warnings=tuple(persistence_warnings),
         )
+
+    def _generate_selected_case(
+        self,
+        *,
+        operation,
+        selection: CaseGeneratorSelection,
+        run_seed: int,
+        case_index: int,
+        frozen_references: _FrozenReferenceValues | None,
+    ) -> GeneratedTestCase:
+        """Generate one selection and retry once with no Constraints.
+
+        An unsatisfiable positive combination or the remaining unrelated
+        Constraints of a negative case must not trigger gradual weakening.
+        The approved fallback removes all Constraints in one retry.
+        """
+
+        expressions = [
+            expression
+            for item in selection.constraints
+            for expression in item.constraint.constraints
+        ]
+        constraints = ConstraintSet(constraints=expressions) if expressions else None
+        try:
+            return generate_test_case(
+                operation,
+                selection.config,
+                run_seed=run_seed,
+                case_index=case_index,
+                reference_values=frozen_references,
+                constraints=constraints,
+            )
+        except (ConstraintValidationError, ConstraintSolveError):
+            return generate_test_case(
+                operation,
+                selection.config,
+                run_seed=run_seed,
+                case_index=case_index,
+                reference_values=frozen_references,
+            )
 
     def _update_batch_summary(
         self,
@@ -411,6 +523,8 @@ class OperationTestingService:
         abstract_test_case_id: str,
         seed: int,
         requested_case_count: int,
+        test_mode: TestMode,
+        skipped_case_count: int,
         cases: tuple[BatchCaseOutcome, ...],
         persistence_warnings: list[str],
     ) -> None:
@@ -436,7 +550,9 @@ class OperationTestingService:
                 generation_state_digest=generation_state.state_digest,
                 abstract_test_case_id=abstract_test_case_id,
                 seed=seed,
+                test_mode=test_mode,
                 requested_case_count=requested_case_count,
+                skipped_case_count=skipped_case_count,
                 cases=cases,
                 persisted_observation_count=persisted_count,
                 persistence_warnings=tuple(persistence_warnings),
@@ -463,7 +579,7 @@ class OperationTestingService:
         records: dict[str, tuple[dict[str, object], ...]] = {}
         resources: dict[tuple[str, ...], str] = {}
         identity_fields: dict[str, tuple[str, ...]] = {}
-        for item in state.config.configs:
+        for item in state.config.positive_generators:
             strategy = item.strategy
             if not isinstance(
                 strategy,
@@ -507,8 +623,13 @@ class OperationTestingService:
         )
         generators_json = {
             "active_media_type": state.config.active_media_type,
-            "configs": [
-                item.model_dump(mode="json") for item in state.config.configs
+            "positive_generators": [
+                item.model_dump(mode="json")
+                for item in state.config.positive_generators
+            ],
+            "negative_generators": [
+                item.model_dump(mode="json")
+                for item in state.config.negative_generators
             ],
             "reference_bindings": [
                 item.model_dump(mode="json") for item in state.reference_bindings
@@ -542,6 +663,7 @@ class OperationTestingService:
         operation_path: str,
         abstract_test_case_id: str,
         batch_id: str,
+        selection: CaseGeneratorSelection,
     ) -> BatchCaseOutcome:
         """Execute one prepared request and retain bounded inline facts."""
         with self.tracing_runtime.span(
@@ -579,8 +701,16 @@ class OperationTestingService:
                         abstract_test_case_id=abstract_test_case_id,
                         batch_id=batch_id,
                         batch_case_index=case_index,
-                        input_validity="valid",
-                        validity_provenance="positive_generator",
+                        input_validity=(
+                            "valid"
+                            if selection.action == "happy_path"
+                            else "invalid"
+                        ),
+                        validity_provenance=(
+                            "positive_generator"
+                            if selection.action == "happy_path"
+                            else selection.action
+                        ),
                     ),
                 )
                 media_type = (
@@ -601,8 +731,18 @@ class OperationTestingService:
                     response_body=response_body,
                     body_truncated=response.body_truncated,
                 )
+                bug_found, bug_categories = self._bug_assessment(response)
                 result = BatchCaseOutcome(
                     case_number=case_number,
+                    test_action=selection.action,
+                    negative_rule=(
+                        selection.negative_choice.rule
+                        if selection.negative_choice is not None
+                        else None
+                    ),
+                    ignored_constraint_count=len(selection.ignored_constraint_ids),
+                    bug_found=bug_found,
+                    bug_categories=bug_categories,
                     request=catalog_request,
                     status_code=response.status_code,
                     reason_phrase=response.reason_phrase or None,
@@ -633,9 +773,44 @@ class OperationTestingService:
 
         return BatchCaseOutcome(
             case_number=case_number,
+            test_action=selection.action,
+            negative_rule=(
+                selection.negative_choice.rule
+                if selection.negative_choice is not None
+                else None
+            ),
+            ignored_constraint_count=len(selection.ignored_constraint_ids),
             request=catalog_request,
             failure=failure,
         )
+
+    def _bug_assessment(self, response) -> tuple[bool, list[str]]:
+        """Read the final replay-confirmed Bug verdict for a Primary response."""
+
+        processor = response.processor_result
+        if processor is not None and processor.details is not None:
+            bug_found = processor.details.get("bug_found")
+            categories = processor.details.get("bug_categories")
+            if isinstance(bug_found, bool) and isinstance(categories, list):
+                return bug_found, [
+                    item for item in categories if isinstance(item, str)
+                ][:3]
+        observation_id = (
+            processor.details.get("observation_id")
+            if processor is not None and processor.details is not None
+            else None
+        )
+        if not isinstance(observation_id, str):
+            return False, []
+        record = self.api_behavior_catalog.get_oracle_assessment(observation_id)
+        if record is None:
+            return False, []
+        categories = [
+            check.name
+            for check in record.assessment.checks
+            if check.status == "reproduced"
+        ]
+        return record.is_bug, categories
 
 
 def _reference_key(
@@ -674,6 +849,32 @@ def _catalog_request(generated: GeneratedTestCase) -> dict[str, object]:
     if generated.body_present:
         request["body"] = deepcopy(generated.body)
     return request
+
+
+def _case_feedback(
+    generated: GeneratedTestCase,
+    selection: CaseGeneratorSelection,
+    outcome: BatchCaseOutcome,
+) -> list[tuple[GeneratorChoice, int]]:
+    """Build binary arm rewards from one completed request outcome.
+
+    Happy-path positive arms receive one for a 2xx response. Exceptional
+    negative arms receive one only for the final replay-confirmed Bug verdict.
+    Positive candidates used to fill the rest of an exceptional request do not
+    share the negative reward, keeping the two greedy policies independent.
+    """
+
+    if selection.action == "happy_path":
+        omitted = set(generated.omitted_input_node_ids)
+        reward = int(outcome.status_code is not None and outcome.failure is None)
+        return [
+            (choice, reward)
+            for choice in selection.positive_choices
+            if choice.input_node_id not in omitted
+        ]
+    if selection.negative_choice is not None:
+        return [(selection.negative_choice, int(outcome.bug_found))]
+    return []
 
 
 def _decode_failure_body(
@@ -716,7 +917,9 @@ def _batch_summary(
     generation_state_digest: str,
     abstract_test_case_id: str,
     seed: int,
+    test_mode: TestMode,
     requested_case_count: int,
+    skipped_case_count: int,
     cases: tuple[BatchCaseOutcome, ...],
     persisted_observation_count: int,
     persistence_warnings: tuple[str, ...],
@@ -751,13 +954,16 @@ def _batch_summary(
         "generation_state_digest": generation_state_digest,
         "abstract_test_case_id": abstract_test_case_id,
         "seed": seed,
+        "test_mode": test_mode.value,
         "requested_case_count": requested_case_count,
         "executed_case_count": len(cases),
+        "skipped_case_count": skipped_case_count,
         "persisted_observation_count": persisted_observation_count,
         "success_count": success_count,
         "failure_count": len(cases) - success_count,
         "http_status_counts": status_counts,
         "transport_failure_count": transport_failure_count,
+        "bug_count": sum(case.bug_found for case in cases),
         "logs": safe_logs,
     }
 

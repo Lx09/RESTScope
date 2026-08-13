@@ -284,13 +284,24 @@ GeneratorStrategy = Annotated[
 
 
 class InputGeneratorConfig(BaseModel):
-    """One persisted strategy bound to a stable IR input node."""
+    """One positive strategy candidate bound to a stable IR input node."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     input_node_id: str
     inclusion_probability: float = Field(ge=0, le=1)
     strategy: GeneratorStrategy
+
+
+class NegativeInputGeneratorConfig(InputGeneratorConfig):
+    """One deterministic OpenAPI rule violation for a scalar input.
+
+    The inherited inclusion probability and strategy describe the invalid
+    value or omission to generate. ``rule`` explains which frozen schema rule
+    was deliberately violated; negative candidates never come from a Patch.
+    """
+
+    rule: str = Field(min_length=1, max_length=100)
 
 
 class InputGeneratorPatch(BaseModel):
@@ -411,8 +422,9 @@ class OperationGeneratorConfig(BaseModel):
     """Current configuration for all active inputs of one operation.
 
     The immutable request snapshot is derived from the App's current OpenAPI
-    IR.  Only ``configs`` are stored in the database; the other fields are
-    rebuilt deterministically whenever the catalog reads current input rows.
+    IR. Positive candidates are replaceable App-lifetime configuration.
+    Negative candidates are rebuilt deterministically from the same snapshot
+    and are immutable from Parameter Patches.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -422,7 +434,10 @@ class OperationGeneratorConfig(BaseModel):
     enabled: bool = True
     disabled_reasons: list[GeneratorDisabledReason] = Field(default_factory=list)
     active_media_type: str | None = None
-    configs: list[InputGeneratorConfig]
+    positive_generators: list[InputGeneratorConfig]
+    negative_generators: list[NegativeInputGeneratorConfig] = Field(
+        default_factory=list
+    )
 
 class GeneratedNodeValue(BaseModel):
     """One concrete scalar generated for an input-node occurrence."""

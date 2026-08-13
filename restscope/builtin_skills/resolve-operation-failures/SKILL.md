@@ -55,8 +55,9 @@ the linked Reference when its stage becomes active:
    `request_generation.get_input_state` and verifies the reported revision,
    state digest, last-applied validation digest, Generators, Constraints, and
    exact reference bindings.
-9. After confirmed application, call `test_case.run_batch` for a new complete
-   Batch. Apply success is not HTTP success; Batch success is not a substitute
+9. After confirmed application, call `test_case.run_batch` with
+   `test_mode="happy_path"` for a new complete Batch. Apply success is not HTTP
+   success; Batch success is not a substitute
    for value-predicate proof.
 10. Use new Batch evidence to finish, rediagnose, or delegate a new complete
     Patch. Never auto-rollback: restoring behavior requires a newly validated

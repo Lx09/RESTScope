@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from restscope.llm import ToolSpec
 from restscope.request_generation.store import GeneratorConfigError
+from restscope.request_generation.selection import TestMode
 from restscope.tools.context import ToolContext
 from restscope.tools.runtime import ToolBinding, ToolFailure
 
@@ -27,11 +28,12 @@ _MAX_OUTPUT_CHARACTERS = 24_000
 
 
 class RunBatchInput(BaseModel):
-    """Select one operation and a small deterministic case count."""
+    """Select one operation, semantic test mode, and bounded case count."""
 
     model_config = ConfigDict(extra="forbid")
 
     operation_key: str = Field(min_length=1, max_length=1_000)
+    test_mode: Literal["happy_path", "exceptional"]
     case_count: int = Field(default=1, ge=1, le=5)
     seed: int | None = Field(default=None, ge=0, le=2**63 - 1)
 
@@ -42,6 +44,15 @@ class BatchCaseView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     case_number: int = Field(ge=1, le=5)
+    test_action: Literal[
+        "happy_path",
+        "negative_generator",
+        "ignored_constraint",
+    ]
+    negative_rule: str | None = None
+    ignored_constraint_count: int = Field(ge=0, le=20)
+    bug_found: bool
+    bug_categories: list[str] = Field(max_length=3)
     request: dict[str, object] = Field(
         description="Complete bounded canonical method, URL, headers, and body for this case."
     )
@@ -66,9 +77,13 @@ class RunBatchOutput(BaseModel):
     abstract_test_case_id: str
     batch_id: str
     seed: int = Field(ge=0)
-    case_count: int = Field(ge=1, le=5)
+    test_mode: Literal["happy_path", "exceptional"]
+    requested_case_count: int = Field(ge=1, le=5)
+    executed_case_count: int = Field(ge=1, le=5)
+    skipped_case_count: int = Field(ge=0, le=5)
     success_count: int = Field(ge=0, le=5)
     failure_count: int = Field(ge=0, le=5)
+    bug_count: int = Field(ge=0, le=5)
     batch_persistence_warnings: list[str] = Field(max_length=20)
     cases: list[BatchCaseView] = Field(min_length=1, max_length=5)
 
@@ -83,6 +98,7 @@ class BatchExecutionBackend(Protocol):
         context: ToolContext,
         *,
         operation_key: str,
+        test_mode: TestMode,
         case_count: int,
         seed: int | None,
     ) -> object: ...
@@ -110,6 +126,7 @@ class TestCaseBatchToolBackend:
                 result = self.service.run_batch(
                     context,
                     operation_key=request.operation_key,
+                    test_mode=TestMode(request.test_mode),
                     case_count=request.case_count,
                     seed=request.seed,
                 )
@@ -127,9 +144,13 @@ class TestCaseBatchToolBackend:
                 abstract_test_case_id=result.abstract_test_case_id,
                 batch_id=result.batch_id,
                 seed=result.seed,
-                case_count=len(cases),
+                test_mode=result.test_mode.value,
+                requested_case_count=result.requested_case_count,
+                executed_case_count=len(cases),
+                skipped_case_count=result.skipped_case_count,
                 success_count=result.success_count,
                 failure_count=len(cases) - result.success_count,
+                bug_count=sum(case.bug_found for case in result.cases),
                 batch_persistence_warnings=list(
                     result.batch_persistence_warnings
                 ),
@@ -169,6 +190,11 @@ def _case_view(case) -> BatchCaseView:
     transport = failure if getattr(failure, "kind", None) == "transport" else None
     return BatchCaseView(
         case_number=case.case_number,
+        test_action=case.test_action,
+        negative_rule=case.negative_rule,
+        ignored_constraint_count=case.ignored_constraint_count,
+        bug_found=case.bug_found,
+        bug_categories=case.bug_categories,
         request=case.request,
         outcome_kind="transport" if transport is not None else "http",
         status_code=case.status_code,
@@ -183,8 +209,9 @@ def test_case_run_batch_tool_spec() -> ToolSpec:
     return ToolSpec(
         name=TEST_CASE_RUN_BATCH_TOOL_NAME,
         description=(
-            "Generate and execute 1 to 5 requests for one exact operation from "
-            "a frozen request-generation revision. Write methods may permanently "
+            "Generate and execute 1 to 5 happy-path or exceptional requests for "
+            "one exact operation from a frozen request-generation revision. "
+            "The caller must choose test_mode. Write methods may permanently "
             "change target state and are not rolled back."
         ),
         kind="local_function",

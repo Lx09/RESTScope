@@ -158,7 +158,7 @@ def _solver_config():
         operation_key=snapshot.operation_key,
         snapshot=snapshot,
         active_media_type="application/json",
-        configs=configs,
+        positive_generators=configs,
     )
 
 
@@ -308,9 +308,9 @@ def test_candidate_domain_samples_regex_generator_values() -> None:
             if item.input_node_id == "query/mode"
             else item
         )
-        for item in config.configs
+        for item in config.positive_generators
     ]
-    config = config.model_copy(update={"configs": configs})
+    config = config.model_copy(update={"positive_generators": configs})
     constraints = _constraint_set(
         {"type": "present", "input_node_id": "query/mode"},
     )
