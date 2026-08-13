@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import logging
 import traceback
-
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 
 from restscope.observability.content import PreparedContent, TraceContentEncoder
 from restscope.observability.openinference import prepare_message_attributes
-from .redaction import Redactor
 
+from .redaction import Redactor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class TraceSpan:
 
         try:
             normalized = self._normalize_messages(messages)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
         self._set_llm_messages(
             "input",
@@ -61,7 +60,7 @@ class TraceSpan:
 
         try:
             normalized = self._normalize_messages(messages)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
         self._set_llm_messages(
             "output",
@@ -79,7 +78,7 @@ class TraceSpan:
         if self._live_span is not None:
             try:
                 self._live_span.set_attribute(name, value)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if self._span is None or self._content_encoder is None:
             return
@@ -88,7 +87,7 @@ class TraceSpan:
             if isinstance(redacted, dict | list):
                 redacted = self._content_encoder.prepare(redacted).value
             self._span.set_attribute(name, redacted)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def set_input(self, value: object) -> None:
@@ -110,7 +109,7 @@ class TraceSpan:
             return
         try:
             self._live_span.set_detail(name, value)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def record_error(self, exc: BaseException) -> None:
@@ -123,7 +122,7 @@ class TraceSpan:
                     self._live_span.mark_interrupted()
                 else:
                     self._live_span.mark_error(str(exc))
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if self._span is None or self._content_encoder is None:
             return
@@ -144,7 +143,7 @@ class TraceSpan:
                     "exception.stacktrace": stacktrace,
                 },
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def mark_error(self, message: str) -> None:
@@ -152,14 +151,14 @@ class TraceSpan:
         if self._live_span is not None:
             try:
                 self._live_span.mark_error(message)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if self._span is None or self._content_encoder is None:
             return
         try:
             redacted = self._content_encoder.redactor.redact_text(message)
             self._mark_export_error(redacted)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def mark_ok(self) -> None:
@@ -167,7 +166,7 @@ class TraceSpan:
         if self._live_span is not None and not self._has_error:
             try:
                 self._live_span.mark_ok()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if self._span is None or self._has_error:
             return
@@ -175,14 +174,14 @@ class TraceSpan:
             from opentelemetry.trace.status import Status, StatusCode
 
             self._span.set_status(Status(StatusCode.OK))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def _set_content(self, prefix: str, value: object) -> None:
         if self._live_span is not None:
             try:
                 self._live_span.set_content(prefix, value)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if self._span is None or self._content_encoder is None:
             return
@@ -191,7 +190,7 @@ class TraceSpan:
             self._span.set_attribute(f"{prefix}.value", prepared.value)
             self._span.set_attribute(f"{prefix}.mime_type", "application/json")
             self._set_size_attributes(prefix, prepared)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def _mark_export_error(self, message: str) -> None:
@@ -214,7 +213,7 @@ class TraceSpan:
         if self._live_span is not None:
             try:
                 self._live_span.set_messages(prefix, messages, summary=summary)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         if self._span is None or self._content_encoder is None:
             return
@@ -259,7 +258,7 @@ class TraceSpan:
                     ),
                 ),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def _normalize_messages(self, messages: object) -> list[dict[str, object]]:
@@ -318,7 +317,7 @@ class TracingRuntime:
         self._closed = False
 
     @classmethod
-    def disabled(cls, *, redactor: Redactor | None = None) -> "TracingRuntime":
+    def disabled(cls, *, redactor: Redactor | None = None) -> TracingRuntime:
         """Create a no-export runtime that preserves the same context-manager API."""
         return cls(redactor=redactor)
 
@@ -371,7 +370,7 @@ class TracingRuntime:
                     input_value=input_value,
                     attributes=attributes,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 live_span = None
         span = TraceSpan(
             content_encoder=self._content_encoder,
@@ -392,7 +391,7 @@ class TracingRuntime:
             if live_span is not None:
                 try:
                     live_span.finish()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
     @contextmanager
@@ -421,7 +420,7 @@ class TracingRuntime:
                     input_value=input_value,
                     attributes=attributes,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 live_span = None
         manager = None
         otel_span = None
@@ -429,7 +428,7 @@ class TracingRuntime:
             try:
                 manager = self._backend.start_as_current_span(name)
                 otel_span = manager.__enter__()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self._warn("Tracing span creation failed", exc)
 
         span = TraceSpan(
@@ -458,12 +457,12 @@ class TracingRuntime:
             if manager is not None:
                 try:
                     manager.__exit__(None, None, None)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     self._warn("Tracing span finalization failed", exc)
             if live_span is not None:
                 try:
                     live_span.finish()
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
     def close(self) -> None:
@@ -475,7 +474,7 @@ class TracingRuntime:
             return
         try:
             self._backend.close()
-        except Exception as exc:  # pragma: no cover - backend-specific failure.
+        except Exception as exc:  # pragma: no cover - backend-specific failure.  # noqa: BLE001
             self._warn("Tracing shutdown failed", exc)
 
     def __repr__(self) -> str:
@@ -511,7 +510,7 @@ def build_tracing_runtime(
         from restscope.observability.phoenix import build_phoenix_backend
 
         backend = build_phoenix_backend(config=config)
-    except Exception as exc:  # Missing extras and initialization failures are fail-open.
+    except Exception as exc:  # Missing extras and initialization failures are fail-open.  # noqa: BLE001
         LOGGER.warning(
             "Tracing initialization failed; continuing without tracing: %s",
             shared_redactor.redact_text(str(exc)),

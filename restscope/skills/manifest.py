@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 _REFERENCE_PATH_PATTERN = r"^references/[A-Za-z0-9][A-Za-z0-9._-]*\.md$"
 
 

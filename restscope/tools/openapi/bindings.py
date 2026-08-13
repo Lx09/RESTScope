@@ -20,8 +20,9 @@ from .specs import (
     OPENAPI_LIST_RESPONSE_FIELDS_TOOL_NAME,
 )
 
+
 def openapi_tool_bindings(
-    backend: "OpenAPIToolBackend",
+    backend: OpenAPIToolBackend,
     *,
     names: set[str] | None = None,
 ) -> tuple[ToolBinding, ...]:
@@ -48,7 +49,7 @@ def openapi_tool_bindings(
     )
 
 def observed_response_fields_tool_binding(
-    backend: "OpenAPIToolBackend | None",
+    backend: OpenAPIToolBackend | None,
     *,
     unavailable: Callable[..., dict[str, object]],
 ) -> ToolBinding:

@@ -7,9 +7,6 @@ def _api_behavior_catalog():
     """Create a real in-memory Catalog required before every Batch send."""
 
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
@@ -29,17 +26,19 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
     """A Batch exposes one durable abstract state identity, never per-case rows."""
     import httpx
 
-    from restscope.harness.operation_testing import OperationTestingService
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
+    from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import RequestGenerationConfigStore
     from restscope.target_api import TargetAPIClient
@@ -146,6 +145,7 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
 def test_batch_freezes_reference_values_with_generation_revision() -> None:
     """All cases use one value snapshot even if live evidence changes later."""
     import httpx
+
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
@@ -370,9 +370,11 @@ def test_observation_failure_does_not_stop_later_batch_cases() -> None:
 
     import httpx
 
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import RequestGenerationConfigStore
@@ -454,9 +456,11 @@ def test_final_batch_summary_failure_returns_inline_results_with_warning() -> No
 
     import httpx
 
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
     from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import RequestGenerationConfigStore

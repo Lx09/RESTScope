@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Literal, TypeAlias, cast
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -29,7 +29,7 @@ class InputAssignment(_ConstraintModel):
     value: object = None
 
     @model_validator(mode="after")
-    def validate_value_state(self) -> "InputAssignment":
+    def validate_value_state(self) -> InputAssignment:
         """Reject impossible combinations of presence, value flag, and value."""
         if not self.present and self.has_value:
             raise ValueError("an absent input cannot have a value")
@@ -76,8 +76,8 @@ class ArithmeticValue(_ConstraintModel):
     """
     type: Literal["arithmetic"]
     operator: Literal["+", "-", "*", "/"]
-    left: "ValueExpression"
-    right: "ValueExpression"
+    left: ValueExpression
+    right: ValueExpression
 
 
 class PresentPredicate(_ConstraintModel):
@@ -102,8 +102,8 @@ class ComparePredicate(_ConstraintModel):
     """
     type: Literal["compare"]
     operator: Literal["==", "!=", "<", "<=", ">", ">="]
-    left: "ValueExpression"
-    right: "ValueExpression"
+    left: ValueExpression
+    right: ValueExpression
 
 
 class MatchesPredicate(_ConstraintModel):
@@ -115,7 +115,7 @@ class MatchesPredicate(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["matches"]
-    value: "ValueExpression"
+    value: ValueExpression
     pattern: str = Field(max_length=2000)
 
 
@@ -128,8 +128,8 @@ class ImplicationConstraint(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["implies"]
-    condition: "BooleanExpression"
-    consequence: "BooleanExpression"
+    condition: BooleanExpression
+    consequence: BooleanExpression
 
 
 class CardinalityConstraint(_ConstraintModel):
@@ -141,7 +141,7 @@ class CardinalityConstraint(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["cardinality"]
-    expressions: list["BooleanExpression"] = Field(min_length=1, max_length=100)
+    expressions: list[BooleanExpression] = Field(min_length=1, max_length=100)
     minimum: int = Field(ge=0)
     maximum: int = Field(ge=0)
 
@@ -155,7 +155,7 @@ class AndConstraint(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["and"]
-    expressions: list["BooleanExpression"] = Field(min_length=1, max_length=100)
+    expressions: list[BooleanExpression] = Field(min_length=1, max_length=100)
 
 
 class OrConstraint(_ConstraintModel):
@@ -167,7 +167,7 @@ class OrConstraint(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["or"]
-    expressions: list["BooleanExpression"] = Field(min_length=1, max_length=100)
+    expressions: list[BooleanExpression] = Field(min_length=1, max_length=100)
 
 
 class NotConstraint(_ConstraintModel):
@@ -179,15 +179,15 @@ class NotConstraint(_ConstraintModel):
     corresponding service functions.
     """
     type: Literal["not"]
-    expression: "BooleanExpression"
+    expression: BooleanExpression
 
 
-ValueExpression: TypeAlias = Annotated[
+type ValueExpression = Annotated[
     InputValue | LiteralValue | ArithmeticValue,
     Field(discriminator="type"),
 ]
 
-BooleanExpression: TypeAlias = Annotated[
+type BooleanExpression = Annotated[
     PresentPredicate
     | ComparePredicate
     | MatchesPredicate
@@ -227,7 +227,7 @@ for _model in _RECURSIVE_MODELS:
     _model.model_rebuild(_types_namespace=globals())
 
 
-ConstraintKind: TypeAlias = Literal[
+type ConstraintKind = Literal[
     "Requires",
     "Or",
     "OnlyOne",

@@ -24,9 +24,9 @@ from restscope.agent import (
 from restscope.agent.prompt import AgentPromptSession, PromptSessionError
 from restscope.llm import LLMClient, LLMModelConfig
 from restscope.skills import (
+    SkillCatalog,
     SkillDefinition,
     SkillPolicy,
-    SkillCatalog,
     builtin_skill_catalog,
 )
 from restscope.tools import AgentToolbox, ToolBinding, ToolCatalog, builtin_tool_catalog
@@ -56,7 +56,6 @@ if TYPE_CHECKING:
     from restscope.observability import TracingRuntime
 
 from .agent_control import AgentTreeControl
-
 
 _SUBAGENT_TOOL_NAMES = (
     SUBAGENT_START_TOOL_NAME,
@@ -185,7 +184,7 @@ class AgentRuntimeResolver:
         *,
         built_in_catalog: ToolCatalog | None = None,
         external_catalog: ToolCatalog | None = None,
-        tracing_runtime: "TracingRuntime | None" = None,
+        tracing_runtime: TracingRuntime | None = None,
     ) -> None:
         """Index every name and reject bad configuration before model use."""
         self.definition = definition
@@ -469,7 +468,7 @@ class AgentRuntimeResolver:
         if collisions:
             raise ValueError(
                 "Tool name exists in built-in and external Catalogs: "
-                f"{sorted(collisions)[0]}"
+                f"{min(collisions)}"
             )
         for binding_name in self.binding_factories:
             if binding_name == SKILL_READ_TOOL_NAME:
@@ -559,7 +558,7 @@ class AgentRuntimeResolver:
                 if missing_tools:
                     raise ValueError(
                         f"Skill {skill_name} requires Tool "
-                        f"{sorted(missing_tools)[0]} in the same Profile"
+                        f"{min(missing_tools)} in the same Profile"
                     )
                 missing_context = (
                     set(skill.manifest.required_context_sources) - granted_context
@@ -567,7 +566,7 @@ class AgentRuntimeResolver:
                 if missing_context:
                     raise ValueError(
                         f"Skill {skill_name} requires context source "
-                        f"{sorted(missing_context)[0]} in the same Profile"
+                        f"{min(missing_context)} in the same Profile"
                     )
                 if not self.skill_policy.is_allowed(skill=skill):
                     raise ValueError(f"Skill is not allowed by Harness policy: {skill_name}")

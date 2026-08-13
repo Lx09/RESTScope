@@ -11,8 +11,8 @@ dynamic groups; stable instructions and the original user task remain separate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import json
+from dataclasses import dataclass, replace
 
 from restscope.llm import LLMMessage, LLMModelConfig, LLMResponse
 

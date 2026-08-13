@@ -28,8 +28,8 @@ def api_behavior_catalog():
 @pytest.fixture
 def tool_context():
     """Fixture: provide tool context for isolated scenarios."""
-    from restscope.tools.context import ToolContext
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools.context import ToolContext
 
     ir = OpenAPIParser.parse(
         {

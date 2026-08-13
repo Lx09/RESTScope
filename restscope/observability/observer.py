@@ -20,23 +20,36 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import Condition, RLock
+from types import MappingProxyType
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
-from .redaction import Redactor
-
 from .projection import (
-    EventKind,
     HTTP_TOOL_NAME,
+    EventKind,
     classify_tool,
+)
+from .projection import (
     event_summary as _event_summary,
+)
+from .projection import (
     merge_scope as _merge_scope,
+)
+from .projection import (
     message_fingerprint as _message_fingerprint,
+)
+from .projection import (
     request_body as _request_body,
-    semantic_status as _semantic_status,
-    tool_status as _tool_status,
+)
+from .projection import (
     utc_now as _utc_now,
 )
+from .redaction import Redactor
+
+if TYPE_CHECKING:
+    from .http_exchange import LiveHTTPExchange
+    from .span import LiveSpan
 
 _IGNORED_TOOL_SPANS = {"RESTScopeTestCase.execute"}
 _PLAN_UPDATE_TOOL = "plan.update"
@@ -73,12 +86,18 @@ class _ActiveContext:
     event_id: str | None
     context_id: str | None
     agent: dict[str, object] | None
-    scope: dict[str, object]
+    scope: Mapping[str, object]
 
 
-_CURRENT_CONTEXT: ContextVar[_ActiveContext] = ContextVar(
+_EMPTY_CONTEXT = _ActiveContext(
+    event_id=None,
+    context_id=None,
+    agent=None,
+    scope=MappingProxyType({}),
+)
+_CURRENT_CONTEXT: ContextVar[_ActiveContext | None] = ContextVar(
     "restscope_live_run_context",
-    default=_ActiveContext(event_id=None, context_id=None, agent=None, scope={}),
+    default=None,
 )
 
 
@@ -190,7 +209,7 @@ class LiveRunObserver:
                     self._run["result"] = safe_result
                 self._run["ended_at"] = _utc_now()
                 self._publish_locked("run.update", deepcopy(self._run))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def interrupt_run(self) -> None:
@@ -236,7 +255,7 @@ class LiveRunObserver:
                 }
                 self._run["ended_at"] = now
                 self._publish_locked("run.update", deepcopy(self._run))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def start_span(
@@ -246,7 +265,7 @@ class LiveRunObserver:
         kind: str,
         input_value: object | None = None,
         attributes: Mapping[str, object] | None = None,
-    ) -> "LiveSpan | None":
+    ) -> LiveSpan | None:
         """Open one semantic event or an invisible aggregation context.
 
         Agent and helper spans provide ownership only. An LLM span under an
@@ -258,7 +277,7 @@ class LiveRunObserver:
         try:
             if not self.active:
                 return None
-            parent = _CURRENT_CONTEXT.get()
+            parent = _CURRENT_CONTEXT.get() or _EMPTY_CONTEXT
             safe_attributes = self._safe(dict(attributes or {}))
             scope = _merge_scope(parent.scope, safe_attributes)
             context_id = f"context_{uuid4().hex}"
@@ -355,7 +374,7 @@ class LiveRunObserver:
                 ),
                 is_agent_run=name in {"Agent.run", "Agent.start"} and kind == "CHAIN",
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def start_http_exchange(
@@ -368,7 +387,7 @@ class LiveRunObserver:
         request_kwargs: Mapping[str, object] | None,
         operation_key: str | None,
         path_template: str | None,
-    ) -> "LiveHTTPExchange | None":
+    ) -> LiveHTTPExchange | None:
         """Attach one final prepared target request to its semantic owner.
 
         A request under ``restscope.http.request`` enriches that Tool card.
@@ -380,7 +399,7 @@ class LiveRunObserver:
         try:
             if not self.active:
                 return None
-            parent = _CURRENT_CONTEXT.get()
+            parent = _CURRENT_CONTEXT.get() or _EMPTY_CONTEXT
             owner = self._event_copy(parent.event_id)
             if owner is None:
                 return None
@@ -414,7 +433,7 @@ class LiveRunObserver:
                     event_id=str(owner["event_id"]),
                 )
             return None
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def snapshot(self) -> dict[str, object]:
@@ -626,7 +645,7 @@ class LiveRunObserver:
                     self._event_order.append(event_id)
                 self._events[event_id] = deepcopy(event)
                 self._publish_locked("timeline.upsert", event)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def _update_event(self, event_id: str, **changes: object) -> dict[str, object] | None:
@@ -640,7 +659,7 @@ class LiveRunObserver:
                 event["revision"] = int(event.get("revision", 0)) + 1
                 self._publish_locked("timeline.upsert", event)
                 return deepcopy(event)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def _event_copy(self, event_id: str | None) -> dict[str, object] | None:

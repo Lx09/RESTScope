@@ -327,7 +327,7 @@ def test_runtime_rejects_catalog_collisions_and_unowned_binding_factories() -> N
                         name="not.in.catalog",
                         create=lambda: ToolBinding(
                             name="not.in.catalog",
-                            execute=lambda: {},
+                            execute=dict,
                         ),
                     ),
                 ),
@@ -590,7 +590,11 @@ def test_profile_resolves_exact_skill_context_and_tool_binding_into_agent() -> N
 def test_agent_corrects_mixed_and_invalid_tool_outputs_without_executing_them() -> None:
     """Malformed model turns receive feedback and cannot change Tool state."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ToolBindingFactory, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ToolBindingFactory,
+        build_harness,
+    )
     from restscope.llm import LLMResponse, ToolCall
     from restscope.tools import ToolBinding
 
@@ -663,7 +667,11 @@ def test_agent_corrects_mixed_and_invalid_tool_outputs_without_executing_them() 
 def test_shared_rollout_budget_uses_cached_input_and_blocks_overage_action() -> None:
     """The over-budget response is charged but its Tool Call never executes."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ToolBindingFactory, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ToolBindingFactory,
+        build_harness,
+    )
     from restscope.llm import LLMResponse, ToolCall
     from restscope.tools import ToolBinding
 
@@ -719,7 +727,11 @@ def test_shared_rollout_budget_uses_cached_input_and_blocks_overage_action() -> 
 def test_rollout_budget_reminder_is_injected_once_after_crossing() -> None:
     """Crossing a waterline adds one bounded reminder to the next model turn."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ToolBindingFactory, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ToolBindingFactory,
+        build_harness,
+    )
     from restscope.llm import LLMResponse, ToolCall
     from restscope.tools import ToolBinding
 
@@ -791,7 +803,11 @@ def test_rollout_budget_reminder_is_injected_once_after_crossing() -> None:
 def test_agent_compacts_at_eighty_percent_with_same_model_and_no_tools() -> None:
     """Large history is summarized atomically before the next ordinary turn."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ToolBindingFactory, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ToolBindingFactory,
+        build_harness,
+    )
     from restscope.llm import LLMResponse, ToolCall
     from restscope.tools import ToolBinding
 
@@ -879,7 +895,11 @@ def test_agent_compacts_at_eighty_percent_with_same_model_and_no_tools() -> None
 def test_agent_returns_stable_failure_after_two_invalid_compactions() -> None:
     """Two blank summaries preserve history and end without a normal model turn."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ToolBindingFactory, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ToolBindingFactory,
+        build_harness,
+    )
     from restscope.llm import LLMResponse, ToolCall
     from restscope.tools import ToolBinding
 

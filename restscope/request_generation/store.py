@@ -9,48 +9,47 @@ Constraint, Patch, sample, or revision history is persisted.
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Callable, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
 import hashlib
 import json
+from collections import Counter
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from threading import RLock
-from typing import Iterator, Literal, TypeVar
+from typing import Literal, TypeVar
 
-from restscope.target_api.media_type import normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.operation_references.response import ResponseSourceCoordinate
+from restscope.target_api.media_type import normalize_media_type
 
+from .constraints import OperationConstraintRecord
 from .models import (
     ArrayGenerator,
     BooleanGenerator,
     ChoiceGenerator,
     ConstantGenerator,
     FormatGenerator,
+    GeneratorDisabledReason,
     InputGeneratorConfig,
     InputGeneratorPatch,
     InputNodeSnapshot,
-    GeneratorDisabledReason,
     IntegerRangeGenerator,
     NumberRangeGenerator,
     ObjectGenerator,
     OperationGeneratorConfig,
     RandomStringGenerator,
     RegexGenerator,
+    RequestBodyGenerator,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
-    RequestBodyGenerator,
     VariantGenerator,
 )
-from .snapshot import build_initial_catalog
-from .constraints import OperationConstraintRecord
 from .selection import (
     BanditKey,
     GeneratorChoice,
     RewardStatistics,
 )
-
+from .snapshot import build_initial_catalog
 
 _T = TypeVar("_T")
 

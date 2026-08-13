@@ -88,7 +88,7 @@ def compile_constraint(
         separators=(",", ":"),
     )
     identity = hashlib.sha256(
-        f"{config.operation_key}:{encoded}".encode("utf-8")
+        f"{config.operation_key}:{encoded}".encode()
     ).hexdigest()[:16]
     return CompiledConstraintPatch(
         constraint_id=f"constraint_{identity}",

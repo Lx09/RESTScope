@@ -8,10 +8,6 @@ Foreign values that RESTScope deliberately does not inspect use ``object``.
 
 from __future__ import annotations
 
-from typing import TypeAlias
-from typing_extensions import TypeAliasType
-
-
 type JSONScalar = None | bool | int | float | str
 
 type JSONValue = (

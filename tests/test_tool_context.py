@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 
 def _context(*, secret: str = "Bearer runtime-secret"):
     """Build one immutable App target context for boundary tests."""
-    from restscope.tools.context import ToolContext
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools.context import ToolContext
 
     ir = OpenAPIParser.parse(
         {
@@ -64,14 +63,14 @@ def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
 ) -> None:
     """The runtime exposes lookup implementations but owns no global toolbox."""
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
-    from restscope.harness import build_harness
-    from restscope.tools.resource import ResourceToolBackend
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
     )
+    from restscope.harness import build_harness
+    from restscope.tools.resource import ResourceToolBackend
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'catalogs.sqlite'}")
     Base.metadata.create_all(engine)
@@ -108,8 +107,8 @@ def test_harness_runtime_injects_monitor_catalogs_without_registering_tools(
 
 def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments() -> None:
     """Only the implementation closure chooses whether it needs App context."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     context = _context()
     seen = []
@@ -145,9 +144,9 @@ def test_agent_tool_binds_context_explicitly_and_cannot_be_replaced_by_arguments
 def test_missing_context_is_stable_and_unknown_tool_errors_hide_headers() -> None:
     """Lifecycle errors are explicit while implementation details stay internal."""
     from restscope.harness import build_harness
+    from restscope.llm import ToolCall, ToolSpec
     from restscope.tools import AgentToolbox
     from restscope.tools.context import ToolContextError
-    from restscope.llm import ToolCall, ToolSpec
 
     runtime = build_harness()
     with pytest.raises(ToolContextError) as exc_info:

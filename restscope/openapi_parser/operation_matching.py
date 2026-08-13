@@ -6,7 +6,6 @@ import re
 
 from .ir import OpenAPISpecIR, OperationIR
 
-
 _TEMPLATE_SEGMENT = re.compile(r"^\{[^{}]+\}$")
 
 

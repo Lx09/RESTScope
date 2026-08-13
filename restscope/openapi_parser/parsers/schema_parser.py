@@ -1,11 +1,9 @@
 """Schema parser module."""
 
 
-from ..diagnostics import make_diagnostic
 from ..exceptions import RecursiveReferenceError, SchemaParseError
 from ..ir import DiagnosticsIR, SchemaIR
 from ..resolver import ReferenceResolver
-
 
 _LEGACY_SCHEMA_KEYS = {
     "type",

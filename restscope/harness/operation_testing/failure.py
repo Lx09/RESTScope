@@ -12,7 +12,6 @@ from restscope.target_api.media_type import is_json_media_type, normalize_media_
 
 from .outcomes import HTTPFailure, TransportFailure
 
-
 _JSON_KEYS = ("message", "detail", "error", "title", "errors")
 _FIELD_KEYS = ("field", "path", "name")
 _MAX_MESSAGE_CHARS = 4_096

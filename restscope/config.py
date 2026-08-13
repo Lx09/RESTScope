@@ -7,10 +7,9 @@ directories, log files, database connections, or runtime objects.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -170,7 +169,7 @@ class RESTScopeConfig:
     ui: UIConfig = field(default_factory=UIConfig)
 
     @classmethod
-    def from_environment(cls, env_file: Path | None = None) -> "RESTScopeConfig":
+    def from_environment(cls, env_file: Path | None = None) -> RESTScopeConfig:
         """Load all App settings from the optional env file plus process variables. Process variables win, invalid typed values raise during construction, and no runtime service is opened."""
         values = _merged_environment(env_file or PROJECT_ROOT / ".env")
         data_dir = Path(values.get("DATA_DIR", str(PROJECT_ROOT / "data"))).expanduser()

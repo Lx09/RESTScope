@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import timedelta
-import os
 from queue import Queue
 from threading import Thread
 
@@ -80,7 +80,7 @@ class StdioMCPClientSession:
     def _run_owner(self, ready: Future[None]) -> None:
         try:
             asyncio.run(self._serve(ready))
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001
             if not ready.done():
                 ready.set_exception(exc)
 
@@ -122,7 +122,7 @@ class StdioMCPClientSession:
                             result = await session.call_tool(*command.args)
                         else:
                             raise RuntimeError(f"Unsupported MCP session command: {command.name}")
-                    except BaseException as exc:
+                    except BaseException as exc:  # noqa: BLE001
                         command.completed.set_exception(exc)
                     else:
                         command.completed.set_result(result)

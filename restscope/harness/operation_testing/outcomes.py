@@ -58,7 +58,7 @@ class BatchCaseOutcome(_Model):
     failure: CatalogFailure | None = Field(default=None, discriminator="kind")
 
     @model_validator(mode="after")
-    def validate_retained_evidence(self) -> "BatchCaseOutcome":
+    def validate_retained_evidence(self) -> BatchCaseOutcome:
         """Validate canonical request JSON and transport/HTTP consistency.
 
         The four ordinary OpenAPI Parameter locations always exist as objects.
@@ -81,7 +81,7 @@ class BatchCaseOutcome(_Model):
             )
         for location in sorted(required_locations):
             if not isinstance(self.request[location], dict):
-                raise ValueError(f"request.{location} must be an object")
+                raise TypeError(f"request.{location} must be an object")
         try:
             json.dumps(self.request, allow_nan=False)
         except (TypeError, ValueError) as exc:

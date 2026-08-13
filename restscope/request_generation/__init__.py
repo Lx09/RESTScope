@@ -7,9 +7,9 @@ Generation should import specialized types from their owning Module instead
 of treating this package file as a second, very broad API.
 """
 
-from .reference_values import BehaviorMonitorReferences
 from .parameter_patch.runtime import RequestGenerationPatchRuntime
 from .randomness import SeededRandom
+from .reference_values import BehaviorMonitorReferences
 from .store import RequestGenerationConfigStore
 
 __all__ = [

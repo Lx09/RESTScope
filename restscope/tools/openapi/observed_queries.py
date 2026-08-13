@@ -7,8 +7,8 @@ never stored values, timestamps, or database identities.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import json
+from collections.abc import Callable
 from typing import Protocol
 
 from restscope.api_behavior_monitor.catalog import (
@@ -21,15 +21,14 @@ from restscope.tools.runtime import ToolFailure
 
 from .traversal import (
     _DEFAULT_LIST_LIMIT,
-    _ObservedFieldMatch,
     _field_similarity,
     _normalized_name,
     _observed_media_schema,
+    _ObservedFieldMatch,
     _scalar_schema,
     _schema_entries,
     _select_response,
 )
-
 
 _OBSERVATION_PAGE_SIZE = 8
 

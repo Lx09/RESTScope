@@ -79,10 +79,10 @@ def test_production_main_profile_owns_exploration_and_one_patch_child(
 ) -> None:
     """Production Main can explore while Patch mutation stays in one child."""
     from restscope.app.profiles import _build_agent_runtime_definition
+    from restscope.config import RESTScopeConfig
     from restscope.llm import LLMClient, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.observability import TracingRuntime
-    from restscope.config import RESTScopeConfig
 
     class Provider:
         """Record the one production-shaped Main request without network I/O."""
@@ -215,8 +215,8 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
 
 def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp_path) -> None:
     """One parsed target feeds the only taskless Main loop in this App."""
-    from restscope.tools.context import ToolContextError
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools.context import ToolContextError
 
     original_parse = OpenAPIParser.parse
     seen: list[object] = []

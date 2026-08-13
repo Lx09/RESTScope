@@ -6,9 +6,8 @@ keep those three entry points aligned so a local environment cannot silently use
 an older Python than an installed RESTScope package supports.
 """
 
-from pathlib import Path
 import tomllib
-
+from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MINIMUM_PYTHON = "3.12"

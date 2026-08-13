@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from restscope.tools.runtime import AgentToolbox
-from restscope.tools.external.mcp import MCPToolAdapter
 from restscope.llm.schemas import ToolSpec
-
+from restscope.tools.external.mcp import MCPToolAdapter
+from restscope.tools.runtime import AgentToolbox
 
 CallTool = Callable[[str, dict[str, object]], object]
 
@@ -46,7 +45,7 @@ def register_tool_source(
         source_tool_name = (
             tool.get("name")
             if isinstance(tool, Mapping)
-            else getattr(tool, "name")
+            else tool.name
         )
         toolbox.register(
             spec=spec,

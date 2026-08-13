@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 BUSINESS_TABLES = {
     "openapi_current",
     "openapi_change_events",
@@ -122,16 +121,15 @@ def test_observation_database_rejects_partial_and_duplicate_batch_cases() -> Non
         "response_body": b"{}",
         "body_format": "json",
     }
-    with pytest.raises(IntegrityError):
-        with engine.begin() as connection:
-            connection.execute(
-                observations.insert().values(
-                    observation_id="partial",
-                    batch_id="batch_one",
-                    batch_case_index=None,
-                    **common,
-                )
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            observations.insert().values(
+                observation_id="partial",
+                batch_id="batch_one",
+                batch_case_index=None,
+                **common,
             )
+        )
 
     with engine.begin() as connection:
         connection.execute(
@@ -142,16 +140,15 @@ def test_observation_database_rejects_partial_and_duplicate_batch_cases() -> Non
                 **common,
             )
         )
-    with pytest.raises(IntegrityError):
-        with engine.begin() as connection:
-            connection.execute(
-                observations.insert().values(
-                    observation_id="duplicate",
-                    batch_id="batch_one",
-                    batch_case_index=0,
-                    **common,
-                )
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            observations.insert().values(
+                observation_id="duplicate",
+                batch_id="batch_one",
+                batch_case_index=0,
+                **common,
             )
+        )
 
 
 def test_response_monitor_natural_primary_keys_match_the_approved_model() -> None:

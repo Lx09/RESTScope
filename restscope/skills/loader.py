@@ -9,16 +9,15 @@ calls cannot traverse the installation or observe files added after startup.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-import re
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 import yaml
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from .manifest import SkillDefinition, SkillManifest, SkillReference
-
 
 _STANDARD_FRONTMATTER_KEYS = frozenset({"name", "description"})
 _SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -34,13 +33,13 @@ class _Traversable(Protocol):
     @property
     def name(self) -> str: ...
 
-    def iterdir(self) -> Iterable["_Traversable"]: ...
+    def iterdir(self) -> Iterable[_Traversable]: ...
 
     def is_dir(self) -> bool: ...
 
     def is_file(self) -> bool: ...
 
-    def joinpath(self, *descendants: str) -> "_Traversable": ...
+    def joinpath(self, *descendants: str) -> _Traversable: ...
 
     def read_bytes(self) -> bytes: ...
 
@@ -178,7 +177,7 @@ def _load_runtime_manifest(directory: _Traversable) -> _RuntimeSettings:
         if raw is None:
             raw = {}
         if not isinstance(raw, dict):
-            raise ValueError("manifest must be a mapping")
+            raise TypeError("manifest must be a mapping")
         manifest = _RuntimeManifest.model_validate(raw)
     except (ValidationError, yaml.YAMLError, ValueError) as exc:
         raise ValueError(f"Invalid restscope.yaml for Skill {directory.name}") from exc
@@ -229,12 +228,12 @@ def _load_references(
     missing = linked_set - packaged_paths
     if missing:
         raise ValueError(
-            f"Skill {directory.name} linked Reference is missing: {sorted(missing)[0]}"
+            f"Skill {directory.name} linked Reference is missing: {min(missing)}"
         )
     orphaned = packaged_paths - linked_set
     if orphaned:
         raise ValueError(
-            f"Skill {directory.name} Reference is not linked: {sorted(orphaned)[0]}"
+            f"Skill {directory.name} Reference is not linked: {min(orphaned)}"
         )
 
     loaded: list[SkillReference] = []

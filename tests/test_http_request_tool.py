@@ -15,19 +15,16 @@ def _toolbox_for_transport(
 ):
     import httpx
 
+    from restscope.observability import Redactor, TracingRuntime
+    from restscope.openapi_parser import OpenAPIParser
     from restscope.tools import AgentToolbox, ToolFailure
     from restscope.tools.context import ToolContext
     from restscope.tools.http import (
+        HTTPRequestTimeoutError,
+        HTTPRequestToolError,
         TargetHTTPRequestTool,
         http_request_tool_spec,
     )
-    from restscope.tools.http import (
-        HTTPRequestTimeoutError,
-        HTTPRequestToolError,
-    )
-    from restscope.observability import TracingRuntime
-    from restscope.openapi_parser import OpenAPIParser
-    from restscope.observability import Redactor
 
     http_tool = TargetHTTPRequestTool(
         client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),
@@ -180,22 +177,24 @@ def test_http_tool_persists_only_results_that_match_an_openapi_operation() -> No
 
     import httpx
 
-    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
-    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
-    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
-    from restscope.target_api import TargetAPIClient
-    from restscope.tools.context import ToolContext
-    from restscope.tools.http import (
-        HTTPRequestTimeoutError,
-        TargetHTTPRequestTool,
-    )
-    from restscope.openapi_parser import OpenAPIParser
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.response_processor import (
+        APIBehaviorResponseProcessor,
+    )
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
         create_engine_from_url,
         make_session_factory,
+    )
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.target_api import TargetAPIClient
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import (
+        HTTPRequestTimeoutError,
+        TargetHTTPRequestTool,
     )
 
     engine = create_engine_from_url("sqlite:///:memory:")

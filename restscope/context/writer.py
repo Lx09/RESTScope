@@ -9,14 +9,13 @@ an initial user message or tool result consumed by :class:`AgentContext`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import math
 import re
-from typing import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 from .context import ContextMetrics
-
 
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SECTION_SEPARATOR = re.compile(r"(?:^|\s)(?:-{3,}|={3,})(?:\s|$)")

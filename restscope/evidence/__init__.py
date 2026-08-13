@@ -10,13 +10,9 @@ payload, publish a Tool, or participate in the Agent or behavior-monitor flow.
 from __future__ import annotations
 
 from threading import Lock
-from typing import Generic, TypeVar
 
 
-_EvidenceData = TypeVar("_EvidenceData")
-
-
-class Evidence(Generic[_EvidenceData]):
+class Evidence[EvidenceData]:
     """Keep arbitrary evidence data together with its current confidence.
 
     Args:
@@ -31,14 +27,14 @@ class Evidence(Generic[_EvidenceData]):
 
     __slots__ = ("_alpha", "_beta", "_data", "_lock")
 
-    def __init__(self, data: _EvidenceData) -> None:
+    def __init__(self, data: EvidenceData) -> None:
         self._data = data
         self._alpha = 1
         self._beta = 1
         self._lock = Lock()
 
     @property
-    def data(self) -> _EvidenceData:
+    def data(self) -> EvidenceData:
         """Return the exact caller-owned payload without copying it."""
         return self._data
 

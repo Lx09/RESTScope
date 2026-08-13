@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
 import hashlib
+import itertools
 import random
 import re
 import string
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from rstr.xeger import Xeger
 
+from .constraints import (
+    ConstraintSet,
+    InputAssignment,
+    InputNodeOverride,
+    evaluate_constraint_set,
+)
 from .models import (
     ArrayGenerator,
     BooleanGenerator,
@@ -22,6 +29,7 @@ from .models import (
     GeneratedNodeValue,
     GeneratedTestCase,
     GeneratorStrategy,
+    InputNodeSnapshot,
     IntegerRangeGenerator,
     NumberRangeGenerator,
     ObjectGenerator,
@@ -34,14 +42,7 @@ from .models import (
     ResponseValueGenerator,
     SchemaSnapshot,
 )
-from .models import InputNodeSnapshot
 from .ports import ReferenceValueProvider
-from .constraints import (
-    ConstraintSet,
-    InputAssignment,
-    InputNodeOverride,
-    evaluate_constraint_set,
-)
 
 
 class GenerationError(ValueError):
@@ -521,7 +522,7 @@ def project_generated_input_value(
         value = deepcopy(generated.body)
         ancestors = ancestors[media_root_index:]
 
-    for parent, child in zip(ancestors, ancestors[1:]):
+    for parent, child in itertools.pairwise(ancestors):
         suffix = child.canonical_path.removeprefix(
             f"{parent.canonical_path}/"
         )
@@ -871,7 +872,7 @@ def _format_value(format_name: str, generator: random.Random) -> str:
     if format_name == "date":
         return (date(2000, 1, 1) + timedelta(days=generator.randrange(365 * 100))).isoformat()
     if format_name == "date-time":
-        instant = datetime(2000, 1, 1, tzinfo=timezone.utc) + timedelta(
+        instant = datetime(2000, 1, 1, tzinfo=UTC) + timedelta(
             seconds=generator.randrange(365 * 100 * 24 * 60 * 60)
         )
         return instant.isoformat().replace("+00:00", "Z")
@@ -951,7 +952,7 @@ def _validate_scalar(schema: SchemaSnapshot, value: object, *, path: str) -> Non
                     f"Generated string is not a date-time for {path}"
                 )
             try:
-                datetime.fromisoformat(value.replace("Z", "+00:00"))
+                datetime.fromisoformat(value)
             except ValueError as exc:
                 raise GenerationError(f"Generated string is not a date-time for {path}") from exc
         elif schema.format == "email" and re.fullmatch(

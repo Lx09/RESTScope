@@ -672,7 +672,10 @@ def test_deepseek_thinking_none_omits_tools() -> None:
 def test_deepseek_thinking_rejects_forced_tool_choice_before_network() -> None:
     """Scenario: verify that deepseek thinking rejects forced tool choice before network."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
-    from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
+    from restscope.llm.providers.deepseek import (
+        DeepSeekCompatibilityError,
+        DeepSeekProvider,
+    )
 
     client = RecordingClient()
     with pytest.raises(DeepSeekCompatibilityError) as exc_info:
@@ -694,7 +697,10 @@ def test_deepseek_thinking_rejects_forced_tool_choice_before_network() -> None:
 def test_deepseek_thinking_rejects_forced_tool_choice_without_tools() -> None:
     """Scenario: verify that deepseek thinking rejects forced tool choice without tools."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
-    from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
+    from restscope.llm.providers.deepseek import (
+        DeepSeekCompatibilityError,
+        DeepSeekProvider,
+    )
 
     client = RecordingClient()
     with pytest.raises(DeepSeekCompatibilityError) as exc_info:
@@ -784,7 +790,10 @@ def test_deepseek_provider_carries_and_replays_tool_call_reasoning() -> None:
 def test_deepseek_provider_rejects_tool_response_without_reasoning() -> None:
     """Scenario: verify that deepseek provider rejects tool response without reasoning."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
-    from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
+    from restscope.llm.providers.deepseek import (
+        DeepSeekCompatibilityError,
+        DeepSeekProvider,
+    )
 
     provider = DeepSeekProvider(
         api_key="test-key",
@@ -893,7 +902,10 @@ def test_deepseek_provider_recovers_after_two_incomplete_tool_responses() -> Non
 def test_deepseek_provider_rejects_thinking_history_without_reasoning() -> None:
     """Scenario: verify that deepseek provider rejects thinking history without reasoning."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest, ToolCall
-    from restscope.llm.providers.deepseek import DeepSeekCompatibilityError, DeepSeekProvider
+    from restscope.llm.providers.deepseek import (
+        DeepSeekCompatibilityError,
+        DeepSeekProvider,
+    )
 
     client = RecordingClient()
     with pytest.raises(DeepSeekCompatibilityError) as exc_info:

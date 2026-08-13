@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field, model_validator
 
 from restscope.data_types import JSONObject, JSONValue
 
-
 LLMRole = Literal["system", "developer", "user", "assistant", "tool"]
 LLMResponseFormat = Literal["text", "json", "json_schema"]
 LLMReasoningMode = Literal["default", "enabled", "disabled"]
@@ -131,7 +130,7 @@ class LLMModelConfig(BaseModel):
     enabled: bool = True
 
     @model_validator(mode="after")
-    def validate_context_capacity(self) -> "LLMModelConfig":
+    def validate_context_capacity(self) -> LLMModelConfig:
         """Reserve at least one token of the context window for model input."""
         if self.max_tokens >= self.context_window_tokens:
             raise ValueError(

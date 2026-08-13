@@ -15,13 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from restscope.llm import ToolSpec
 from restscope.request_generation.parameter_patch import (
-    RequestGenerationPatchRuntime,
     ParameterPatchValidationError,
+    RequestGenerationPatchRuntime,
     SemanticParameterPatch,
 )
 from restscope.request_generation.store import GeneratorConfigError
 from restscope.tools.runtime import ToolBinding, ToolFailure
-
 
 PARAMETER_PATCH_APPLY_TOOL_NAME = "parameter_patch.apply"
 

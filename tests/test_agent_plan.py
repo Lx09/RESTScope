@@ -255,7 +255,7 @@ def test_profile_plan_grants_are_paired_and_harness_owned() -> None:
             binding_factories=(
                 ToolBindingFactory(
                     name="plan.read",
-                    create=lambda: ToolBinding(name="plan.read", execute=lambda: {}),
+                    create=lambda: ToolBinding(name="plan.read", execute=dict),
                 ),
             ),
         )

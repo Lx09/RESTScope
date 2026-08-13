@@ -29,7 +29,6 @@ from .observation import (
 )
 from .request import PreparedTargetRequest
 
-
 _ClientFactory = Callable[..., httpx.Client]
 _OBSERVER_BODY_LIMIT = 1024 * 1024
 
@@ -78,14 +77,13 @@ class TargetAPIClient:
             with self._client_factory(
                 timeout=timeout_seconds,
                 follow_redirects=False,
-            ) as client:
-                with client.stream(
-                    prepared.method,
-                    prepared.url,
-                    headers=prepared.headers,
-                    **dict(request_kwargs or {}),
-                ) as response:
-                    yield response
+            ) as client, client.stream(
+                prepared.method,
+                prepared.url,
+                headers=prepared.headers,
+                **dict(request_kwargs or {}),
+            ) as response:
+                yield response
         except httpx.TimeoutException as exc:
             raise TargetAPITimeout("HTTP request timed out") from exc
         except httpx.HTTPError as exc:
@@ -145,13 +143,13 @@ class TargetAPIClient:
             if exchange is not None:
                 try:
                     exchange.fail(exc)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             raise
         if exchange is not None:
             try:
                 exchange.finish(observer_result)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         directive = (
             result.processor_result.replay_directive
@@ -233,7 +231,7 @@ class TargetAPIClient:
                 ),
                 response_context,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Monitoring cannot replace the original target transport exception.
             return
 
@@ -327,7 +325,7 @@ class TargetAPIClient:
                         processor_result = TargetResponseProcessorResult(
                             response_validation="not_evaluated",
                         )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     processor_result = TargetResponseProcessorResult(
                         response_validation="partial",
                         warnings=(
@@ -408,7 +406,7 @@ class TargetAPIClient:
                     else None
                 ),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
 

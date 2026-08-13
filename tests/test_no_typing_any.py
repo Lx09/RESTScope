@@ -24,9 +24,8 @@ def test_python_sources_do_not_import_or_reference_typing_any() -> None:
                 if (
                     isinstance(node, ast.ImportFrom)
                     and node.module in {"typing", "typing_extensions"}
-                ):
-                    if any(alias.name in {"Any", "*"} for alias in node.names):
-                        violations.append(f"{path.relative_to(root)}:{node.lineno}: import")
+                ) and any(alias.name in {"Any", "*"} for alias in node.names):
+                    violations.append(f"{path.relative_to(root)}:{node.lineno}: import")
                 if (
                     isinstance(node, ast.Attribute)
                     and node.attr == "Any"

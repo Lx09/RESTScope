@@ -1,15 +1,15 @@
 """Standard Skill loading and metadata selected by an Agent Profile."""
 
 from .builtin import builtin_skill_catalog
+from .catalog import SkillCatalog
 from .manifest import SkillDefinition, SkillManifest, SkillReference
 from .policy import SkillPolicy
-from .catalog import SkillCatalog
 
 __all__ = [
+    "SkillCatalog",
     "SkillDefinition",
     "SkillManifest",
-    "SkillReference",
     "SkillPolicy",
-    "SkillCatalog",
+    "SkillReference",
     "builtin_skill_catalog",
 ]

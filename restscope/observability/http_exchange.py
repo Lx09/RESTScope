@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import time
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 from .projection import response_detail as _response_detail
@@ -18,7 +18,7 @@ class LiveHTTPExchange:
     def __init__(
         self,
         *,
-        observer: "LiveRunObserver",
+        observer: LiveRunObserver,
         event_id: str,
     ) -> None:
         """Remember the semantic owner for the in-flight HTTP request."""

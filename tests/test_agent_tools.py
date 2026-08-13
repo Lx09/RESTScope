@@ -7,8 +7,8 @@ import pytest
 
 def test_agent_toolbox_rejects_duplicate_tool_names() -> None:
     """Scenario: a second registration cannot replace an existing tool."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     spec = ToolSpec(
@@ -26,8 +26,8 @@ def test_agent_toolbox_rejects_duplicate_tool_names() -> None:
 
 def test_agent_toolbox_rejects_a_missing_tool_implementation() -> None:
     """Scenario: a model-visible tool can never be registered half-built."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     spec = ToolSpec(
@@ -44,8 +44,8 @@ def test_agent_toolbox_rejects_a_missing_tool_implementation() -> None:
 
 def test_agent_toolbox_rejects_invalid_arguments_before_execution() -> None:
     """Scenario: malformed model arguments never reach the tool code."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     executed: list[dict] = []
     toolbox = AgentToolbox()
@@ -83,8 +83,8 @@ def test_agent_toolbox_rejects_invalid_arguments_before_execution() -> None:
 
 def test_agent_toolbox_rejects_success_output_that_breaks_its_schema() -> None:
     """Scenario: malformed implementation output never reaches the Agent."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     toolbox.register(
@@ -117,8 +117,8 @@ def test_agent_toolbox_rejects_success_output_that_breaks_its_schema() -> None:
 
 def test_agent_toolbox_hides_unexpected_exception_details() -> None:
     """Scenario: an implementation defect cannot leak secrets to the model."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     def fail() -> dict:
         raise RuntimeError("database failed with secret-password")
@@ -149,12 +149,12 @@ def test_agent_toolbox_hides_unexpected_exception_details() -> None:
 
 def test_agent_toolbox_propagates_provider_unavailable_error() -> None:
     """A shared model outage escapes the tool seam instead of becoming feedback."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import (
         ProviderUnavailableError,
         ToolCall,
         ToolSpec,
     )
+    from restscope.tools import AgentToolbox
 
     unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
 
@@ -184,12 +184,12 @@ def test_agent_toolbox_propagates_provider_unavailable_error() -> None:
 
 def test_agent_toolbox_parallel_calls_propagate_provider_unavailable_error() -> None:
     """A shared outage in a read-only tool group aborts the entire result group."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import (
         ProviderUnavailableError,
         ToolCall,
         ToolSpec,
     )
+    from restscope.tools import AgentToolbox
 
     unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
 
@@ -242,8 +242,8 @@ def test_agent_toolbox_parallel_calls_propagate_provider_unavailable_error() -> 
 
 def test_agent_toolbox_returns_only_its_registered_specs_in_order() -> None:
     """Scenario: an Agent offers exactly the tools registered for that Agent."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     first = ToolSpec(
@@ -271,8 +271,8 @@ def test_agent_toolbox_executes_independent_calls_concurrently_in_call_order() -
     import threading
     import time
 
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     barrier = threading.Barrier(2, timeout=1)
     completion_order: list[str] = []
@@ -322,8 +322,8 @@ def test_agent_toolbox_executes_independent_calls_concurrently_in_call_order() -
 
 def test_agent_toolbox_validates_a_whole_batch_before_any_call_runs() -> None:
     """Scenario: one invalid call prevents every implementation side effect."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     executed: list[str] = []
     toolbox = AgentToolbox()
@@ -370,8 +370,8 @@ def test_agent_toolbox_validates_a_whole_batch_before_any_call_runs() -> None:
 
 def test_agent_toolbox_requires_output_schema_for_restscope_tools() -> None:
     """Scenario: an owned tool cannot opt out of its success contract."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     spec = ToolSpec(
@@ -388,8 +388,8 @@ def test_agent_toolbox_requires_output_schema_for_restscope_tools() -> None:
 
 def test_agent_toolbox_rejects_invalid_json_schemas_during_registration() -> None:
     """Scenario: a broken contract fails at startup, not during an Agent run."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     spec = ToolSpec(
@@ -406,10 +406,9 @@ def test_agent_toolbox_rejects_invalid_json_schemas_during_registration() -> Non
 
 def test_agent_toolbox_redacts_every_model_visible_success_value() -> None:
     """Scenario: the App redactor is the final model-result boundary."""
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
-    from restscope.observability import TracingRuntime
-    from restscope.observability import Redactor
+    from restscope.observability import Redactor, TracingRuntime
+    from restscope.tools import AgentToolbox
 
     secret = "tool-secret"
     toolbox = AgentToolbox(
@@ -445,8 +444,8 @@ def test_agent_toolbox_redacts_every_model_visible_success_value() -> None:
 
 def test_agent_toolbox_returns_an_explicit_expected_failure() -> None:
     """Scenario: a domain rejection reaches the model with its safe contract."""
-    from restscope.tools import AgentToolbox, ToolFailure
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox, ToolFailure
 
     def reject() -> dict:
         raise ToolFailure(

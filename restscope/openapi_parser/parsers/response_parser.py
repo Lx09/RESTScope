@@ -4,7 +4,6 @@ from ..adapters.base import SpecificationAdapter
 from ..diagnostics import make_diagnostic
 from ..ir import (
     DiagnosticsIR,
-    ExampleIR,
     HeaderIR,
     LinkIR,
     MediaTypeIR,
@@ -83,7 +82,7 @@ def parse_response_headers(
                 content=content,
                 raw=header_raw,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             diagnostics.operation_errors.append(
                 make_diagnostic(
                     severity="error",
@@ -145,7 +144,7 @@ def parse_response_links(
                 server=server,
                 raw=link_raw,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             diagnostics.operation_errors.append(
                 make_diagnostic(
                     severity="error",
@@ -264,7 +263,7 @@ def parse_responses(
     """
     raw_responses = adapter.get_responses_definition(operation_raw)
     if not isinstance(raw_responses, dict):
-        raise ValueError("`responses` must be an object")
+        raise TypeError("`responses` must be an object")
 
     parsed: dict[str, ResponseIR] = {}
 
@@ -295,7 +294,7 @@ def parse_responses(
                 source_pointer=None,
                 raw=raw_response,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             diagnostics.operation_errors.append(
                 make_diagnostic(
                     severity="error",

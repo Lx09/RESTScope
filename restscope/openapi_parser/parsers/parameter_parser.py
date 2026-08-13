@@ -3,7 +3,6 @@
 import re
 
 from ..adapters.base import SpecificationAdapter
-from ..constants import HTTP_METHODS
 from ..diagnostics import make_diagnostic
 from ..ir import DiagnosticsIR, ExampleIR, ParameterIR, SchemaIR
 from ..resolver import ReferenceResolver
@@ -162,7 +161,7 @@ def parse_parameters(
             seen_keys.add(key)
 
             result.append(param)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             diagnostics.operation_errors.append(
                 make_diagnostic(
                     severity="error",

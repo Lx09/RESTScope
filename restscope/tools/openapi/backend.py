@@ -17,6 +17,8 @@ from .input_queries import get_input_schema as query_input_schema
 from .input_queries import list_inputs as query_inputs
 from .observed_queries import (
     ObservedResponseReader,
+)
+from .observed_queries import (
     find_observed_response_fields as query_observed_fields,
 )
 from .response_queries import get_response_field_schema as query_response_schema
@@ -24,8 +26,6 @@ from .response_queries import list_response_fields as query_response_fields
 from .traversal import (
     _DEFAULT_LIST_LIMIT,
     _closest_operation_keys,
-    operation_input_references,
-    operation_parameter_handles,
 )
 
 

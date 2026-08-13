@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-
 from dataclasses import dataclass, field
 from threading import RLock
 from urllib.parse import urlparse, urlunparse
@@ -17,7 +16,7 @@ from restscope.observability.otel_backend import OpenTelemetryBackend
 class _SharedBackend:
     key: tuple[object, ...] = field(repr=False)
     backend: OpenTelemetryBackend
-    proxy_environment: "_ProxyEnvironment | None"
+    proxy_environment: _ProxyEnvironment | None
     references: int = 1
 
 

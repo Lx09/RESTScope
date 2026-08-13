@@ -7,12 +7,12 @@ only bounded projections through the three global ``subagent.*`` Tools.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from threading import Condition, Event, RLock, Semaphore
-import time
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
@@ -345,7 +345,7 @@ class AgentTreeControl:
                 record.cancel_event,
             )
             result = agent.run(AgentTask(objective=objective))
-        except Exception:
+        except Exception:  # noqa: BLE001
             result = AgentResult(
                 session_id=record.session_id,
                 profile_name=record.profile_name,

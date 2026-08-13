@@ -18,8 +18,8 @@ from restscope.openapi_parser.ir import (
     ResponseIR,
     SchemaIR,
 )
-from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.operation_references import RequestInputReference, ResponseFieldReference
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.tools.runtime import ToolFailure
 
 _DEFAULT_LIST_LIMIT = 100

@@ -64,7 +64,7 @@ def parse_components(
                 )
                 if parsed is not None:
                     schemas[str(name)] = parsed
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -89,7 +89,7 @@ def parse_components(
                         synthetic=False,
                     )
                     parameters[str(name)] = parsed
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -117,7 +117,7 @@ def parse_components(
                     )
                     if parsed is not None:
                         request_bodies[str(name)] = parsed
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -145,7 +145,7 @@ def parse_components(
                     )
                     if str(name) in parsed_responses.by_status:
                         responses[str(name)] = parsed_responses.by_status[str(name)]
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -186,7 +186,7 @@ def parse_components(
                         content={},
                         raw=header_raw,
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -206,7 +206,7 @@ def parse_components(
                     security_schemes[str(name)] = parse_security_scheme(
                         str(name), scheme_raw, spec_format=adapter.spec_format
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -231,7 +231,7 @@ def parse_components(
                         external_value=ex_raw.get("externalValue"),
                         raw=ex_raw,
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",
@@ -264,7 +264,7 @@ def parse_components(
                         server=None,
                         raw=link_raw,
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 diagnostics.spec_errors.append(
                     make_diagnostic(
                         severity="error",

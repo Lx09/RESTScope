@@ -205,8 +205,8 @@ def _ir():
 
 def _capability():
     """Bind one global Capability to a trusted in-memory ToolContext."""
-    from restscope.tools.openapi import OpenAPIToolBackend
     from restscope.tools.context import ToolContext
+    from restscope.tools.openapi import OpenAPIToolBackend
 
     context = ToolContext(ir=_ir(), baseline_schema_source={})
     return OpenAPIToolBackend(context_provider=lambda: context)
@@ -214,9 +214,9 @@ def _capability():
 
 def _operation_candidate_capability():
     """Build GitLab-like operation names used to recover from model guesses."""
-    from restscope.tools.openapi import OpenAPIToolBackend
-    from restscope.tools.context import ToolContext
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools.context import ToolContext
+    from restscope.tools.openapi import OpenAPIToolBackend
 
     ir = OpenAPIParser.parse(
         {
@@ -254,9 +254,9 @@ def _operation_candidate_capability():
 def _observed_catalog(tmp_path: Path):
     """Create a real bounded observation reader for OpenAPI intersection."""
     from restscope.api_behavior_monitor.catalog import (
+        APIBehaviorCatalog,
         ObservationWrite,
         OperationDefinition,
-        APIBehaviorCatalog,
     )
     from restscope.db import (
         Base,
@@ -507,10 +507,10 @@ def test_operation_candidates_are_bounded_stable_and_expose_only_real_keys() -> 
     """Large documents return ten deterministic METHOD/path choices, not aliases."""
     import pytest
 
-    from restscope.tools.openapi import OpenAPIToolBackend
-    from restscope.tools.context import ToolContext
-    from restscope.tools import ToolFailure
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools import ToolFailure
+    from restscope.tools.context import ToolContext
+    from restscope.tools.openapi import OpenAPIToolBackend
 
     paths = {
         f"/items/{index:02d}": {
@@ -560,10 +560,10 @@ def test_unknown_operation_keeps_plain_error_when_the_ir_has_no_operations() -> 
     """An empty document cannot offer a fabricated recovery choice."""
     import pytest
 
-    from restscope.tools.openapi import OpenAPIToolBackend
-    from restscope.tools.context import ToolContext
-    from restscope.tools import ToolFailure
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools import ToolFailure
+    from restscope.tools.context import ToolContext
+    from restscope.tools.openapi import OpenAPIToolBackend
 
     ir = OpenAPIParser.parse(
         {
@@ -679,6 +679,7 @@ def test_find_observed_response_fields_returns_only_matching_current_ir_fields(
     tmp_path: Path,
 ) -> None:
     """Observed scalar evidence is intersected with the current response Schema."""
+    from restscope.llm import ToolCall
     from restscope.tools import (
         AgentToolbox,
     )
@@ -687,7 +688,6 @@ def test_find_observed_response_fields_returns_only_matching_current_ir_fields(
         OpenAPIToolBackend,
         openapi_find_observed_response_fields_tool_spec,
     )
-    from restscope.llm import ToolCall
 
     catalog = _observed_catalog(tmp_path)
     catalog.record_observation(
@@ -747,6 +747,7 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
     tmp_path: Path,
 ) -> None:
     """Field offsets stay global while repeated response metadata is grouped."""
+    from restscope.llm import ToolCall
     from restscope.tools import (
         AgentToolbox,
     )
@@ -755,7 +756,6 @@ def test_observed_field_pagination_groups_one_page_by_response_contract(
         OpenAPIToolBackend,
         openapi_find_observed_response_fields_tool_spec,
     )
-    from restscope.llm import ToolCall
 
     catalog = _observed_catalog(tmp_path)
     for status_code in (200, 201):
@@ -874,8 +874,8 @@ def test_observed_lookup_reuses_array_and_combiner_field_references(
     tmp_path: Path,
 ) -> None:
     """Observed selectors map to the same handles as exact Schema lookup."""
-    from restscope.tools.openapi import OpenAPIToolBackend
     from restscope.tools.context import ToolContext
+    from restscope.tools.openapi import OpenAPIToolBackend
 
     catalog = _observed_catalog(tmp_path)
     catalog.record_observation(
@@ -913,8 +913,8 @@ def test_observed_lookup_keeps_only_high_precision_fuzzy_matches(
     tmp_path: Path,
 ) -> None:
     """One-character omission passes 0.95 while a broad prefix does not."""
-    from restscope.tools.openapi import OpenAPIToolBackend
     from restscope.tools.context import ToolContext
+    from restscope.tools.openapi import OpenAPIToolBackend
 
     catalog = _observed_catalog(tmp_path)
     catalog.record_observation(
@@ -1172,13 +1172,13 @@ def test_unknown_operation_and_old_tool_name_are_not_accepted() -> None:
 
 def test_observed_field_tool_validates_bounds_and_requires_catalog_injection() -> None:
     """The fifth OpenAPI tool stays unavailable without retained evidence."""
+    from restscope.llm import ToolCall
     from restscope.tools import (
         AgentToolbox,
     )
     from restscope.tools.openapi import (
         openapi_find_observed_response_fields_tool_spec,
     )
-    from restscope.llm import ToolCall
 
     capability = _capability()
     toolbox = AgentToolbox()

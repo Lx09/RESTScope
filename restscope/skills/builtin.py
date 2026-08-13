@@ -10,8 +10,8 @@ from __future__ import annotations
 from functools import lru_cache
 from importlib.resources import files
 
-from .loader import discover_skill_definitions
 from .catalog import SkillCatalog
+from .loader import discover_skill_definitions
 
 
 @lru_cache(maxsize=1)

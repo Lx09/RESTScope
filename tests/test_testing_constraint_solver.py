@@ -163,7 +163,10 @@ def _solver_config():
 
 
 def _baseline():
-    from restscope.request_generation.models import GeneratedNodeValue, GeneratedTestCase
+    from restscope.request_generation.models import (
+        GeneratedNodeValue,
+        GeneratedTestCase,
+    )
 
     values = {
         "query/fixed": 1,
@@ -289,8 +292,8 @@ def test_candidate_domains_follow_generators_and_put_baseline_first() -> None:
 
 def test_candidate_domain_samples_regex_generator_values() -> None:
     """Scenario: constraints can choose deterministic values from a regex domain."""
-    from restscope.request_generation.models import InputGeneratorConfig
     from restscope.request_generation.constraint_solver import build_candidate_domains
+    from restscope.request_generation.models import InputGeneratorConfig
 
     config = _solver_config()
     configs = [
@@ -586,6 +589,9 @@ def test_solver_contracts_are_exported_from_testing_package() -> None:
 
 def test_generated_case_assignments_recover_container_presence() -> None:
     """Scenario: verify that generated case assignments recover container presence."""
+    from restscope.request_generation.constraint_solver import (
+        assignments_from_generated_case,
+    )
     from restscope.request_generation.models import (
         GeneratedTestCase,
         InputNodeSnapshot,
@@ -593,7 +599,6 @@ def test_generated_case_assignments_recover_container_presence() -> None:
         ParameterSnapshot,
         SchemaSnapshot,
     )
-    from restscope.request_generation.constraint_solver import assignments_from_generated_case
 
     operation = OperationTestSnapshot(
         operation_key="POST /containers",

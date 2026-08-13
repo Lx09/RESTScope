@@ -22,7 +22,6 @@ import yaml
 
 from restscope.openapi_parser import OpenAPIParser, build_openapi_document
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "artifacts" / "openapi-ir-roundtrip"
 ASSET_PATHS = (
@@ -360,7 +359,9 @@ def test_all_assets_round_trip_through_ir_and_pass_swagger_validator() -> None:
     for asset_path in ASSET_PATHS:
         try:
             summary, asset_failures = _process_asset(asset_path)
-        except Exception as exc:  # Continue so every asset leaves evidence.
+        # This live diagnostic intentionally retains evidence for every asset,
+        # including failures from third-party validators and network clients.
+        except Exception as exc:  # noqa: BLE001
             artifact_dir = OUTPUT_ROOT / asset_path.stem
             artifact_dir.mkdir(parents=True, exist_ok=True)
             error = {

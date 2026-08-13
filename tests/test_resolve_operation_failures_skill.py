@@ -7,7 +7,6 @@ from importlib.resources import files
 import pytest
 import yaml
 
-
 RESOLVE = "resolve-operation-failures"
 PATCH = "apply-parameter-patch"
 

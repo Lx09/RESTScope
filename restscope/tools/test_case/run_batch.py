@@ -16,11 +16,10 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from restscope.llm import ToolSpec
-from restscope.request_generation.store import GeneratorConfigError
 from restscope.request_generation.selection import TestMode
+from restscope.request_generation.store import GeneratorConfigError
 from restscope.tools.context import ToolContext
 from restscope.tools.runtime import ToolBinding, ToolFailure
-
 
 TEST_CASE_RUN_BATCH_TOOL_NAME = "test_case.run_batch"
 _MAX_FAILURE_MESSAGE_CHARACTERS = 1_200

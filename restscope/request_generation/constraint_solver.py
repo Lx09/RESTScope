@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-import hashlib
 
 from .constraints import (
     ConstraintSet,
@@ -336,7 +336,7 @@ def _resource_identifier_records_match(
             groups.setdefault(reference_values.resource_key(strategy), {})[
                 strategy.source.field_name
             ] = (item.input_node_id, strategy)
-    for _resource, component_nodes in groups.items():
+    for component_nodes in groups.values():
         selected: dict[str, object] = {}
         for component, (node_id, _strategy) in component_nodes.items():
             assignment = assignments.get(node_id)

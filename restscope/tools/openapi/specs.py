@@ -7,7 +7,6 @@ without reading the query implementation.
 
 from __future__ import annotations
 
-
 from restscope.llm import ToolSpec
 
 OPENAPI_LIST_INPUTS_TOOL_NAME = "openapi.list_inputs"

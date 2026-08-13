@@ -23,7 +23,6 @@ from pydantic import (
 from restscope.llm import ToolSpec
 from restscope.tools.runtime import ToolBinding, ToolFailure
 
-
 PLAN_READ_TOOL_NAME = "plan.read"
 PLAN_UPDATE_TOOL_NAME = "plan.update"
 
@@ -117,7 +116,7 @@ class AgentPlan(BaseModel):
     plan: tuple[AgentPlanItem, ...] = Field(max_length=100)
 
     @model_validator(mode="after")
-    def require_at_most_one_active_step(self) -> "AgentPlan":
+    def require_at_most_one_active_step(self) -> AgentPlan:
         """Reject ambiguous Plans that claim two steps are currently active."""
         if sum(item.status == "in_progress" for item in self.plan) > 1:
             raise ValueError("Agent Plan may contain at most one in_progress step")
@@ -150,7 +149,7 @@ class _UpdatePlanInput(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_at_most_one_active_step(self) -> "_UpdatePlanInput":
+    def require_at_most_one_active_step(self) -> _UpdatePlanInput:
         """Apply the same active-step rule when a Binding is called directly."""
         if sum(item.status == "in_progress" for item in self.plan) > 1:
             raise ValueError("Agent Plan may contain at most one in_progress step")

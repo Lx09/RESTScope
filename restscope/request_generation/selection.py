@@ -9,13 +9,13 @@ returns one selected configuration; it performs no I/O or persistence.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-import hashlib
-import json
-from typing import Literal, TypeAlias
+from typing import Literal
 
 from .constraints import OperationConstraintRecord, associated_constraint_ids
 from .models import (
@@ -25,10 +25,9 @@ from .models import (
 )
 from .randomness import SeededRandom
 
-
 EPSILON = 0.1
-CandidateKind: TypeAlias = Literal["positive", "negative"]
-BanditKey: TypeAlias = tuple[CandidateKind, str, str]
+type CandidateKind = Literal["positive", "negative"]
+type BanditKey = tuple[CandidateKind, str, str]
 
 
 class TestMode(StrEnum):

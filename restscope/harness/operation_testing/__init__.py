@@ -5,16 +5,20 @@ network effects. The service executes each request in stable order without a
 Test Case Catalog, Worklist, Failure identity, or persistence record.
 """
 
-from .service import BatchExecutionResult, OperationTestingService, TestingExecutionError
 from .outcomes import (
     BatchCaseOutcome,
     HTTPFailure,
     TransportFailure,
 )
+from .service import (
+    BatchExecutionResult,
+    OperationTestingService,
+    TestingExecutionError,
+)
 
 __all__ = [
-    "BatchExecutionResult",
     "BatchCaseOutcome",
+    "BatchExecutionResult",
     "HTTPFailure",
     "OperationTestingService",
     "TestingExecutionError",

@@ -20,7 +20,6 @@ from .ir import (
     ServerIR,
 )
 
-
 _SCHEMA_MODELED_KEYS = {
     "type",
     "format",

@@ -91,7 +91,7 @@ def get_input_schema(
     actionable caller mistake rather than a silently ignored argument.
     """
     operation = operation_resolver(operation_key)
-    if input == "body" or input.startswith("body.") or input.startswith("body["):
+    if input == "body" or input.startswith(("body.", "body[")):
         selected_media_type, schema = _select_media_schema(
             operation.request_body.contents if operation.request_body else {},
             requested=media_type,

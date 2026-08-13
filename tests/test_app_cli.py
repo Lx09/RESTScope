@@ -57,7 +57,7 @@ def test_command_passes_validated_inputs_and_closes_the_app(
         ui_url = "http://127.0.0.1:8765"
 
         @classmethod
-        def from_environment(cls, *, env_file: Path | None = None) -> "App":
+        def from_environment(cls, *, env_file: Path | None = None) -> App:
             events.append(("construct", env_file))
             return cls()
 
@@ -207,20 +207,23 @@ def test_command_maps_interrupt_and_runtime_failure_to_safe_exit_codes(
             """Raise the selected terminal result from the public start seam."""
 
             ui_url = None
+            terminal_failure = failure
+            cleanup_calls = closed
+            command_exit_code = expected_code
 
             @classmethod
-            def from_environment(cls, **_arguments: object) -> "App":
+            def from_environment(cls, **_arguments: object) -> App:
                 return cls()
 
             def initialize(self, **_arguments: object) -> None:
                 return None
 
             def start(self) -> None:
-                raise failure
+                raise self.terminal_failure
 
             def close(self) -> None:
-                closed.append(True)
-                if expected_code == 1:
+                self.cleanup_calls.append(True)
+                if self.command_exit_code == 1:
                     # Cleanup cannot replace the command's already-selected
                     # runtime failure code, even when cleanup is interrupted.
                     raise KeyboardInterrupt
@@ -250,7 +253,7 @@ def test_command_reports_cleanup_failure_after_success_without_details(
         ui_url = None
 
         @classmethod
-        def from_environment(cls, **_arguments: object) -> "App":
+        def from_environment(cls, **_arguments: object) -> App:
             return cls()
 
         def initialize(self, **_arguments: object) -> None:

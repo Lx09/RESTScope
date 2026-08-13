@@ -12,14 +12,12 @@ import asyncio
 import json
 import logging
 import time
-
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from threading import RLock, Thread
 from typing import Protocol
 
 from restscope.observability import LiveRunObserver
-
 
 LOGGER = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -140,7 +138,7 @@ class UIService:
                     access_log=False,
                 )
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             LOGGER.warning("RESTScope UI initialization failed: %s", type(exc).__name__)
             return False
 
@@ -182,7 +180,7 @@ class UIService:
         try:
             assert self._server is not None
             self._server.run()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001
             LOGGER.warning("RESTScope UI server stopped: %s", type(exc).__name__)
 
 
@@ -211,11 +209,11 @@ def build_ui_app(
         RuntimeError: The committed frontend assets are missing.
     """
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
     from starlette.requests import Request
     from starlette.responses import FileResponse, JSONResponse, StreamingResponse
     from starlette.routing import Mount, Route
     from starlette.staticfiles import StaticFiles
-    from starlette.middleware import Middleware
 
     index_file = static_root / "index.html"
     assets_dir = static_root / "assets"

@@ -336,11 +336,11 @@ def test_multipart_serializer_rejects_file_values_and_header_injection() -> None
 
 def test_allow_reserved_query_values_are_preserved_by_target_url_preparation() -> None:
     """Scenario: verify that allow reserved query values are preserved by target url preparation."""
-    from restscope.target_api.request import build_target_url
+    from restscope.harness.operation_testing.service import _target_query_items
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation.models import GeneratedTestCase
-    from restscope.harness.operation_testing.service import _target_query_items
     from restscope.request_generation.serialization import serialize_test_case
+    from restscope.target_api.request import build_target_url
 
     operation = OpenAPIParser.parse(
         {

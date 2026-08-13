@@ -1,14 +1,13 @@
 """Constants used throughout the OpenAPI parser."""
 
-from typing import FrozenSet
 
 # HTTP methods
-HTTP_METHODS: FrozenSet[str] = frozenset({
+HTTP_METHODS: frozenset[str] = frozenset({
     "get", "put", "post", "delete", "options", "head", "patch", "trace"
 })
 
 # Parameter locations
-PARAMETER_LOCATIONS: FrozenSet[str] = frozenset({
+PARAMETER_LOCATIONS: frozenset[str] = frozenset({
     "path", "query", "header", "cookie"
 })
 

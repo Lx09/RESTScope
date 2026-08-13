@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
 import json
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-
 
 DEFAULT_MCP_SERVERS_FILE = Path("./mcp.servers.json")
 
@@ -24,7 +23,7 @@ class MCPServerConfig:
     timeout: int = 30
 
     @classmethod
-    def from_mapping(cls, name: str, values: Mapping[str, object]) -> "MCPServerConfig":
+    def from_mapping(cls, name: str, values: Mapping[str, object]) -> MCPServerConfig:
         """Validate one MCP server mapping, including its command, arguments, environment, and startup timeout."""
         return cls(
             name=name,

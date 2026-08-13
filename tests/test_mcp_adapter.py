@@ -78,9 +78,9 @@ def test_mcp_tool_adapter_preserves_contract_without_deciding_availability() -> 
 def test_register_tool_source_uses_external_call_bridge_and_summarizes_results(
 ) -> None:
     """Scenario: verify that register tool source uses external call bridge and summarizes results."""
+    from restscope.llm import ToolCall
     from restscope.tools import AgentToolbox
     from restscope.tools.external import register_tool_source
-    from restscope.llm import ToolCall
 
     calls: list[tuple[str, dict]] = []
 
@@ -166,7 +166,7 @@ def test_build_harness_registers_all_explicit_sources_without_presets() -> None:
     """Scenario: verify that build capabilities registers all explicit sources without presets."""
     import inspect
 
-    import restscope.harness as harness
+    from restscope import harness
 
     runtime = harness.build_harness(
         sources={
@@ -261,7 +261,7 @@ def test_retired_capabilities_package_is_not_public_api() -> None:
 
 def test_mcp_package_exports_generic_host_and_adapter_only() -> None:
     """Scenario: verify that mcp package exports generic host and adapter only."""
-    import restscope.tools.external.mcp as mcp
+    from restscope.tools.external import mcp
 
     assert mcp.__all__ == [
         "MCPHost",

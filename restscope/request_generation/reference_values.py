@@ -10,19 +10,19 @@ neutral Beta prior; it never stores a copied producer-value collection.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
-import json
 
 from restscope.api_behavior_monitor.catalog import (
+    APIBehaviorCatalog,
     OperationDefinition,
     OperationInputSource,
     ResourceDefinitionRecord,
-    APIBehaviorCatalog,
 )
-from restscope.target_api.media_type import normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.operation_references import ResponseFieldReference
+from restscope.target_api.media_type import normalize_media_type
 
 from .models import (
     InputNodeSnapshot,
@@ -34,7 +34,6 @@ from .models import (
 )
 from .parameter_patch.models import SelectedReferenceProvenance
 from .store import ReferenceValueBinding
-
 
 _SCALAR_REFERENCE_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _MAX_RESPONSE_VALUE_CANDIDATES = 8

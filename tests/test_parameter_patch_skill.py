@@ -7,7 +7,6 @@ from importlib.resources import files
 import pytest
 import yaml
 
-
 SKILL_NAME = "apply-parameter-patch"
 
 

@@ -11,13 +11,12 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from restscope.api_behavior_monitor.catalog import (
-    ResourceDefinitionRecord,
     APIBehaviorCatalog,
+    ResourceDefinitionRecord,
     normalize_resource_name,
 )
 from restscope.llm import ToolSpec
 from restscope.tools.runtime import ToolBinding
-
 
 RESOURCE_LIST_RESOURCES_TOOL_NAME = "resource.list_resources"
 RESOURCE_LIST_IDS_TOOL_NAME = "resource.list_ids"
@@ -27,7 +26,7 @@ _MAX_LIST_LIMIT = 200
 
 
 def resource_tool_bindings(
-    backend: "ResourceToolBackend | None",
+    backend: ResourceToolBackend | None,
     *,
     unavailable: Callable[..., dict[str, object]],
 ) -> tuple[ToolBinding, ...]:

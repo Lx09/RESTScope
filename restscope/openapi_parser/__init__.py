@@ -7,13 +7,13 @@ from .operation_matching import OpenAPIOperationMatchError, match_operation
 from .parser import OpenAPIParser
 
 __all__ = [
-    "OpenAPIParser",
-    "OpenAPISpecIR",
     "InputNodeIR",
     "InputNodeKind",
-    "OperationIR",
     "OpenAPIOperationMatchError",
+    "OpenAPIParser",
+    "OpenAPISpecIR",
     "OperationDocumentGenerationError",
+    "OperationIR",
     "build_openapi_document",
     "match_operation",
 ]

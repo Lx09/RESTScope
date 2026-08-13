@@ -15,10 +15,10 @@ its fingerprints, messages, or loaded instructions are persisted or shared.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from copy import deepcopy
 from hashlib import sha256
-import json
 
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
 from restscope.llm import LLMMessage, LLMModelConfig, LLMRequest, LLMResponse, ToolSpec
@@ -26,7 +26,6 @@ from restscope.skills import SkillDefinition
 
 from .contracts import AgentTask, SystemAgentTask
 from .profile import AgentProfile
-
 
 _STABLE_PREFIX_CHARS = 24_000
 _DESCRIPTION_OMITTED = "[DESCRIPTION OMITTED: stable prefix budget]"

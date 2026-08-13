@@ -82,7 +82,7 @@ def test_evidence_data_cannot_be_replaced() -> None:
     evidence = Evidence("original")
 
     with pytest.raises(AttributeError):
-        setattr(evidence, "data", "replacement")
+        evidence.data = "replacement"
 
     assert evidence.data == "original"
 

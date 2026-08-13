@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import math
 import re
+from copy import deepcopy
 
 from pydantic import ValidationError
 
-from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 from restscope.openapi_parser import OpenAPISpecIR
 from restscope.openapi_parser.ir import OperationIR, ParameterIR, SchemaIR
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 
 from .models import (
     GeneratorDisabledReason,

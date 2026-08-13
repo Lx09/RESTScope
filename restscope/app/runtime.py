@@ -41,7 +41,7 @@ class RESTScopeApp:
     def from_environment(
         cls,
         env_file: str | Path | None = None,
-    ) -> "RESTScopeApp":
+    ) -> RESTScopeApp:
         """Load dotenv/process configuration and construct one production App.
 
         Args:

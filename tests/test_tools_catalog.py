@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from jsonschema import validate
+from jsonschema import ValidationError, validate
 
 from restscope.llm import ToolSpec
-
 
 EXPECTED_BUILTIN_TOOLS = {
     "restscope.http.request": "http",
@@ -225,5 +224,5 @@ def test_global_http_contract_covers_only_generic_requests() -> None:
         },
         schema,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         validate({"case_id": "TC1", "status_code": 400}, schema)

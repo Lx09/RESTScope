@@ -166,9 +166,9 @@ def test_staged_source_commit_failure_rolls_back_flushed_database_rows() -> None
     import pytest
 
     from restscope.api_behavior_monitor.catalog import (
+        APIBehaviorCatalog,
         OperationDefinition,
         OperationInputSource,
-        APIBehaviorCatalog,
     )
     from restscope.db import (
         Base,
@@ -209,12 +209,14 @@ def test_staged_source_commit_failure_rolls_back_flushed_database_rows() -> None
         field_name="id",
     )
 
-    with pytest.raises(RuntimeError, match="database commit failed"):
-        with catalog.stage_input_sources(
+    with (
+        pytest.raises(RuntimeError, match="database commit failed"),
+        catalog.stage_input_sources(
             operations=[consumer, producer],
             sources=[source],
-        ):
-            pass
+        ),
+    ):
+        pass
 
     readable = APIBehaviorCatalog(
         lambda: SqlAlchemyAPIBehaviorUnitOfWork(sessions)
@@ -302,7 +304,6 @@ def test_patch_staging_persists_only_the_exact_consumer_source_proposition() -> 
     )
     from restscope.request_generation.models import (
         OperationInputSourceReference,
-        ResponseValueGenerator,
     )
     from restscope.request_generation.store import ReferenceValueBinding
 
@@ -349,12 +350,11 @@ def test_patch_staging_persists_only_the_exact_consumer_source_proposition() -> 
     catalog = _catalog()
     provider = BehaviorMonitorReferences(catalog)
 
-    with pytest.raises(RuntimeError, match="publication failed"):
-        with provider.stage_bindings(
-            config=config,
-            bindings=(binding,),
-        ):
-            raise RuntimeError("publication failed")
+    with (
+        pytest.raises(RuntimeError, match="publication failed"),
+        provider.stage_bindings(config=config, bindings=(binding,)),
+    ):
+        raise RuntimeError("publication failed")
     assert catalog.list_input_sources(
         consumer_operation_id="GET /consumers",
         consumer_input_node_id=input_node_id,

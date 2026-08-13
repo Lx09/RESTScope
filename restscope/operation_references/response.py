@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from restscope.target_api.media_type import normalize_media_type
 
+from restscope.target_api.media_type import normalize_media_type
 
 _SchemaVariant = Literal["oneOf", "anyOf", "allOf"]
 _COMBINERS = {"oneOf", "anyOf", "allOf"}
@@ -44,12 +44,12 @@ class ResponseFieldReference:
     _steps: tuple[_PathStep, ...] = ()
 
     @classmethod
-    def body(cls) -> "ResponseFieldReference":
+    def body(cls) -> ResponseFieldReference:
         """Create the root response Body reference."""
         return cls()
 
     @classmethod
-    def from_selector(cls, selector: str) -> "ResponseFieldReference":
+    def from_selector(cls, selector: str) -> ResponseFieldReference:
         """Parse one stored ``$`` observation selector.
 
         Args:
@@ -90,7 +90,7 @@ class ResponseFieldReference:
         return reference
 
     @classmethod
-    def from_handle(cls, handle: str) -> "ResponseFieldReference":
+    def from_handle(cls, handle: str) -> ResponseFieldReference:
         """Parse a semantic handle or normalize its concrete array indexes.
 
         Args:
@@ -211,13 +211,13 @@ class ResponseFieldReference:
             current = next_values
         return tuple(current)
 
-    def property(self, name: str) -> "ResponseFieldReference":
+    def property(self, name: str) -> ResponseFieldReference:
         """Return an immutable child for one direct JSON property name."""
         if not name or any(marker in name for marker in (".", "[", "]")):
             raise ValueError("Response property name is not representable")
         return self._child(_PathStep(kind="property", name=name))
 
-    def items(self) -> "ResponseFieldReference":
+    def items(self) -> ResponseFieldReference:
         """Return the semantic item reference for one array level."""
         return self._child(_PathStep(kind="items"))
 
@@ -225,7 +225,7 @@ class ResponseFieldReference:
         self,
         kind: _SchemaVariant,
         index: int,
-    ) -> "ResponseFieldReference":
+    ) -> ResponseFieldReference:
         """Return one exact OpenAPI Schema-combination branch."""
         if kind not in _COMBINERS:
             raise ValueError(f"Unsupported Schema variant: {kind}")
@@ -235,7 +235,7 @@ class ResponseFieldReference:
             _PathStep(kind="variant", name=kind, index=index)
         )
 
-    def _child(self, step: _PathStep) -> "ResponseFieldReference":
+    def _child(self, step: _PathStep) -> ResponseFieldReference:
         """Append one trusted path step without changing the current reference."""
         return ResponseFieldReference((*self._steps, step))
 
@@ -269,7 +269,7 @@ class ResponseSourceCoordinate(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def require_selector_field_name(self) -> "ResponseSourceCoordinate":
+    def require_selector_field_name(self) -> ResponseSourceCoordinate:
         """Reject a display field that contradicts the exact JSON selector."""
 
         reference = ResponseFieldReference.from_selector(self.selector)

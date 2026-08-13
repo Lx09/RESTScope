@@ -282,7 +282,7 @@ def _compose_app_resources(config: RESTScopeConfig) -> _AppResources:
             cleanup_steps.append(database.cleanup)
         try:
             _close_in_order(cleanup_steps)
-        except BaseException:
+        except BaseException:  # noqa: BLE001, S110
             pass
         raise
 
@@ -323,7 +323,7 @@ def _close_in_order(steps: list[Callable[[], None]]) -> None:
     for step in steps:
         try:
             step()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001
             if first_error is None:
                 first_error = exc
     if first_error is not None:

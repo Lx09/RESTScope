@@ -146,6 +146,7 @@ def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
 def test_mcp_source_builder_registers_discovered_tools_through_runtime(
 ) -> None:
     """Scenario: verify that mcp source builder registers discovered tools through runtime."""
+    from restscope.llm import ToolCall
     from restscope.tools import AgentToolbox
     from restscope.tools.external import register_tool_source
     from restscope.tools.external.mcp import (
@@ -153,7 +154,6 @@ def test_mcp_source_builder_registers_discovered_tools_through_runtime(
         MCPServerConfig,
         MCPSourceBuilder,
     )
-    from restscope.llm import ToolCall
 
     calls: list[tuple[str, dict]] = []
 

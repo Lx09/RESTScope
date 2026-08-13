@@ -31,7 +31,7 @@ def _model(*, context_window_tokens: int = 8_192) -> LLMModelConfig:
 
 def test_context_facade_exports_only_the_approved_interface() -> None:
     """The new facade must not recreate the deleted policy/registry platform."""
-    import restscope.context as context
+    from restscope import context
 
     assert context.__all__ == [
         "AgentContext",

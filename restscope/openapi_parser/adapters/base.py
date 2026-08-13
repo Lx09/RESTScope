@@ -17,7 +17,6 @@ class SpecificationAdapter(ABC):
     @abstractmethod
     def spec_format(self) -> str:
         """Return the spec format identifier."""
-        pass
 
     @abstractmethod
     def get_base_path(self, raw_schema: dict) -> str | None:
@@ -30,7 +29,6 @@ class SpecificationAdapter(ABC):
         Returns:
             The base path or None.
         """
-        pass
 
     def get_host(self, raw_schema: dict) -> str | None:
         """Get host from the schema when the format supports it."""
@@ -51,7 +49,6 @@ class SpecificationAdapter(ABC):
         Returns:
             List of server definitions.
         """
-        pass
 
     @abstractmethod
     def get_path_item_servers(self, path_item: dict) -> list[dict]:
@@ -64,7 +61,6 @@ class SpecificationAdapter(ABC):
         Returns:
             List of server definitions.
         """
-        pass
 
     @abstractmethod
     def get_operation_servers(self, operation: dict) -> list[dict]:
@@ -77,7 +73,6 @@ class SpecificationAdapter(ABC):
         Returns:
             List of server definitions.
         """
-        pass
 
     @abstractmethod
     def get_components_container(self, raw_schema: dict) -> dict:
@@ -90,7 +85,6 @@ class SpecificationAdapter(ABC):
         Returns:
             The components dictionary.
         """
-        pass
 
     @abstractmethod
     def get_security_schemes_container(self, raw_schema: dict) -> dict:
@@ -103,7 +97,6 @@ class SpecificationAdapter(ABC):
         Returns:
             The security schemes dictionary.
         """
-        pass
 
     @abstractmethod
     def get_global_security_requirements(self, raw_schema: dict) -> list[dict]:
@@ -116,7 +109,6 @@ class SpecificationAdapter(ABC):
         Returns:
             List of security requirement objects.
         """
-        pass
 
     @abstractmethod
     def iter_operation_parameters(
@@ -134,7 +126,6 @@ class SpecificationAdapter(ABC):
         Returns:
             List of parameter definitions.
         """
-        pass
 
     @abstractmethod
     def get_request_body_definition(self, operation: dict) -> dict | None:
@@ -147,7 +138,6 @@ class SpecificationAdapter(ABC):
         Returns:
             Request body definition or None.
         """
-        pass
 
     @abstractmethod
     def get_responses_definition(self, operation: dict) -> dict:
@@ -160,7 +150,6 @@ class SpecificationAdapter(ABC):
         Returns:
             Responses dictionary.
         """
-        pass
 
     @abstractmethod
     def build_synthetic_path_parameter(self, name: str) -> dict:
@@ -173,7 +162,6 @@ class SpecificationAdapter(ABC):
         Returns:
             A parameter definition dictionary.
         """
-        pass
 
     @abstractmethod
     def validate_top_level(self, raw_schema: dict) -> None:
@@ -186,4 +174,3 @@ class SpecificationAdapter(ABC):
         Raises:
             InvalidTopLevelSchemaError: If the schema is invalid.
         """
-        pass

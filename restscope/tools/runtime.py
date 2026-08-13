@@ -98,11 +98,11 @@ class AgentToolbox:
     def from_catalog(
         cls,
         *,
-        catalog: "ToolCatalog",
+        catalog: ToolCatalog,
         selected_names: tuple[str, ...],
         bindings: list[ToolBinding],
         tracing_runtime: TracingRuntime | None = None,
-    ) -> "AgentToolbox":
+    ) -> AgentToolbox:
         """Build one Agent's toolbox from exact Catalog grants and Bindings.
 
         The selected names and Binding names must be identical. This prevents a
@@ -333,7 +333,7 @@ class AgentToolbox:
                     content=exc.content,
                     error={"code": exc.code, "message": exc.safe_message},
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 # The trace retains a redacted diagnostic event. The exception
                 # itself never crosses the model-visible ToolResult boundary.
                 span.record_error(exc)

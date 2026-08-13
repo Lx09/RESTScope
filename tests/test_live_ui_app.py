@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import sys
-
 from dataclasses import replace
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,7 +15,7 @@ if TYPE_CHECKING:
     from restscope.harness import AgentRuntimeDefinition
 
 
-def _interrupting_agent_definition() -> "AgentRuntimeDefinition":
+def _interrupting_agent_definition() -> AgentRuntimeDefinition:
     """Build one production-shaped Main definition that simulates Ctrl-C."""
     from restscope.agent import AgentProfile
     from restscope.harness import AgentRuntimeDefinition
@@ -69,9 +68,8 @@ _ONE_GET_SCHEMA = json.dumps(
 def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path: Path) -> None:
     """Scenario: enabled hosting exposes only the actual started loopback URL."""
     from restscope.app import RESTScopeApp
-    from restscope.observability import TracingRuntime
     from restscope.config import DBConfig, RESTScopeConfig, UIConfig
-
+    from restscope.observability import TracingRuntime
     from restscope.ui import UIService
 
     service = UIService(observer=object(), port=9988, static_root=tmp_path)
@@ -110,9 +108,8 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
 ) -> None:
     """Ctrl-C preserves the stopped snapshot until the App is closed."""
     from restscope.app import RESTScopeApp
-    from restscope.observability import TracingRuntime
     from restscope.config import DBConfig, RESTScopeConfig, UIConfig
-
+    from restscope.observability import TracingRuntime
     from restscope.ui import UIService
 
     service = UIService(observer=object(), port=9987, static_root=tmp_path)
@@ -169,8 +166,8 @@ def test_app_continues_without_collection_when_ui_startup_fails(
 ) -> None:
     """Scenario: an optional server failure disables UI but not App construction."""
     from restscope.app import RESTScopeApp
-    from restscope.observability import TracingRuntime
     from restscope.config import DBConfig, RESTScopeConfig, UIConfig
+    from restscope.observability import TracingRuntime
 
     monkeypatch.setattr(
         "restscope.app.composition.start_ui_service",

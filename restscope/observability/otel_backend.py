@@ -40,7 +40,7 @@ class OpenTelemetryBackend:
                     timeout_millis=int(self.flush_timeout_seconds * 1000),
                 )
                 self.tracer_provider.shutdown()
-            except BaseException as exc:  # Propagated to the fail-open facade.
+            except BaseException as exc:  # Propagated to the fail-open facade.  # noqa: BLE001
                 errors.append(exc)
 
         worker = Thread(target=shutdown, name="restscope-tracing-shutdown", daemon=True)

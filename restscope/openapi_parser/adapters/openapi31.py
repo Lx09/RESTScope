@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from .base import SpecificationAdapter
 from ..constants import SPEC_FORMAT_OAS31
 from ..exceptions import InvalidTopLevelSchemaError
+from .base import SpecificationAdapter
 
 
 class OpenAPI31Adapter(SpecificationAdapter):

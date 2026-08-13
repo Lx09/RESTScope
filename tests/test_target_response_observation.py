@@ -12,7 +12,6 @@ class _CapturingProcessor:
     def process(self, observation, context):
         del context
         self.observation = observation
-        return None
 
 
 def test_monitor_receives_full_body_and_sanitized_actual_request_view() -> None:

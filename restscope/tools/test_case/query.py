@@ -17,7 +17,6 @@ from restscope.llm import ToolSpec
 from restscope.target_api.request import is_sensitive_header
 from restscope.tools.runtime import ToolBinding, ToolFailure
 
-
 TEST_CASE_GET_BATCH_RESULTS_TOOL_NAME = "test_case.get_batch_results"
 TEST_CASE_GET_TOOL_NAME = "test_case.get"
 _DEFAULT_LIMIT = 100

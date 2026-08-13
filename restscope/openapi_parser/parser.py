@@ -4,16 +4,14 @@ from .adapters.base import SpecificationAdapter
 from .constants import HTTP_METHODS
 from .diagnostics import make_diagnostic
 from .exceptions import InvalidTopLevelSchemaError
+from .input_nodes import build_operation_input_nodes
 from .ir import (
-    ComponentsIR,
     DiagnosticsIR,
     OpenAPISpecIR,
     OperationIR,
     PathItemIR,
     SpecIndexesIR,
-    SpecMetaIR,
 )
-from .input_nodes import build_operation_input_nodes
 from .loader import load_parse_input
 from .parsers import (
     parse_components,
@@ -23,7 +21,7 @@ from .parsers import (
     parse_request_body,
     parse_responses,
 )
-from .parsers.parameter_parser import merge_parameters, inject_missing_path_parameters
+from .parsers.parameter_parser import inject_missing_path_parameters, merge_parameters
 from .parsers.server_parser import resolve_operation_servers
 from .resolver import ReferenceResolver
 from .versioning import detect_spec_version_and_adapter
@@ -375,7 +373,7 @@ class OpenAPIParser:
                     resolver=resolver,
                     diagnostics=diagnostics,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001, S112
                 # Skip this path on error
                 continue
 
@@ -404,7 +402,7 @@ class OpenAPIParser:
                     op.input_nodes = build_operation_input_nodes(op)
                     ir.operations[op.operation_key] = op
                     path_item_ir.operations[method] = op.operation_key
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     diagnostics.operation_errors.append(
                         make_diagnostic(
                             severity="error",

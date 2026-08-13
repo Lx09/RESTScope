@@ -16,7 +16,6 @@ from typing import Literal
 
 from restscope.target_api.media_type import is_json_media_type, normalize_media_type
 
-
 EventKind = Literal["agent_turn", "tool_call"]
 HTTP_TOOL_NAME = "restscope.http.request"
 
@@ -30,7 +29,7 @@ def classify_tool(name: str) -> str:
         return "openapi"
     if name.startswith("test_case."):
         return "test_case"
-    if name.startswith("request_generation.") or name.startswith("parameter_patch."):
+    if name.startswith(("request_generation.", "parameter_patch.")):
         return "parameter_patch"
     if name.startswith("resource."):
         return "resource"

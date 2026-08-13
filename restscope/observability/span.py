@@ -7,20 +7,20 @@ locking, and cursor publication inside the observer module.
 
 from __future__ import annotations
 
-from copy import deepcopy
 import time
-from typing import TYPE_CHECKING
 from contextvars import Token
+from copy import deepcopy
+from typing import TYPE_CHECKING
 
 from .observer import (
-    _ActiveContext,
     _CURRENT_CONTEXT,
     _HTTP_TOOL,
     _PLAN_UPDATE_TOOL,
-    _semantic_status,
-    _tool_status,
+    _ActiveContext,
     _utc_now,
 )
+from .projection import semantic_status as _semantic_status
+from .projection import tool_status as _tool_status
 
 if TYPE_CHECKING:
     from .observer import LiveRunObserver
@@ -32,9 +32,9 @@ class LiveSpan:
     def __init__(
         self,
         *,
-        observer: "LiveRunObserver",
+        observer: LiveRunObserver,
         event_id: str | None,
-        context_token: Token[_ActiveContext],
+        context_token: Token[_ActiveContext | None],
         span_name: str,
         task_id: str | None,
         is_agent_run: bool,
@@ -193,5 +193,5 @@ class LiveSpan:
         finally:
             try:
                 _CURRENT_CONTEXT.reset(self._context_token)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass

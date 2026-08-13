@@ -1,8 +1,8 @@
 """Configure, redact, trace, and project RESTScope runtime observations."""
 
+from .logging import configure_logging
 from .observer import LiveRunObserver
 from .projection import classify_tool
-from .logging import configure_logging
 from .redaction import Redactor
 from .runtime import TraceSpan, TracingRuntime, build_tracing_runtime
 

@@ -103,7 +103,7 @@ def parse_media_type(
     if schema_raw:
         try:
             schema = parse_schema(schema_raw, resolver, scope, diagnostics)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             diagnostics.spec_warnings.append(
                 make_diagnostic(
                     severity="warning",
@@ -168,8 +168,8 @@ def parse_request_body(
         try:
             _, raw_request_body = resolver.resolve(raw_request_body["$ref"])
             if not isinstance(raw_request_body, dict):
-                raise ValueError("Resolved requestBody is not an object")
-        except Exception as exc:
+                raise TypeError("Resolved requestBody is not an object")
+        except Exception as exc:  # noqa: BLE001
             diagnostics.operation_errors.append(
                 make_diagnostic(
                     severity="error",

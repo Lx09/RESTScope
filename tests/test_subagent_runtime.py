@@ -108,8 +108,8 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
 
     providers = LLMProviderRegistry()
     providers.register(_ChildProvider())
-    definition = dict(
-        models=(
+    definition = {
+        "models": (
             LLMModelConfig(
                 name="fast",
                 provider="scripted",
@@ -118,8 +118,8 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
                 context_window_tokens=2_048,
             ),
         ),
-        client=LLMClient(providers),
-    )
+        "client": LLMClient(providers),
+    }
 
     with pytest.raises(ValueError, match="all three Subagent Tools"):
         build_harness(

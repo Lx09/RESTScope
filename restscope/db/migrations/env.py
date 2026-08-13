@@ -16,7 +16,6 @@ from restscope.db import orm  # noqa: F401
 from restscope.db.base import Base
 from restscope.db.session import enable_sqlite_foreign_keys
 
-
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

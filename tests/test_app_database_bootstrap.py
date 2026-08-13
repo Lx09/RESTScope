@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 
 BUSINESS_TABLES = {
     "openapi_current",
@@ -158,12 +157,13 @@ def test_close_releases_later_resources_when_agent_cleanup_fails(
     tmp_path: Path,
 ) -> None:
     """A Main-Agent close error cannot strand Context or tracing resources."""
+    from sqlalchemy import create_engine
+
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
     from restscope.app.composition import _AppResources
     from restscope.harness import build_harness
     from restscope.observability import TracingRuntime
     from restscope.request_generation import RequestGenerationConfigStore
-    from sqlalchemy import create_engine
 
     runtime = build_harness()
     tracing = TracingRuntime.disabled()

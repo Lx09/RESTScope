@@ -83,7 +83,7 @@ def test_agent_profile_accepts_only_bounded_nonblank_instructions() -> None:
 
 def test_harness_exposes_atomic_start_instead_of_shallow_profile_resolution() -> None:
     """Callers cannot resolve grants and then assemble an Agent themselves."""
-    import restscope.harness as harness
+    from restscope import harness
 
     runtime = harness.build_harness()
 

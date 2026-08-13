@@ -86,6 +86,6 @@ def test_redactor_preserves_mapping_entries_when_redacted_keys_collide() -> None
 
 def test_llm_package_no_longer_exports_redactor() -> None:
     """Scenario: verify that llm package no longer exports redactor."""
-    import restscope.llm as llm
+    from restscope import llm
 
     assert not hasattr(llm, "Redactor")

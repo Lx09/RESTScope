@@ -1,9 +1,7 @@
 """Reference resolver for $ref resolution."""
 
-import json
 import os
 import urllib.parse
-from typing import Tuple
 
 from .exceptions import RecursiveReferenceError, ReferenceResolutionError
 
@@ -73,14 +71,12 @@ class ReferenceResolver:
         # Handle empty doc_part (local pointer)
         if not doc_part:
             doc_uri = current_scope
-        elif doc_part.startswith("http://") or doc_part.startswith("https://"):
-            doc_uri = doc_part
-        elif doc_part.startswith("file://"):
+        elif doc_part.startswith(("http://", "https://", "file://")):
             doc_uri = doc_part
         else:
             # Relative path
             if current_scope:
-                if current_scope.startswith("http://") or current_scope.startswith("https://"):
+                if current_scope.startswith(("http://", "https://")):
                     # Relative URL
                     doc_uri = urllib.parse.urljoin(current_scope, doc_part)
                 elif current_scope.startswith("file://"):
@@ -130,13 +126,14 @@ class ReferenceResolver:
                     doc = yaml.safe_load(content)
                     self._document_cache[doc_uri] = doc
                     return doc
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 raise ReferenceResolutionError(f"Failed to load file {file_path}: {e}")
 
         # Handle http:// and https:// URIs
-        if doc_uri.startswith("http://") or doc_uri.startswith("https://"):
+        if doc_uri.startswith(("http://", "https://")):
             try:
                 import urllib.request
+
                 import yaml
 
                 with urllib.request.urlopen(doc_uri, timeout=30) as response:
@@ -144,7 +141,7 @@ class ReferenceResolver:
                     doc = yaml.safe_load(content)
                     self._document_cache[doc_uri] = doc
                     return doc
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 raise ReferenceResolutionError(f"Failed to load URL {doc_uri}: {e}")
 
         # Handle local file paths
@@ -157,7 +154,7 @@ class ReferenceResolver:
                     doc = yaml.safe_load(content)
                     self._document_cache[doc_uri] = doc
                     return doc
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 raise ReferenceResolutionError(f"Failed to load file {doc_uri}: {e}")
 
         raise ReferenceResolutionError(f"Cannot load document from {doc_uri}")
@@ -177,8 +174,7 @@ class ReferenceResolver:
             return document
 
         # Remove leading #
-        if pointer.startswith("#"):
-            pointer = pointer[1:]
+        pointer = pointer.removeprefix("#")
 
         # Remove leading /
         if not pointer.startswith("/"):

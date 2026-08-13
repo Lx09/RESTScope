@@ -16,7 +16,6 @@ from restscope.llm import ToolSpec
 from restscope.skills import SkillDefinition
 from restscope.tools.runtime import ToolBinding, ToolFailure
 
-
 FILE_READ_TOOL_NAME = "file.read"
 _REFERENCE_PATH_PATTERN = r"^references/[A-Za-z0-9][A-Za-z0-9._-]*\.md$"
 

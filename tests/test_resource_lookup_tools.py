@@ -8,7 +8,12 @@ from pathlib import Path
 def _catalog(tmp_path: Path):
     """Create one isolated unified Response Monitor Catalog."""
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
-    from restscope.db import Base, SqlAlchemyAPIBehaviorUnitOfWork, create_engine_from_url, make_session_factory
+    from restscope.db import (
+        Base,
+        SqlAlchemyAPIBehaviorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
 
     engine = create_engine_from_url(f"sqlite:///{tmp_path / 'tools.sqlite'}")
     Base.metadata.create_all(engine)
@@ -18,7 +23,10 @@ def _catalog(tmp_path: Path):
 
 def _record_resource(catalog, *, name: str = "assignment") -> None:
     """Record one real composite observation through the Catalog Interface."""
-    from restscope.api_behavior_monitor.catalog import OperationDefinition, ResourceDerivation
+    from restscope.api_behavior_monitor.catalog import (
+        OperationDefinition,
+        ResourceDerivation,
+    )
 
     catalog.ensure_operation(
         OperationDefinition(
@@ -54,7 +62,10 @@ def test_resource_list_returns_canonical_names(tmp_path: Path) -> None:
 
 def test_resource_id_list_returns_definition_and_ordered_components(tmp_path: Path) -> None:
     """The Tool exposes complete records and no legacy scalar ID fields."""
-    from restscope.tools.resource import ResourceToolBackend, resource_list_ids_tool_spec
+    from restscope.tools.resource import (
+        ResourceToolBackend,
+        resource_list_ids_tool_spec,
+    )
 
     catalog = _catalog(tmp_path)
     _record_resource(catalog)

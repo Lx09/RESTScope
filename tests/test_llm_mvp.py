@@ -226,8 +226,8 @@ def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
     """Scenario: verify that llm public contract excludes removed legacy surface."""
     import inspect
 
-    import restscope.llm as llm
-    import restscope.llm.providers as providers
+    from restscope import llm
+    from restscope.llm import providers
     from restscope.llm.output_validator import OutputValidator
     from restscope.llm.providers.base import BaseLLMProvider
 
@@ -282,8 +282,10 @@ class _FakeOpenAIUsage:
 
 
 class _FakeOpenAIResponse:
+    """Provide immutable response-shaped class data to the fake client."""
+
     id = "chatcmpl_test"
-    choices = [_FakeOpenAIChoice()]
+    choices: tuple[_FakeOpenAIChoice, ...] = (_FakeOpenAIChoice(),)
     usage = _FakeOpenAIUsage()
 
 
@@ -620,22 +622,18 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
 
 def test_model_builder_uses_named_thinking_and_fast_configs(tmp_path: Path) -> None:
     """Each raw slot translates directly without semantic role selection."""
-    from restscope.llm import build_llm_model_config
     from restscope.config import RESTScopeConfig
+    from restscope.llm import build_llm_model_config
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            [
-                "THINK_PROVIDER=fake",
-                "THINK_MODEL=strong-model",
-                "THINK_TEMPERATURE=0.1",
-                "THINK_MAX_TOKENS=4096",
-                "FAST_PROVIDER=fake",
-                "FAST_MODEL=fast-model",
-                "FAST_TEMPERATURE=0.2",
-            ]
-        ),
+        "THINK_PROVIDER=fake\n"
+        "THINK_MODEL=strong-model\n"
+        "THINK_TEMPERATURE=0.1\n"
+        "THINK_MAX_TOKENS=4096\n"
+        "FAST_PROVIDER=fake\n"
+        "FAST_MODEL=fast-model\n"
+        "FAST_TEMPERATURE=0.2",
         encoding="utf-8",
     )
     config = RESTScopeConfig.from_environment(env_file)
@@ -655,18 +653,14 @@ def test_deepseek_profiles_accept_one_m_context_and_384k_output(tmp_path: Path) 
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            (
-                "THINK_PROVIDER=deepseek",
-                "THINK_MODEL=deepseek-v4-flash",
-                "THINK_CONTEXT_WINDOW_TOKENS=1048576",
-                "THINK_MAX_TOKENS=393216",
-                "FAST_PROVIDER=deepseek",
-                "FAST_MODEL=deepseek-v4-flash",
-                "FAST_CONTEXT_WINDOW_TOKENS=1048576",
-                "FAST_MAX_TOKENS=393216",
-            )
-        ),
+        "THINK_PROVIDER=deepseek\n"
+        "THINK_MODEL=deepseek-v4-flash\n"
+        "THINK_CONTEXT_WINDOW_TOKENS=1048576\n"
+        "THINK_MAX_TOKENS=393216\n"
+        "FAST_PROVIDER=deepseek\n"
+        "FAST_MODEL=deepseek-v4-flash\n"
+        "FAST_CONTEXT_WINDOW_TOKENS=1048576\n"
+        "FAST_MAX_TOKENS=393216",
         encoding="utf-8",
     )
 
@@ -686,14 +680,10 @@ def test_model_config_exposes_separate_context_and_output_limits(
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            (
-                "THINK_MODEL=think-model",
-                "FAST_MODEL=fast-model",
-                "THINK_CONTEXT_WINDOW_TOKENS=200000",
-                "THINK_MAX_TOKENS=12000",
-            )
-        ),
+        "THINK_MODEL=think-model\n"
+        "FAST_MODEL=fast-model\n"
+        "THINK_CONTEXT_WINDOW_TOKENS=200000\n"
+        "THINK_MAX_TOKENS=12000",
         encoding="utf-8",
     )
 
@@ -713,13 +703,9 @@ def test_model_config_rejects_output_limit_that_fills_context(
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            (
-                "THINK_MODEL=think-model",
-                "THINK_CONTEXT_WINDOW_TOKENS=4096",
-                "THINK_MAX_TOKENS=4096",
-            )
-        ),
+        "THINK_MODEL=think-model\n"
+        "THINK_CONTEXT_WINDOW_TOKENS=4096\n"
+        "THINK_MAX_TOKENS=4096",
         encoding="utf-8",
     )
 
@@ -734,19 +720,15 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
     tmp_path: Path,
 ) -> None:
     """Scenario: verify that deepseek config defaults reasoning by model slot and registers provider."""
+    from restscope.config import RESTScopeConfig
     from restscope.llm import build_llm_model_config, build_llm_registry
     from restscope.llm.providers.deepseek import DeepSeekProvider
-    from restscope.config import RESTScopeConfig
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            [
-                "THINK_PROVIDER=deepseek",
-                "THINK_MODEL=deepseek-v4-pro",
-                "THINK_API_KEY=test-key",
-            ]
-        ),
+        "THINK_PROVIDER=deepseek\n"
+        "THINK_MODEL=deepseek-v4-pro\n"
+        "THINK_API_KEY=test-key",
         encoding="utf-8",
     )
 
@@ -764,23 +746,19 @@ def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider
 
 def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> None:
     """Scenario: verify that deepseek config parses explicit reasoning effort."""
-    from restscope.llm import build_llm_model_config
     from restscope.config import RESTScopeConfig
+    from restscope.llm import build_llm_model_config
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            [
-                "THINK_PROVIDER=deepseek",
-                "THINK_MODEL=deepseek-v4-pro",
-                "THINK_API_KEY=test-key",
-                "THINK_REASONING_MODE=enabled",
-                "THINK_REASONING_EFFORT=max",
-                "FAST_PROVIDER=deepseek",
-                "FAST_MODEL=deepseek-v4-flash",
-                "FAST_REASONING_MODE=disabled",
-            ]
-        ),
+        "THINK_PROVIDER=deepseek\n"
+        "THINK_MODEL=deepseek-v4-pro\n"
+        "THINK_API_KEY=test-key\n"
+        "THINK_REASONING_MODE=enabled\n"
+        "THINK_REASONING_EFFORT=max\n"
+        "FAST_PROVIDER=deepseek\n"
+        "FAST_MODEL=deepseek-v4-flash\n"
+        "FAST_REASONING_MODE=disabled",
         encoding="utf-8",
     )
 
@@ -828,8 +806,8 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
 def test_agent_toolbox_exposes_and_executes_only_explicit_tools(tool_context) -> None:
     """An Agent's toolbox is its complete availability decision."""
     del tool_context
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     toolbox = AgentToolbox()
     toolbox.register(

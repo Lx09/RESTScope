@@ -14,7 +14,12 @@ from restscope.tools.openapi import (
     openapi_list_operations_tool_spec,
     openapi_list_response_fields_tool_spec,
 )
+from restscope.tools.parameter_patch import parameter_patch_apply_tool_spec
 from restscope.tools.plan import plan_read_tool_spec, plan_update_tool_spec
+from restscope.tools.request_generation import (
+    request_generation_get_input_state_tool_spec,
+    request_generation_validate_patch_tool_spec,
+)
 from restscope.tools.resource import (
     resource_list_ids_tool_spec,
     resource_list_resources_tool_spec,
@@ -30,11 +35,6 @@ from restscope.tools.test_case import (
     test_case_get_tool_spec,
     test_case_run_batch_tool_spec,
 )
-from restscope.tools.request_generation import (
-    request_generation_get_input_state_tool_spec,
-    request_generation_validate_patch_tool_spec,
-)
-from restscope.tools.parameter_patch import parameter_patch_apply_tool_spec
 
 from .catalog import ToolCatalog, ToolDefinition
 

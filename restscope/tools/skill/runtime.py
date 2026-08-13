@@ -18,7 +18,6 @@ from restscope.llm import ToolSpec
 from restscope.skills import SkillDefinition
 from restscope.tools.runtime import ToolBinding, ToolFailure
 
-
 SKILL_READ_TOOL_NAME = "skill.read"
 
 

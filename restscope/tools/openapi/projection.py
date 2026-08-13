@@ -7,7 +7,6 @@ values, enum size, and untrusted text.
 
 from __future__ import annotations
 
-
 from restscope.openapi_parser.ir import SchemaIR
 
 _MAX_ENUM_VALUES = 50

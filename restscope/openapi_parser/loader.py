@@ -2,7 +2,6 @@
 
 import json
 import os
-import urllib.parse
 from pathlib import Path
 
 import yaml
@@ -14,7 +13,7 @@ from .ir import ParseInput
 
 def _is_url(text: str) -> bool:
     """Check if a string is a URL."""
-    return text.startswith("http://") or text.startswith("https://")
+    return text.startswith(("http://", "https://"))
 
 
 def _is_local_path(text: str) -> bool:
@@ -29,7 +28,7 @@ def _parse_yaml_or_json(content: str) -> dict[str, object]:
         result = json.loads(content)
         if isinstance(result, dict):
             return result
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         pass
 
     # Try YAML
@@ -53,7 +52,7 @@ def _load_from_url(url: str) -> dict[str, object]:
         with urllib.request.urlopen(url, timeout=30) as response:
             content = response.read().decode("utf-8")
             return _parse_yaml_or_json(content)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise LoaderError(f"Failed to load from URL {url}: {e}")
 
 
@@ -64,7 +63,7 @@ def _load_from_file(file_path: str) -> dict[str, object]:
         with open(abs_path, "r", encoding="utf-8") as f:
             content = f.read()
         return _parse_yaml_or_json(content)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise LoaderError(f"Failed to load from file {file_path}: {e}")
 
 

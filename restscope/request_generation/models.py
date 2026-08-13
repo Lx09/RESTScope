@@ -46,7 +46,7 @@ class ChoiceGenerator(_Strategy):
     weights: list[float] | None = None
 
     @model_validator(mode="after")
-    def validate_weights(self) -> "ChoiceGenerator":
+    def validate_weights(self) -> ChoiceGenerator:
         """Require one positive finite weight per choice value."""
         if self.weights is not None:
             if len(self.weights) != len(self.values):
@@ -69,7 +69,7 @@ class IntegerRangeGenerator(_Strategy):
     maximum: int
 
     @model_validator(mode="after")
-    def validate_range(self) -> "IntegerRangeGenerator":
+    def validate_range(self) -> IntegerRangeGenerator:
         """Require the integer range minimum to be no greater than its maximum."""
         if self.minimum > self.maximum:
             raise ValueError("minimum cannot exceed maximum")
@@ -89,7 +89,7 @@ class NumberRangeGenerator(_Strategy):
     maximum: float
 
     @model_validator(mode="after")
-    def validate_range(self) -> "NumberRangeGenerator":
+    def validate_range(self) -> NumberRangeGenerator:
         """Require the numeric range minimum to be no greater than its maximum."""
         if self.minimum > self.maximum:
             raise ValueError("minimum cannot exceed maximum")
@@ -110,7 +110,7 @@ class RandomStringGenerator(_Strategy):
     alphabet: str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
     @model_validator(mode="after")
-    def validate_string_options(self) -> "RandomStringGenerator":
+    def validate_string_options(self) -> RandomStringGenerator:
         """Require at least one allowed character and a minimum length no greater than the maximum."""
         if self.min_length > self.max_length:
             raise ValueError("min_length cannot exceed max_length")
@@ -134,7 +134,7 @@ class RegexGenerator(_Strategy):
     max_length: int = Field(default=100, ge=0, le=10_000)
 
     @model_validator(mode="after")
-    def validate_regex_options(self) -> "RegexGenerator":
+    def validate_regex_options(self) -> RegexGenerator:
         """Return this contract after validating its cross-field boundaries.
 
         The method changes no state. It raises a validation error when the
@@ -198,7 +198,7 @@ class ArrayGenerator(_Strategy):
     max_items: int = Field(default=1, ge=0)
 
     @model_validator(mode="after")
-    def validate_length(self) -> "ArrayGenerator":
+    def validate_length(self) -> ArrayGenerator:
         """Require the array minimum length to be no greater than its maximum."""
         if self.min_items > self.max_items:
             raise ValueError("min_items cannot exceed max_items")
@@ -217,7 +217,7 @@ class VariantGenerator(_Strategy):
     branch_weights: list[float] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_branch_weights(self) -> "VariantGenerator":
+    def validate_branch_weights(self) -> VariantGenerator:
         """Require variant weights to be positive, finite, and aligned with branch count."""
         if any(weight < 0 for weight in self.branch_weights) or not any(self.branch_weights):
             raise ValueError(
@@ -314,7 +314,7 @@ class InputGeneratorPatch(BaseModel):
     strategy: GeneratorStrategy | None = None
 
     @model_validator(mode="after")
-    def validate_change(self) -> "InputGeneratorPatch":
+    def validate_change(self) -> InputGeneratorPatch:
         """Require a Generator change event to include distinct before and after states."""
         if self.inclusion_probability is None and self.strategy is None:
             raise ValueError("generator patch must change strategy or inclusion_probability")
@@ -328,10 +328,10 @@ class SchemaSnapshot(BaseModel):
 
     type: str | list[str] | None = None
     format: str | None = None
-    properties: dict[str, "SchemaSnapshot"] = Field(default_factory=dict)
+    properties: dict[str, SchemaSnapshot] = Field(default_factory=dict)
     read_only_properties: list[str] = Field(default_factory=list)
     required: list[str] = Field(default_factory=list)
-    items: "SchemaSnapshot | None" = None
+    items: SchemaSnapshot | None = None
     enum: list[object] | None = None
     const: object | None = None
     has_const: bool = False
@@ -353,10 +353,10 @@ class SchemaSnapshot(BaseModel):
     unique_items: bool | None = None
     min_properties: int | None = None
     max_properties: int | None = None
-    additional_properties: "bool | SchemaSnapshot | None" = None
-    all_of: list["SchemaSnapshot"] = Field(default_factory=list)
-    any_of: list["SchemaSnapshot"] = Field(default_factory=list)
-    one_of: list["SchemaSnapshot"] = Field(default_factory=list)
+    additional_properties: bool | SchemaSnapshot | None = None
+    all_of: list[SchemaSnapshot] = Field(default_factory=list)
+    any_of: list[SchemaSnapshot] = Field(default_factory=list)
+    one_of: list[SchemaSnapshot] = Field(default_factory=list)
     has_not: bool = False
     has_conditional: bool = False
 

@@ -17,7 +17,6 @@ from alembic import op
 from restscope.db import orm  # noqa: F401  # Register every current mapping.
 from restscope.db.base import Base
 
-
 revision = "0001_current_baseline"
 down_revision = None
 branch_labels = None

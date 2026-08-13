@@ -7,18 +7,19 @@ from pathlib import Path
 
 import pytest
 
-
 pytest.importorskip("opentelemetry.sdk")
 
 
 def _recording_runtime(*, secret_values=()):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
+    from restscope.observability import Redactor
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -238,10 +239,10 @@ def test_agent_toolbox_uses_actual_tool_name_and_sanitizes_trace_payload() -> No
     """The Agent-owned execution boundary emits safe tool spans."""
     from opentelemetry.trace.status import StatusCode
 
-    from restscope.tools import AgentToolbox
-    from restscope.tools.context import ToolContext
     from restscope.llm import ToolCall, ToolSpec
     from restscope.openapi_parser import OpenAPIParser
+    from restscope.tools import AgentToolbox
+    from restscope.tools.context import ToolContext
 
     schema = {
         "openapi": "3.0.0",
@@ -336,12 +337,12 @@ def test_agent_toolbox_propagates_provider_unavailable_without_tracing_cause() -
     """A nested model outage keeps stable Tool span facts and a private cause."""
     from opentelemetry.trace.status import StatusCode
 
-    from restscope.tools import AgentToolbox
     from restscope.llm import (
         ProviderUnavailableError,
         ToolCall,
         ToolSpec,
     )
+    from restscope.tools import AgentToolbox
 
     provider_body = "unregistered private nested provider response body"
     unavailable = ProviderUnavailableError(status_code=503, retry_limit=3)
@@ -391,8 +392,8 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
     """Scenario: concurrent tool spans remain children of the calling Agent."""
     import threading
 
-    from restscope.tools import AgentToolbox
     from restscope.llm import ToolCall, ToolSpec
+    from restscope.tools import AgentToolbox
 
     # Requiring both implementations to arrive before either returns proves
     # that this scenario crosses the real worker-thread boundary.
@@ -464,12 +465,12 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
 
 def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: Path) -> None:
     """The blocking App, Main Agent, and model call form one trace hierarchy."""
-    from restscope.agent import AgentProfile
     from restscope import RESTScopeApp
+    from restscope.agent import AgentProfile
+    from restscope.config import RESTScopeConfig
     from restscope.harness import AgentRuntimeDefinition
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
-    from restscope.config import RESTScopeConfig
 
     class Provider:
         """Return a local Main completion and expose the request to tracing."""
@@ -577,8 +578,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
 def test_harness_rebinds_only_its_owned_trace_consumers() -> None:
     """Harness tracing replacement stays at the Harness ownership seam."""
     from restscope.harness import build_harness
-    from restscope.observability import TracingRuntime
-    from restscope.observability import Redactor
+    from restscope.observability import Redactor, TracingRuntime
 
     old_runtime = TracingRuntime.disabled(redactor=Redactor(["old-key"]))
     app_runtime = TracingRuntime.disabled(redactor=Redactor(["app-key"]))
@@ -614,14 +614,14 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     """Scenario: verify that http request tool keeps full result while trace output is bounded."""
     import httpx
 
+    from restscope.llm import ToolCall
+    from restscope.openapi_parser import OpenAPIParser
     from restscope.tools import AgentToolbox
     from restscope.tools.context import ToolContext
     from restscope.tools.http import (
         TargetHTTPRequestTool,
         http_request_tool_spec,
     )
-    from restscope.llm import ToolCall
-    from restscope.openapi_parser import OpenAPIParser
 
     response_body = f"{'x' * 70000} Bearer runtime-secret"
     transport = httpx.MockTransport(
@@ -678,15 +678,15 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
     """The generic Batch runner traces structure without target secrets."""
     import httpx
 
-    from restscope.tools.context import ToolContext
-    from restscope.target_api import TargetAPIClient
+    from restscope.harness.operation_testing import OperationTestingService
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
-        RequestGenerationPatchRuntime,
         RequestGenerationConfigStore,
+        RequestGenerationPatchRuntime,
     )
     from restscope.request_generation.parameter_patch import SemanticParameterPatch
-    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.target_api import TargetAPIClient
+    from restscope.tools.context import ToolContext
 
     class UnreadableBody(httpx.SyncByteStream):
         def __iter__(self):

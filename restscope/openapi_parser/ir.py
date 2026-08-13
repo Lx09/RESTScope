@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
-def _format_named_schema_item(name: str, schema: "SchemaIR | None", *, required: bool | None = None) -> str:
+def _format_named_schema_item(name: str, schema: SchemaIR | None, *, required: bool | None = None) -> str:
     """Format one named schema line for prompt-friendly contract text."""
     suffix = ""
     if required is True:
@@ -18,7 +18,7 @@ def _format_named_schema_item(name: str, schema: "SchemaIR | None", *, required:
 
 
 def _iter_schema_path_items(
-    schema: "SchemaIR | None",
+    schema: SchemaIR | None,
     *,
     parent_path: str = "",
     required: bool | None = None,
@@ -73,7 +73,7 @@ def _iter_schema_path_items(
 
 
 def _iter_schema_path_items_json(
-    schema: "SchemaIR | None",
+    schema: SchemaIR | None,
     *,
     parent_path: str = "",
     required: bool | None = None,
@@ -136,7 +136,7 @@ def _iter_schema_path_items_json(
     return []
 
 
-def _format_request_body_lines(body: "RequestBodyIR") -> list[str]:
+def _format_request_body_lines(body: RequestBodyIR) -> list[str]:
     """Format request-body schema lines, skipping empty sections."""
     media = next((item for item in body.contents.values() if item.schema is not None), None)
     if media is None or media.schema is None:
@@ -147,7 +147,7 @@ def _format_request_body_lines(body: "RequestBodyIR") -> list[str]:
     return lines
 
 
-def _format_response_schema_lines(schema: "SchemaIR") -> list[str]:
+def _format_response_schema_lines(schema: SchemaIR) -> list[str]:
     """Format one response schema into itemized lines."""
     return _iter_schema_path_items(schema)
 
@@ -191,7 +191,7 @@ class SpecMetaIR:
     license: dict | None
     external_docs: dict | None
     base_path: str | None
-    servers: list["ServerIR"]
+    servers: list[ServerIR]
 
 
 @dataclass(slots=True)
@@ -202,9 +202,9 @@ class SchemaIR:
     title: str | None
     description: str | None
 
-    properties: dict[str, "SchemaIR"]
+    properties: dict[str, SchemaIR]
     required: list[str]
-    items: "SchemaIR | None"
+    items: SchemaIR | None
 
     enum: list[object] | None
     const: object | None
@@ -227,12 +227,12 @@ class SchemaIR:
     min_properties: int | None
     max_properties: int | None
 
-    all_of: list["SchemaIR"]
-    any_of: list["SchemaIR"]
-    one_of: list["SchemaIR"]
-    not_schema: "SchemaIR | None"
+    all_of: list[SchemaIR]
+    any_of: list[SchemaIR]
+    one_of: list[SchemaIR]
+    not_schema: SchemaIR | None
 
-    additional_properties: "bool | SchemaIR | None"
+    additional_properties: bool | SchemaIR | None
 
     example: object | None
     examples: list[object]
@@ -281,9 +281,9 @@ class ExampleIR:
 class MediaTypeIR:
     """Media type definition."""
     media_type: str
-    schema: "SchemaIR | None"
+    schema: SchemaIR | None
     example: object | None
-    examples: dict[str, "ExampleIR"]
+    examples: dict[str, ExampleIR]
     encoding: dict[str, object]
     source_pointer: str | None
     raw: dict[str, object]
@@ -299,8 +299,8 @@ class HeaderIR:
     allow_empty_value: bool
     style: str | None
     explode: bool | None
-    schema: "SchemaIR | None"
-    content: dict[str, "MediaTypeIR"]
+    schema: SchemaIR | None
+    content: dict[str, MediaTypeIR]
     raw: dict[str, object]
 
 
@@ -313,7 +313,7 @@ class LinkIR:
     parameters: dict[str, object]
     request_body: object | None
     description: str | None
-    server: "ServerIR | None"
+    server: ServerIR | None
     raw: dict[str, object]
 
 
@@ -379,10 +379,10 @@ class ParameterIR:
 
     description: str | None
     example: object | None
-    examples: dict[str, "ExampleIR"]
-    content: dict[str, "MediaTypeIR"]
+    examples: dict[str, ExampleIR]
+    content: dict[str, MediaTypeIR]
 
-    schema: "SchemaIR | None"
+    schema: SchemaIR | None
 
     synthetic: bool
     source_pointer: str | None
@@ -408,7 +408,7 @@ class InputNodeIR:
     node_kind: InputNodeKind
     canonical_path: str
     parent_node_id: str | None
-    schema: "SchemaIR | None"
+    schema: SchemaIR | None
 
 
 @dataclass(slots=True)
@@ -416,7 +416,7 @@ class RequestBodyIR:
     """Request body definition."""
     required: bool
     description: str | None
-    contents: dict[str, "MediaTypeIR"]
+    contents: dict[str, MediaTypeIR]
     source_pointer: str | None
     raw: dict[str, object]
 
@@ -424,14 +424,14 @@ class RequestBodyIR:
 @dataclass(slots=True)
 class ComponentsIR:
     """Components container."""
-    schemas: dict[str, "SchemaIR"]
-    parameters: dict[str, "ParameterIR"]
-    request_bodies: dict[str, "RequestBodyIR"]
-    responses: dict[str, "ResponseIR"]
-    headers: dict[str, "HeaderIR"]
-    security_schemes: dict[str, "SecuritySchemeIR"]
-    examples: dict[str, "ExampleIR"]
-    links: dict[str, "LinkIR"]
+    schemas: dict[str, SchemaIR]
+    parameters: dict[str, ParameterIR]
+    request_bodies: dict[str, RequestBodyIR]
+    responses: dict[str, ResponseIR]
+    headers: dict[str, HeaderIR]
+    security_schemes: dict[str, SecuritySchemeIR]
+    examples: dict[str, ExampleIR]
+    links: dict[str, LinkIR]
     callbacks: dict[str, object]
     path_items: dict[str, object]
 
@@ -442,7 +442,7 @@ class PathItemIR:
     path: str
     summary: str | None
     description: str | None
-    shared_parameters: list["ParameterIR"]
+    shared_parameters: list[ParameterIR]
     operations: dict[str, str]  # method -> operation_key
     extensions: dict[str, object]
 
@@ -459,21 +459,21 @@ class OperationIR:
     description: str | None
     deprecated: bool
 
-    path_parameters: list["ParameterIR"]
-    query_parameters: list["ParameterIR"]
-    header_parameters: list["ParameterIR"]
-    cookie_parameters: list["ParameterIR"]
+    path_parameters: list[ParameterIR]
+    query_parameters: list[ParameterIR]
+    header_parameters: list[ParameterIR]
+    cookie_parameters: list[ParameterIR]
 
-    request_body: "RequestBodyIR | None"
-    responses: "ResponsesIR"
-    security: "OperationSecurityIR"
-    servers: list["ServerIR"]
+    request_body: RequestBodyIR | None
+    responses: ResponsesIR
+    security: OperationSecurityIR
+    servers: list[ServerIR]
 
     callbacks: dict[str, object]
     links: dict[str, object]
     extensions: dict[str, object]
 
-    diagnostics: list["DiagnosticItemIR"]
+    diagnostics: list[DiagnosticItemIR]
     input_nodes: dict[str, InputNodeIR] = field(default_factory=dict)
 
     def to_request_schema_text(self) -> str:

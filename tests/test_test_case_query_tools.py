@@ -142,7 +142,10 @@ def test_get_test_case_bounds_binary_body_and_redacts_sensitive_headers() -> Non
 
     import base64
 
-    from restscope.api_behavior_monitor.catalog import ObservationWrite, OperationDefinition
+    from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
+        OperationDefinition,
+    )
     from restscope.tools.test_case import TestCaseQueryToolBackend
 
     catalog = _catalog()
@@ -195,7 +198,10 @@ def test_get_test_case_bounds_binary_body_and_redacts_sensitive_headers() -> Non
 def test_get_test_case_returns_json_source_and_utf8_text() -> None:
     """Readable HTTP bodies keep their persisted JSON or text representation."""
 
-    from restscope.api_behavior_monitor.catalog import ObservationWrite, OperationDefinition
+    from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
+        OperationDefinition,
+    )
     from restscope.tools.test_case import TestCaseQueryToolBackend
 
     catalog = _catalog()

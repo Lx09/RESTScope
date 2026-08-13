@@ -7,7 +7,7 @@ nodes, while Tool results project only semantic names back to the model.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,13 +18,13 @@ from ..models import (
     ChoiceGenerator,
     ConstantGenerator,
     FormatGenerator,
+    InputGeneratorPatch,
     IntegerRangeGenerator,
     NumberRangeGenerator,
+    OperationInputSourceReference,
     RandomStringGenerator,
     RegexGenerator,
-    InputGeneratorPatch,
     VariantGenerator,
-    OperationInputSourceReference,
 )
 
 
@@ -45,7 +45,7 @@ class SelectedReferenceProvenance(_Model):
     value_count: int = Field(ge=1)
 
     @model_validator(mode="after")
-    def validate_source(self) -> "SelectedReferenceProvenance":
+    def validate_source(self) -> SelectedReferenceProvenance:
         """Require the source fields appropriate to the selected reference kind."""
         if self.kind == "resource_identifier" and not self.canonical_resource:
             raise ValueError("resource_identifier requires a canonical resource")
@@ -135,11 +135,11 @@ class SemanticArithmeticValue(_Model):
 
     type: Literal["arithmetic"]
     operator: Literal["+", "-", "*", "/"]
-    left: "SemanticValueExpression"
-    right: "SemanticValueExpression"
+    left: SemanticValueExpression
+    right: SemanticValueExpression
 
 
-SemanticValueExpression: TypeAlias = Annotated[
+type SemanticValueExpression = Annotated[
     SemanticInputValue | SemanticLiteralValue | SemanticArithmeticValue,
     Field(discriminator="type"),
 ]
@@ -189,8 +189,8 @@ class SemanticImplicationConstraint(_Model):
     """
 
     type: Literal["implies"]
-    condition: "SemanticBooleanExpression"
-    consequence: "SemanticBooleanExpression"
+    condition: SemanticBooleanExpression
+    consequence: SemanticBooleanExpression
 
 
 class SemanticCardinalityConstraint(_Model):
@@ -201,7 +201,7 @@ class SemanticCardinalityConstraint(_Model):
     """
 
     type: Literal["cardinality"]
-    expressions: list["SemanticBooleanExpression"] = Field(
+    expressions: list[SemanticBooleanExpression] = Field(
         min_length=1,
         max_length=100,
     )
@@ -217,7 +217,7 @@ class SemanticAndConstraint(_Model):
     """
 
     type: Literal["and"]
-    expressions: list["SemanticBooleanExpression"] = Field(
+    expressions: list[SemanticBooleanExpression] = Field(
         min_length=1,
         max_length=100,
     )
@@ -231,7 +231,7 @@ class SemanticOrConstraint(_Model):
     """
 
     type: Literal["or"]
-    expressions: list["SemanticBooleanExpression"] = Field(
+    expressions: list[SemanticBooleanExpression] = Field(
         min_length=1,
         max_length=100,
     )
@@ -244,10 +244,10 @@ class SemanticNotConstraint(_Model):
     """
 
     type: Literal["not"]
-    expression: "SemanticBooleanExpression"
+    expression: SemanticBooleanExpression
 
 
-SemanticBooleanExpression: TypeAlias = Annotated[
+type SemanticBooleanExpression = Annotated[
     SemanticPresentPredicate
     | SemanticComparePredicate
     | SemanticMatchesPredicate
@@ -327,7 +327,7 @@ class CompiledParameterPatch(_Model):
     )
 
     @model_validator(mode="after")
-    def validate_patch(self) -> "CompiledParameterPatch":
+    def validate_patch(self) -> CompiledParameterPatch:
         """Reject oversized candidate sets or unrelated reference content."""
         changed = [item.input_node_id for item in self.updates]
         counts = {node_id: changed.count(node_id) for node_id in set(changed)}

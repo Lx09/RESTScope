@@ -17,7 +17,6 @@ from restscope.agent import AgentCompletion, AgentError
 from restscope.llm import ToolSpec
 from restscope.tools.runtime import ToolBinding
 
-
 SUBAGENT_START_TOOL_NAME = "subagent.start"
 SUBAGENT_WAIT_TOOL_NAME = "subagent.wait"
 SUBAGENT_CANCEL_TOOL_NAME = "subagent.cancel"
@@ -99,7 +98,7 @@ class _AgentSnapshot(BaseModel):
     error: AgentError | None = None
 
     @model_validator(mode="after")
-    def require_status_payload(self) -> "_AgentSnapshot":
+    def require_status_payload(self) -> _AgentSnapshot:
         """Keep lifecycle state and optional terminal payloads consistent."""
         if self.status == "completed":
             if self.completion is None or self.error is not None:

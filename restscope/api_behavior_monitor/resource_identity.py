@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import re
+from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from restscope.agent import SystemAgentResult, SystemAgentTask
 from restscope.context import CompactTextWriter, ContextMetrics
-
 
 IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS = (
     "Choose the ordered response field or fields that uniquely identify one persistent instance "
@@ -208,9 +207,11 @@ def validate_identifier_system_output(
     placeholders = re.findall(r"\{([^{}]+)\}", selected.path)
     if len(selected.fields) != len(placeholders):
         return (
-            "Selected path requires "
-            f"{len(placeholders)} ordered fields for {', '.join(placeholders)}; "
-            f"received {len(selected.fields)}.",
+            (
+                "Selected path requires "
+                f"{len(placeholders)} ordered fields for {', '.join(placeholders)}; "
+                f"received {len(selected.fields)}."
+            ),
         )
     return ()
 

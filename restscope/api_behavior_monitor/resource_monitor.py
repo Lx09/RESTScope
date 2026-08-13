@@ -14,24 +14,24 @@ from dataclasses import dataclass
 
 from restscope.agent import SystemAgentTask
 from restscope.api_behavior_monitor.catalog import (
+    APIBehaviorCatalog,
     OperationDefinition,
     ResourceDefinitionRecord,
     ResourceDerivation,
     ResourceDerivationResult,
-    APIBehaviorCatalog,
     normalize_resource_name,
 )
 from restscope.data_types import JSONValue
 from restscope.observability import TracingRuntime
 
 from .resource_identity import (
+    RESOURCE_IDENTIFIER_PROFILE_NAME,
     IdentifierCandidateView,
     IdentifierSelectionDecision,
+    SystemAgentRunner,
     build_identifier_prompt,
     validate_identifier_decision,
 )
-from .resource_identity import RESOURCE_IDENTIFIER_PROFILE_NAME, SystemAgentRunner
-
 
 _MAX_GROUPS = 50
 _MAX_INSTANCES = 1000

@@ -10,8 +10,6 @@ from urllib.parse import urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from restscope.target_api.media_type import is_json_media_type, normalize_media_type
-from restscope.tools.context import ToolContext
 from restscope.llm.schemas import ToolSpec
 from restscope.target_api import (
     BufferedTargetResponse,
@@ -21,7 +19,8 @@ from restscope.target_api import (
     TargetResponseOperationContext,
     prepare_target_request,
 )
-
+from restscope.target_api.media_type import is_json_media_type, normalize_media_type
+from restscope.tools.context import ToolContext
 
 HTTP_REQUEST_TOOL_NAME = "restscope.http.request"
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
@@ -99,7 +98,7 @@ class HTTPRequestArguments(BaseModel):
     timeout_seconds: float = Field(default=30, gt=0, le=30)
 
     @model_validator(mode="after")
-    def require_one_body_encoding(self) -> "HTTPRequestArguments":
+    def require_one_body_encoding(self) -> HTTPRequestArguments:
         """Reject ambiguous requests that supply more than one body encoding."""
         supplied = self.model_fields_set.intersection(_BODY_FIELDS)
         if len(supplied) > 1:

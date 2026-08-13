@@ -161,7 +161,10 @@ def test_constraint_contracts_are_frozen_and_forbid_extra_fields() -> None:
 
 def test_assignment_distinguishes_omission_explicit_null_and_structural_presence() -> None:
     """Scenario: verify that assignment distinguishes omission explicit null and structural presence."""
-    from restscope.request_generation.constraints import InputAssignment, InputNodeOverride
+    from restscope.request_generation.constraints import (
+        InputAssignment,
+        InputNodeOverride,
+    )
 
     omitted = InputAssignment(present=False)
     explicit_null = InputAssignment(
@@ -642,7 +645,10 @@ def test_classification_is_derived_from_ast_shape(
 
 def test_normalization_orders_commutative_children() -> None:
     """Scenario: verify that normalization orders commutative children."""
-    from restscope.request_generation.constraints import ConstraintSet, normalize_constraint_set
+    from restscope.request_generation.constraints import (
+        ConstraintSet,
+        normalize_constraint_set,
+    )
 
     first = ConstraintSet.model_validate(
         {

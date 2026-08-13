@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from restscope.llm import ToolSpec
 
-
 ToolSubject = Literal[
     "http",
     "openapi",
@@ -54,7 +53,7 @@ class ToolDefinition(BaseModel):
         return self.spec.name
 
     @model_validator(mode="after")
-    def require_complete_local_contract(self) -> "ToolDefinition":
+    def require_complete_local_contract(self) -> ToolDefinition:
         """Require a closed, described contract for every RESTScope Tool."""
         self.check_local_contract()
         return self

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 
@@ -10,8 +11,8 @@ def _runtime():
     """Create one initialized two-input operation without external services."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.request_generation import (
-        RequestGenerationPatchRuntime,
         RequestGenerationConfigStore,
+        RequestGenerationPatchRuntime,
     )
 
     ir = OpenAPIParser.parse(
@@ -115,7 +116,7 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
     """The exact same Patch produces one digest and becomes future state once."""
     from restscope.request_generation.parameter_patch import semantic_state_payload
 
-    store, runtime = _runtime()
+    _, runtime = _runtime()
     patch = _relational_patch()
     first = runtime.validate(
         operation_key="GET /items",
@@ -159,8 +160,10 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
 
 def test_digest_mismatch_and_no_change_leave_store_untouched() -> None:
     """Failed Apply attempts never increment revision or replace content."""
-    from restscope.request_generation.parameter_patch import SemanticParameterPatch
-    from restscope.request_generation.parameter_patch import ParameterPatchValidationError
+    from restscope.request_generation.parameter_patch import (
+        ParameterPatchValidationError,
+        SemanticParameterPatch,
+    )
     from restscope.request_generation.store import GeneratorConfigError
 
     store, runtime = _runtime()
@@ -201,7 +204,9 @@ def test_digest_mismatch_and_no_change_leave_store_untouched() -> None:
 
 def test_two_concurrent_applies_of_one_revision_have_one_winner() -> None:
     """The operation lock turns the second old-revision Apply into a conflict."""
-    from restscope.request_generation.parameter_patch import ParameterPatchValidationError
+    from restscope.request_generation.parameter_patch import (
+        ParameterPatchValidationError,
+    )
     from restscope.request_generation.store import GeneratorConfigError
 
     store, runtime = _runtime()

@@ -9,7 +9,8 @@ would exceed the Tool limit.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 from restscope.operation_references import ResponseFieldReference
 
@@ -101,7 +102,7 @@ def semantic_state_payload(
     return payload
 
 
-def validation_payload(validated: "ValidatedPatch") -> dict[str, object]:
+def validation_payload(validated: ValidatedPatch) -> dict[str, object]:
     """Project complete post-Patch state and bounded deterministic witnesses."""
     semantic = build_semantic_input_map(validated.final_config)
     configs: dict[str, list[InputGeneratorConfig]] = {}

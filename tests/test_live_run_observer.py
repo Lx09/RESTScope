@@ -27,8 +27,7 @@ class _Response:
 
 def test_live_observer_emits_only_agent_and_tool_cards_without_phoenix() -> None:
     """Scenario: the UI remains semantic and complete with Phoenix disabled."""
-    from restscope.observability import LiveRunObserver, TracingRuntime
-    from restscope.observability import Redactor
+    from restscope.observability import LiveRunObserver, Redactor, TracingRuntime
 
     observer = LiveRunObserver(redactor=Redactor(["model-secret"]))
     observer.begin_run({"metadata": {"key": "model-secret"}})
@@ -37,63 +36,62 @@ def test_live_observer_emits_only_agent_and_tool_cards_without_phoenix() -> None
     with runtime.span(
         "RESTScopeApp.start",
         kind="CHAIN",
-    ):
+    ), runtime.span(
+        "main",
+        kind="AGENT",
+        attributes={"restscope.operation.key": "GET /projects"},
+    ) as agent_span:
+        agent_span.set_live_detail(
+            "failure_messages",
+            {"E1": "HTTP 400: name already exists"},
+        )
         with runtime.span(
-            "main",
-            kind="AGENT",
-            attributes={"restscope.operation.key": "GET /projects"},
-        ) as agent_span:
-            agent_span.set_live_detail(
-                "failure_messages",
-                {"E1": "HTTP 400: name already exists"},
+            "LLMClient.invoke",
+            kind="LLM",
+            attributes={
+                "restscope.llm.role": "failure_resolution_agent",
+                "llm.model_name": "thinking-model",
+            },
+        ) as model_span:
+            model_span.set_llm_input_messages(
+                [
+                    {"role": "system", "content": "Keep model-secret safe"},
+                    {"role": "user", "content": "Diagnose E1"},
+                ]
             )
-            with runtime.span(
-                "LLMClient.invoke",
-                kind="LLM",
-                attributes={
-                    "restscope.llm.role": "failure_resolution_agent",
-                    "llm.model_name": "thinking-model",
-                },
-            ) as model_span:
-                model_span.set_llm_input_messages(
-                    [
-                        {"role": "system", "content": "Keep model-secret safe"},
-                        {"role": "user", "content": "Diagnose E1"},
-                    ]
-                )
-                model_span.set_llm_output_messages(
-                    [{"role": "assistant", "content": "Create one work item"}],
-                    summary={"finish_reason": "tool_calls"},
-                )
+            model_span.set_llm_output_messages(
+                [{"role": "assistant", "content": "Create one work item"}],
+                summary={"finish_reason": "tool_calls"},
+            )
 
-            with runtime.span(
-                "diagnosis.record",
-                kind="TOOL",
-                input_value={"arguments": {"expected_revision": 0}},
-            ) as tool_span:
-                tool_span.set_output(
-                    {
-                        "tool_call_id": "call-1",
-                        "name": "diagnosis.record",
-                        "status": "succeeded",
-                        "structured": {
-                            "revision": 1,
-                            "active_item_id": "WI-001",
-                            "items": [
-                                {
-                                    "item_id": "WI-001",
-                                    "source_failure_refs": ["E1"],
-                                    "test_case_refs": ["TC1"],
-                                    "suspected_parameters": [],
-                                    "progress": "Investigating",
-                                    "root_cause": None,
-                                    "candidate_refs": [],
-                                    "decision": None,
-                                }
-                            ],
-                        },
-                    }
-                )
+        with runtime.span(
+            "diagnosis.record",
+            kind="TOOL",
+            input_value={"arguments": {"expected_revision": 0}},
+        ) as tool_span:
+            tool_span.set_output(
+                {
+                    "tool_call_id": "call-1",
+                    "name": "diagnosis.record",
+                    "status": "succeeded",
+                    "structured": {
+                        "revision": 1,
+                        "active_item_id": "WI-001",
+                        "items": [
+                            {
+                                "item_id": "WI-001",
+                                "source_failure_refs": ["E1"],
+                                "test_case_refs": ["TC1"],
+                                "suspected_parameters": [],
+                                "progress": "Investigating",
+                                "root_cause": None,
+                                "candidate_refs": [],
+                                "decision": None,
+                            }
+                        ],
+                    },
+                }
+            )
 
     snapshot = observer.snapshot()
 
@@ -133,21 +131,20 @@ def test_main_agent_plan_update_projects_the_generic_todo() -> None:
             "restscope.agent.profile": "main_profile",
             "restscope.agent.lifecycle": "main",
         },
-    ):
-        with runtime.span("plan.update", kind="TOOL") as tool_span:
-            tool_span.set_output(
-                {
-                    "status": "succeeded",
-                    "structured": {
-                        "explanation": "Follow the evidence in order.",
-                        "plan": [
-                            {"step": "Read the schema", "status": "completed"},
-                            {"step": "Probe the endpoint", "status": "in_progress"},
-                            {"step": "Report findings", "status": "pending"},
-                        ],
-                    },
-                }
-            )
+    ), runtime.span("plan.update", kind="TOOL") as tool_span:
+        tool_span.set_output(
+            {
+                "status": "succeeded",
+                "structured": {
+                    "explanation": "Follow the evidence in order.",
+                    "plan": [
+                        {"step": "Read the schema", "status": "completed"},
+                        {"step": "Probe the endpoint", "status": "in_progress"},
+                        {"step": "Report findings", "status": "pending"},
+                    ],
+                },
+            }
+        )
 
     snapshot = observer.snapshot()
 
@@ -170,8 +167,7 @@ def test_main_agent_plan_update_projects_the_generic_todo() -> None:
 
 def test_generic_agent_task_exposes_identity_reasoning_and_validated_final_phase() -> None:
     """Only a completed generic Agent task promotes its last turn to Final Answer."""
-    from restscope.observability import LiveRunObserver, TracingRuntime
-    from restscope.observability import Redactor
+    from restscope.observability import LiveRunObserver, Redactor, TracingRuntime
 
     observer = LiveRunObserver(redactor=Redactor(["private-token"]))
     observer.begin_run({})
@@ -280,9 +276,11 @@ def test_system_agent_is_an_independent_root_displayed_under_its_http_tool() -> 
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
-    with runtime.span("main", kind="AGENT"):
-        with runtime.span("restscope.http.request", kind="TOOL") as http_span:
-            with runtime.span(
+    with (
+        runtime.span("main", kind="AGENT"),
+        runtime.span("restscope.http.request", kind="TOOL") as http_span,
+    ):
+        with runtime.span(
                 "Agent.run",
                 kind="CHAIN",
                 input_value={"objective": "Choose I1"},
@@ -291,23 +289,23 @@ def test_system_agent_is_an_independent_root_displayed_under_its_http_tool() -> 
                     "restscope.agent.profile": "resource-identifier-selector",
                     "restscope.agent.lifecycle": "system",
                 },
-            ) as system_span:
-                with runtime.span("LLMClient.invoke", kind="LLM") as model_span:
-                    model_span.set_llm_input_messages(
-                        [{"role": "user", "content": "Choose I1"}]
-                    )
-                    model_span.set_llm_output_messages(
-                        [{"role": "assistant", "content": '{"identifier":"I1"}'}]
-                    )
-                system_span.set_output(
-                    {
-                        "session_id": "system-1",
-                        "profile_name": "resource-identifier-selector",
-                        "status": "completed",
-                        "output": {"identifier": "I1"},
-                    }
+        ) as system_span:
+            with runtime.span("LLMClient.invoke", kind="LLM") as model_span:
+                model_span.set_llm_input_messages(
+                    [{"role": "user", "content": "Choose I1"}]
                 )
-            http_span.set_output({"status": "succeeded"})
+                model_span.set_llm_output_messages(
+                    [{"role": "assistant", "content": '{"identifier":"I1"}'}]
+                )
+            system_span.set_output(
+                {
+                    "session_id": "system-1",
+                    "profile_name": "resource-identifier-selector",
+                    "status": "completed",
+                    "output": {"identifier": "I1"},
+                }
+            )
+        http_span.set_output({"status": "succeeded"})
 
     http_event, system_turn = observer.snapshot()["events"]
 
@@ -327,8 +325,7 @@ def test_llm_client_routes_reasoning_only_to_the_redacted_live_observer() -> Non
         LLMResponse,
     )
     from restscope.llm.providers.base import BaseLLMProvider
-    from restscope.observability import LiveRunObserver, TracingRuntime
-    from restscope.observability import Redactor
+    from restscope.observability import LiveRunObserver, Redactor, TracingRuntime
 
     class ReasoningProvider(BaseLLMProvider):
         """Return one raw reasoning value without changing request messages."""
@@ -469,6 +466,8 @@ def test_nested_agent_identity_keeps_its_direct_parent_session() -> None:
     observer.begin_run({})
     runtime = TracingRuntime(run_observer=observer)
 
+    # The child Agent starts after the parent's model turn has closed, so the
+    # Agent relationship remains while no visible turn becomes its UI parent.
     with runtime.span("main", kind="AGENT"):
         with runtime.span("LLMClient.invoke", kind="LLM") as parent_turn:
             parent_turn.set_llm_input_messages(
@@ -477,14 +476,16 @@ def test_nested_agent_identity_keeps_its_direct_parent_session() -> None:
             parent_turn.set_llm_output_messages(
                 [{"role": "assistant", "content": "Compaction is needed.", "tool_calls": []}]
             )
-        with runtime.span("summarize", kind="AGENT"):
-            with runtime.span("LLMClient.invoke", kind="LLM") as child_turn:
-                child_turn.set_llm_input_messages(
-                    [{"role": "system", "content": "Summarize the investigation."}]
-                )
-                child_turn.set_llm_output_messages(
-                    [{"role": "assistant", "content": "Summary", "tool_calls": []}]
-                )
+        with (
+            runtime.span("summarize", kind="AGENT"),
+            runtime.span("LLMClient.invoke", kind="LLM") as child_turn,
+        ):
+            child_turn.set_llm_input_messages(
+                [{"role": "system", "content": "Summarize the investigation."}]
+            )
+            child_turn.set_llm_output_messages(
+                [{"role": "assistant", "content": "Summary", "tool_calls": []}]
+            )
 
     parent, child = observer.snapshot()["events"]
 
@@ -522,14 +523,16 @@ def test_tool_mediated_agent_keeps_the_tool_as_its_visible_parent() -> None:
             kind="TOOL",
             input_value={"arguments": {}},
         ) as tool:
-            with runtime.span("patch", kind="AGENT"):
-                with runtime.span("LLMClient.invoke", kind="LLM") as child_turn:
-                    child_turn.set_llm_input_messages(
-                        [{"role": "system", "content": "Propose a patch."}]
-                    )
-                    child_turn.set_llm_output_messages(
-                        [{"role": "assistant", "content": "Patch", "tool_calls": []}]
-                    )
+            with (
+                runtime.span("patch", kind="AGENT"),
+                runtime.span("LLMClient.invoke", kind="LLM") as child_turn,
+            ):
+                child_turn.set_llm_input_messages(
+                    [{"role": "system", "content": "Propose a patch."}]
+                )
+                child_turn.set_llm_output_messages(
+                    [{"role": "assistant", "content": "Patch", "tool_calls": []}]
+                )
             tool.set_output({"tool_call_id": "call-patch", "status": "succeeded"})
 
     parent, tool_event, child = observer.snapshot()["events"]
@@ -720,13 +723,15 @@ def test_interrupted_run_marks_inflight_semantic_cards_as_stopped_warnings() -> 
     observer.begin_run({"name": "interrupted"})
     runtime = TracingRuntime(run_observer=observer)
 
-    with pytest.raises(KeyboardInterrupt):
-        with runtime.span("main", kind="AGENT"):
-            with runtime.span("LLMClient.invoke", kind="LLM") as turn:
-                turn.set_llm_input_messages(
-                    [{"role": "system", "content": "Wait"}, {"role": "user", "content": "Run"}]
-                )
-                raise KeyboardInterrupt
+    with (
+        pytest.raises(KeyboardInterrupt),
+        runtime.span("main", kind="AGENT"),
+        runtime.span("LLMClient.invoke", kind="LLM") as turn,
+    ):
+        turn.set_llm_input_messages(
+            [{"role": "system", "content": "Wait"}, {"role": "user", "content": "Run"}]
+        )
+        raise KeyboardInterrupt
 
     cursor_before_stop = observer.snapshot()["latest_cursor"]
     observer.interrupt_run()
@@ -783,8 +788,8 @@ def test_target_api_client_keeps_binary_response_evidence_inside_the_tool() -> N
     """Scenario: final headers/query and truncated binary bytes enrich one HTTP tool."""
     import httpx
 
-    from restscope.target_api import TargetAPIClient, prepare_target_request
     from restscope.observability import LiveRunObserver, TracingRuntime
+    from restscope.target_api import TargetAPIClient, prepare_target_request
 
     observer = LiveRunObserver()
     observer.begin_run({})
@@ -859,12 +864,12 @@ def test_target_api_client_marks_timeout_without_replacing_the_public_error() ->
     import httpx
     import pytest
 
+    from restscope.observability import LiveRunObserver, TracingRuntime
     from restscope.target_api import (
         TargetAPIClient,
         TargetAPITimeout,
         prepare_target_request,
     )
-    from restscope.observability import LiveRunObserver, TracingRuntime
 
     observer = LiveRunObserver()
     observer.begin_run({})
@@ -890,9 +895,8 @@ def test_target_api_client_marks_timeout_without_replacing_the_public_error() ->
         "restscope.http.request",
         kind="TOOL",
         input_value={"arguments": {"method": "GET", "path": "/slow"}},
-    ):
-        with pytest.raises(TargetAPITimeout, match="timed out"):
-            client.send(prepared, success_body_limit=1024)
+    ), pytest.raises(TargetAPITimeout, match="timed out"):
+        client.send(prepared, success_body_limit=1024)
 
     event = observer.snapshot()["events"][0]
     assert event["status"] == "failed"

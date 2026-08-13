@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-
 from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -14,13 +13,12 @@ from uuid import uuid4
 
 import pytest
 
-
 PHOENIX_ENDPOINT = "http://localhost:6006"
 
 
 def _get_json(url: str) -> dict:
     opener = build_opener(ProxyHandler({}))
-    with opener.open(url, timeout=2) as response:  # noqa: S310 - fixed localhost contract endpoint.
+    with opener.open(url, timeout=2) as response:
         return json.load(response)
 
 
@@ -83,8 +81,8 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
 
     from restscope import RESTScopeApp
     from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition, build_harness
-    from restscope.tools import AgentToolbox
+    from restscope.config import RESTScopeConfig, TracingConfig
+    from restscope.harness import AgentRuntimeDefinition
     from restscope.llm import (
         LLMClient,
         LLMMessage,
@@ -96,9 +94,8 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
         ToolSpec,
     )
     from restscope.llm.providers.base import BaseLLMProvider
-    from restscope.observability import build_tracing_runtime
-    from restscope.observability import Redactor
-    from restscope.config import RESTScopeConfig, TracingConfig
+    from restscope.observability import Redactor, build_tracing_runtime
+    from restscope.tools import AgentToolbox
 
     _wait_for_phoenix()
     project_name = f"restscope-contract-{uuid4().hex}"
@@ -277,21 +274,12 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
 
     assert agent_span["parent_id"] == app_span["context"]["span_id"]
     assert main_llm_span["parent_id"] == agent_span["context"]["span_id"]
-    assert run_harness_span["span_kind"] == "CHAIN"
-    assert attempt_span["span_kind"] == "CHAIN"
-    assert operation_span["span_kind"] == "CHAIN"
-    assert "agent.name" not in run_harness_span["attributes"]
-    assert "agent.name" not in operation_span["attributes"]
     assert tool_span["attributes"]["tool.name"] == "contract.tool"
     assert json.loads(app_span["attributes"]["output.value"]) == {
-        "report_id": json.loads(run_harness_span["attributes"]["output.value"])["report_id"],
-        "status": "passed",
-        "stop_reason": "completed",
-        "operation_count": 20,
-        "attempt_count": 20,
+        "profile_name": "main",
+        "status": "completed",
     }
     assert app_span["attributes"]["restscope.output.truncated"] is False
-    assert run_harness_span["attributes"]["restscope.output.truncated"] is False
     assert "\n  " in app_span["attributes"]["output.value"]
     assert json.loads(llm_span["attributes"]["input.value"]) == {
         "message_count": 1,

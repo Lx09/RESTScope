@@ -99,7 +99,7 @@ def main(
     except KeyboardInterrupt:
         terminal_result_selected = True
         raise click.exceptions.Exit(130) from None
-    except Exception:
+    except Exception:  # noqa: BLE001
         terminal_result_selected = True
         click.echo("RESTScope could not start or complete the run.", err=True)
         raise click.exceptions.Exit(1) from None
@@ -107,7 +107,7 @@ def main(
         if app is not None:
             try:
                 app.close()
-            except BaseException:
+            except BaseException:  # noqa: BLE001
                 # Preserve an already-selected interrupt or failure. If the
                 # work itself completed, cleanup failure is the runtime error.
                 if not terminal_result_selected:

@@ -32,7 +32,6 @@ from .ports import AgentToolExecutor, AgentTreeControlPort
 from .profile import AgentProfile
 from .prompt import AgentPromptSession, PromptSessionError
 
-
 _HARNESS_CONSTRUCTION_TOKEN = object()
 AgentLifecycle = Literal["main", "subagent", "system"]
 AgentLoopResult = AgentResult | SystemAgentResult
@@ -80,7 +79,7 @@ class Agent:
         self._has_started = False
 
     @classmethod
-    def _from_harness(cls, **dependencies) -> "Agent":
+    def _from_harness(cls, **dependencies) -> Agent:
         """Let the Harness create an Agent after resolving every authorization."""
         return cls(
             **dependencies,

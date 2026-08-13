@@ -202,7 +202,11 @@ def test_skill_read_is_auto_appended_and_injects_only_authorized_instructions() 
 def test_skill_loader_denies_unselected_names_and_cannot_be_overridden() -> None:
     """The Harness owns the loader and selected Skill names are its only grants."""
     from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition, ToolBindingFactory, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ToolBindingFactory,
+        build_harness,
+    )
     from restscope.llm import ToolCall
     from restscope.skills import SkillDefinition, SkillManifest
     from restscope.tools import ToolBinding
@@ -284,7 +288,11 @@ def test_skill_loader_denies_unselected_names_and_cannot_be_overridden() -> None
 def test_context_sources_are_incremental_and_empty_changes_are_explicit() -> None:
     """One Main session sends full first state and only later replacements."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ContextSourceBinding, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ContextSourceBinding,
+        build_harness,
+    )
 
     current = {"value": "## Operation\nGET /pets"}
     client, provider = _client(
@@ -509,7 +517,11 @@ def test_protocol_reservation_can_stop_before_model_or_tool_execution() -> None:
 def test_oversized_context_source_stops_before_model_use() -> None:
     """The Harness validates bounded Markdown instead of silently truncating it."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ContextSourceBinding, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ContextSourceBinding,
+        build_harness,
+    )
 
     client, provider = _client()
     agent = build_harness(
@@ -542,7 +554,11 @@ def test_oversized_context_source_stops_before_model_use() -> None:
 def test_non_text_context_source_is_rejected_by_the_harness_reader() -> None:
     """An Adapter contract violation stops before any model request is sent."""
     from restscope.agent import AgentProfile, AgentTask
-    from restscope.harness import AgentRuntimeDefinition, ContextSourceBinding, build_harness
+    from restscope.harness import (
+        AgentRuntimeDefinition,
+        ContextSourceBinding,
+        build_harness,
+    )
 
     client, provider = _client()
     agent = build_harness(
@@ -754,6 +770,6 @@ def test_compaction_reanchors_context_but_not_loaded_skill_instructions() -> Non
 
 def test_private_prompt_session_is_not_exported_from_agent_facade() -> None:
     """Callers receive Agent behavior, not a public Prompt assembly platform."""
-    import restscope.agent as agent
+    from restscope import agent
 
     assert not hasattr(agent, "AgentPromptSession")

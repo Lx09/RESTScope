@@ -8,15 +8,14 @@ connection.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-import re
 from urllib.parse import SplitResult, quote, unquote, urlsplit, urlunsplit
 
 import httpx
 
 from .errors import TargetAPIError
-
 
 QueryItem = tuple[str, str] | tuple[str, str, bool]
 

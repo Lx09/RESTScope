@@ -9,42 +9,41 @@ and applies only an exact previously validated revision/digest pair.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
-import hashlib
-import json
 from typing import TYPE_CHECKING
 
-from restscope.target_api.media_type import normalize_media_type
-from restscope.operation_references import ResponseFieldReference
 from restscope.openapi_parser import OpenAPISpecIR
+from restscope.operation_references import ResponseFieldReference
+from restscope.target_api.media_type import normalize_media_type
 
+from ..constraint_solver import assignments_from_generated_case
 from ..constraints import (
     ConstraintSet,
     OperationConstraintRecord,
-    classify_constraint,
-    normalize_constraint_set,
-    referenced_input_node_ids,
-    validate_constraint_set,
 )
-from ..generation import generate_test_case
+from ..generation import generate_test_case, project_generated_input_value
 from ..models import (
     InputGeneratorPatch,
     OperationGeneratorConfig,
     ResourceIdentifierGenerator,
     ResponseValueGenerator,
 )
-from .models import (
-    CompiledConstraintPatch,
-    CompiledParameterPatch,
-    SelectedReferenceProvenance,
-    SemanticBooleanExpression,
-    SemanticParameterPatch,
-    SemanticResourceIdentifierGenerator,
-    SemanticResponseValueGenerator,
+from ..ports import ReferenceValueProvider
+from ..selection import TestMode, choose_case_generators
+from ..semantics import build_semantic_input_map
+from ..store import (
+    GeneratorConfigError,
+    ReferenceValueBinding,
+    RequestGenerationConfigStore,
+    RequestGenerationState,
+    expand_generator_patch_presence,
+    generation_state_digest,
+    preview_generator_patch,
 )
-from .errors import ParameterPatchValidationError
 from .compiler import (
     compile_constraint,
     json_scalar_type,
@@ -54,21 +53,15 @@ from .compiler import (
     validate_affected_inputs,
     validate_variant_branch_updates,
 )
-from .projection import semantic_state_payload
-from ..ports import ReferenceValueProvider
-from ..semantics import build_semantic_input_map
-from ..store import (
-    GeneratorConfigError,
-    RequestGenerationConfigStore,
-    RequestGenerationState,
-    ReferenceValueBinding,
-    expand_generator_patch_presence,
-    generation_state_digest,
-    preview_generator_patch,
+from .errors import ParameterPatchValidationError
+from .models import (
+    CompiledParameterPatch,
+    SelectedReferenceProvenance,
+    SemanticParameterPatch,
+    SemanticResourceIdentifierGenerator,
+    SemanticResponseValueGenerator,
 )
-from ..constraint_solver import assignments_from_generated_case
-from ..generation import project_generated_input_value
-from ..selection import TestMode, choose_case_generators
+from .projection import semantic_state_payload
 
 if TYPE_CHECKING:
     from ..reference_values import BehaviorMonitorReferences

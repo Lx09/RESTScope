@@ -18,18 +18,14 @@ def test_tracing_config_reads_every_explicit_environment_field(tmp_path: Path) -
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "\n".join(
-            [
-                "TRACING_ENABLED=true",
-                "PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.test:6006",
-                "PHOENIX_PROJECT_NAME=restscope-test",
-                "PHOENIX_API_KEY=phoenix-secret",
-                "PHOENIX_PROTOCOL=http/protobuf",
-                "TRACING_BATCH=false",
-                "TRACING_MAX_CONTENT_BYTES=2048",
-                "TRACING_FLUSH_TIMEOUT_SECONDS=2.5",
-            ]
-        ),
+        "TRACING_ENABLED=true\n"
+        "PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.test:6006\n"
+        "PHOENIX_PROJECT_NAME=restscope-test\n"
+        "PHOENIX_API_KEY=phoenix-secret\n"
+        "PHOENIX_PROTOCOL=http/protobuf\n"
+        "TRACING_BATCH=false\n"
+        "TRACING_MAX_CONTENT_BYTES=2048\n"
+        "TRACING_FLUSH_TIMEOUT_SECONDS=2.5",
         encoding="utf-8",
     )
 
@@ -77,8 +73,8 @@ def test_ui_config_rejects_values_outside_the_tcp_port_range(port: int) -> None:
 
 def test_trace_content_encoder_only_redacts_registered_values() -> None:
     """Scenario: verify that trace content encoder only redacts registered values."""
-    from restscope.observability.content import TraceContentEncoder
     from restscope.observability import Redactor
+    from restscope.observability.content import TraceContentEncoder
 
     encoder = TraceContentEncoder(
         redactor=Redactor(["literal-secret"]),
@@ -113,8 +109,8 @@ def test_trace_content_encoder_formats_normalized_json_for_people() -> None:
     """Scenario: verify that trace content encoder formats normalized json for people."""
     from pydantic import BaseModel
 
-    from restscope.observability.content import TraceContentEncoder
     from restscope.observability import Redactor
+    from restscope.observability.content import TraceContentEncoder
 
     @dataclass(frozen=True)
     class DataclassValue:
@@ -146,8 +142,8 @@ def test_trace_content_encoder_formats_normalized_json_for_people() -> None:
 
 def test_trace_content_encoder_bounds_serialized_content_and_records_original_size() -> None:
     """Scenario: verify that trace content encoder bounds serialized content and records original size."""
-    from restscope.observability.content import TraceContentEncoder
     from restscope.observability import Redactor
+    from restscope.observability.content import TraceContentEncoder
 
     encoder = TraceContentEncoder(redactor=Redactor(), max_content_bytes=256)
     prepared = encoder.prepare({"content": "x" * 4096})
@@ -163,9 +159,8 @@ def test_trace_content_encoder_bounds_serialized_content_and_records_original_si
 
 def test_disabled_tracing_runtime_is_a_safe_noop() -> None:
     """Scenario: verify that disabled tracing runtime is a safe noop."""
-    from restscope.observability import build_tracing_runtime
-    from restscope.observability import Redactor
     from restscope.config import TracingConfig
+    from restscope.observability import Redactor, build_tracing_runtime
 
     redactor = Redactor(["not-visible"])
     runtime = build_tracing_runtime(
@@ -195,8 +190,8 @@ def test_enabled_runtime_without_tracing_extra_falls_back_to_noop(
     caplog,
 ) -> None:
     """Scenario: verify that enabled runtime without tracing extra falls back to noop."""
-    from restscope.observability import build_tracing_runtime
     from restscope.config import TracingConfig
+    from restscope.observability import build_tracing_runtime
 
     monkeypatch.setitem(sys.modules, "restscope.observability.phoenix", None)
 
@@ -210,8 +205,8 @@ def test_span_backend_failure_is_sanitized_and_does_not_change_business_result(
     caplog,
 ) -> None:
     """Scenario: verify that span backend failure is sanitized and does not change business result."""
-    from restscope.observability.runtime import TracingRuntime
     from restscope.observability import Redactor
+    from restscope.observability.runtime import TracingRuntime
 
     class FailingBackend:
         def start_as_current_span(self, name):
@@ -239,11 +234,13 @@ def test_enabled_runtime_emits_nested_sanitized_openinference_spans() -> None:
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
+    from restscope.observability import Redactor
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -289,7 +286,9 @@ def test_runtime_adds_openinference_names_for_agent_and_tool_spans() -> None:
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
@@ -323,11 +322,13 @@ def test_llm_message_projection_preserves_roles_when_content_is_truncated() -> N
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
+    from restscope.observability import Redactor
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -378,7 +379,9 @@ def test_llm_message_projection_failure_does_not_change_business_result() -> Non
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
@@ -412,12 +415,14 @@ def test_runtime_records_sanitized_error_without_leaking_exception_message() -> 
     pytest.importorskip("opentelemetry.sdk")
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
     from opentelemetry.trace.status import StatusCode
 
+    from restscope.observability import Redactor
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability import Redactor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -430,9 +435,11 @@ def test_runtime_records_sanitized_error_without_leaking_exception_message() -> 
         ),
     )
 
-    with pytest.raises(ValueError, match="error-secret"):
-        with runtime.span("failing", kind="TOOL"):
-            raise ValueError("failure contains error-secret")
+    with (
+        pytest.raises(ValueError, match="error-secret"),
+        runtime.span("failing", kind="TOOL"),
+    ):
+        raise ValueError("failure contains error-secret")
     runtime.close()
 
     span = exporter.get_finished_spans()[0]
@@ -455,9 +462,8 @@ def test_phoenix_runtime_disables_all_automatic_instrumentation(monkeypatch) -> 
     from opentelemetry.sdk.trace import TracerProvider
 
     import restscope.observability.phoenix as phoenix_module
-    from restscope.observability import build_tracing_runtime
-    from restscope.observability import Redactor
     from restscope.config import TracingConfig
+    from restscope.observability import build_tracing_runtime
 
     register_calls: list[dict] = []
     monkeypatch.setattr(
@@ -501,12 +507,13 @@ def test_openai_sdk_call_does_not_create_automatic_child_span(monkeypatch) -> No
     from openai import OpenAI
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
     import restscope.observability.phoenix as phoenix_module
-    from restscope.observability import build_tracing_runtime
-    from restscope.observability import Redactor
     from restscope.config import TracingConfig
+    from restscope.observability import Redactor, build_tracing_runtime
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -610,8 +617,8 @@ def test_phoenix_runtime_reuses_matching_process_registration(monkeypatch) -> No
     from opentelemetry.sdk.trace import TracerProvider
 
     import restscope.observability.phoenix as phoenix_module
-    from restscope.observability import build_tracing_runtime
     from restscope.config import TracingConfig
+    from restscope.observability import build_tracing_runtime
 
     register_calls: list[dict] = []
     shutdown_calls: list[str] = []
@@ -661,8 +668,8 @@ def test_phoenix_runtime_rejects_conflicting_process_configuration_fail_open(
     from opentelemetry.sdk.trace import TracerProvider
 
     import restscope.observability.phoenix as phoenix_module
-    from restscope.observability import build_tracing_runtime
     from restscope.config import TracingConfig
+    from restscope.observability import build_tracing_runtime
 
     monkeypatch.setattr(phoenix_module, "register", lambda **kwargs: TracerProvider())
     active = build_tracing_runtime(
@@ -694,9 +701,9 @@ def test_phoenix_runtime_rejects_conflicting_process_configuration_fail_open(
 
 def test_runtime_shutdown_timeout_is_fail_open(caplog) -> None:
     """Scenario: verify that runtime shutdown timeout is fail open."""
+    from restscope.observability import Redactor
     from restscope.observability.otel_backend import OpenTelemetryBackend
     from restscope.observability.runtime import TracingRuntime
-    from restscope.observability import Redactor
 
     class BlockingProvider:
         def get_tracer(self, name):
@@ -731,8 +738,8 @@ def test_local_phoenix_runtime_temporarily_bypasses_process_proxy(monkeypatch) -
     from opentelemetry.sdk.trace import TracerProvider
 
     import restscope.observability.phoenix as phoenix_module
-    from restscope.observability import build_tracing_runtime
     from restscope.config import TracingConfig
+    from restscope.observability import build_tracing_runtime
 
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.test:8080")
     monkeypatch.setenv("no_proxy", "existing.test")

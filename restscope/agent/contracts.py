@@ -134,7 +134,7 @@ class AgentResult(BaseModel):
     usage: AgentUsage = Field(default_factory=AgentUsage)
 
     @model_validator(mode="after")
-    def require_matching_payload(self) -> "AgentResult":
+    def require_matching_payload(self) -> AgentResult:
         """Keep success and failure payloads mutually exclusive."""
         if self.status == "completed":
             if self.completion is None or self.error is not None:
@@ -163,7 +163,7 @@ class SystemAgentResult(BaseModel):
     usage: AgentUsage = Field(default_factory=AgentUsage)
 
     @model_validator(mode="after")
-    def require_matching_payload(self) -> "SystemAgentResult":
+    def require_matching_payload(self) -> SystemAgentResult:
         """Keep validated output and terminal failure mutually exclusive."""
         if self.status == "completed":
             if self.output is None or self.error is not None:

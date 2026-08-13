@@ -14,7 +14,6 @@ class _CapturingProcessor:
 
         del context
         self.observation = observation
-        return None
 
 
 class _CapturingExchange:
@@ -50,7 +49,7 @@ class _CapturingObserver:
 def test_target_api_facade_exposes_only_shared_integration_entries() -> None:
     """Readers enter through one Client, one prepare function, and shared records."""
 
-    import restscope.target_api as target_api
+    from restscope import target_api
 
     assert set(target_api.__all__) == {
         "BufferedTargetResponse",
@@ -252,7 +251,13 @@ def test_replay_processor_warnings_are_returned_with_the_primary_response() -> N
 
     import httpx
 
-    from restscope.target_api import TargetAPIClient, TargetResponseOperationContext, TargetResponseProcessorResult, TargetResponseProcessorWarning, prepare_target_request
+    from restscope.target_api import (
+        TargetAPIClient,
+        TargetResponseOperationContext,
+        TargetResponseProcessorResult,
+        TargetResponseProcessorWarning,
+        prepare_target_request,
+    )
     from restscope.target_api.observation import TargetReplayDirective
 
     class WarningProcessor:

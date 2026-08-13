@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import os
-from pathlib import Path
 import sqlite3
 import stat
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from restscope.db.migrations import MIGRATIONS_DIR
 from restscope.config import DBConfig
+from restscope.db.migrations import MIGRATIONS_DIR
 
 
 class DatabaseBootstrapError(RuntimeError):
@@ -138,7 +138,7 @@ def prepare_fresh_sqlite(config: DBConfig) -> tuple[DBConfig, _FreshSQLiteDataba
                     device=claimed.st_dev,
                     inode=claimed.st_ino,
                 )
-            except BaseException:
+            except BaseException:  # noqa: BLE001, S110
                 pass
             raise
         database = _FreshSQLiteDatabase(
@@ -156,7 +156,7 @@ def prepare_fresh_sqlite(config: DBConfig) -> tuple[DBConfig, _FreshSQLiteDataba
             descriptor_owned = False
             try:
                 os.close(descriptor)
-            except BaseException:
+            except BaseException:  # noqa: BLE001, S110
                 pass
         if database is not None:
             database.cleanup()

@@ -16,8 +16,12 @@ from restscope.llm.exceptions import (
     StrictToolUnavailableError,
 )
 from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
-from restscope.llm.schemas import LLMMessage, LLMReasoningConfig, LLMRequest, LLMResponse
-
+from restscope.llm.schemas import (
+    LLMMessage,
+    LLMReasoningConfig,
+    LLMRequest,
+    LLMResponse,
+)
 
 # DeepSeek occasionally returns a thinking-mode tool call without the
 # ``reasoning_content`` that its own continuation contract requires. Three

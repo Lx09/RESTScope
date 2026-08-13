@@ -10,8 +10,8 @@ def test_setup_logging_suppresses_http_and_openai_debug_output(
     tmp_path: Path,
 ) -> None:
     """Transport libraries must not expose headers when app DEBUG is enabled."""
-    from restscope.observability.logging import configure_logging
     from restscope.config import LoggingConfig
+    from restscope.observability.logging import configure_logging
 
     settings = LoggingConfig(level="DEBUG")
     configure_logging(

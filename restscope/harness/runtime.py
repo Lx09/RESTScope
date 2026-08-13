@@ -9,14 +9,22 @@ from threading import RLock
 from typing import TYPE_CHECKING
 
 from restscope.agent import Agent, SystemAgentResult
-
+from restscope.observability import TracingRuntime
+from restscope.openapi_parser.ir import OperationIR
+from restscope.target_api import TargetAPIClient
+from restscope.tools import (
+    ToolCatalog,
+    ToolDefinition,
+    builtin_tool_catalog,
+)
+from restscope.tools.context import ToolContext, ToolContextError
+from restscope.tools.external import register_tool_source
 from restscope.tools.external.mcp import (
     MCPHost,
     MCPServerConfig,
     MCPSourceBuilder,
     load_mcp_server_configs,
 )
-from restscope.tools.runtime import AgentToolbox, ToolBinding
 from restscope.tools.http import HTTP_REQUEST_TOOL_NAME, TargetHTTPRequestTool
 from restscope.tools.openapi import (
     ObservedResponseReader,
@@ -24,19 +32,13 @@ from restscope.tools.openapi import (
     openapi_tool_bindings,
 )
 from restscope.tools.resource import ResourceToolBackend, resource_tool_bindings
-from restscope.tools.context import ToolContext, ToolContextError
-from restscope.tools.external import register_tool_source
-from restscope.tools import (
-    ToolCatalog,
-    ToolDefinition,
-    builtin_tool_catalog,
-)
-from restscope.target_api import TargetAPIClient
-from restscope.observability import TracingRuntime
-from restscope.openapi_parser.ir import OperationIR
+from restscope.tools.runtime import AgentToolbox, ToolBinding
 
-from .agent_runtime import AgentRuntimeDefinition, AgentRuntimeResolver
-from .agent_runtime import ToolBindingFactory
+from .agent_runtime import (
+    AgentRuntimeDefinition,
+    AgentRuntimeResolver,
+    ToolBindingFactory,
+)
 
 if TYPE_CHECKING:
     from restscope.harness.operation_testing import OperationTestingService
@@ -173,7 +175,7 @@ class HarnessRuntime:
         try:
             result = agent.run(bounded_task)
             if not isinstance(result, SystemAgentResult):
-                raise RuntimeError("System Agent returned the wrong lifecycle result")
+                raise TypeError("System Agent returned the wrong lifecycle result")
             return result
         finally:
             agent.close()
@@ -199,9 +201,9 @@ def build_harness(
     target_api_client: TargetAPIClient | None = None,
     observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
-    request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
-    operation_testing_service: "OperationTestingService | None" = None,
-    test_case_query_backend: "TestCaseQueryToolBackend | None" = None,
+    request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None,
+    operation_testing_service: OperationTestingService | None = None,
+    test_case_query_backend: TestCaseQueryToolBackend | None = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Build shared App implementations and optional explicit integrations.
@@ -279,9 +281,9 @@ def _production_tool_binding_factories(
     *,
     include_http: bool,
     include_openapi: bool,
-    request_generation_patch_runtime: "RequestGenerationPatchRuntime | None",
-    operation_testing_service: "OperationTestingService | None",
-    test_case_query_backend: "TestCaseQueryToolBackend | None",
+    request_generation_patch_runtime: RequestGenerationPatchRuntime | None,
+    operation_testing_service: OperationTestingService | None,
+    test_case_query_backend: TestCaseQueryToolBackend | None,
 ) -> tuple[ToolBindingFactory, ...]:
     """Create implementations for every App-owned built-in domain Tool.
 
@@ -371,9 +373,9 @@ def build_harness_with_mcp_host(
     target_api_client: TargetAPIClient | None = None,
     observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
-    request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
-    operation_testing_service: "OperationTestingService | None" = None,
-    test_case_query_backend: "TestCaseQueryToolBackend | None" = None,
+    request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None,
+    operation_testing_service: OperationTestingService | None = None,
+    test_case_query_backend: TestCaseQueryToolBackend | None = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Discover selected MCP servers into the isolated external toolbox.
@@ -409,7 +411,7 @@ def build_harness_with_mcp_host(
         if owns_host:
             try:
                 host.close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         raise
 

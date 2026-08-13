@@ -1,7 +1,6 @@
 """Security parser module."""
 
 from ..adapters.base import SpecificationAdapter
-from ..diagnostics import make_diagnostic
 from ..ir import (
     DiagnosticsIR,
     OperationSecurityIR,

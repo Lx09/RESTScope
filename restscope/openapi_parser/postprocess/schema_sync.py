@@ -10,7 +10,6 @@ Author: lixin
 
 from __future__ import annotations
 
-
 from ..ir import SchemaIR
 
 
@@ -74,7 +73,7 @@ def _infer_array_items(values: list[object]) -> SchemaIR:
     item_schemas = [infer_schema_from_value(v) for v in values]
 
     # Check if all have same type
-    unique_types = set(s.type for s in item_schemas if s.type)
+    unique_types = {schema.type for schema in item_schemas if schema.type}
     if len(unique_types) == 1:
         # All same type, return first non-null schema
         for s in item_schemas:
@@ -172,10 +171,12 @@ def schema_matches(inferred: SchemaIR, existing: SchemaIR) -> bool:
                 return False
 
     # Array type: check items
-    if inferred.type == "array":
-        if inferred.items and existing.items:
-            if not schema_matches(inferred.items, existing.items):
-                return False
+    if (
+        inferred.type == "array"
+        and inferred.items
+        and existing.items
+    ):
+        return schema_matches(inferred.items, existing.items)
 
     return True
 

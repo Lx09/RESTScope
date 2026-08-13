@@ -10,9 +10,9 @@ tool registration, or persistent state.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Mapping
-
+from typing import Literal
 
 RequestInputLocation = Literal["path", "query", "header", "cookie", "body"]
 _SchemaVariant = Literal["oneOf", "anyOf", "allOf"]
@@ -51,7 +51,7 @@ class RequestInputReference:
         cls,
         location: Literal["path", "query", "header", "cookie"],
         name: str,
-    ) -> "RequestInputReference":
+    ) -> RequestInputReference:
         """Create one ordinary OpenAPI Parameter reference.
 
         Args:
@@ -71,7 +71,7 @@ class RequestInputReference:
         return cls(location=location, _parameter_name=name)
 
     @classmethod
-    def body(cls) -> "RequestInputReference":
+    def body(cls) -> RequestInputReference:
         """Create the request Body root reference."""
         return cls(location="body")
 
@@ -92,7 +92,7 @@ class RequestInputReference:
                 output += f".{step.name}[{step.index}]"
         return output
 
-    def property(self, name: str) -> "RequestInputReference":
+    def property(self, name: str) -> RequestInputReference:
         """Return a reference to one object property below this input.
 
         Args:
@@ -105,7 +105,7 @@ class RequestInputReference:
             raise ValueError("Property name must not be empty")
         return self._child(_PathStep(kind="property", name=name))
 
-    def items(self) -> "RequestInputReference":
+    def items(self) -> RequestInputReference:
         """Return the semantic item reference for an array Schema."""
         return self._child(_PathStep(kind="items"))
 
@@ -113,7 +113,7 @@ class RequestInputReference:
         self,
         kind: _SchemaVariant,
         index: int,
-    ) -> "RequestInputReference":
+    ) -> RequestInputReference:
         """Return one Schema-combination branch reference.
 
         Combination branches make handles unique but do not add a key to the
@@ -200,7 +200,7 @@ class RequestInputReference:
             raise KeyError(f"Request input was not used: {self.handle}")
         return selected._wrap(value)
 
-    def _child(self, step: _PathStep) -> "RequestInputReference":
+    def _child(self, step: _PathStep) -> RequestInputReference:
         """Append one trusted step without exposing the internal representation."""
         return RequestInputReference(
             location=self.location,

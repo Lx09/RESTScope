@@ -9,13 +9,12 @@ UUIDs.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import date, datetime, timedelta, timezone
 import hashlib
 import random
 import secrets
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, timedelta
 from typing import TypeVar
-
 
 _Value = TypeVar("_Value")
 
@@ -69,7 +68,7 @@ class SeededRandom:
             365 * 100 * 24 * 60 * 60 - 1,
             scope=f"{scope}:date-time",
         )
-        return datetime(2000, 1, 1, tzinfo=timezone.utc) + timedelta(
+        return datetime(2000, 1, 1, tzinfo=UTC) + timedelta(
             seconds=seconds
         )
 
@@ -77,7 +76,7 @@ class SeededRandom:
         """Return the stable integer seed used by an existing generator seam."""
         return int.from_bytes(
             hashlib.sha256(
-                f"{self.seed}\0{scope}".encode("utf-8")
+                f"{self.seed}\0{scope}".encode()
             ).digest()[:8],
             "big",
         )
