@@ -12,6 +12,7 @@ BUSINESS_TABLES = {
     "resources",
     "operation_resource_edges",
     "resource_instances",
+    "batches",
     "observations",
     "operation_input_sources",
     "abstract_test_cases",
@@ -61,7 +62,9 @@ def test_response_monitor_tables_enforce_status_source_and_prior_shapes() -> Non
         if isinstance(constraint, CheckConstraint)
     }
     expected_suffixes = {
-        "observation_success_status",
+        "observation_http_status",
+        "observation_outcome_shape",
+        "observation_batch_shape",
         "operation_input_source_success_status",
         "operation_input_source_consume_type",
         "operation_input_source_alpha",
@@ -73,6 +76,78 @@ def test_response_monitor_tables_enforce_status_source_and_prior_shapes() -> Non
         any(name.endswith(suffix) for name in check_names)
         for suffix in expected_suffixes
     )
+
+
+def test_observation_database_rejects_partial_and_duplicate_batch_cases() -> None:
+    """Raw SQL cannot bypass paired Batch fields or the one-row-per-Case rule."""
+
+    from datetime import UTC, datetime
+
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from restscope.db import Base, create_engine_from_url
+
+    engine = create_engine_from_url("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    operations = Base.metadata.tables["operations"]
+    batches = Base.metadata.tables["batches"]
+    observations = Base.metadata.tables["observations"]
+    with engine.begin() as connection:
+        connection.execute(
+            operations.insert().values(
+                operation_id="GET /items",
+                method="GET",
+                path="/items",
+            )
+        )
+        connection.execute(
+            batches.insert().values(
+                batch_id="batch_one",
+                summary={"status": "running"},
+            )
+        )
+
+    common = {
+        "operation_id": "GET /items",
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
+        "outcome_kind": "http",
+        "status_code": 200,
+        "request_json": {},
+        "response_headers": {},
+        "response_body": b"{}",
+        "body_format": "json",
+    }
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                observations.insert().values(
+                    observation_id="partial",
+                    batch_id="batch_one",
+                    batch_case_index=None,
+                    **common,
+                )
+            )
+
+    with engine.begin() as connection:
+        connection.execute(
+            observations.insert().values(
+                observation_id="first",
+                batch_id="batch_one",
+                batch_case_index=0,
+                **common,
+            )
+        )
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                observations.insert().values(
+                    observation_id="duplicate",
+                    batch_id="batch_one",
+                    batch_case_index=0,
+                    **common,
+                )
+            )
 
 
 def test_response_monitor_natural_primary_keys_match_the_approved_model() -> None:
@@ -89,6 +164,7 @@ def test_response_monitor_natural_primary_keys_match_the_approved_model() -> Non
             "role",
         ),
         "resource_instances": ("resource_type", "resource_instance_id"),
+        "batches": ("batch_id",),
         "observations": ("observation_id",),
         "operation_input_sources": (
             "consumer_operation_id",

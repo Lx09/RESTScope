@@ -22,6 +22,7 @@ from .observation import (
     TargetResponseProcessor,
     TargetResponseProcessorResult,
     TargetResponseProcessorWarning,
+    TargetTransportObservation,
     _observation_request_json,
 )
 from .request import PreparedTargetRequest
@@ -125,6 +126,16 @@ class TargetAPIClient:
                 observer_enabled=exchange is not None,
             )
         except BaseException as exc:
+            if isinstance(exc, TargetAPITimeout) or (
+                isinstance(exc, TargetAPIError)
+                and exc.code == "request_failed"
+            ):
+                self._process_transport_failure(
+                    prepared=prepared,
+                    request_kwargs=request_kwargs,
+                    response_context=response_context,
+                    error=exc,
+                )
             if exchange is not None:
                 try:
                     exchange.fail(exc)
@@ -137,6 +148,41 @@ class TargetAPIClient:
             except Exception:
                 pass
         return result
+
+    def _process_transport_failure(
+        self,
+        *,
+        prepared: PreparedTargetRequest,
+        request_kwargs: Mapping[str, object] | None,
+        response_context: TargetResponseOperationContext | None,
+        error: TargetAPITimeout | TargetAPIError,
+    ) -> None:
+        """Offer one no-response attempt to the advisory persistence processor."""
+
+        if self._response_processor is None or response_context is None:
+            return
+        callback = getattr(self._response_processor, "process_transport", None)
+        if not callable(callback):
+            return
+        code = "request_timeout" if isinstance(error, TargetAPITimeout) else error.code
+        try:
+            callback(
+                TargetTransportObservation(
+                    method=prepared.method,
+                    path=prepared.path,
+                    url=str(prepared.url),
+                    code=code,
+                    message=str(error),
+                    request_json=_observation_request_json(
+                        prepared,
+                        request_kwargs=request_kwargs,
+                    ),
+                ),
+                response_context,
+            )
+        except Exception:
+            # Monitoring cannot replace the original target transport exception.
+            return
 
     def _send(
         self,

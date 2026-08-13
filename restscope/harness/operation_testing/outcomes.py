@@ -1,8 +1,8 @@
 """Define inline, run-local outcomes for one generic request Batch.
 
 Batch execution returns canonical request inputs and bounded HTTP or transport
-facts directly to its Tool caller. Outcomes have no catalog identity and are
-discarded with the Tool result.
+facts directly to its Tool caller. These projections carry no database identity;
+the corresponding exact durable Test Case is the separately written Observation.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ CatalogFailure = HTTPFailure | TransportFailure
 
 
 class BatchCaseOutcome(_Model):
-    """Carry one canonical request and its bounded transport outcome."""
+    """Carry one canonical request and its bounded inline outcome."""
 
     case_number: int = Field(ge=1, le=5)
     request: dict[str, object]

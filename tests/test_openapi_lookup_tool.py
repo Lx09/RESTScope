@@ -301,10 +301,14 @@ def _observed_catalog(tmp_path: Path):
                     operation_id=operation_key,
                     timestamp=datetime(2026, 8, 11, tzinfo=UTC)
                     + timedelta(seconds=self.count),
+                    outcome_kind="http",
                     status_code=status_code,
+                    reason_phrase="OK",
                     media_type=media_type,
                     request_json={"path": path},
-                    response_json=response_json,
+                    response_headers={},
+                    response_body=response_json.encode(),
+                    body_format="json",
                 )
             )
             self.count += 1

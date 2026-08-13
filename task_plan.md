@@ -4,9 +4,17 @@
 Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 27 RESTScopeApp lifecycle and CLI entrypoint is verified for its authorized scoped commit; Phase 19 exact 375 px confirmation remains pending
+Phase 28 persistent Batch results is complete; Phase 19 exact 375 px confirmation remains pending
 
 ## Phases
+
+### Phase 28: Persistent Batch and Test Case results
+- [x] Confirm persistence, query, retention, security, and Profile-authorization contracts
+- [x] Add red Catalog, Batch execution, and Tool contract tests
+- [x] Implement Batch and complete Observation persistence
+- [x] Add bounded Batch/Test Case query Tools and production bindings
+- [x] Update architecture records and run complete verification
+- **Status:** complete and verified on local `main`; 590 tests passed with 2 skips, implementation remains unstaged, and pre-existing data-types edit was preserved
 
 ### Phase 27: RESTScopeApp lifecycle and CLI entrypoint
 - [x] Add red App Interface, target validation, and Click command contracts

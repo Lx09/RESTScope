@@ -138,11 +138,15 @@ explicit project decision:
 - The API Behavior Monitor catalog is one explicit narrow exception. It may
   persist normalized operations, resource definitions and operation roles,
   recursively merged current resource instances, exact consumer input sources,
-  and the latest 100 complete valid 2xx JSON observations per operation. Stored
-  requests exclude sensitive headers. It may also persist immutable abstract
-  Generator/Constraint snapshots used by Batches, the complete current
-  normalized OpenAPI, and append-only response change events. The response
-  check registry and resource extraction decisions remain App-lifetime only.
+  and every matched HTTP response or transport failure as a permanent
+  Observation. Stored requests exclude sensitive headers; stored responses keep
+  complete headers and body bytes. It may also persist Batch identities and
+  bounded summaries, immutable abstract Generator/Constraint snapshots used by
+  Batches, the complete current normalized OpenAPI, and append-only response
+  change events. Only the latest 100 complete valid 2xx JSON Observations per
+  operation are eligible inputs to resource extraction, response-field
+  discovery, and value reuse. The response check registry and resource
+  extraction decisions remain App-lifetime only.
   It must not persist materialized response-value pools, extraction rules, LLM
   reasoning, plans, queues, general Agent memory, or recovery snapshots.
 - Request Generation configuration is an App-lifetime in-memory store, not a
@@ -152,8 +156,11 @@ explicit project decision:
   propositions. Values are parsed on demand from retained observations or read
   as complete current resource instances. A Batch freezes one complete revision
   and its current reference values before generating requests, then records or
-  reuses the immutable abstract snapshot before any network call. It must not
-  persist Patch history, samples, Failures, Agent reasoning, or rollback state.
+  reuses the immutable abstract snapshot and creates a durable Batch before any
+  network call. Each executed matched Case is the Observation it produces; this
+  evidence and the Batch summary are audit records, not recovery or scheduling
+  state. It must not persist Patch history, generated samples, Agent reasoning,
+  or rollback state.
 - The Live Observer browser history is a second narrow exception approved only
   for local UI testing and recovery. The React page may persist the latest five
   complete schema-v3 snapshots in same-origin IndexedDB, including the

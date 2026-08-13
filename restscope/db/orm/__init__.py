@@ -2,6 +2,7 @@
 
 from .api_behavior_monitor import (
     AbstractTestCaseORM,
+    BatchORM,
     ObservationORM,
     OpenAPIChangeEventORM,
     OpenAPICurrentORM,
@@ -14,6 +15,7 @@ from .api_behavior_monitor import (
 
 __all__ = [
     "AbstractTestCaseORM",
+    "BatchORM",
     "ObservationORM",
     "OpenAPIChangeEventORM",
     "OpenAPICurrentORM",

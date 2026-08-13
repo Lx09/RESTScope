@@ -1,9 +1,10 @@
 """Persist the complete API Behavior Monitor evidence and audit catalog.
 
 The Catalog stores the current normalized OpenAPI document, append-only
-Contract changes, successful observations, derived resources, exact request
-input sources, and immutable abstract Test Case snapshots. Callers use this one
-Interface while concrete SQL statements remain in :mod:`restscope.db`.
+Contract changes, every matched HTTP or transport Observation, derived
+resources, exact request input sources, durable Batches, and immutable abstract
+Test Case snapshots. Callers use this one Interface while concrete SQL
+statements remain in :mod:`restscope.db`.
 """
 
 from __future__ import annotations
@@ -72,45 +73,105 @@ class OperationDefinition(_CatalogModel):
         return self
 
 
-class ObservationWrite(_CatalogModel):
-    """Describe one complete successful JSON exchange before insertion.
+class BatchWrite(_CatalogModel):
+    """Describe one durable Batch summary before its generated ID is assigned."""
 
-    ``response_json`` remains the exact decoded text supplied by the transport.
-    Validation parses it only to prove that later selector resolution can read
-    it; the text is never replaced with a reformatted representation.
+    summary: JSONObject
+
+
+class BatchRecord(BatchWrite):
+    """Return one stored Batch and its generated durable identity."""
+
+    batch_id: str
+
+
+class ObservationWrite(_CatalogModel):
+    """Describe one completed HTTP exchange or request transport failure.
+
+    HTTP outcomes retain the exact response bytes and complete response headers.
+    Transport outcomes have no HTTP fields and instead carry one stable redacted
+    failure code and message. A Batch identity and zero-based Case index either
+    appear together or are both absent for an ordinary HTTP Tool request.
     """
 
     operation_id: str = Field(min_length=1, max_length=2000)
     timestamp: datetime
-    status_code: int = Field(ge=200, le=299)
-    media_type: str = Field(min_length=1, max_length=500)
+    outcome_kind: Literal["http", "transport"]
     request_json: JSONObject
-    response_json: str
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    reason_phrase: str | None = Field(default=None, max_length=500)
+    media_type: str | None = Field(default=None, max_length=500)
+    response_headers: dict[str, str] | None = None
+    response_body: bytes | None = None
+    body_format: Literal["json", "text", "base64"] | None = None
+    transport_code: str | None = Field(default=None, min_length=1, max_length=200)
+    transport_message: str | None = Field(default=None, min_length=1, max_length=2000)
     abstract_test_case_id: str | None = None
+    batch_id: str | None = None
+    batch_case_index: int | None = Field(default=None, ge=0)
 
     @field_validator("media_type")
     @classmethod
-    def normalize_media_type_value(cls, value: str) -> str:
+    def normalize_media_type_value(cls, value: str | None) -> str | None:
         """Store a lowercase media type without transport parameters."""
 
+        if value is None:
+            return None
         normalized = normalize_media_type(value)
         if normalized is None:
             raise ValueError("media_type cannot be blank")
         return normalized
 
-    @field_validator("response_json")
-    @classmethod
-    def require_valid_json(cls, value: str) -> str:
-        """Reject invalid JSON while preserving every original character."""
+    @model_validator(mode="after")
+    def require_consistent_outcome(self) -> "ObservationWrite":
+        """Reject mixed HTTP/transport fields and partial Batch identities."""
 
-        json.loads(value)
-        return value
+        if (self.batch_id is None) != (self.batch_case_index is None):
+            raise ValueError("batch_id and batch_case_index must appear together")
+        if self.outcome_kind == "http":
+            if self.status_code is None:
+                raise ValueError("HTTP observations require status_code")
+            if self.response_headers is None or self.response_body is None:
+                raise ValueError("HTTP observations require response headers and body")
+            if self.body_format is None:
+                raise ValueError("HTTP observations require body_format")
+            if self.transport_code is not None or self.transport_message is not None:
+                raise ValueError("HTTP observations cannot contain transport failure")
+            if self.body_format == "json":
+                try:
+                    json.loads(self.response_body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("JSON response body must contain valid UTF-8 JSON") from exc
+            return self
+        if self.status_code is not None or self.reason_phrase is not None:
+            raise ValueError("transport observations cannot contain HTTP status")
+        if any(
+            value is not None
+            for value in (
+                self.media_type,
+                self.response_headers,
+                self.response_body,
+                self.body_format,
+            )
+        ):
+            raise ValueError("transport observations cannot contain HTTP response data")
+        if self.transport_code is None or self.transport_message is None:
+            raise ValueError("transport observations require failure code and message")
+        return self
 
 
 class ObservationRecord(ObservationWrite):
     """Return one stored observation with its generated durable identity."""
 
     observation_id: str
+
+    @property
+    def response_json(self) -> str:
+        """Return exact JSON text for consumers already restricted to JSON rows."""
+
+        if self.body_format != "json" or self.response_body is None:
+            raise ValueError("Observation does not contain a JSON response")
+        return self.response_body.decode("utf-8")
 
 
 class ObservedResponseCoordinate(_CatalogModel):
@@ -327,10 +388,31 @@ class _APIBehaviorRepository(Protocol):
         operation: OperationDefinition,
     ) -> OperationDefinition: ...
 
+    def create_batch(self, batch: BatchWrite) -> BatchRecord: ...
+
+    def update_batch_summary(
+        self,
+        *,
+        batch_id: str,
+        summary: JSONObject,
+    ) -> BatchRecord | None: ...
+
+    def get_batch(self, batch_id: str) -> BatchRecord | None: ...
+
     def record_observation(
         self,
         observation: ObservationWrite,
     ) -> ObservationRecord: ...
+
+    def get_observation(self, observation_id: str) -> ObservationRecord | None: ...
+
+    def list_batch_observations(
+        self,
+        *,
+        batch_id: str,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ObservationRecord], int]: ...
 
     def list_observations(
         self,
@@ -491,16 +573,77 @@ class APIBehaviorCatalog:
             uow.commit()
             return result
 
+    def create_batch(self, batch: BatchWrite) -> BatchRecord:
+        """Create one Batch before its first target request is sent."""
+
+        with self._unit_of_work_factory() as uow:
+            result = uow.api_behavior.create_batch(batch)
+            uow.commit()
+            return result
+
+    def update_batch_summary(
+        self,
+        *,
+        batch_id: str,
+        summary: JSONObject,
+    ) -> BatchRecord | None:
+        """Replace one Batch's complete structured execution summary."""
+
+        if not batch_id.strip():
+            raise ValueError("batch_id cannot be blank")
+        with self._unit_of_work_factory() as uow:
+            result = uow.api_behavior.update_batch_summary(
+                batch_id=batch_id,
+                summary=summary,
+            )
+            uow.commit()
+            return result
+
+    def get_batch(self, batch_id: str) -> BatchRecord | None:
+        """Return one exact Batch without scanning other summaries."""
+
+        if not batch_id.strip():
+            raise ValueError("batch_id cannot be blank")
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.get_batch(batch_id)
+
     def record_observation(
         self,
         observation: ObservationWrite,
     ) -> ObservationRecord:
-        """Insert one observation and atomically retain the latest one hundred."""
+        """Insert one permanent HTTP response or transport failure."""
 
         with self._unit_of_work_factory() as uow:
             result = uow.api_behavior.record_observation(observation)
             uow.commit()
             return result
+
+    def get_observation(self, observation_id: str) -> ObservationRecord | None:
+        """Return one exact executed Test Case by its Observation identity."""
+
+        if not observation_id.strip():
+            raise ValueError("observation_id cannot be blank")
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.get_observation(observation_id)
+
+    def list_batch_observations(
+        self,
+        *,
+        batch_id: str,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[ObservationRecord], int]:
+        """Return one stable page in the Batch's original Case order."""
+
+        if not batch_id.strip():
+            raise ValueError("batch_id cannot be blank")
+        _require_page(offset=offset, limit=limit)
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.list_batch_observations(
+                batch_id=batch_id,
+                offset=offset,
+                limit=limit,
+            )
 
     def list_observations(
         self,
@@ -518,8 +661,9 @@ class APIBehaviorCatalog:
             status_code: Optional exact successful response status.
             media_type: Optional exact media type after normalization.
             offset: Number of matching newest-first rows to skip.
-            limit: Maximum rows to return. The database retention contract
-                makes values above one hundred unnecessary and invalid.
+            limit: Maximum eligible learning rows to return. Learning consumers
+                intentionally inspect at most the newest one hundred even though
+                the durable Observation table itself has no retention deletion.
 
         Returns:
             Immutable records ordered by response time and observation ID.
@@ -715,6 +859,8 @@ def _require_page(*, offset: int, limit: int) -> None:
 
 
 __all__ = [
+    "BatchRecord",
+    "BatchWrite",
     "AbstractTestCaseRecord",
     "AbstractTestCaseWrite",
     "ObservationRecord",

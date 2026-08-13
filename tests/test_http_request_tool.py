@@ -175,6 +175,109 @@ def test_http_request_tool_sends_target_json_and_preserves_full_response() -> No
     assert "response-cookie" in result.model_dump_json()
 
 
+def test_http_tool_persists_only_results_that_match_an_openapi_operation() -> None:
+    """Matched ordinary HTTP/transport results persist without Batch identity."""
+
+    import httpx
+
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.target_api import TargetAPIClient
+    from restscope.tools.context import ToolContext
+    from restscope.tools.http import (
+        HTTPRequestTimeoutError,
+        TargetHTTPRequestTool,
+    )
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.db import (
+        Base,
+        SqlAlchemyAPIBehaviorUnitOfWork,
+        create_engine_from_url,
+        make_session_factory,
+    )
+
+    engine = create_engine_from_url("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    catalog = APIBehaviorCatalog(
+        lambda: SqlAlchemyAPIBehaviorUnitOfWork(make_session_factory(engine))
+    )
+
+    class RecordingCatalog:
+        """Remember writes while delegating the complete Catalog Interface."""
+
+        def __init__(self) -> None:
+            self.observations = []
+
+        def __getattr__(self, name):
+            return getattr(catalog, name)
+
+        def record_observation(self, observation):
+            record = catalog.record_observation(observation)
+            self.observations.append(record)
+            return record
+
+    recording = RecordingCatalog()
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Ordinary HTTP", "version": "1"},
+            "paths": {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        }
+    )
+    context = ToolContext(
+        ir=ir,
+        baseline_schema_source={},
+        base_url="https://api.example.test",
+        headers={},
+    )
+    coordinator = APIBehaviorMonitorCoordinator(
+        contract_tracker=ResponseContractTracker(recording),
+        catalog=recording,
+    )
+    responses = iter(
+        (
+            httpx.Response(200, json={"healthy": True}),
+            httpx.Response(404, text="unknown"),
+        )
+    )
+    client = TargetAPIClient(
+        response_processor=APIBehaviorResponseProcessor(coordinator),
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(lambda _request: next(responses)),
+            **kwargs,
+        ),
+    )
+    tool = TargetHTTPRequestTool(client=client)
+
+    tool.execute(context, method="GET", path="/health")
+    tool.execute(context, method="GET", path="/not-declared")
+
+    assert len(recording.observations) == 1
+    assert recording.observations[0].operation_id == "GET /health"
+    assert recording.observations[0].batch_id is None
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("network detail", request=request)
+
+    transport_tool = TargetHTTPRequestTool(
+        client=TargetAPIClient(
+            response_processor=APIBehaviorResponseProcessor(coordinator),
+            client_factory=lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(timeout),
+                **kwargs,
+            ),
+        )
+    )
+    with pytest.raises(HTTPRequestTimeoutError):
+        transport_tool.execute(context, method="GET", path="/health")
+
+    assert len(recording.observations) == 2
+    assert recording.observations[1].outcome_kind == "transport"
+    assert recording.observations[1].batch_id is None
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected_content"),
     [

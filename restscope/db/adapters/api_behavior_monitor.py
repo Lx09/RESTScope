@@ -1,8 +1,8 @@
 """SQLAlchemy adapter for API Behavior Monitor evidence and audit state.
 
-This Module translates the Catalog's immutable records into ORM rows.  It owns
-the mechanical latest-one-hundred observation retention rule but does not
-interpret response JSON, classify resources, or choose Generator sources.
+This Module translates the Catalog's immutable records into ORM rows. It keeps
+complete Batch and executed-request evidence without interpreting response
+bodies, classifying resources, or choosing Generator sources.
 """
 
 from __future__ import annotations
@@ -10,13 +10,15 @@ from __future__ import annotations
 from copy import deepcopy
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from restscope.api_behavior_monitor.catalog import (
     AbstractTestCaseRecord,
     AbstractTestCaseWrite,
+    BatchRecord,
+    BatchWrite,
     ObservationRecord,
     ObservationWrite,
     ObservedResponseCoordinate,
@@ -34,6 +36,7 @@ from restscope.api_behavior_monitor.catalog import (
 
 from ..orm import (
     AbstractTestCaseORM,
+    BatchORM,
     ObservationORM,
     OpenAPIChangeEventORM,
     OpenAPICurrentORM,
@@ -146,43 +149,96 @@ class _SqlAlchemyAPIBehaviorRepository:
         self.session.flush()
         return _operation_definition(row)
 
+    def create_batch(self, batch: BatchWrite) -> BatchRecord:
+        """Insert one Batch identity with its complete initial summary."""
+
+        row = BatchORM(
+            batch_id=f"batch_{uuid4().hex}",
+            summary=deepcopy(batch.summary),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return _batch_record(row)
+
+    def update_batch_summary(
+        self,
+        *,
+        batch_id: str,
+        summary: dict[str, object],
+    ) -> BatchRecord | None:
+        """Replace a known Batch's summary without creating missing identities."""
+
+        row = self.session.get(BatchORM, batch_id)
+        if row is None:
+            return None
+        row.summary = deepcopy(summary)
+        self.session.flush()
+        return _batch_record(row)
+
+    def get_batch(self, batch_id: str) -> BatchRecord | None:
+        """Return one exact Batch record when it exists."""
+
+        row = self.session.get(BatchORM, batch_id)
+        return _batch_record(row) if row is not None else None
+
     def record_observation(
         self,
         observation: ObservationWrite,
     ) -> ObservationRecord:
-        """Insert one exact response and delete rows older than the newest hundred."""
+        """Insert one exact HTTP or transport outcome without retention pruning."""
 
         row = ObservationORM(
             observation_id=f"observation_{uuid4().hex}",
             operation_id=observation.operation_id,
             timestamp=observation.timestamp,
+            outcome_kind=observation.outcome_kind,
             status_code=observation.status_code,
+            reason_phrase=observation.reason_phrase,
             media_type=observation.media_type,
             request_json=deepcopy(observation.request_json),
-            response_json=observation.response_json,
+            response_headers=deepcopy(observation.response_headers),
+            response_body=observation.response_body,
+            body_format=observation.body_format,
+            transport_code=observation.transport_code,
+            transport_message=observation.transport_message,
             abstract_test_case_id=observation.abstract_test_case_id,
+            batch_id=observation.batch_id,
+            batch_case_index=observation.batch_case_index,
         )
         self.session.add(row)
         self.session.flush()
-
-        # Ordering by the generated identity resolves responses whose receipt
-        # timestamps are equal without relying on database insertion order.
-        expired_ids = self.session.scalars(
-            select(ObservationORM.observation_id)
-            .where(ObservationORM.operation_id == observation.operation_id)
-            .order_by(
-                ObservationORM.timestamp.desc(),
-                ObservationORM.observation_id.desc(),
-            )
-            .offset(100)
-        ).all()
-        if expired_ids:
-            self.session.execute(
-                delete(ObservationORM).where(
-                    ObservationORM.observation_id.in_(expired_ids)
-                )
-            )
         return _observation_record(row)
+
+    def get_observation(self, observation_id: str) -> ObservationRecord | None:
+        """Return one exact executed request result by durable identity."""
+
+        row = self.session.get(ObservationORM, observation_id)
+        return _observation_record(row) if row is not None else None
+
+    def list_batch_observations(
+        self,
+        *,
+        batch_id: str,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ObservationRecord], int]:
+        """Return one Batch page in its original zero-based Case order."""
+
+        predicate = ObservationORM.batch_id == batch_id
+        total = self.session.scalar(
+            select(func.count()).select_from(ObservationORM).where(predicate)
+        ) or 0
+        rows = self.session.scalars(
+            select(ObservationORM)
+            .where(predicate)
+            .order_by(
+                ObservationORM.batch_case_index,
+                ObservationORM.observation_id,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [_observation_record(row) for row in rows], total
 
     def list_observations(
         self,
@@ -196,7 +252,10 @@ class _SqlAlchemyAPIBehaviorRepository:
         """Return one filtered deterministic newest-first observation page."""
 
         query = select(ObservationORM).where(
-            ObservationORM.operation_id == operation_id
+            ObservationORM.operation_id == operation_id,
+            ObservationORM.outcome_kind == "http",
+            ObservationORM.status_code.between(200, 299),
+            ObservationORM.body_format == "json",
         )
         if status_code is not None:
             query = query.where(ObservationORM.status_code == status_code)
@@ -223,6 +282,11 @@ class _SqlAlchemyAPIBehaviorRepository:
                 ObservationORM.operation_id,
                 ObservationORM.status_code,
                 ObservationORM.media_type,
+            )
+            .where(
+                ObservationORM.outcome_kind == "http",
+                ObservationORM.status_code.between(200, 299),
+                ObservationORM.body_format == "json",
             )
             .distinct()
             .order_by(
@@ -490,6 +554,15 @@ def _operation_definition(row: OperationORM) -> OperationDefinition:
     )
 
 
+def _batch_record(row: BatchORM) -> BatchRecord:
+    """Detach one Batch summary from ORM-managed state."""
+
+    return BatchRecord(
+        batch_id=row.batch_id,
+        summary=deepcopy(row.summary),
+    )
+
+
 def _openapi_change_record(
     row: OpenAPIChangeEventORM,
 ) -> OpenAPIChangeEventRecord:
@@ -508,17 +581,25 @@ def _openapi_change_record(
 
 
 def _observation_record(row: ObservationORM) -> ObservationRecord:
-    """Detach one observation row while preserving its original JSON text."""
+    """Detach one complete observation row from ORM-managed state."""
 
     return ObservationRecord(
         observation_id=row.observation_id,
         operation_id=row.operation_id,
         timestamp=as_utc(row.timestamp),
+        outcome_kind=row.outcome_kind,
         status_code=row.status_code,
+        reason_phrase=row.reason_phrase,
         media_type=row.media_type,
         request_json=deepcopy(row.request_json),
-        response_json=row.response_json,
+        response_headers=deepcopy(row.response_headers),
+        response_body=row.response_body,
+        body_format=row.body_format,
+        transport_code=row.transport_code,
+        transport_message=row.transport_message,
         abstract_test_case_id=row.abstract_test_case_id,
+        batch_id=row.batch_id,
+        batch_case_index=row.batch_case_index,
     )
 
 

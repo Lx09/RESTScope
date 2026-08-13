@@ -397,15 +397,17 @@ transitively intersecting state for selected inputs.
 schema and reference compatibility, solves Constraints, generates deterministic
 samples, and returns a validation digest without changing state.
 `parameter_patch.apply` revalidates the exact request under the operation lock,
-stages complete response-value pool replacements, publishes the new Generation
-State, and commits both as one visible change. A failed commit restores the old
-state before unlocking; a stale application changes nothing.
+publishes the new Generation State, and commits its exact input-source
+propositions as one visible change. A failed commit restores the old state
+before unlocking; a stale application changes nothing.
 
 `test_case.run_batch` freezes one complete generation revision and every named
-reference pool before it
-preflights and executes 1–5 cases. The result contains bounded inline canonical
-requests and HTTP or transport outcomes plus the frozen revision. It creates no
-`TC*`, `E*`, Test Case registry, Failure memory, candidate, or database row.
+reference pool before it preflights and executes 1–5 cases. The result contains
+bounded inline canonical requests, HTTP or transport outcomes, the frozen
+revision, a durable `batch_id`, and persistence warnings. The Batch summary and
+each matched case Observation are audit evidence; `observation_id` is the Test
+Case ID. This creates no planning registry, Failure memory, candidate, or
+resumable scheduler.
 An already-running Batch is unaffected by a later Patch; a later Batch sees the
 new revision. Batch execution can mutate the target API and does not retry,
 follow redirects, or roll back effects.
@@ -430,10 +432,11 @@ The Monitor coordinates three ordered responsibilities:
 - Response Contract checks every first exact status/media observation. A real
   change updates the current App's OpenAPI representation and its durable audit
   document/event atomically.
-- Observation persistence accepts complete valid 2xx JSON responses after
-  sensitive request headers are removed. It keeps the original response text
-  and latest 100 observations per operation; there is no flattened-scalar or
-  per-response JSON-size limit.
+- Observation persistence accepts every matched HTTP response and transport
+  failure after sensitive request headers are removed. It permanently keeps
+  complete response headers and exact body bytes. Only complete valid 2xx JSON
+  enters learning readers, which select the latest 100 eligible rows per
+  operation.
 - Resource Monitor reuses unambiguous known identity fields or asks the bounded
   FAST Resource Identifier System Agent for a new direct field combination. It
   then stores operation roles and recursively merged current instance state.
@@ -447,11 +450,16 @@ Beta(1,1) prior. No shared response-value pool exists: VALUE_REUSE parses typed
 scalars from matching retained observations when needed, while RESOURCE reads
 complete non-deleted instances and keeps composite identity fields correlated.
 Batch preflight records or reuses one immutable abstract Generator/Constraint
-snapshot before the first request, and successful generated observations point
-to it.
+snapshot and creates a running Batch before the first request. Every persisted
+generated Observation points to its Batch and stable zero-based Case index.
 
 The public read-only Tool Backend exposes `resource.list_resources`,
-`resource.list_ids`, and `openapi.find_observed_response_fields`. The last Tool
+`resource.list_ids`, `openapi.find_observed_response_fields`,
+`test_case.get_batch_results`, and `test_case.get`. Batch results paginate and
+group Observation IDs by operation/outcome/status; Test Case reads return the
+complete persisted request/result metadata, a 16 KiB body projection, and
+redacted sensitive response header values. These contracts are registered and
+bound but are not granted to the initial Main or System Profiles. The OpenAPI Tool
 discovers scalar selectors directly from raw observations without returning
 their values. A source transaction stages exact producer-to-consumer rows,
 publishes matching in-memory Store state, and restores the old Store revision

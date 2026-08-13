@@ -41,6 +41,7 @@ from .agent_runtime import ToolBindingFactory
 if TYPE_CHECKING:
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.request_generation import RequestGenerationPatchRuntime
+    from restscope.tools.test_case import TestCaseQueryToolBackend
 
 
 class AgentRuntimeNotConfiguredError(RuntimeError):
@@ -190,6 +191,7 @@ class HarnessRuntime:
             self._main_agent.close()
             self._main_agent = None
 
+
 def build_harness(
     *,
     sources: Mapping[str, Mapping[str, object]] | None = None,
@@ -199,6 +201,7 @@ def build_harness(
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
+    test_case_query_backend: "TestCaseQueryToolBackend | None" = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Build shared App implementations and optional explicit integrations.
@@ -248,10 +251,12 @@ def build_harness(
                     resource_tool_backend,
                     request_generation_patch_runtime,
                     operation_testing_service,
+                    test_case_query_backend,
                 )
             ),
             request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,
+            test_case_query_backend=test_case_query_backend,
         )
         agent_runtime = replace(
             agent_runtime,
@@ -276,6 +281,7 @@ def _production_tool_binding_factories(
     include_openapi: bool,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None",
     operation_testing_service: "OperationTestingService | None",
+    test_case_query_backend: "TestCaseQueryToolBackend | None",
 ) -> tuple[ToolBindingFactory, ...]:
     """Create implementations for every App-owned built-in domain Tool.
 
@@ -336,6 +342,10 @@ def _production_tool_binding_factories(
                 )
             )
         )
+    if test_case_query_backend is not None:
+        from restscope.tools.test_case import test_case_query_tool_bindings
+
+        bindings.extend(test_case_query_tool_bindings(test_case_query_backend))
     return tuple(
         ToolBindingFactory(name=binding.name, create=lambda item=binding: item)
         for binding in bindings
@@ -363,6 +373,7 @@ def build_harness_with_mcp_host(
     resource_tool_backend: ResourceToolBackend | None = None,
     request_generation_patch_runtime: "RequestGenerationPatchRuntime | None" = None,
     operation_testing_service: "OperationTestingService | None" = None,
+    test_case_query_backend: "TestCaseQueryToolBackend | None" = None,
     agent_runtime: AgentRuntimeDefinition | None = None,
 ) -> HarnessRuntime:
     """Discover selected MCP servers into the isolated external toolbox.
@@ -389,6 +400,7 @@ def build_harness_with_mcp_host(
             resource_tool_backend=resource_tool_backend,
             request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,
+            test_case_query_backend=test_case_query_backend,
             agent_runtime=agent_runtime,
         )
         runtime.mcp_host = host

@@ -56,10 +56,14 @@ def test_response_values_are_parsed_from_exact_observations_on_demand() -> None:
             ObservationWrite(
                 operation_id="GET /items",
                 timestamp=now,
+                outcome_kind="http",
                 status_code=status_code,
+                reason_phrase="OK",
                 media_type="application/json",
                 request_json={"path": "/items"},
-                response_json=response_json,
+                response_headers={},
+                response_body=response_json.encode(),
+                body_format="json",
             )
         )
     strategy = ResponseValueGenerator(
@@ -115,10 +119,14 @@ def test_response_values_keep_only_eight_latest_distinct_candidates() -> None:
             ObservationWrite(
                 operation_id="GET /items",
                 timestamp=started + timedelta(seconds=index),
+                outcome_kind="http",
                 status_code=200,
+                reason_phrase="OK",
                 media_type="application/json",
                 request_json={"path": "/items"},
-                response_json=f'{{"item":{{"id":{index}}}}}',
+                response_headers={},
+                response_body=f'{{"item":{{"id":{index}}}}}'.encode(),
+                body_format="json",
             )
         )
     # A newer response at another exact coordinate must not displace matching
@@ -127,10 +135,14 @@ def test_response_values_keep_only_eight_latest_distinct_candidates() -> None:
         ObservationWrite(
             operation_id="GET /items",
             timestamp=started + timedelta(seconds=20),
+            outcome_kind="http",
             status_code=201,
+            reason_phrase="Created",
             media_type="application/json",
             request_json={"path": "/items"},
-            response_json='{"item":{"id":99}}',
+            response_headers={},
+            response_body=b'{"item":{"id":99}}',
+            body_format="json",
         )
     )
     strategy = ResponseValueGenerator(

@@ -278,10 +278,14 @@ def test_source_only_replacement_changes_digest_and_commit_failure_rolls_back() 
         ObservationWrite(
             operation_id="GET /producer",
             timestamp=datetime(2026, 8, 12, tzinfo=UTC),
+            outcome_kind="http",
             status_code=200,
+            reason_phrase="OK",
             media_type="application/json",
             request_json={"path": "/producer"},
-            response_json='{"old":3,"new":4}',
+            response_headers={},
+            response_body=b'{"old":3,"new":4}',
+            body_format="json",
         )
     )
 

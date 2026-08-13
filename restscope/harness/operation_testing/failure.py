@@ -1,8 +1,9 @@
 """Parse one executed request outcome into bounded inline Failure evidence.
 
 Generic Batch execution calls these helpers once at the HTTP capture seam. The
-normalized messages enter only that Tool result; there is no Test Case Catalog,
-Failure Memory, or persistence boundary behind them.
+normalized messages enter the inline Tool result and bounded Batch summary only.
+Exact HTTP/transport evidence is persisted separately as an Observation; there
+is no Failure Memory or second Test Case registry behind these parser models.
 """
 
 from __future__ import annotations

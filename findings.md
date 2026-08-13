@@ -1,5 +1,24 @@
 # Findings & Decisions
 
+## Persistent Batch and Test Case results (2026-08-12)
+
+- The approved public seams are `APIBehaviorCatalog`, target response processing,
+  `test_case.run_batch`, `test_case.get_batch_results`, and `test_case.get`.
+- `observation_id` is the stable Test Case identity. Batch cases additionally
+  carry a zero-based `batch_case_index`; ordinary HTTP Tool observations leave
+  both Batch fields null.
+- HTTP and transport outcomes are durable, while only complete valid 2xx JSON
+  remains eligible for resource derivation, response-field lookup, and response
+  value generation.
+- Database responses keep complete headers and body bytes. Agent-visible Tool
+  output redacts sensitive response-header values and limits the body projection
+  to 16 KiB.
+- Observation retention is removed. The App still accepts only a new database,
+  so the single baseline migration changes without an upgrade path.
+- New query Tools enter the built-in Catalog and production bindings but no
+  production Profile grant changes.
+
+
 ## Code navigation and API Behavior persistence consolidation (2026-08-12)
 
 - The former `restscope.openapi_audit` package has only 164 production lines and

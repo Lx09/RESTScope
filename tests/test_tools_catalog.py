@@ -19,6 +19,8 @@ EXPECTED_BUILTIN_TOOLS = {
     "resource.list_resources": "resource",
     "resource.list_ids": "resource",
     "test_case.run_batch": "test_case",
+    "test_case.get_batch_results": "test_case",
+    "test_case.get": "test_case",
     "request_generation.get_input_state": "request_generation",
     "request_generation.validate_patch": "request_generation",
     "parameter_patch.apply": "parameter_patch",

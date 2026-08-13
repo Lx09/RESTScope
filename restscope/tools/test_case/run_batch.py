@@ -3,8 +3,8 @@
 The Backend serializes calls so one Agent cannot interleave two mutating
 Batches. ``OperationTestingService`` freezes the Generation Store revision and
 prepares every case before the first request. This Tool then projects inline
-requests and bounded outcomes without creating ``TC*``/``E*`` identities or
-persisting Batch state.
+requests and bounded outcomes while exposing the durable Batch identity and
+any advisory persistence warnings.
 """
 
 from __future__ import annotations
@@ -64,10 +64,12 @@ class RunBatchOutput(BaseModel):
     generation_revision: int = Field(ge=0)
     generation_state_digest: str
     abstract_test_case_id: str
+    batch_id: str
     seed: int = Field(ge=0)
     case_count: int = Field(ge=1, le=5)
     success_count: int = Field(ge=0, le=5)
     failure_count: int = Field(ge=0, le=5)
+    batch_persistence_warnings: list[str] = Field(max_length=20)
     cases: list[BatchCaseView] = Field(min_length=1, max_length=5)
 
 
@@ -123,10 +125,14 @@ class TestCaseBatchToolBackend:
                 generation_revision=result.generation_revision,
                 generation_state_digest=result.generation_state_digest,
                 abstract_test_case_id=result.abstract_test_case_id,
+                batch_id=result.batch_id,
                 seed=result.seed,
                 case_count=len(cases),
                 success_count=result.success_count,
                 failure_count=len(cases) - result.success_count,
+                batch_persistence_warnings=list(
+                    result.batch_persistence_warnings
+                ),
                 cases=cases,
             )
             payload = output.model_dump(mode="json")

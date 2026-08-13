@@ -49,6 +49,7 @@ from restscope.request_generation import (
 from restscope.target_api import TargetAPIClient
 from restscope.tools.context import ToolContext
 from restscope.tools.resource import ResourceToolBackend
+from restscope.tools.test_case import TestCaseQueryToolBackend
 from restscope.ui import UIService, start_ui_service
 
 from .profiles import _build_agent_runtime_definition
@@ -249,6 +250,7 @@ def _compose_app_resources(config: RESTScopeConfig) -> _AppResources:
             resource_tool_backend=ResourceToolBackend(catalog=catalog),
             request_generation_patch_runtime=patch_runtime,
             operation_testing_service=operation_testing_service,
+            test_case_query_backend=TestCaseQueryToolBackend(catalog=catalog),
             agent_runtime=_build_agent_runtime_definition(
                 config,
                 tracing_runtime=tracing,

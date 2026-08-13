@@ -9,6 +9,7 @@ from .errors import TargetAPIError, TargetAPITimeout
 from .observation import (
     BufferedTargetResponse,
     TargetResponseObservation,
+    TargetTransportObservation,
     TargetResponseOperationContext,
     TargetResponseProcessor,
     TargetResponseProcessorResult,
@@ -26,6 +27,7 @@ __all__ = [
     "TargetAPIError",
     "TargetAPITimeout",
     "TargetResponseObservation",
+    "TargetTransportObservation",
     "TargetResponseOperationContext",
     "TargetResponseProcessor",
     "TargetResponseProcessorResult",

@@ -107,9 +107,10 @@ def test_api_behavior_catalog_rejects_reinitialization_without_partial_changes()
     assert catalog.current_openapi() == original
 
 
-def test_observations_keep_the_original_json_and_latest_hundred_per_operation() -> None:
-    """A busy operation retains exact response text without unbounded row growth."""
+def test_catalog_persists_complete_batches_and_all_http_outcomes() -> None:
+    """Every HTTP case remains queryable in its original Batch order."""
     from restscope.api_behavior_monitor.catalog import (
+        BatchWrite,
         ObservationWrite,
         OperationDefinition,
     )
@@ -123,28 +124,80 @@ def test_observations_keep_the_original_json_and_latest_hundred_per_operation() 
             description="List items",
         )
     )
+    batch = catalog.create_batch(
+        BatchWrite(summary={"schema_version": 1, "status": "running"})
+    )
     started = datetime(2026, 8, 11, tzinfo=UTC)
     for index in range(101):
-        # Whitespace is intentionally different from canonical JSON so the
-        # assertion proves that persistence does not reserialize the response.
-        response_json = f'{{ "position" : {index} }}'
         catalog.record_observation(
             ObservationWrite(
                 operation_id="GET /items",
                 timestamp=started + timedelta(seconds=index),
-                status_code=200,
-                media_type="application/json",
+                outcome_kind="http",
+                status_code=404 if index == 100 else 200,
+                reason_phrase="Not Found" if index == 100 else "OK",
+                media_type="application/json" if index < 100 else "text/plain",
                 request_json={"path": "/items", "query": []},
-                response_json=response_json,
+                response_headers={"set-cookie": "session=secret"},
+                response_body=(
+                    f'{{ "position" : {index} }}'.encode()
+                    if index < 100
+                    else b"missing"
+                ),
+                body_format="json" if index < 100 else "text",
+                batch_id=batch.batch_id,
+                batch_case_index=index,
             )
         )
 
-    observations = catalog.list_observations(operation_id="GET /items")
+    observations, total = catalog.list_batch_observations(
+        batch_id=batch.batch_id,
+        offset=0,
+        limit=200,
+    )
 
-    assert len(observations) == 100
-    assert observations[0].response_json == '{ "position" : 100 }'
-    assert observations[-1].response_json == '{ "position" : 1 }'
+    assert total == 101
+    assert len(observations) == 101
+    assert observations[0].batch_case_index == 0
+    assert observations[-1].status_code == 404
+    assert observations[-1].response_body == b"missing"
+    assert observations[-1].response_headers == {"set-cookie": "session=secret"}
     assert all(item.operation_id == "GET /items" for item in observations)
+
+
+def test_catalog_persists_transport_test_cases_without_an_http_status() -> None:
+    """A sent request with no response remains an unambiguous Test Case."""
+    from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
+        OperationDefinition,
+    )
+
+    catalog = _catalog()
+    catalog.ensure_operation(
+        OperationDefinition(
+            operation_id="GET /items",
+            method="GET",
+            path="/items",
+        )
+    )
+
+    saved = catalog.record_observation(
+        ObservationWrite(
+            operation_id="GET /items",
+            timestamp=datetime(2026, 8, 12, tzinfo=UTC),
+            outcome_kind="transport",
+            request_json={"path": "/items", "query": []},
+            transport_code="request_timeout",
+            transport_message="HTTP request timed out",
+        )
+    )
+
+    restored = catalog.get_observation(saved.observation_id)
+
+    assert restored == saved
+    assert restored is not None
+    assert restored.status_code is None
+    assert restored.response_body is None
 
 
 def test_composite_resource_instances_merge_nested_state_without_null_overwrite() -> None:

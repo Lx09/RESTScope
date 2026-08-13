@@ -12,11 +12,14 @@ from typing import TypeAlias
 from typing_extensions import TypeAliasType
 
 
-JSONScalar: TypeAlias = None | bool | int | float | str
-JSONValue = TypeAliasType(
-    "JSONValue",
-    JSONScalar | list["JSONValue"] | dict[str, "JSONValue"],
+type JSONScalar = None | bool | int | float | str
+
+type JSONValue = (
+    JSONScalar
+    | list[JSONValue]
+    | dict[str, JSONValue]
 )
-JSONObject: TypeAlias = dict[str, JSONValue]
+
+type JSONObject = dict[str, JSONValue]
 
 __all__ = ["JSONObject", "JSONScalar", "JSONValue"]

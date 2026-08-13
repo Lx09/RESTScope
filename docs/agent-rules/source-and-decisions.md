@@ -94,10 +94,12 @@ as the active project direction.
   materialized into shared pools: Batch execution freezes values parsed from
   current observations or complete resource instances with the selected
   revision. It persists or reuses one immutable abstract state snapshot before
-  sending the first request, and successful observations reference it.
+  sending the first request, creates a durable Batch, and links every persisted
+  HTTP or transport Observation from that execution to the Batch and Case index.
   The Harness owns deterministic operation execution and mechanical Tool
-  bindings. `test_case.run_batch` returns bounded inline evidence without a Test
-  Case registry. Neither Module owns semantic test selection or retry decisions.
+  bindings. `test_case.run_batch` returns bounded inline evidence and its durable
+  Batch identity without creating a planning registry. Neither Module owns
+  semantic test selection or retry decisions.
 - Test plans, inferred operation relationships, scheduler state, and Agent
   intermediate decisions are ephemeral and are not database records or durable
   artifacts.
@@ -108,13 +110,16 @@ as the active project direction.
   catalog: normalized operations; resource names and immutable direct identity
   fields; operation-resource role propositions; recursively merged current
   resource instances with logical deletion; exact RESOURCE and VALUE_REUSE
-  consumer input-source propositions; and immutable abstract Batch state.
-  It retains the latest 100 complete valid 2xx JSON observations per operation,
-  including original response JSON text and an actual request envelope with
+  consumer input-source propositions; immutable abstract Batch state; bounded
+  Batch summaries; and every matched HTTP or transport Observation permanently.
+  Observations include exact response bytes, complete response headers, and an
+  actual request envelope with
   Authorization, Cookie, token, API-key, and similarly sensitive headers
-  removed. This local raw evidence requires the same database protection as
-  other target evidence. It does not authorize LLM reasoning, extraction rules,
-  evolved-IR recovery snapshots, plans, queues, or general Agent memory.
+  removed. Only the latest 100 complete valid 2xx JSON Observations per operation
+  may feed learning consumers. This local raw evidence requires the same database
+  protection as other target evidence. It does not authorize LLM reasoning,
+  extraction rules, evolved-IR recovery snapshots, plans, queues, or general
+  Agent memory.
   Unknown resource identity fields use one registered no-Tool `fast` System
   Agent Profile. Its dynamic `I*` aliases are restricted by a per-invocation
   Schema and local validation before Monitor state changes. Identity fields may

@@ -7,6 +7,9 @@ def _api_behavior_catalog():
     """Create a real in-memory Catalog required before every Batch send."""
 
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
@@ -28,6 +31,9 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
 
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
     from restscope.db import (
         Base,
         SqlAlchemyAPIBehaviorUnitOfWork,
@@ -71,6 +77,12 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
     )
     sent: list[str] = []
     client = TargetAPIClient(
+        response_processor=APIBehaviorResponseProcessor(
+            APIBehaviorMonitorCoordinator(
+                contract_tracker=ResponseContractTracker(catalog),
+                catalog=catalog,
+            )
+        ),
         client_factory=lambda **kwargs: httpx.Client(
             transport=httpx.MockTransport(
                 lambda request: sent.append(str(request.url)) or httpx.Response(200)
@@ -97,12 +109,25 @@ def test_batch_tool_returns_inline_cases_from_one_frozen_revision() -> None:
 
     assert result["generation_revision"] == 0
     assert result["case_count"] == 2
+    assert result["batch_id"].startswith("batch_")
+    assert result["batch_persistence_warnings"] == []
     assert result["success_count"] == 2
     assert [case["case_number"] for case in result["cases"]] == [1, 2]
     assert all("limit=1" in url for url in sent)
     assert "run_id" not in result
     assert result["abstract_test_case_id"].startswith("abstract_test_case_")
     assert "case_number" in str(result)
+    stored_batch = catalog.get_batch(result["batch_id"])
+    stored_cases, stored_total = catalog.list_batch_observations(
+        batch_id=result["batch_id"],
+        offset=0,
+        limit=10,
+    )
+    assert stored_batch is not None
+    assert stored_batch.summary["status"] == "completed"
+    assert stored_batch.summary["http_status_counts"] == {"200": 2}
+    assert stored_total == 2
+    assert [case.batch_case_index for case in stored_cases] == [0, 1]
 
     repeated = backend.run_batch(
         operation_key="GET /items",
@@ -330,3 +355,226 @@ def test_abstract_case_persistence_failure_stops_batch_before_network() -> None:
         )
 
     assert sent == []
+
+
+def test_observation_failure_does_not_stop_later_batch_cases() -> None:
+    """A missing Observation becomes a warning while remaining requests still run."""
+
+    import httpx
+
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.target_api import TargetAPIClient
+    from restscope.tools.context import ToolContext
+
+    catalog = _api_behavior_catalog()
+
+    class OneObservationFailure:
+        """Delegate every Catalog behavior except the first Observation write."""
+
+        def __init__(self) -> None:
+            self.failed = False
+
+        def __getattr__(self, name):
+            return getattr(catalog, name)
+
+        def record_observation(self, observation):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("simulated observation failure")
+            return catalog.record_observation(observation)
+
+    flaky = OneObservationFailure()
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Persistence", "version": "1"},
+            "paths": {"/items": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        }
+    )
+    store = RequestGenerationConfigStore()
+    store.initialize_once(ir)
+    sent: list[str] = []
+    client = TargetAPIClient(
+        response_processor=APIBehaviorResponseProcessor(
+            APIBehaviorMonitorCoordinator(
+                contract_tracker=ResponseContractTracker(flaky),
+                catalog=flaky,
+            )
+        ),
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: sent.append(str(request.url)) or httpx.Response(200)
+            ),
+            **kwargs,
+        ),
+    )
+    result = OperationTestingService(
+        config_store=store,
+        api_behavior_catalog=flaky,
+        target_api_client=client,
+    ).run_batch(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={},
+            base_url="https://api.example.test",
+            headers={},
+        ),
+        operation_key="GET /items",
+        case_count=2,
+        seed=4,
+    )
+
+    assert len(sent) == 2
+    assert any(
+        warning.startswith("observation_persistence_incomplete:")
+        for warning in result.batch_persistence_warnings
+    )
+    stored = catalog.get_batch(result.batch_id)
+    assert stored is not None
+    assert stored.summary["status"] == "completed"
+    assert stored.summary["persisted_observation_count"] == 1
+
+
+def test_final_batch_summary_failure_returns_inline_results_with_warning() -> None:
+    """Completed target results survive when every summary replacement fails."""
+
+    import httpx
+
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.response_processor import APIBehaviorResponseProcessor
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.target_api import TargetAPIClient
+    from restscope.tools.context import ToolContext
+
+    catalog = _api_behavior_catalog()
+
+    class SummaryFailure:
+        """Keep the initial Batch but reject all progress/final summary writes."""
+
+        def __getattr__(self, name):
+            return getattr(catalog, name)
+
+        def update_batch_summary(self, **_arguments):
+            raise RuntimeError("simulated summary failure")
+
+    flaky = SummaryFailure()
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Summary", "version": "1"},
+            "paths": {"/items": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        }
+    )
+    store = RequestGenerationConfigStore()
+    store.initialize_once(ir)
+    client = TargetAPIClient(
+        response_processor=APIBehaviorResponseProcessor(
+            APIBehaviorMonitorCoordinator(
+                contract_tracker=ResponseContractTracker(flaky),
+                catalog=flaky,
+            )
+        ),
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200)),
+            **kwargs,
+        ),
+    )
+
+    result = OperationTestingService(
+        config_store=store,
+        api_behavior_catalog=flaky,
+        target_api_client=client,
+    ).run_batch(
+        ToolContext(
+            ir=ir,
+            baseline_schema_source={},
+            base_url="https://api.example.test",
+            headers={},
+        ),
+        operation_key="GET /items",
+        case_count=1,
+        seed=5,
+    )
+
+    assert result.success_count == 1
+    assert result.batch_persistence_warnings == (
+        "batch_summary_persistence_failed:RuntimeError",
+    )
+    stored = catalog.get_batch(result.batch_id)
+    assert stored is not None
+    assert stored.summary["status"] == "running"
+
+
+def test_unexpected_batch_interruption_marks_summary_failed() -> None:
+    """An unexpected execution defect preserves a failed summary and re-raises."""
+
+    import pytest
+
+    from restscope.harness.operation_testing import OperationTestingService
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.request_generation import RequestGenerationConfigStore
+    from restscope.tools.context import ToolContext
+
+    class BrokenClient:
+        """Raise outside the expected HTTP/transport failure vocabulary."""
+
+        def send(self, *_arguments, **_keywords):
+            raise ValueError("unexpected execution defect")
+
+    class CapturingCatalog:
+        """Remember the created Batch identity while delegating persistence."""
+
+        batch_id = None
+
+        def __getattr__(self, name):
+            return getattr(catalog, name)
+
+        def create_batch(self, batch):
+            record = catalog.create_batch(batch)
+            self.batch_id = record.batch_id
+            return record
+
+    catalog = _api_behavior_catalog()
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Interrupted", "version": "1"},
+            "paths": {"/items": {"get": {"responses": {"200": {"description": "ok"}}}}},
+        }
+    )
+    store = RequestGenerationConfigStore()
+    store.initialize_once(ir)
+    capturing_catalog = CapturingCatalog()
+    service = OperationTestingService(
+        config_store=store,
+        api_behavior_catalog=capturing_catalog,
+        target_api_client=BrokenClient(),
+    )
+
+    with pytest.raises(ValueError, match="unexpected execution defect"):
+        service.run_batch(
+            ToolContext(
+                ir=ir,
+                baseline_schema_source={},
+                base_url="https://api.example.test",
+                headers={},
+            ),
+            operation_key="GET /items",
+            case_count=1,
+            seed=6,
+        )
+
+    # The safe log records the exception type without persisting its message.
+    assert capturing_catalog.batch_id is not None
+    stored = catalog.get_batch(capturing_catalog.batch_id)
+    assert stored is not None
+    assert stored.summary["status"] == "failed"
+    assert stored.summary["logs"] == ["batch_execution_failed:ValueError"]

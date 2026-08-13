@@ -5,7 +5,8 @@ first network call, then executes the requests sequentially. Its output is a
 ``BatchExecutionResult`` contains inline canonical requests and bounded
 HTTP/transport outcomes.  Before the first network call it persists one
 immutable Abstract Test Case for the frozen Generator/Constraint state; every
-successful observation produced by that Batch points to this identity.
+persisted HTTP or transport Observation produced by that Batch points to this
+identity and its stable zero-based Case index.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import secrets
 from restscope.tools.context import ToolContext
 from restscope.api_behavior_monitor.catalog import (
     AbstractTestCaseWrite,
+    BatchWrite,
     OperationDefinition,
     APIBehaviorCatalog,
 )
@@ -63,8 +65,10 @@ class BatchExecutionResult:
     generation_revision: int
     generation_state_digest: str
     abstract_test_case_id: str
+    batch_id: str
     seed: int
     cases: tuple[BatchCaseOutcome, ...]
+    batch_persistence_warnings: tuple[str, ...] = ()
 
     @property
     def success_count(self) -> int:
@@ -306,34 +310,147 @@ class OperationTestingService:
         abstract_test_case_id = self._ensure_abstract_test_case(
             generation_state,
         )
+        initial_summary = _batch_summary(
+            status="running",
+            operation_key=operation_key,
+            generation_revision=generation_state.revision,
+            generation_state_digest=generation_state.state_digest,
+            abstract_test_case_id=abstract_test_case_id,
+            seed=run_seed,
+            requested_case_count=case_count,
+            cases=(),
+            persisted_observation_count=0,
+            persistence_warnings=(),
+        )
+        batch = self.api_behavior_catalog.create_batch(
+            BatchWrite(summary=initial_summary)
+        )
 
         # Network execution begins only after preflight succeeds for every case.
         cases: list[BatchCaseOutcome] = []
-        for case_index, (generated, request, target_request, inline_request) in enumerate(
-            prepared
-        ):
-            cases.append(
-                self._execute_case(
-                    context,
-                    case_number=case_index + 1,
-                    case_index=case_index,
-                    generated=generated,
-                    request=request,
-                    target_request=target_request,
-                    catalog_request=inline_request,
-                    operation_path=operation.path,
-                    abstract_test_case_id=abstract_test_case_id,
+        persistence_warnings: list[str] = []
+        try:
+            for case_index, (
+                generated,
+                request,
+                target_request,
+                inline_request,
+            ) in enumerate(prepared):
+                cases.append(
+                    self._execute_case(
+                        context,
+                        case_number=case_index + 1,
+                        case_index=case_index,
+                        generated=generated,
+                        request=request,
+                        target_request=target_request,
+                        catalog_request=inline_request,
+                        operation_path=operation.path,
+                        abstract_test_case_id=abstract_test_case_id,
+                        batch_id=batch.batch_id,
+                    )
                 )
+                self._update_batch_summary(
+                    batch_id=batch.batch_id,
+                    status="running",
+                    operation_key=operation_key,
+                    generation_state=generation_state,
+                    abstract_test_case_id=abstract_test_case_id,
+                    seed=run_seed,
+                    requested_case_count=case_count,
+                    cases=tuple(cases),
+                    persistence_warnings=persistence_warnings,
+                )
+        except Exception as exc:
+            persistence_warnings.append(
+                f"batch_execution_failed:{type(exc).__name__}"
             )
+            self._update_batch_summary(
+                batch_id=batch.batch_id,
+                status="failed",
+                operation_key=operation_key,
+                generation_state=generation_state,
+                abstract_test_case_id=abstract_test_case_id,
+                seed=run_seed,
+                requested_case_count=case_count,
+                cases=tuple(cases),
+                persistence_warnings=persistence_warnings,
+            )
+            raise
+
+        self._update_batch_summary(
+            batch_id=batch.batch_id,
+            status="completed",
+            operation_key=operation_key,
+            generation_state=generation_state,
+            abstract_test_case_id=abstract_test_case_id,
+            seed=run_seed,
+            requested_case_count=case_count,
+            cases=tuple(cases),
+            persistence_warnings=persistence_warnings,
+        )
 
         return BatchExecutionResult(
             operation_key=operation_key,
             generation_revision=generation_state.revision,
             generation_state_digest=generation_state.state_digest,
             abstract_test_case_id=abstract_test_case_id,
+            batch_id=batch.batch_id,
             seed=run_seed,
             cases=tuple(cases),
+            batch_persistence_warnings=tuple(persistence_warnings),
         )
+
+    def _update_batch_summary(
+        self,
+        *,
+        batch_id: str,
+        status: str,
+        operation_key: str,
+        generation_state: RequestGenerationState,
+        abstract_test_case_id: str,
+        seed: int,
+        requested_case_count: int,
+        cases: tuple[BatchCaseOutcome, ...],
+        persistence_warnings: list[str],
+    ) -> None:
+        """Best-effort update one Batch without hiding already executed cases."""
+
+        try:
+            _rows, persisted_count = self.api_behavior_catalog.list_batch_observations(
+                batch_id=batch_id,
+                offset=0,
+                limit=1,
+            )
+            if persisted_count < len(cases):
+                warning = (
+                    "observation_persistence_incomplete:"
+                    f"expected={len(cases)},stored={persisted_count}"
+                )
+                if warning not in persistence_warnings:
+                    persistence_warnings.append(warning)
+            summary = _batch_summary(
+                status=status,
+                operation_key=operation_key,
+                generation_revision=generation_state.revision,
+                generation_state_digest=generation_state.state_digest,
+                abstract_test_case_id=abstract_test_case_id,
+                seed=seed,
+                requested_case_count=requested_case_count,
+                cases=cases,
+                persisted_observation_count=persisted_count,
+                persistence_warnings=tuple(persistence_warnings),
+            )
+            updated = self.api_behavior_catalog.update_batch_summary(
+                batch_id=batch_id,
+                summary=summary,
+            )
+            if updated is None:
+                raise RuntimeError("Batch disappeared during execution")
+        except Exception as exc:
+            warning = f"batch_summary_persistence_failed:{type(exc).__name__}"
+            if warning not in persistence_warnings:
+                persistence_warnings.append(warning)
 
     def _capture_reference_values(
         self,
@@ -424,6 +541,7 @@ class OperationTestingService:
         catalog_request: dict[str, object],
         operation_path: str,
         abstract_test_case_id: str,
+        batch_id: str,
     ) -> BatchCaseOutcome:
         """Execute one prepared request and retain bounded inline facts."""
         with self.tracing_runtime.span(
@@ -459,6 +577,8 @@ class OperationTestingService:
                         operation_method=request.method,
                         operation_path=operation_path,
                         abstract_test_case_id=abstract_test_case_id,
+                        batch_id=batch_id,
+                        batch_case_index=case_index,
                     ),
                 )
                 media_type = (
@@ -584,6 +704,60 @@ def _decode_failure_body(
         except UnicodeDecodeError:
             return body
     return body
+
+
+def _batch_summary(
+    *,
+    status: str,
+    operation_key: str,
+    generation_revision: int,
+    generation_state_digest: str,
+    abstract_test_case_id: str,
+    seed: int,
+    requested_case_count: int,
+    cases: tuple[BatchCaseOutcome, ...],
+    persisted_observation_count: int,
+    persistence_warnings: tuple[str, ...],
+) -> dict[str, object]:
+    """Build the bounded durable progress record for one Batch.
+
+    The summary contains identifiers and aggregate evidence only. It deliberately
+    excludes response bodies, target secrets, exception messages, and stack traces;
+    those facts either belong to individual Observations or human-only logs.
+    """
+
+    status_counts: dict[str, int] = {}
+    transport_failure_count = 0
+    for case in cases:
+        if case.status_code is None:
+            transport_failure_count += 1
+            continue
+        status_key = str(case.status_code)
+        status_counts[status_key] = status_counts.get(status_key, 0) + 1
+
+    success_count = sum(
+        case.status_code is not None and case.failure is None for case in cases
+    )
+    # Warnings are generated by RESTScope itself, but are still bounded so a
+    # repeatedly failing persistence adapter cannot grow this JSON indefinitely.
+    safe_logs = [message[:300] for message in persistence_warnings[-20:]]
+    return {
+        "schema_version": 1,
+        "status": status,
+        "operation_key": operation_key,
+        "generation_revision": generation_revision,
+        "generation_state_digest": generation_state_digest,
+        "abstract_test_case_id": abstract_test_case_id,
+        "seed": seed,
+        "requested_case_count": requested_case_count,
+        "executed_case_count": len(cases),
+        "persisted_observation_count": persisted_observation_count,
+        "success_count": success_count,
+        "failure_count": len(cases) - success_count,
+        "http_status_counts": status_counts,
+        "transport_failure_count": transport_failure_count,
+        "logs": safe_logs,
+    }
 
 
 def _target_query_items(

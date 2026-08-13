@@ -16,6 +16,7 @@ BUSINESS_TABLES = {
     "resources",
     "operation_resource_edges",
     "resource_instances",
+    "batches",
     "observations",
     "operation_input_sources",
     "abstract_test_cases",
@@ -29,11 +30,11 @@ def _config(database_url: str):
     return replace(RESTScopeConfig.from_environment(), db=DBConfig(url=database_url))
 
 
-def test_default_app_creates_only_the_nine_persistent_business_tables(
+def test_default_app_creates_only_the_ten_persistent_business_tables(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """Generation state is App-memory only; SQLite retains Monitor/Audit facts."""
+    """Generation state is App-memory only; SQLite retains approved audit facts."""
     from sqlalchemy import inspect
 
     from restscope import RESTScopeApp

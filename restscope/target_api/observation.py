@@ -30,6 +30,8 @@ class TargetResponseOperationContext:
     operation_method: str | None = None
     operation_path: str | None = None
     abstract_test_case_id: str | None = None
+    batch_id: str | None = None
+    batch_case_index: int | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -45,6 +47,19 @@ class TargetResponseObservation:
     body: bytes
     body_truncated: bool
     received_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    request_json: JSONObject = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class TargetTransportObservation:
+    """Carry one attempted request that ended before an HTTP response existed."""
+
+    method: str
+    path: str
+    url: str
+    code: str
+    message: str
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     request_json: JSONObject = field(default_factory=dict)
 
 
@@ -75,6 +90,17 @@ class TargetResponseProcessor(Protocol):
         context: TargetResponseOperationContext,
     ) -> TargetResponseProcessorResult | TargetResponseProcessorWarning | None:
         """Inspect one bounded response and return advisory structured output."""
+
+        ...
+
+    def process_transport(
+        self,
+        observation: TargetTransportObservation,
+        context: TargetResponseOperationContext,
+    ) -> TargetResponseProcessorResult | TargetResponseProcessorWarning | None:
+        """Persist one request attempt that produced no HTTP response."""
+
+        ...
 
 
 @dataclass(slots=True, frozen=True)

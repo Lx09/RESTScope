@@ -154,6 +154,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
         RequestGenerationConfigStore,
         RequestGenerationPatchRuntime,
     )
+    from restscope.tools.test_case import TestCaseQueryToolBackend
 
     class UnusedProvider:
         """Satisfy Profile validation; this binding test never invokes a model."""
@@ -175,6 +176,8 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
             "request_generation.validate_patch",
             "parameter_patch.apply",
             "test_case.run_batch",
+            "test_case.get_batch_results",
+            "test_case.get",
         ),
     )
     runtime = build_harness(
@@ -185,6 +188,9 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
         operation_testing_service=OperationTestingService(
             config_store=store,
             api_behavior_catalog=api_behavior_catalog,
+        ),
+        test_case_query_backend=TestCaseQueryToolBackend(
+            catalog=api_behavior_catalog
         ),
         agent_runtime=AgentRuntimeDefinition(
             profiles=(profile,),

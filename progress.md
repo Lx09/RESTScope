@@ -654,3 +654,47 @@
 - Moved generated wheel build directories to
   `/tmp/restscope-cli-wheel.b4Y3nD`; no generated build output remains in the
   worktree. The pre-existing data-types edit is still untouched and unstaged.
+# Phase 28: Persistent Batch and Test Case results (2026-08-12)
+
+- Read the approved implementation plan and current Catalog, ORM, response
+  processor, target client, Batch service, Tool Catalog, and Profile boundaries.
+- Confirmed the pre-existing `restscope/data_types/__init__.py` edit is unrelated
+  and must remain untouched.
+- Began TDD at the Catalog/database seam before changing production behavior.
+- Red Catalog/schema verification: `uv run pytest -q tests/test_schema_catalog.py
+  tests/test_api_behavior_catalog.py` failed 6 tests because `batches`, expanded
+  Observation fields, permanent retention, and Batch/Test Case reads do not yet
+  exist. This is the expected first red state.
+- First green attempt left one transport-row failure: SQLAlchemy JSON encoded
+  Python `None` as JSON `null`, so the SQL nullability check rejected it. Configure
+  the optional response-header JSON column with `none_as_null=True`.
+- Catalog/schema slice is green: 11 tests passed. The first Monitor/client/batch
+  regression run initially named one missing test path; the corrected 39-test
+  group exposed 8 expected old-Observation contract failures.
+- Monitor/response slice is green: 46 focused tests passed, including durable
+  404 text and transport outcomes while learning readers remain 2xx-JSON only.
+- Batch persistence tracer test is red because `test_case.run_batch` does not
+  yet return or persist a Batch identity.
+- Implemented durable Batch creation/progress/final summaries and extended
+  `test_case.run_batch` with `batch_id` plus bounded persistence warnings.
+- Added `test_case.get_batch_results` and `test_case.get`, registered both in
+  the immutable built-in Catalog, and bound production implementations without
+  adding either name to a Main or System Agent Profile.
+- The query Tools paginate in stable Case order, group Observation IDs by
+  operation/outcome/status, return structured `not_found`, bound bodies to a
+  16 KiB source prefix, Base64 binary bytes, and redact sensitive response
+  header values while leaving database evidence exact.
+- Added failure-path coverage: one Observation write failure does not stop later
+  cases; summary write failure returns inline evidence; unexpected execution
+  marks the retained Batch failed with a safe exception-type log.
+- Focused cross-module verification passed 80 tests. The Batch/query/client
+  degradation subset passed 14 tests.
+- The first full run found one stale nine-table App bootstrap assertion after
+  the approved `batches` table was added; updating that exact baseline contract
+  was the only required correction.
+- Added direct ordinary HTTP Tool coverage: matched HTTP and transport outcomes
+  persist with null Batch fields, while a request that cannot match an OpenAPI
+  operation writes no Observation.
+- Final fresh verification: `uv run pytest -q` passed 590 tests with 2 skips;
+  Python compilation, the precise `typing.Any` guard, and `git diff --check`
+  also passed.

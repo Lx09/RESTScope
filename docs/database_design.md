@@ -4,14 +4,15 @@ Status: Active exploratory design (2026-08-11)
 
 RESTScope creates one SQLite file for one App. The file is an evidence and audit
 artifact, not a recovery image: a later App rejects the existing path and never
-resumes it. The fresh baseline contains nine business tables plus Alembic's
+resumes it. The fresh baseline contains ten business tables plus Alembic's
 `alembic_version` table.
 
 ## Boundary
 
 - `restscope.api_behavior_monitor.catalog` is the single database-independent
   Interface for the current normalized OpenAPI, append-only contract changes,
-  operations, observations, resources, input sources, and abstract test cases.
+  operations, batches, observations, resources, input sources, and abstract
+  test cases.
 - `restscope.request_generation` keeps the current revisioned
   Generator/Constraint state in memory. Exact source bindings participate in
   that state, but producer values are parsed from observations on demand.
@@ -26,9 +27,9 @@ with integrity and foreign-key checks. Request headers conventionally carrying
 authorization, cookies, tokens, API keys, or secrets are removed before an
 observation is written.
 
-## API Behavior Catalog: 9 tables
+## API Behavior Catalog: 10 tables
 
-All nine tables belong to one Catalog and one SQLAlchemy transaction family.
+All ten tables belong to one Catalog and one SQLAlchemy transaction family.
 The headings below group their contents for explanation; they are not separate
 runtime repositories or App collaborators.
 
@@ -45,7 +46,7 @@ Each real response-contract change records operation text, actual status,
 normalized media type, change labels, and affected Response before/after data.
 Contract matches, pending retries, and internal check failures add no event.
 
-### Response and resource evidence: 7 tables
+### Response and resource evidence: 8 tables
 
 #### `operations`
 
@@ -77,12 +78,19 @@ deletion and deleted instances are hidden from ordinary generation and Tools.
 
 #### `observations`
 
-Each eligible response stores `observation_id`, operation, completion time,
-actual status/media type, a sanitized actual request envelope, and the complete
-original valid JSON response text. An optional `abstract_test_case_id` links a
-generated request to its immutable configuration. In the same insertion
-transaction, rows older than the newest 100 for that operation are physically
-deleted. There is no per-response JSON-size or flattened-scalar limit.
+Every matched sent request that reaches an HTTP response or transport failure
+is permanent. `observation_id` is also its Test Case ID. Each row stores the
+operation, completion time, sanitized actual request envelope, explicit
+`outcome_kind`, and optional Abstract Test Case/Batch identity. HTTP rows store
+status 100–599, reason phrase, media type, complete response headers, exact body
+bytes, and their JSON/text/Base64 presentation kind. Transport rows instead
+store a stable failure code/message with no HTTP status. `batch_id` and the
+zero-based `batch_case_index` appear together and are unique as a pair.
+
+Persistence has no retention deletion or per-response body limit. Learning
+queries independently select no more than the latest 100 complete valid 2xx
+JSON Observations per operation. Response-value reuse, observed-field discovery,
+and resource extraction cannot consume other rows.
 
 #### `operation_input_sources`
 
@@ -93,7 +101,7 @@ and `_beta` start at Beta(1,1) and are not updated in this version. Two consume
 types may coexist for identical response coordinates.
 
 No response-value table exists. A VALUE_REUSE Generator selects typed scalars
-from matching retained observations when it needs values. A RESOURCE Generator
+from matching eligible Observations when it needs values. A RESOURCE Generator
 reads current non-deleted instances and uses one shared per-case resource seed,
 so composite identity components never form an unobserved combination.
 
@@ -105,14 +113,31 @@ preflight writes or reuses it after every request is generated and serialized
 but before the first network call. It is audit metadata, not a restorable
 Generation Store or per-concrete-case registry.
 
+#### `batches`
+
+`batch_id` is the durable execution identity. `summary` is complete bounded JSON
+covering running/completed/failed status, operation and generation identity,
+Abstract Test Case, seed, requested/executed/persisted counts, HTTP status
+distribution, transport failure count, and safe persistence logs. A Batch is
+created after all cases preflight and the Abstract Test Case commits, but before
+the first network call. It is evidence, not a resumable queue or scheduler.
+
 ## Response processing order
 
 For every matched response, Contract Monitor runs first. Internal Contract
-Monitor failure becomes a warning and does not block a valid observation. A
-complete valid 2xx JSON response then commits as the factual observation. Only
-after that commit does Resource Monitor derive resource definitions, role
+Monitor failure becomes a warning and does not block Observation persistence.
+Every HTTP outcome then commits its complete factual result; matched transport
+failures commit without a Contract check. Only after a complete valid 2xx JSON
+Observation commits does Resource Monitor derive resource definitions, role
 edges, and current instances in a separate transaction; resource failure never
-removes the observation.
+removes the Observation.
+
+Ordinary HTTP Tool calls use no Batch fields. Batch execution creates one
+running summary before its first send, updates progress best-effort, and ends as
+completed even when cases include non-2xx or transport failures. Unexpected
+execution defects mark it failed and preserve earlier Observations. A missing
+Observation or summary update produces a bounded warning without suppressing
+later requests or already available inline results.
 
 Unknown resource groups ask the bounded Resource Identifier System Agent for
 direct identity fields. Existing unambiguous definitions are reused. No model

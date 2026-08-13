@@ -21,7 +21,7 @@ The runtime has five distinct responsibilities:
    prepares a complete Batch, and sends its requests.
 4. `restscope.tools` exposes narrow model-callable behaviors. Profiles—not the
    global Catalog—decide which Tools an Agent may call.
-5. `restscope.api_behavior_monitor` owns the nine-table evidence/audit Catalog
+5. `restscope.api_behavior_monitor` owns the ten-table evidence/audit Catalog
    and the ordered response-processing flow.
 6. `restscope.agent`, `restscope.skills`, and `restscope.harness` run the same
    generic Agent as a Main Agent, Subagent, or System Agent. Skills teach a
@@ -60,12 +60,16 @@ connects one consumer input to an exact producer operation, actual status,
 media type, selector, and field as either RESOURCE or VALUE_REUSE. Composite
 resource fields always come from one complete current instance.
 
-### Observation and Abstract Test Case
+### Batch, Observation, and Abstract Test Case
 
-An Observation is one complete valid 2xx JSON response plus its sanitized
-actual request. An Abstract Test Case is the immutable Generator/Constraint
-state used by a Batch. It is created before network execution, and every
-eligible response from that Batch references it.
+A Batch is one preflighted generated execution with a durable identity and
+bounded running/completed/failed summary. An Observation is one permanent
+matched HTTP response or transport failure plus its sanitized actual request;
+its `observation_id` is also the executed Test Case ID. An Abstract Test Case is
+the immutable Generator/Constraint state used by a Batch. It and the Batch are
+created before network execution, and every persisted Case links to both its
+Batch index and the abstract state. Only complete valid 2xx JSON Observations
+enter learning readers, which select at most the latest 100 per operation.
 
 ### Constraint
 
@@ -210,15 +214,21 @@ Skills cannot be used by it until a later approved Profile change.
 
 ### `restscope/api_behavior_monitor/`
 
-The API Behavior Monitor checks every matched response contract, persists
-complete valid 2xx JSON observations, and then derives resource state in a
-separate transaction. `catalog.py` owns all nine persisted tables, including
+The API Behavior Monitor checks every matched response contract, permanently
+persists every matched HTTP or transport Observation, and then allows only
+complete valid 2xx JSON evidence to derive resource state in a separate
+transaction. `catalog.py` owns all ten persisted tables, including
 the current normalized OpenAPI and append-only contract-change events.
 `contract_monitor.py` checks and updates response contracts;
 `coordinator.py` owns stage ordering; `resource_monitor.py` derives resources;
 and `resource_identity.py` contains the bounded System Agent contract used for
 an unknown identity. The Monitor never calls an LLM client directly and does
 not persist extraction rules or reasoning.
+
+`tools/test_case/query.py` is the Agent safety boundary for durable results. It
+groups paginated Batch Observation IDs, bounds body output to 16 KiB, and hides
+sensitive response header values while leaving complete database evidence
+unchanged.
 
 Parameter Patch stores exact RESOURCE or VALUE_REUSE source propositions with
 neutral Beta(1,1) evidence. Values are resolved on demand from raw observations
@@ -242,12 +252,13 @@ generated Batch execution consume the same Client; Harness does not own it.
 
 ### `restscope/db/`
 
-The one baseline migration creates nine business tables. Their SQLAlchemy
+The one baseline migration creates ten business tables. Their SQLAlchemy
 mappings live together in `orm/api_behavior_monitor.py`, and the sole concrete
 transaction Adapter is `adapters/api_behavior_monitor.py`. Two tables retain
-OpenAPI audit/export facts; seven retain response and resource evidence.
-There are no response-value pools, extraction-rule, concrete Test Case,
-Failure, Attempt, plan, queue, or candidate tables.
+OpenAPI audit/export facts; eight retain Batch, response, and resource evidence.
+The concrete Test Case identity is the Observation row rather than a second
+registry. There are no response-value pools, extraction-rule, Failure, Attempt,
+plan, queue, or candidate tables.
 
 ### `restscope/observability/`, `restscope/ui/`, and `ui/`
 

@@ -59,6 +59,7 @@ def test_target_api_facade_exposes_only_shared_integration_entries() -> None:
         "TargetAPIError",
         "TargetAPITimeout",
         "TargetResponseObservation",
+        "TargetTransportObservation",
         "TargetResponseOperationContext",
         "TargetResponseProcessor",
         "TargetResponseProcessorResult",

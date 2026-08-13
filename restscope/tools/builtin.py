@@ -26,6 +26,8 @@ from restscope.tools.subagent import (
     subagent_wait_tool_spec,
 )
 from restscope.tools.test_case import (
+    test_case_get_batch_results_tool_spec,
+    test_case_get_tool_spec,
     test_case_run_batch_tool_spec,
 )
 from restscope.tools.request_generation import (
@@ -59,7 +61,11 @@ def builtin_tool_catalog() -> ToolCatalog:
         ),
         (
             "test_case",
-            (test_case_run_batch_tool_spec(),),
+            (
+                test_case_run_batch_tool_spec(),
+                test_case_get_batch_results_tool_spec(),
+                test_case_get_tool_spec(),
+            ),
         ),
         (
             "request_generation",

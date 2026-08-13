@@ -1,11 +1,12 @@
 """Map all durable API Behavior Monitor evidence and audit state.
 
 The API Behavior Monitor initializes the current normalized OpenAPI and its
-operations, audits Contract changes, writes successful JSON observations, and
-then derives resources, current instances, and exact request-input sources.
-Request Generation may also record the immutable abstract configuration that
-produced a Batch request. These tables never store Agent reasoning, scheduler
-state, or a restorable Generation State.
+operations, audits Contract changes, and writes every matched HTTP or transport
+Observation. Complete valid 2xx JSON Observations may additionally derive
+resources, current instances, and exact request-input sources. Request
+Generation records durable Batch summaries and immutable abstract configuration.
+These tables never store Agent reasoning, scheduler state, or a restorable
+Generation State.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -146,8 +148,17 @@ class AbstractTestCaseORM(CreatedAtMixin, Base):
     constraints_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
+class BatchORM(Base):
+    """Map one durable Batch identity to its complete structured summary."""
+
+    __tablename__ = "batches"
+
+    batch_id: Mapped[str] = mapped_column(String, primary_key=True)
+    summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+
+
 class ObservationORM(Base):
-    """Map one complete successful JSON request and response observation."""
+    """Map one completed HTTP exchange or request transport failure."""
 
     __tablename__ = "observations"
     __table_args__ = (
@@ -158,8 +169,31 @@ class ObservationORM(Base):
             "observation_id",
         ),
         CheckConstraint(
-            "status_code >= 200 AND status_code <= 299",
-            name="observation_success_status",
+            "status_code IS NULL OR (status_code >= 100 AND status_code <= 599)",
+            name="observation_http_status",
+        ),
+        CheckConstraint(
+            "((outcome_kind = 'http' AND status_code IS NOT NULL "
+            "AND response_headers IS NOT NULL AND response_body IS NOT NULL "
+            "AND body_format IS NOT NULL AND transport_code IS NULL "
+            "AND transport_message IS NULL) OR "
+            "(outcome_kind = 'transport' AND status_code IS NULL "
+            "AND reason_phrase IS NULL AND media_type IS NULL "
+            "AND response_headers IS NULL AND response_body IS NULL "
+            "AND body_format IS NULL AND transport_code IS NOT NULL "
+            "AND transport_message IS NOT NULL))",
+            name="observation_outcome_shape",
+        ),
+        CheckConstraint(
+            "((batch_id IS NULL AND batch_case_index IS NULL) OR "
+            "(batch_id IS NOT NULL AND batch_case_index IS NOT NULL "
+            "AND batch_case_index >= 0))",
+            name="observation_batch_shape",
+        ),
+        UniqueConstraint(
+            "batch_id",
+            "batch_case_index",
+            name="observation_batch_case",
         ),
     )
 
@@ -169,14 +203,29 @@ class ObservationORM(Base):
         nullable=False,
     )
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
-    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason_phrase: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
-    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    response_headers: Mapped[dict[str, str] | None] = mapped_column(
+        JSON(none_as_null=True),
+        nullable=True,
+    )
+    response_body: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    body_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    transport_code: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    transport_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     abstract_test_case_id: Mapped[str | None] = mapped_column(
         ForeignKey("abstract_test_cases.abstract_test_case_id"),
         nullable=True,
     )
+    batch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("batches.batch_id"),
+        nullable=True,
+        index=True,
+    )
+    batch_case_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class OperationInputSourceORM(Base):

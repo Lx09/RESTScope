@@ -9,6 +9,7 @@ from restscope.target_api import (
     TargetResponseOperationContext,
     TargetResponseProcessorResult,
     TargetResponseProcessorWarning,
+    TargetTransportObservation,
 )
 
 from .coordinator import APIBehaviorMonitorCoordinator, APIBehaviorMonitorError
@@ -64,6 +65,38 @@ class APIBehaviorResponseProcessor:
                 )
                 for warning in result.warnings
             ),
+            details=_result_details(result),
+        )
+
+    def process_transport(
+        self,
+        observation: TargetTransportObservation,
+        context: TargetResponseOperationContext,
+    ) -> TargetResponseProcessorResult:
+        """Persist a transport failure without replacing its original exception."""
+
+        try:
+            result = self.coordinator.observe_transport(observation, context)
+        except APIBehaviorMonitorError as exc:
+            return TargetResponseProcessorResult(
+                response_validation="partial",
+                warnings=(
+                    TargetResponseProcessorWarning(code=exc.code, message=str(exc)),
+                ),
+            )
+        except Exception as exc:
+            return TargetResponseProcessorResult(
+                response_validation="partial",
+                warnings=(
+                    TargetResponseProcessorWarning(
+                        code="api_behavior_monitor_failed",
+                        message="API behavior monitoring failed",
+                        issues=(type(exc).__name__,),
+                    ),
+                ),
+            )
+        return TargetResponseProcessorResult(
+            response_validation="evaluated",
             details=_result_details(result),
         )
 

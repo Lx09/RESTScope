@@ -169,3 +169,70 @@ def test_internal_contract_failure_warns_but_does_not_block_valid_observation() 
         "response_contract_check_failed"
     ]
     assert len(catalog.list_observations(operation_id="GET /items")) == 1
+
+
+def test_non_success_text_response_is_saved_without_becoming_learning_evidence() -> None:
+    """A 404 Test Case is durable while successful-JSON queries ignore it."""
+    from restscope.target_api import (
+        TargetResponseObservation,
+        TargetResponseOperationContext,
+    )
+
+    coordinator, catalog = _runtime()
+    result = coordinator.observe_response(
+        TargetResponseObservation(
+            method="GET",
+            path="/items",
+            url="https://example.test/items",
+            status_code=404,
+            reason_phrase="Not Found",
+            headers={
+                "content-type": "text/plain; charset=utf-8",
+                "set-cookie": "session=secret",
+            },
+            body=b"missing",
+            body_truncated=False,
+            request_json={"path": "/items", "headers": {}},
+        ),
+        TargetResponseOperationContext(ir=_ir(), operation_key="GET /items"),
+    )
+
+    saved = catalog.get_observation(result.observation_id or "")
+
+    assert saved is not None
+    assert saved.status_code == 404
+    assert saved.body_format == "text"
+    assert saved.response_body == b"missing"
+    assert saved.response_headers == {
+        "content-type": "text/plain; charset=utf-8",
+        "set-cookie": "session=secret",
+    }
+    assert catalog.list_observations(operation_id="GET /items") == []
+
+
+def test_transport_failure_is_saved_without_an_http_status() -> None:
+    """A timeout is a durable Test Case even though no response arrived."""
+    from restscope.target_api import (
+        TargetResponseOperationContext,
+        TargetTransportObservation,
+    )
+
+    coordinator, catalog = _runtime()
+    result = coordinator.observe_transport(
+        TargetTransportObservation(
+            method="GET",
+            path="/items",
+            url="https://example.test/items",
+            code="request_timeout",
+            message="HTTP request timed out",
+            request_json={"path": "/items", "headers": {}},
+        ),
+        TargetResponseOperationContext(ir=_ir(), operation_key="GET /items"),
+    )
+
+    saved = catalog.get_observation(result.observation_id or "")
+
+    assert saved is not None
+    assert saved.outcome_kind == "transport"
+    assert saved.status_code is None
+    assert saved.transport_code == "request_timeout"
