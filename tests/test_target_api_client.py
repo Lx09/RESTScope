@@ -155,3 +155,140 @@ def test_client_does_not_read_an_unused_success_body() -> None:
 
     assert response.body is None
     assert response.body_truncated is False
+
+
+def test_processor_requested_replay_resends_identical_request_once_without_recursion() -> None:
+    """One Primary directive repeats frozen application bytes through the same processor."""
+
+    import httpx
+
+    from restscope.target_api import (
+        TargetAPIClient,
+        TargetResponseOperationContext,
+        TargetResponseProcessorResult,
+        prepare_target_request,
+    )
+    from restscope.target_api.observation import TargetReplayDirective
+
+    requests: list[tuple[str, str, tuple[tuple[str, str], ...], bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            (
+                request.method,
+                str(request.url),
+                tuple(request.headers.multi_items()),
+                request.content,
+            )
+        )
+        return httpx.Response(
+            500,
+            headers={"content-type": "application/json"},
+            content=b'{"error":"repeat"}',
+            request=request,
+        )
+
+    class ReplayProcessor:
+        """Request Replay only for Primary and record both Monitor passes."""
+
+        def __init__(self):
+            self.contexts = []
+
+        def process(self, _observation, context):
+            self.contexts.append(context)
+            if context.replay_directive is not None:
+                return TargetResponseProcessorResult(response_validation="evaluated")
+            return TargetResponseProcessorResult(
+                response_validation="evaluated",
+                replay_directive=TargetReplayDirective(
+                    primary_observation_id="primary",
+                    state=object(),
+                ),
+            )
+
+    processor = ReplayProcessor()
+    client = TargetAPIClient(
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        ),
+        response_processor=processor,
+    )
+    prepared = prepare_target_request(
+        method="POST",
+        base_url="https://example.test",
+        path="/items",
+        query_items=[("tag", "a"), ("tag", "b")],
+        context_headers={"Authorization": "Bearer secret"},
+        request_headers={"Content-Type": "application/octet-stream", "X-Case": "one"},
+    )
+
+    response = client.send(
+        prepared,
+        request_kwargs={"content": b"\x00exact-body"},
+        success_body_limit=100,
+        failure_body_limit=100,
+        response_context=TargetResponseOperationContext(
+            ir=object(),
+            abstract_test_case_id="abstract",
+            batch_id="batch",
+            batch_case_index=0,
+        ),
+    )
+
+    assert response.status_code == 500
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
+    assert len(processor.contexts) == 2
+    replay_context = processor.contexts[1]
+    assert replay_context.replay_directive is not None
+    assert replay_context.abstract_test_case_id is None
+    assert replay_context.batch_id is None
+    assert replay_context.batch_case_index is None
+
+
+def test_replay_processor_warnings_are_returned_with_the_primary_response() -> None:
+    """Replay advisory failures remain visible without replacing Primary HTTP facts."""
+
+    import httpx
+
+    from restscope.target_api import TargetAPIClient, TargetResponseOperationContext, TargetResponseProcessorResult, TargetResponseProcessorWarning, prepare_target_request
+    from restscope.target_api.observation import TargetReplayDirective
+
+    class WarningProcessor:
+        """Request one Replay and report a persistence warning from that pass."""
+
+        def process(self, _observation, context):
+            if context.replay_directive is None:
+                return TargetResponseProcessorResult(
+                    response_validation="evaluated",
+                    replay_directive=TargetReplayDirective(
+                        primary_observation_id="primary",
+                        state=object(),
+                    ),
+                )
+            return TargetResponseProcessorResult(
+                response_validation="partial",
+                warnings=(TargetResponseProcessorWarning(
+                    code="oracle_assessment_persistence_failed",
+                    message="Bug Oracle Assessment could not be persisted",
+                ),),
+            )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"failure", request=request)
+
+    response = TargetAPIClient(
+        client_factory=lambda **kwargs: httpx.Client(transport=httpx.MockTransport(handler), **kwargs),
+        response_processor=WarningProcessor(),
+    ).send(
+        prepare_target_request(method="GET", base_url="https://example.test", path="/items"),
+        failure_body_limit=100,
+        response_context=TargetResponseOperationContext(ir=object()),
+    )
+
+    assert response.status_code == 500
+    assert response.processor_result is not None
+    assert [warning.code for warning in response.processor_result.warnings] == [
+        "oracle_assessment_persistence_failed"
+    ]

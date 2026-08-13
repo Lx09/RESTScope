@@ -20,6 +20,7 @@ BUSINESS_TABLES = {
     "observations",
     "operation_input_sources",
     "abstract_test_cases",
+    "oracle_assessments",
 }
 
 
@@ -30,7 +31,7 @@ def _config(database_url: str):
     return replace(RESTScopeConfig.from_environment(), db=DBConfig(url=database_url))
 
 
-def test_default_app_creates_only_the_ten_persistent_business_tables(
+def test_default_app_creates_only_the_approved_persistent_business_tables(
     monkeypatch,
     tmp_path: Path,
 ) -> None:

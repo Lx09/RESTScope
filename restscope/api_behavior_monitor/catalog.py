@@ -16,7 +16,7 @@ from datetime import datetime
 import json
 import re
 from types import TracebackType
-from typing import Literal, Protocol, TypeAlias
+from typing import Annotated, Literal, Protocol, TypeAlias, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -109,6 +109,7 @@ class ObservationWrite(_CatalogModel):
     abstract_test_case_id: str | None = None
     batch_id: str | None = None
     batch_case_index: int | None = Field(default=None, ge=0)
+    replay_of_observation_id: str | None = Field(default=None, min_length=1)
 
     @field_validator("media_type")
     @classmethod
@@ -128,6 +129,15 @@ class ObservationWrite(_CatalogModel):
 
         if (self.batch_id is None) != (self.batch_case_index is None):
             raise ValueError("batch_id and batch_case_index must appear together")
+        if self.replay_of_observation_id is not None and any(
+            value is not None
+            for value in (
+                self.abstract_test_case_id,
+                self.batch_id,
+                self.batch_case_index,
+            )
+        ):
+            raise ValueError("Replay observations cannot belong to a Batch")
         if self.outcome_kind == "http":
             if self.status_code is None:
                 raise ValueError("HTTP observations require status_code")
@@ -137,11 +147,6 @@ class ObservationWrite(_CatalogModel):
                 raise ValueError("HTTP observations require body_format")
             if self.transport_code is not None or self.transport_message is not None:
                 raise ValueError("HTTP observations cannot contain transport failure")
-            if self.body_format == "json":
-                try:
-                    json.loads(self.response_body.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError("JSON response body must contain valid UTF-8 JSON") from exc
             return self
         if self.status_code is not None or self.reason_phrase is not None:
             raise ValueError("transport observations cannot contain HTTP status")
@@ -172,6 +177,131 @@ class ObservationRecord(ObservationWrite):
         if self.body_format != "json" or self.response_body is None:
             raise ValueError("Observation does not contain a JSON response")
         return self.response_body.decode("utf-8")
+
+
+OracleCheckName = Literal[
+    "valid_input_server_error",
+    "invalid_input_accepted",
+    "response_schema_mismatch",
+]
+
+
+class _OracleCheckBase(_CatalogModel):
+    """Carry the category shared by every strict Oracle Check state."""
+
+    name: OracleCheckName
+
+
+class OracleCheckNotApplicable(_OracleCheckBase):
+    """Record that the request lacks the input meaning needed by this rule."""
+
+    status: Literal["not_applicable"]
+
+
+class OracleCheckNotEvaluated(_OracleCheckBase):
+    """Record an internal deterministic evaluation failure."""
+
+    status: Literal["not_evaluated"]
+    error: str = Field(min_length=1, max_length=500)
+
+
+class OracleCheckNoCandidate(_OracleCheckBase):
+    """Record a successfully evaluated rule that found no suspicious behavior."""
+
+    status: Literal["no_candidate"]
+
+
+class OracleCheckDismissed(_OracleCheckBase):
+    """Record a candidate rejected by its isolated System Agent."""
+
+    status: Literal["dismissed"]
+    agent_session_id: str = Field(min_length=1, max_length=160)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class OracleCheckConfirmationFailed(_OracleCheckBase):
+    """Record a candidate whose System Agent ended without a decision."""
+
+    status: Literal["confirmation_failed"]
+    error: str = Field(min_length=1, max_length=500)
+
+
+class _ConfirmedOracleCheck(_OracleCheckBase):
+    """Carry the bounded confirmation evidence shared by Replay outcomes."""
+
+    agent_session_id: str = Field(min_length=1, max_length=160)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class OracleCheckNotReproduced(_ConfirmedOracleCheck):
+    """Record a confirmed candidate absent from the Replay response."""
+
+    status: Literal["not_reproduced"]
+
+
+class OracleCheckReplayFailed(_ConfirmedOracleCheck):
+    """Record a confirmed candidate whose Replay produced no HTTP evidence."""
+
+    status: Literal["replay_failed"]
+    error: str = Field(min_length=1, max_length=500)
+
+
+class OracleCheckReproduced(_ConfirmedOracleCheck):
+    """Record a confirmed category that the one Replay reproduced."""
+
+    status: Literal["reproduced"]
+
+
+OracleCheck = Annotated[
+    Union[
+        OracleCheckNotApplicable,
+        OracleCheckNotEvaluated,
+        OracleCheckNoCandidate,
+        OracleCheckDismissed,
+        OracleCheckConfirmationFailed,
+        OracleCheckNotReproduced,
+        OracleCheckReplayFailed,
+        OracleCheckReproduced,
+    ],
+    Field(discriminator="status"),
+]
+
+
+class OracleAssessment(_CatalogModel):
+    """Describe the immutable final verdict for one Primary HTTP Observation."""
+
+    schema_version: Literal[1] = 1
+    checks: tuple[OracleCheck, OracleCheck, OracleCheck]
+    errors: tuple[str, ...] = Field(default=(), max_length=20)
+
+    @model_validator(mode="after")
+    def require_fixed_check_order(self) -> "OracleAssessment":
+        """Keep every stored Assessment complete, ordered, and internally derived."""
+
+        expected = (
+            "valid_input_server_error",
+            "invalid_input_accepted",
+            "response_schema_mismatch",
+        )
+        if tuple(check.name for check in self.checks) != expected:
+            raise ValueError("Oracle checks must use the fixed category order")
+        return self
+
+    @property
+    def is_bug(self) -> bool:
+        """Derive the binary business verdict from reproduced Check states."""
+
+        return any(check.status == "reproduced" for check in self.checks)
+
+
+class OracleAssessmentRecord(_CatalogModel):
+    """Return one persisted Assessment with its Primary and optional Replay facts."""
+
+    primary_observation_id: str
+    replay_observation_id: str | None = None
+    is_bug: bool
+    assessment: OracleAssessment
+    completed_at: datetime
 
 
 class ObservedResponseCoordinate(_CatalogModel):
@@ -371,6 +501,8 @@ class _APIBehaviorRepository(Protocol):
 
     def get_current_openapi(self) -> dict[str, object] | None: ...
 
+    def get_baseline_openapi(self) -> dict[str, object] | None: ...
+
     def record_openapi_change(
         self,
         *,
@@ -405,6 +537,19 @@ class _APIBehaviorRepository(Protocol):
     ) -> ObservationRecord: ...
 
     def get_observation(self, observation_id: str) -> ObservationRecord | None: ...
+
+    def record_oracle_assessment(
+        self,
+        *,
+        primary_observation_id: str,
+        replay_observation_id: str | None,
+        assessment: OracleAssessment,
+    ) -> OracleAssessmentRecord: ...
+
+    def get_oracle_assessment(
+        self,
+        primary_observation_id: str,
+    ) -> OracleAssessmentRecord | None: ...
 
     def list_batch_observations(
         self,
@@ -537,6 +682,15 @@ class APIBehaviorCatalog:
             raise RuntimeError("The API Behavior Catalog has not been initialized")
         return deepcopy(document)
 
+    def baseline_openapi(self) -> dict[str, object]:
+        """Return an isolated copy of the immutable initial normalized document."""
+
+        with self._unit_of_work_factory() as uow:
+            document = uow.api_behavior.get_baseline_openapi()
+        if document is None:
+            raise RuntimeError("The API Behavior Catalog has not been initialized")
+        return deepcopy(document)
+
     def record_openapi_change(
         self,
         *,
@@ -625,6 +779,35 @@ class APIBehaviorCatalog:
             raise ValueError("observation_id cannot be blank")
         with self._unit_of_work_factory() as uow:
             return uow.api_behavior.get_observation(observation_id)
+
+    def record_oracle_assessment(
+        self,
+        *,
+        primary_observation_id: str,
+        replay_observation_id: str | None,
+        assessment: OracleAssessment,
+    ) -> OracleAssessmentRecord:
+        """Insert the sole immutable final Assessment for one Primary Observation."""
+
+        with self._unit_of_work_factory() as uow:
+            result = uow.api_behavior.record_oracle_assessment(
+                primary_observation_id=primary_observation_id,
+                replay_observation_id=replay_observation_id,
+                assessment=assessment,
+            )
+            uow.commit()
+            return result
+
+    def get_oracle_assessment(
+        self,
+        primary_observation_id: str,
+    ) -> OracleAssessmentRecord | None:
+        """Return the exact final Assessment attached to one Primary Observation."""
+
+        if not primary_observation_id.strip():
+            raise ValueError("primary_observation_id cannot be blank")
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.get_oracle_assessment(primary_observation_id)
 
     def list_batch_observations(
         self,
@@ -865,6 +1048,17 @@ __all__ = [
     "AbstractTestCaseWrite",
     "ObservationRecord",
     "ObservationWrite",
+    "OracleAssessment",
+    "OracleAssessmentRecord",
+    "OracleCheck",
+    "OracleCheckConfirmationFailed",
+    "OracleCheckDismissed",
+    "OracleCheckNoCandidate",
+    "OracleCheckNotApplicable",
+    "OracleCheckNotEvaluated",
+    "OracleCheckNotReproduced",
+    "OracleCheckReplayFailed",
+    "OracleCheckReproduced",
     "ObservedResponseCoordinate",
     "OpenAPIChangeEventRecord",
     "OpenAPIChangeEventWrite",

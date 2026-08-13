@@ -15,8 +15,10 @@ from datetime import datetime
 
 from sqlalchemy import (
     CheckConstraint,
+    Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -39,7 +41,8 @@ class OpenAPICurrentORM(CreatedAtMixin, UpdatedAtMixin, Base):
     )
 
     singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    baseline_document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    current_document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 
 class OpenAPIChangeEventORM(CreatedAtMixin, Base):
@@ -195,6 +198,27 @@ class ObservationORM(Base):
             "batch_case_index",
             name="observation_batch_case",
         ),
+        CheckConstraint(
+            "replay_of_observation_id IS NULL OR "
+            "(abstract_test_case_id IS NULL AND batch_id IS NULL "
+            "AND batch_case_index IS NULL)",
+            name="observation_replay_shape",
+        ),
+        CheckConstraint(
+            "replay_of_observation_id IS NULL OR "
+            "replay_of_observation_id <> observation_id",
+            name="observation_not_self_replay",
+        ),
+        UniqueConstraint(
+            "observation_id",
+            "operation_id",
+            name="observation_identity_operation",
+        ),
+        ForeignKeyConstraint(
+            ["replay_of_observation_id", "operation_id"],
+            ["observations.observation_id", "observations.operation_id"],
+            name="observation_replay_same_operation",
+        ),
     )
 
     observation_id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -226,6 +250,39 @@ class ObservationORM(Base):
         index=True,
     )
     batch_case_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    replay_of_observation_id: Mapped[str | None] = mapped_column(
+        nullable=True,
+        unique=True,
+    )
+
+
+class OracleAssessmentORM(Base):
+    """Map one immutable final Oracle verdict for one Primary Observation."""
+
+    __tablename__ = "oracle_assessments"
+    __table_args__ = (
+        CheckConstraint(
+            "replay_observation_id IS NULL OR "
+            "replay_observation_id <> primary_observation_id",
+            name="oracle_assessment_distinct_observations",
+        ),
+    )
+
+    primary_observation_id: Mapped[str] = mapped_column(
+        ForeignKey("observations.observation_id"),
+        primary_key=True,
+    )
+    replay_observation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("observations.observation_id"),
+        nullable=True,
+        unique=True,
+    )
+    is_bug: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    assessment_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
 
 
 class OperationInputSourceORM(Base):

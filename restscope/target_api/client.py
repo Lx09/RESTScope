@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx
@@ -109,16 +111,20 @@ class TargetAPIClient:
         validation, target effects, response processing, and exception types
         remain unchanged. An observer defect is swallowed independently.
         """
-        exchange = self._start_observed_exchange(
-            prepared=prepared,
+        frozen_prepared, frozen_request_kwargs = _freeze_application_request(
+            prepared,
             request_kwargs=request_kwargs,
+        )
+        exchange = self._start_observed_exchange(
+            prepared=frozen_prepared,
+            request_kwargs=frozen_request_kwargs,
             response_context=response_context,
         )
         try:
             result, observer_result = self._send(
-                prepared,
+                frozen_prepared,
                 timeout_seconds=timeout_seconds,
-                request_kwargs=request_kwargs,
+                request_kwargs=frozen_request_kwargs,
                 success_body_limit=success_body_limit,
                 failure_body_limit=failure_body_limit,
                 truncate_body=truncate_body,
@@ -131,8 +137,8 @@ class TargetAPIClient:
                 and exc.code == "request_failed"
             ):
                 self._process_transport_failure(
-                    prepared=prepared,
-                    request_kwargs=request_kwargs,
+                    prepared=frozen_prepared,
+                    request_kwargs=frozen_request_kwargs,
                     response_context=response_context,
                     error=exc,
                 )
@@ -147,8 +153,49 @@ class TargetAPIClient:
                 exchange.finish(observer_result)
             except Exception:
                 pass
+        directive = (
+            result.processor_result.replay_directive
+            if result.processor_result is not None
+            else None
+        )
+        if directive is not None and response_context is not None:
+            # Replay is advisory confirmation. It reuses the frozen method,
+            # URL, final application headers, and body arguments, but its
+            # target or Monitor failure never replaces the Primary response.
+            replay_context = replace(
+                response_context,
+                abstract_test_case_id=None,
+                batch_id=None,
+                batch_case_index=None,
+                replay_directive=directive,
+            )
+            try:
+                replay_result = self.send(
+                    frozen_prepared,
+                    timeout_seconds=timeout_seconds,
+                    request_kwargs=frozen_request_kwargs,
+                    success_body_limit=success_body_limit,
+                    failure_body_limit=failure_body_limit,
+                    truncate_body=truncate_body,
+                    response_context=replay_context,
+                )
+                replay_processor = replay_result.processor_result
+                if (
+                    replay_processor is not None
+                    and replay_processor.warnings
+                    and result.processor_result is not None
+                ):
+                    merged_processor = replace(
+                        result.processor_result,
+                        warnings=(
+                            *result.processor_result.warnings,
+                            *replay_processor.warnings,
+                        ),
+                    )
+                    result = replace(result, processor_result=merged_processor)
+            except (TargetAPIError, TargetAPITimeout):
+                pass
         return result
-
     def _process_transport_failure(
         self,
         *,
@@ -357,3 +404,39 @@ class TargetAPIClient:
             )
         except Exception:
             return None
+
+
+def _freeze_application_request(
+    prepared: PreparedTargetRequest,
+    *,
+    request_kwargs: Mapping[str, object] | None,
+) -> tuple[PreparedTargetRequest, dict[str, object]]:
+    """Materialize final application headers and body bytes before Primary send.
+
+    JSON and text caller inputs otherwise remain recipes that a later Replay
+    would serialize again. Building one in-memory HTTP request captures the
+    exact bytes and generated content headers once without opening a connection.
+    """
+
+    request = httpx.Request(
+        prepared.method,
+        prepared.url,
+        headers=prepared.headers,
+        **deepcopy(dict(request_kwargs or {})),
+    )
+    content = request.read()
+    headers = dict(prepared.headers)
+    if "json" in (request_kwargs or {}) and not any(
+        name.lower() == "content-type" for name in headers
+    ):
+        # JSON serialization owns its application media type. Host and
+        # Content-Length remain connection/protocol details and may be rebuilt
+        # independently for Primary and Replay.
+        headers["Content-Type"] = request.headers["content-type"]
+    frozen = PreparedTargetRequest(
+        method=prepared.method,
+        path=prepared.path,
+        url=request.url,
+        headers=headers,
+    )
+    return frozen, ({"content": content} if content else {})

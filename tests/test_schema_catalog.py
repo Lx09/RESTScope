@@ -14,6 +14,7 @@ BUSINESS_TABLES = {
     "resource_instances",
     "batches",
     "observations",
+    "oracle_assessments",
     "operation_input_sources",
     "abstract_test_cases",
 }
@@ -65,6 +66,9 @@ def test_response_monitor_tables_enforce_status_source_and_prior_shapes() -> Non
         "observation_http_status",
         "observation_outcome_shape",
         "observation_batch_shape",
+        "observation_replay_shape",
+        "observation_not_self_replay",
+        "oracle_assessment_distinct_observations",
         "operation_input_source_success_status",
         "operation_input_source_consume_type",
         "operation_input_source_alpha",

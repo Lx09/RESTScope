@@ -427,21 +427,26 @@ response, a deterministic matcher resolves the concrete path to exactly one
 OpenAPI operation. An ambiguous or missing match adds a structured warning to
 the original HTTP result and does not write evidence.
 
-The Monitor coordinates three ordered responsibilities:
+The Monitor and Bug Oracle coordinate four ordered responsibilities:
 
-- Response Contract checks every first exact status/media observation. A real
+- Observation persistence first accepts every matched HTTP response and transport
+  failure after sensitive request headers are removed. It permanently keeps
+  complete response headers and exact body bytes.
+- Response Contract validation decodes once, checks the immutable startup
+  OpenAPI for Oracle and the latest current OpenAPI for Monitor, then lets the
+  existing Monitor widen current response contracts when required. A real
   change updates the current App's OpenAPI representation and its durable audit
   document/event atomically.
-- Observation persistence accepts every matched HTTP response and transport
-  failure after sensitive request headers are removed. It permanently keeps
-  complete response headers and exact body bytes. Only complete valid 2xx JSON
-  enters learning readers, which select the latest 100 eligible rows per
-  operation.
 - Resource Monitor reuses unambiguous known identity fields or asks the bounded
   FAST Resource Identifier System Agent for a new direct field combination. It
   then stores operation roles and recursively merged current instance state.
   DELETE observations mark instances logically deleted. Extraction rules and
   model reasoning are not persisted.
+- Bug Oracle detects valid-input 5xx, reserved negative-input 2xx, and baseline
+  response Schema mismatch candidates. Each candidate receives an isolated FAST
+  System Agent confirmation. All confirmed categories share one exact-request
+  Replay through the same Monitor path; only reproduced categories create a
+  durable Bug Assessment.
 
 `parameter_patch.apply` records one exact consumer input source using producer
 operation, concrete successful status, normalized media type, selector, and

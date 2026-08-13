@@ -74,6 +74,21 @@ cases. A Batch freezes one Generation State and its current reference values
 before generating its first case. It creates no persistent Test Case,
 Failure, candidate, or Agent memory record.
 
+**Observation**
+One permanent factual record of a matched request that either received an HTTP
+response or ended in a transport failure. A Replay is a new Observation linked
+to the Primary request it repeats.
+
+**Oracle Check**
+One fixed bug category evaluated for a Primary HTTP Observation. A Check moves
+from deterministic candidate detection through an isolated System Agent
+confirmation and, when confirmed, one same-request Replay.
+
+**Oracle Assessment**
+The immutable final result for one Primary HTTP Observation. It contains all
+three Oracle Checks and is a Bug exactly when at least one Check is reproduced
+by Replay.
+
 ## Core relationships
 
 - A Generator owns a single Parameter's possible values and presence.
@@ -86,3 +101,5 @@ Failure, candidate, or Agent memory record.
   the old in-memory state before the Operation lock is released.
 - An Applied Revision proves only that RESTScope changed future generation.
   A later Batch provides new evidence about the target API.
+- An Oracle Assessment belongs only to its Primary HTTP Observation. Its Replay
+  is factual evidence, not another independently assessed Primary request.

@@ -579,6 +579,8 @@ class OperationTestingService:
                         abstract_test_case_id=abstract_test_case_id,
                         batch_id=batch_id,
                         batch_case_index=case_index,
+                        input_validity="valid",
+                        validity_provenance="positive_generator",
                     ),
                 )
                 media_type = (

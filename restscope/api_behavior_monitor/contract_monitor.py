@@ -13,6 +13,7 @@ from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
 from restscope.openapi_parser.ir import MediaTypeIR, ResponseIR, SchemaIR
 
 from .catalog import APIBehaviorCatalog, OpenAPIChangeEventWrite
+from .contract_validation import ResponseEvidence
 
 
 ContractCheckStatus = Literal[
@@ -70,6 +71,7 @@ class ResponseContractTracker:
         media_type: str | None,
         body: bytes,
         body_truncated: bool = False,
+        evidence: ResponseEvidence | None = None,
     ) -> ContractCheckResult:
         """Compare one target response with the current contract and atomically record a real Schema change."""
         normalized_media = normalize_media_type(media_type)
@@ -97,10 +99,14 @@ class ResponseContractTracker:
                 status_code=status_code,
             )
             self._states[key] = "checking"
-            observed_schema, body_kind = _observed_body_schema(
-                media_type=normalized_media,
-                body=body,
-                body_truncated=body_truncated,
+            observed_schema, body_kind = (
+                _observed_schema_from_evidence(evidence)
+                if evidence is not None
+                else _observed_body_schema(
+                    media_type=normalized_media,
+                    body=body,
+                    body_truncated=body_truncated,
+                )
             )
             if body_kind == "pending":
                 self._states[key] = "pending"
@@ -187,6 +193,22 @@ def _observed_body_schema(
             return None, "pending"
         return _infer_schema(value), "json"
     if _is_text_media_type(media_type):
+        return _new_schema("string"), "text"
+    return None, "binary"
+
+
+def _observed_schema_from_evidence(
+    evidence: ResponseEvidence,
+) -> tuple[SchemaIR | None, Literal["json", "text", "empty", "binary", "pending"]]:
+    """Translate shared decoded evidence into the Monitor's widening vocabulary."""
+
+    if evidence.body_kind == "empty":
+        return None, "empty"
+    if evidence.body_kind == "invalid_json":
+        return None, "pending"
+    if evidence.body_kind == "json":
+        return _infer_schema(evidence.json_value), "json"
+    if evidence.body_kind == "text":
         return _new_schema("string"), "text"
     return None, "binary"
 

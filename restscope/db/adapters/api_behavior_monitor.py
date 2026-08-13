@@ -21,6 +21,8 @@ from restscope.api_behavior_monitor.catalog import (
     BatchWrite,
     ObservationRecord,
     ObservationWrite,
+    OracleAssessment,
+    OracleAssessmentRecord,
     ObservedResponseCoordinate,
     OpenAPIChangeEventRecord,
     OpenAPIChangeEventWrite,
@@ -38,6 +40,7 @@ from ..orm import (
     AbstractTestCaseORM,
     BatchORM,
     ObservationORM,
+    OracleAssessmentORM,
     OpenAPIChangeEventORM,
     OpenAPICurrentORM,
     OperationInputSourceORM,
@@ -46,7 +49,7 @@ from ..orm import (
     ResourceInstanceORM,
     ResourceORM,
 )
-from ..time import as_utc
+from ..time import as_utc, utc_now
 from ._transaction import _SqlAlchemyUnitOfWork
 
 
@@ -69,7 +72,11 @@ class _SqlAlchemyAPIBehaviorRepository:
         if self.session.get(OpenAPICurrentORM, 1) is not None:
             raise ValueError("The API Behavior Catalog is already initialized")
         self.session.add(
-            OpenAPICurrentORM(singleton_id=1, document=deepcopy(document))
+            OpenAPICurrentORM(
+                singleton_id=1,
+                baseline_document=deepcopy(document),
+                current_document=deepcopy(document),
+            )
         )
         try:
             self.session.flush()
@@ -84,7 +91,13 @@ class _SqlAlchemyAPIBehaviorRepository:
         """Return the current normalized OpenAPI document detached from ORM state."""
 
         row = self.session.get(OpenAPICurrentORM, 1)
-        return deepcopy(row.document) if row is not None else None
+        return deepcopy(row.current_document) if row is not None else None
+
+    def get_baseline_openapi(self) -> dict[str, object] | None:
+        """Return the immutable initial document detached from ORM state."""
+
+        row = self.session.get(OpenAPICurrentORM, 1)
+        return deepcopy(row.baseline_document) if row is not None else None
 
     def record_openapi_change(
         self,
@@ -97,7 +110,7 @@ class _SqlAlchemyAPIBehaviorRepository:
         current = self.session.get(OpenAPICurrentORM, 1)
         if current is None:
             raise RuntimeError("The API Behavior Catalog has not been initialized")
-        current.document = deepcopy(document)
+        current.current_document = deepcopy(document)
         row = OpenAPIChangeEventORM(
             id=f"openapi_change_{uuid4().hex}",
             operation_id=event.operation_key,
@@ -204,9 +217,24 @@ class _SqlAlchemyAPIBehaviorRepository:
             abstract_test_case_id=observation.abstract_test_case_id,
             batch_id=observation.batch_id,
             batch_case_index=observation.batch_case_index,
+            replay_of_observation_id=observation.replay_of_observation_id,
         )
+        if observation.replay_of_observation_id is not None:
+            primary = self.session.get(
+                ObservationORM,
+                observation.replay_of_observation_id,
+            )
+            if primary is None:
+                raise ValueError("Replay Primary Observation does not exist")
+            if primary.replay_of_observation_id is not None:
+                raise ValueError("A Replay cannot be the Primary of another Replay")
+            if primary.operation_id != observation.operation_id:
+                raise ValueError("Replay and Primary operations must match")
         self.session.add(row)
-        self.session.flush()
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            raise ValueError("Observation identity or Replay lineage conflicts") from exc
         return _observation_record(row)
 
     def get_observation(self, observation_id: str) -> ObservationRecord | None:
@@ -214,6 +242,47 @@ class _SqlAlchemyAPIBehaviorRepository:
 
         row = self.session.get(ObservationORM, observation_id)
         return _observation_record(row) if row is not None else None
+
+    def record_oracle_assessment(
+        self,
+        *,
+        primary_observation_id: str,
+        replay_observation_id: str | None,
+        assessment: OracleAssessment,
+    ) -> OracleAssessmentRecord:
+        """Insert one immutable Assessment after validating factual lineage."""
+
+        primary = self.session.get(ObservationORM, primary_observation_id)
+        if primary is None or primary.outcome_kind != "http":
+            raise ValueError("Oracle Assessment requires a Primary HTTP Observation")
+        if primary.replay_of_observation_id is not None:
+            raise ValueError("A Replay cannot own an Oracle Assessment")
+        if replay_observation_id is not None:
+            replay = self.session.get(ObservationORM, replay_observation_id)
+            if replay is None or replay.replay_of_observation_id != primary_observation_id:
+                raise ValueError("Assessment Replay does not belong to its Primary")
+        row = OracleAssessmentORM(
+            primary_observation_id=primary_observation_id,
+            replay_observation_id=replay_observation_id,
+            is_bug=assessment.is_bug,
+            assessment_json=assessment.model_dump(mode="json"),
+            completed_at=utc_now(),
+        )
+        self.session.add(row)
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            raise ValueError("Oracle Assessment is immutable or Replay is reused") from exc
+        return _oracle_assessment_record(row)
+
+    def get_oracle_assessment(
+        self,
+        primary_observation_id: str,
+    ) -> OracleAssessmentRecord | None:
+        """Return one detached final Assessment by Primary identity."""
+
+        row = self.session.get(OracleAssessmentORM, primary_observation_id)
+        return _oracle_assessment_record(row) if row is not None else None
 
     def list_batch_observations(
         self,
@@ -600,6 +669,19 @@ def _observation_record(row: ObservationORM) -> ObservationRecord:
         abstract_test_case_id=row.abstract_test_case_id,
         batch_id=row.batch_id,
         batch_case_index=row.batch_case_index,
+        replay_of_observation_id=row.replay_of_observation_id,
+    )
+
+
+def _oracle_assessment_record(row: OracleAssessmentORM) -> OracleAssessmentRecord:
+    """Detach and validate one stored Assessment before returning it."""
+
+    return OracleAssessmentRecord(
+        primary_observation_id=row.primary_observation_id,
+        replay_observation_id=row.replay_observation_id,
+        is_bug=row.is_bug,
+        assessment=OracleAssessment.model_validate(row.assessment_json),
+        completed_at=as_utc(row.completed_at),
     )
 
 

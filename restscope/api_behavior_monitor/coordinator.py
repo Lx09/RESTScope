@@ -1,7 +1,7 @@
 """Coordinate Contract checks, factual observations, and resource derivation.
 
-Every matched target response first reaches the Contract Monitor, and every
-HTTP or transport result is stored as an Observation in its own transaction.
+Every matched target response is first stored as an Observation in its own
+transaction, then reaches the current Contract and Resource Monitors.
 Only a complete valid 2xx JSON body may then enter resource learning. Each
 boundary fails independently so an advisory monitor cannot replace the
 target's real HTTP or transport result.
@@ -9,15 +9,15 @@ target's real HTTP or transport result.
 
 from __future__ import annotations
 
-import json
 from typing import Literal
 
 from restscope.data_types import JSONValue
-from restscope.target_api.media_type import is_json_media_type, normalize_media_type
+from restscope.target_api.media_type import normalize_media_type
 from restscope.openapi_parser import (
     OpenAPIOperationMatchError,
     OpenAPISpecIR,
     match_operation,
+    build_openapi_document,
 )
 from restscope.openapi_parser.ir import OperationIR
 from restscope.observability import TracingRuntime
@@ -32,10 +32,24 @@ from .catalog import (
     OperationDefinition,
     ResourceDerivationResult,
     APIBehaviorCatalog,
+    OracleAssessment,
 )
 from .contract_monitor import (
     ContractCheckResult,
     ResponseContractTracker,
+)
+from .contract_validation import (
+    ContractValidator,
+    ResponseEvidence,
+    decode_response_evidence,
+)
+from .oracle import BugOracle, OraclePrimaryDecision
+from .pipeline import (
+    BASELINE_CONTRACT_VALIDATION,
+    CURRENT_CONTRACT_VALIDATION,
+    OBSERVATION_ID,
+    RESPONSE_EVIDENCE,
+    PipelineAnnotations,
 )
 from .results import APIBehaviorMonitorResult, APIBehaviorWarning
 from .resource_monitor import ResourceResponseTracker
@@ -61,6 +75,8 @@ class APIBehaviorMonitorCoordinator:
         catalog: APIBehaviorCatalog,
         resource_tracker: ResourceResponseTracker | None = None,
         tracing_runtime: TracingRuntime | None = None,
+        contract_validator: ContractValidator | None = None,
+        bug_oracle: BugOracle | None = None,
     ) -> None:
         """Retain App-owned collaborators without opening persistent state."""
 
@@ -68,6 +84,8 @@ class APIBehaviorMonitorCoordinator:
         self.catalog = catalog
         self.resource_tracker = resource_tracker
         self.tracing_runtime = tracing_runtime or TracingRuntime.disabled()
+        self.contract_validator = contract_validator or ContractValidator()
+        self.bug_oracle = bug_oracle
 
     def observe_response(
         self,
@@ -124,18 +142,65 @@ class APIBehaviorMonitorCoordinator:
                     "Failed to persist matched operation metadata",
                 ) from exc
 
-            contract = self._check_contract(
-                observation=observation,
-                operation=operation,
-                media_type=media_type,
-                ir=context.ir,
-                warnings=warnings,
+            evidence = decode_response_evidence(
+                status_code=observation.status_code,
+                headers=dict(observation.headers),
+                body=observation.body,
             )
+            annotations = PipelineAnnotations()
+            annotations.write("observation", RESPONSE_EVIDENCE, evidence)
             observation_id, parsed_body = self._record_observation(
                 observation=observation,
+                evidence=evidence,
+                replay_of_observation_id=(
+                    context.replay_directive.primary_observation_id
+                    if context.replay_directive is not None
+                    else None
+                ),
                 context=context,
                 operation=operation,
                 media_type=media_type,
+                warnings=warnings,
+            )
+            if observation_id is not None:
+                annotations.write("observation", OBSERVATION_ID, observation_id)
+            current_validation = self.contract_validator.validate(
+                document=build_openapi_document(context.ir, list(context.ir.operations)),
+                operation_path=operation.path,
+                operation_method=operation.method,
+                evidence=evidence,
+            )
+            annotations.write(
+                "contract_monitor",
+                CURRENT_CONTRACT_VALIDATION,
+                current_validation,
+            )
+            try:
+                baseline_document = self.catalog.baseline_openapi()
+            except RuntimeError:
+                # Pure or legacy-focused tests may intentionally omit Catalog
+                # initialization. Production initializes before any Tool call.
+                baseline_document = build_openapi_document(
+                    context.ir,
+                    list(context.ir.operations),
+                )
+            baseline_validation = self.contract_validator.validate(
+                document=baseline_document,
+                operation_path=operation.path,
+                operation_method=operation.method,
+                evidence=evidence,
+            )
+            annotations.write(
+                "oracle",
+                BASELINE_CONTRACT_VALIDATION,
+                baseline_validation,
+            )
+            contract = self._check_contract(
+                observation=observation,
+                evidence=evidence,
+                operation=operation,
+                media_type=media_type,
+                ir=context.ir,
                 warnings=warnings,
             )
 
@@ -160,12 +225,56 @@ class APIBehaviorMonitorCoordinator:
                         )
                     )
 
+            oracle_primary: OraclePrimaryDecision | None = None
+            oracle_assessment: OracleAssessment | None = None
+            if self.bug_oracle is not None:
+                if context.replay_directive is None:
+                    oracle_primary = self.bug_oracle.evaluate_primary(
+                        primary_observation_id=annotations.read(OBSERVATION_ID),
+                        operation_id=operation.operation_id,
+                        status_code=observation.status_code,
+                        input_validity=context.input_validity,
+                        validity_provenance=context.validity_provenance,
+                        baseline_validation=(
+                            annotations.read(BASELINE_CONTRACT_VALIDATION)
+                            or baseline_validation
+                        ),
+                    )
+                    oracle_assessment = oracle_primary.assessment
+                    persistence_failed = oracle_primary.persistence_failed
+                elif isinstance(
+                    context.replay_directive.state,
+                    OraclePrimaryDecision,
+                ):
+                    finalization = self.bug_oracle.evaluate_replay(
+                        primary=context.replay_directive.state,
+                        replay_observation_id=observation_id,
+                        status_code=observation.status_code,
+                        baseline_validation=baseline_validation,
+                        replay_persisted=observation_id is not None,
+                    )
+                    oracle_assessment = finalization.assessment
+                    persistence_failed = finalization.persistence_failed
+                else:
+                    persistence_failed = False
+                if persistence_failed:
+                    warnings.append(
+                        APIBehaviorWarning(
+                            code="oracle_assessment_persistence_failed",
+                            message="Bug Oracle Assessment could not be persisted",
+                        )
+                    )
+
             result = APIBehaviorMonitorResult(
                 operation_id=operation.operation_id,
                 contract=contract,
                 observation_id=observation_id,
                 resources=resources,
                 warnings=tuple(warnings),
+                current_validation=current_validation,
+                baseline_validation=baseline_validation,
+                oracle_primary=oracle_primary,
+                oracle_assessment=oracle_assessment,
             )
             span.set_output(
                 {
@@ -180,6 +289,7 @@ class APIBehaviorMonitorCoordinator:
         self,
         *,
         observation: TargetResponseObservation,
+        evidence: ResponseEvidence,
         operation: OperationDefinition,
         media_type: str | None,
         ir: OpenAPISpecIR,
@@ -195,6 +305,7 @@ class APIBehaviorMonitorCoordinator:
                 media_type=media_type,
                 body=observation.body,
                 body_truncated=observation.body_truncated,
+                evidence=evidence,
             )
         except Exception as exc:
             warnings.append(
@@ -221,6 +332,8 @@ class APIBehaviorMonitorCoordinator:
         self,
         *,
         observation: TargetResponseObservation,
+        evidence: ResponseEvidence,
+        replay_of_observation_id: str | None,
         context: TargetResponseOperationContext,
         operation: OperationDefinition,
         media_type: str | None,
@@ -228,22 +341,23 @@ class APIBehaviorMonitorCoordinator:
     ) -> tuple[str | None, JSONValue | None]:
         """Store every HTTP response and return eligible 2xx JSON for learning."""
 
-        body_format: Literal["json", "text", "base64"]
-        parsed: JSONValue | None = None
-        try:
-            response_text = observation.body.decode("utf-8")
-        except UnicodeDecodeError:
-            body_format = "base64"
-        else:
-            if is_json_media_type(media_type):
-                try:
-                    parsed = json.loads(response_text)
-                except json.JSONDecodeError:
-                    body_format = "text"
-                else:
-                    body_format = "json"
-            else:
-                body_format = "text"
+        body_format: Literal["json", "text", "base64"] = (
+            "json" if evidence.body_kind == "json"
+            else "base64" if evidence.body_kind == "binary"
+            else "text"
+        )
+        parsed = evidence.json_value
+        if context.replay_directive is not None and replay_of_observation_id is None:
+            warnings.append(
+                APIBehaviorWarning(
+                    code="replay_observation_not_persisted",
+                    message=(
+                        "Replay observation cannot be related because its Primary "
+                        "observation was not persisted"
+                    ),
+                )
+            )
+            return None, None
         try:
             record = self.catalog.record_observation(
                 ObservationWrite(
@@ -260,6 +374,7 @@ class APIBehaviorMonitorCoordinator:
                     abstract_test_case_id=context.abstract_test_case_id,
                     batch_id=context.batch_id,
                     batch_case_index=context.batch_case_index,
+                    replay_of_observation_id=replay_of_observation_id,
                 )
             )
         except Exception as exc:
@@ -274,7 +389,7 @@ class APIBehaviorMonitorCoordinator:
         eligible = (
             200 <= observation.status_code <= 299
             and not observation.body_truncated
-            and body_format == "json"
+            and evidence.body_kind == "json"
         )
         return record.observation_id, parsed if eligible else None
 
@@ -302,8 +417,37 @@ class APIBehaviorMonitorCoordinator:
             description=operation_ir.description,
         )
         self.catalog.ensure_operation(operation)
-        record = self.catalog.record_observation(
-            ObservationWrite(
+        if (
+            context.replay_directive is not None
+            and context.replay_directive.primary_observation_id is None
+        ):
+            if (
+                self.bug_oracle is not None
+                and isinstance(context.replay_directive.state, OraclePrimaryDecision)
+            ):
+                self.bug_oracle.replay_failed(
+                    primary=context.replay_directive.state,
+                    replay_observation_id=None,
+                    error=observation.code,
+                    replay_persisted=False,
+                )
+            return APIBehaviorMonitorResult(
+                operation_id=operation.operation_id,
+                contract=None,
+                observation_id=None,
+                warnings=(
+                    APIBehaviorWarning(
+                        code="replay_observation_not_persisted",
+                        message=(
+                            "Replay transport failure cannot be related because "
+                            "its Primary observation was not persisted"
+                        ),
+                    ),
+                ),
+            )
+        try:
+            record = self.catalog.record_observation(
+                ObservationWrite(
                 operation_id=operation.operation_id,
                 timestamp=observation.occurred_at,
                 outcome_kind="transport",
@@ -313,12 +457,59 @@ class APIBehaviorMonitorCoordinator:
                 abstract_test_case_id=context.abstract_test_case_id,
                 batch_id=context.batch_id,
                 batch_case_index=context.batch_case_index,
+                replay_of_observation_id=(
+                    context.replay_directive.primary_observation_id
+                    if context.replay_directive is not None
+                    else None
+                ),
+                )
             )
-        )
+        except Exception as exc:
+            if (
+                self.bug_oracle is not None
+                and context.replay_directive is not None
+                and isinstance(context.replay_directive.state, OraclePrimaryDecision)
+            ):
+                self.bug_oracle.replay_failed(
+                    primary=context.replay_directive.state,
+                    replay_observation_id=None,
+                    error=observation.code,
+                    replay_persisted=False,
+                )
+            raise APIBehaviorMonitorError(
+                "transport_observation_persistence_failed",
+                "Transport observation could not be persisted",
+            ) from exc
+        if (
+            self.bug_oracle is not None
+            and context.replay_directive is not None
+            and isinstance(context.replay_directive.state, OraclePrimaryDecision)
+        ):
+            finalization = self.bug_oracle.replay_failed(
+                primary=context.replay_directive.state,
+                replay_observation_id=record.observation_id,
+                error=observation.code,
+                replay_persisted=True,
+            )
+            warning = (
+                APIBehaviorWarning(
+                    code="oracle_assessment_persistence_failed",
+                    message="Bug Oracle Assessment could not be persisted",
+                )
+                if finalization.persistence_failed
+                else None
+            )
+        else:
+            finalization = None
+            warning = None
         return APIBehaviorMonitorResult(
             operation_id=operation.operation_id,
             contract=None,
             observation_id=record.observation_id,
+            oracle_assessment=(
+                finalization.assessment if finalization is not None else None
+            ),
+            warnings=(warning,) if warning is not None else (),
         )
 
 

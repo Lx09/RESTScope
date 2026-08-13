@@ -32,6 +32,20 @@ class TargetResponseOperationContext:
     abstract_test_case_id: str | None = None
     batch_id: str | None = None
     batch_case_index: int | None = None
+    input_validity: Literal["valid", "invalid"] | None = None
+    validity_provenance: Literal[
+        "positive_generator",
+        "negative_generator",
+    ] | None = None
+    replay_directive: "TargetReplayDirective | None" = None
+
+
+@dataclass(slots=True, frozen=True)
+class TargetReplayDirective:
+    """Carry one opaque processor-owned decision through a same-request Replay."""
+
+    primary_observation_id: str | None
+    state: object
 
 
 @dataclass(slots=True, frozen=True)
@@ -79,6 +93,7 @@ class TargetResponseProcessorResult:
     response_validation: Literal["evaluated", "partial", "not_evaluated"]
     warnings: tuple[TargetResponseProcessorWarning, ...] = ()
     details: Mapping[str, object] | None = None
+    replay_directive: TargetReplayDirective | None = None
 
 
 class TargetResponseProcessor(Protocol):

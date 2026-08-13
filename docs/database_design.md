@@ -1,18 +1,18 @@
 # RESTScope Database Design
 
-Status: Active exploratory design (2026-08-11)
+Status: Active exploratory design (2026-08-13)
 
 RESTScope creates one SQLite file for one App. The file is an evidence and audit
 artifact, not a recovery image: a later App rejects the existing path and never
-resumes it. The fresh baseline contains ten business tables plus Alembic's
+resumes it. The fresh baseline contains eleven business tables plus Alembic's
 `alembic_version` table.
 
 ## Boundary
 
 - `restscope.api_behavior_monitor.catalog` is the single database-independent
   Interface for the current normalized OpenAPI, append-only contract changes,
-  operations, batches, observations, resources, input sources, and abstract
-  test cases.
+  operations, batches, observations, resources, input sources, abstract test
+  cases, and final Bug Oracle assessments.
 - `restscope.request_generation` keeps the current revisioned
   Generator/Constraint state in memory. Exact source bindings participate in
   that state, but producer values are parsed from observations on demand.
@@ -27,9 +27,9 @@ with integrity and foreign-key checks. Request headers conventionally carrying
 authorization, cookies, tokens, API keys, or secrets are removed before an
 observation is written.
 
-## API Behavior Catalog: 10 tables
+## API Behavior Catalog: 11 tables
 
-All ten tables belong to one Catalog and one SQLAlchemy transaction family.
+All eleven tables belong to one Catalog and one SQLAlchemy transaction family.
 The headings below group their contents for explanation; they are not separate
 runtime repositories or App collaborators.
 
@@ -37,8 +37,10 @@ runtime repositories or App collaborators.
 
 #### `openapi_current`
 
-The singleton row stores the complete normalized OpenAPI document. A real
-observed response-contract change replaces it atomically with its change event.
+The singleton row stores both the immutable initial normalized OpenAPI document
+used by Bug Oracle and the mutable current document used by Contract Monitor. A
+real observed response-contract change replaces only current document atomically
+with its change event.
 
 #### `openapi_change_events`
 
@@ -85,7 +87,16 @@ operation, completion time, sanitized actual request envelope, explicit
 status 100–599, reason phrase, media type, complete response headers, exact body
 bytes, and their JSON/text/Base64 presentation kind. Transport rows instead
 store a stable failure code/message with no HTTP status. `batch_id` and the
-zero-based `batch_case_index` appear together and are unique as a pair.
+zero-based `batch_case_index` appear together and are unique as a pair. A Replay
+instead has one unique `replay_of_observation_id`, no Batch fields, and the same
+operation as its Primary Observation.
+
+#### `oracle_assessments`
+
+One immutable row belongs to one Primary HTTP Observation and may reference its
+single Replay. It stores the derived Boolean Bug verdict and the fixed three
+strict Check states. Only `reproduced` is a Bug. System Agent session IDs and
+bounded reasons are retained; prompts, provider payloads, and reasoning are not.
 
 Persistence has no retention deletion or per-response body limit. Learning
 queries independently select no more than the latest 100 complete valid 2xx
@@ -124,13 +135,13 @@ the first network call. It is evidence, not a resumable queue or scheduler.
 
 ## Response processing order
 
-For every matched response, Contract Monitor runs first. Internal Contract
-Monitor failure becomes a warning and does not block Observation persistence.
-Every HTTP outcome then commits its complete factual result; matched transport
-failures commit without a Contract check. Only after a complete valid 2xx JSON
-Observation commits does Resource Monitor derive resource definitions, role
-edges, and current instances in a separate transaction; resource failure never
-removes the Observation.
+For every matched response, Observation commits its complete factual result
+first. One decoded response evidence value then feeds current Contract Monitor,
+Resource Monitor, and immutable-baseline Bug Oracle. Confirmed Oracle candidates
+share one identical-request Replay through the same processing path. Only a
+candidate that the Replay reproduces becomes a Bug. Matched transport failures
+commit without a Contract check, and Replay failures finalize confirmed Checks
+without replacing the Primary target result.
 
 Ordinary HTTP Tool calls use no Batch fields. Batch execution creates one
 running summary before its first send, updates progress best-effort, and ends as

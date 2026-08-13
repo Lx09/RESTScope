@@ -10,6 +10,7 @@ from .coordinator import APIBehaviorMonitorCoordinator
 from .contract_monitor import ResponseContractTracker
 from .resource_identity import SystemAgentRunner
 from .resource_monitor import ResourceResponseTracker
+from .oracle import BugOracle
 
 
 def build_api_behavior_monitor_coordinator(
@@ -41,6 +42,10 @@ def build_api_behavior_monitor_coordinator(
             catalog=catalog,
             system_agent_runner=system_agent_runner,
             tracing_runtime=runtime,
+        ),
+        bug_oracle=BugOracle(
+            catalog=catalog,
+            system_agent_runner=system_agent_runner,
         ),
         tracing_runtime=runtime,
     )

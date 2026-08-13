@@ -11,6 +11,7 @@ from restscope.target_api import (
     TargetResponseProcessorWarning,
     TargetTransportObservation,
 )
+from restscope.target_api.observation import TargetReplayDirective
 
 from .coordinator import APIBehaviorMonitorCoordinator, APIBehaviorMonitorError
 
@@ -55,6 +56,15 @@ class APIBehaviorResponseProcessor:
             "partial",
             "not_evaluated",
         ] = "partial" if result.warnings else "evaluated"
+        replay_directive = (
+            TargetReplayDirective(
+                primary_observation_id=result.oracle_primary.primary_observation_id,
+                state=result.oracle_primary,
+            )
+            if result.oracle_primary is not None
+            and result.oracle_primary.replay_required
+            else None
+        )
         return TargetResponseProcessorResult(
             response_validation=response_validation,
             warnings=tuple(
@@ -66,6 +76,7 @@ class APIBehaviorResponseProcessor:
                 for warning in result.warnings
             ),
             details=_result_details(result),
+            replay_directive=replay_directive,
         )
 
     def process_transport(
