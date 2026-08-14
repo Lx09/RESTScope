@@ -1,6 +1,6 @@
 # Orchestrator Observer Workspace
 
-Status: Implemented and verified; Git delivery not authorized
+Status: Implemented, verified, and merged into local `main`; not pushed
 
 ## Objective
 
@@ -51,3 +51,5 @@ decisions or the already-approved conversation presentation.
 - Observer/Orchestration focused tests: 33 passed.
 - Complete Python suite: 659 passed, 13 skipped.
 - Ruff, Python compilation, `typing.Any`, package-cycle, and diff checks: passed.
+- Git delivery: implementation commit `3a459f1` was fast-forwarded into local
+  `main`; the dedicated worktree and branch are removed without pushing.

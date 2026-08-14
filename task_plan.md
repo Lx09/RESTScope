@@ -16,7 +16,7 @@ Phase 31 Orchestrator observer workspace is complete and verified
 - [x] Build the Milestone/Task/Attempt rail, segmented Orchestrator flow, and unified Agent Drawer while reusing current conversation rendering
 - [x] Update current architecture records and deterministic built assets
 - [x] Run focused and complete backend/frontend verification and review the scoped diff
-- **Status:** complete and verified; no commit, merge, cleanup, or push is authorized
+- **Status:** complete, verified, committed, and merged into local `main`; push was not requested
 
 ### Phase 29: Positive/negative Generator exploration
 - [x] Confirm Generator categories, e-greedy rewards, exceptional relaxation, and Main-Agent ownership
@@ -312,4 +312,5 @@ Phase 31 Orchestrator observer workspace is complete and verified
 
 ## Notes
 - Current work occurs only in `/Users/lixin/Workplace/RESTScope-worktrees/orchestration-observer-ui` on `codex/orchestration-observer-ui`.
-- Implementation is authorized. Commit, merge, push, branch deletion, and worktree cleanup remain unauthorized.
+- Phase 31 local Git delivery is authorized and complete through merge; the
+  feature worktree and branch are removed in the same lifecycle. No push was requested.

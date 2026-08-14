@@ -47,6 +47,10 @@
   - Focused backend verification passes 33 scenarios; the complete Python
     suite passes 659 with 13 skips. Ruff, Python compilation, the `typing.Any`
     guard, architecture-cycle test, and `git diff --check` pass.
+  - Committed the scoped implementation as `3a459f1`, fast-forwarded it into
+    local `main`, and reverified the merged result: 46 frontend tests and 678
+    Python tests passed with 2 skips. The authorized lifecycle removes the
+    feature worktree and branch after this record; no push was requested.
 
 ## Phase 29: Positive/negative Generator exploration (2026-08-13)
 
