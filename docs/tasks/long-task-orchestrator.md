@@ -1,6 +1,6 @@
 # Long-task Orchestrator
 
-Status: Implemented and verified in a dedicated feature worktree; uncommitted
+Status: Implemented, verified, and merged into local `main`
 
 ## Objective
 
@@ -54,9 +54,11 @@ each bounded task.
   tests — 58 passed.
 - `uv run ruff check restscope tests` — passed.
 - `uv run python -m compileall -q restscope tests` — passed.
-- `uv run pytest -q` — 630 passed, 13 skipped.
-- `uv build` — source distribution and wheel built successfully; both contain
-  only the two retained production Skills.
+- Feature-worktree `uv run pytest -q` — 630 passed, 13 skipped.
+- Merged-`main` `uv run pytest -q` — 649 passed, 2 skipped. The ignored local
+  runtime configuration differs between the two workspaces; both suites passed.
+- `uv build` succeeded in both workspaces; the wheel contains only the two
+  retained production Skills.
 - Changed Python scope contains no `typing.Any`; old exploration Skill names and
   ownership descriptions are absent from production code, tests, and current
   documentation; `git diff --check` passed.
