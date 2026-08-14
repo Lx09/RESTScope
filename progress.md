@@ -1,5 +1,53 @@
 # Progress Log
 
+## Session: 2026-08-14 — Orchestrator observer workspace
+
+### Phase 31: Discovery and setup
+- **Status:** complete
+- Actions taken:
+  - Confirmed current runtime/UI mismatch and approved schema-v4 behavior.
+  - Locked existing main conversation visuals as a compatibility contract.
+  - Created the dedicated `codex/orchestration-observer-ui` worktree from local `main`.
+  - Selected public TDD seams: Orchestration runtime, Observer snapshot/SSE, and visible React behavior.
+- Files modified:
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+### Phase 31: Backend vertical slices
+- **Status:** complete
+- Actions taken:
+  - Added red tests for exact session links, failed Task Executor linkage,
+    fail-open observation, schema-v4 replacement, redaction, and ordinary
+    `plan.update` behavior.
+  - Implemented one optional fail-open observation callback, complete monotonic
+    replacements, exact accepted root links, and schema-v4 snapshot/SSE state.
+  - The focused backend slice passes all six scenarios.
+- Files modified:
+  - `tests/test_orchestration_runtime.py`
+  - `tests/test_live_run_observer.py`
+
+### Phase 31: Frontend workspace and browser state
+- **Status:** complete and verified
+- Actions taken:
+  - Replaced Main/Todo projection with revision-safe Orchestration state and an
+    IndexedDB v4 upgrade that clears schema-v3 records and retains five runs.
+  - Added the text Ledger rail, session-segmented Orchestrator timeline, and one
+    breadcrumb Agent Drawer while reusing `ConversationView` unchanged.
+  - Removed Floating Todo; private Plan activity remains an ordinary Tool row.
+  - Frontend tests pass 46 scenarios and the production build succeeds.
+  - A real local page confirmed narrow-layout routing, exact Task Executor
+    Drawer content, theme switching, keyboard Reasoning collapse, no console
+    warnings, and no horizontal overflow.
+  - Chrome then confirmed exact 1440×900, 1024×800, and 375×812 breakpoints:
+    the desktop rail is 320 px at 1440/1024, the mobile entry replaces it at
+    375, and the document width equals the viewport at all three sizes.
+  - ESLint and Ant Design 6.5.3 lint pass. Two consecutive production builds
+    produced identical HTML/CSS/JS SHA-256 hashes.
+  - Focused backend verification passes 33 scenarios; the complete Python
+    suite passes 659 with 13 skips. Ruff, Python compilation, the `typing.Any`
+    guard, architecture-cycle test, and `git diff --check` pass.
+
 ## Phase 29: Positive/negative Generator exploration (2026-08-13)
 
 - **Status:** implemented and verified on local `main`; no Git staging or commit.

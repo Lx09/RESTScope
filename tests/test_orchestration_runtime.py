@@ -26,7 +26,7 @@ class _ScriptedSystemAgentRunner:
 
 
 def test_runtime_replans_dispatches_one_fresh_executor_and_completes() -> None:
-    """One bounded execution result returns to the Ledger before completion."""
+    """Each accepted transition publishes exact root-to-Ledger relationships."""
     from restscope.orchestration import OrchestrationRuntime
 
     runner = _ScriptedSystemAgentRunner(
@@ -100,7 +100,10 @@ def test_runtime_replans_dispatches_one_fresh_executor_and_completes() -> None:
         ]
     )
 
-    result = OrchestrationRuntime(runner).run(focus="Prefer read-only operations.")
+    observations = []
+    result = OrchestrationRuntime(runner, observe=observations.append).run(
+        focus="Prefer read-only operations."
+    )
 
     assert [profile for profile, _task in runner.calls] == [
         "orchestrator",
@@ -115,6 +118,42 @@ def test_runtime_replans_dispatches_one_fresh_executor_and_completes() -> None:
     assert len(result.ledger.attempts) == 1
     assert result.ledger.attempts[0].task_id == "task_1"
     assert result.ledger.attempts[0].outcome == "completed"
+    assert [item.revision for item in observations] == [1, 2, 3, 4, 5]
+    assert observations[-1].goal == result.goal
+    assert observations[-1].ledger == result.ledger
+    assert [
+        (
+            item.session_id,
+            item.profile_name,
+            item.role,
+            item.sequence,
+            item.decision_kind,
+            item.task_id,
+            item.attempt_id,
+        )
+        for item in observations[-1].sessions
+    ] == [
+        ("agent_1", "orchestrator", "orchestrator", 1, "replan", None, None),
+        (
+            "agent_2",
+            "orchestrator",
+            "orchestrator",
+            2,
+            "dispatch_task",
+            "task_1",
+            None,
+        ),
+        (
+            "agent_3",
+            "task-executor",
+            "task_executor",
+            1,
+            None,
+            "task_1",
+            "attempt_1",
+        ),
+        ("agent_4", "orchestrator", "orchestrator", 3, "complete", None, None),
+    ]
 
     # Every call owns a fresh registered root; the outer runtime never feeds a
     # previous Agent transcript into a later task.
@@ -188,7 +227,8 @@ def test_executor_lifecycle_failure_is_recorded_before_replan() -> None:
         ]
     )
 
-    result = OrchestrationRuntime(runner).run()
+    observations = []
+    result = OrchestrationRuntime(runner, observe=observations.append).run()
 
     assert result.ledger.attempts[0].outcome == "failed"
     assert result.ledger.attempts[0].failure_code == "provider_failed"
@@ -198,6 +238,54 @@ def test_executor_lifecycle_failure_is_recorded_before_replan() -> None:
         "task-executor",
         "orchestrator",
     ]
+    failed_session = observations[-2].sessions[-1]
+    assert failed_session.session_id == "failed_executor"
+    assert failed_session.task_id == "task_1"
+    assert failed_session.attempt_id == "attempt_1"
+    assert failed_session.status == "failed"
+
+
+def test_observation_failure_never_changes_orchestration_result() -> None:
+    """The optional UI projection remains fail-open for the testing runtime."""
+    from restscope.orchestration import OrchestrationRuntime
+
+    runner = _ScriptedSystemAgentRunner(
+        [
+            {
+                "kind": "replan",
+                "expected_plan_revision": 0,
+                "reason": "Create one bounded milestone.",
+                "milestones": [
+                    {
+                        "title": "Inspect health",
+                        "purpose": "Keep the run valid while observation fails.",
+                        "success_criteria": ["The milestone is explicit."],
+                    }
+                ],
+            },
+            {
+                "kind": "complete",
+                "expected_plan_revision": 1,
+                "goal_criteria": [
+                    {
+                        "criterion_id": f"goal_{index}",
+                        "status": "unknown",
+                        "explanation": "This scenario protects observation isolation.",
+                    }
+                    for index in range(1, 4)
+                ],
+                "summary": "Observation failure did not stop orchestration.",
+            },
+        ]
+    )
+
+    def fail_observation(_observation: object) -> None:
+        raise RuntimeError("observer unavailable")
+
+    result = OrchestrationRuntime(runner, observe=fail_observation).run()
+
+    assert result.summary == "Observation failure did not stop orchestration."
+    assert result.ledger.run_status == "completed"
 
 
 def test_next_orchestrator_call_receives_the_task_attempt_causal_chain() -> None:

@@ -5,24 +5,29 @@ import type { ObserverState } from "../types";
 import { makeEvent } from "./fixtures";
 
 describe("observerReducer", () => {
-  it("does not let an older snapshot rewind the current Todo", () => {
-    const todo = (revision: number, activeStep: string) => ({
-      revision,
-      agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
-      explanation: null,
-      items: [{ step: activeStep, status: "in_progress" as const }],
-      completed_count: 0,
-      total_count: 1,
-      active_step: activeStep,
-      percent: 0,
-    });
+  const orchestration = (revision: number, mission: string) => ({
+    revision,
+    goal: { mission, focus: null, success_criteria: [] },
+    ledger: {
+      plan_revision: 0,
+      run_status: "planning" as const,
+      plan_revisions: [],
+      milestones: [],
+      tasks: [],
+      attempts: [],
+    },
+    sessions: [],
+  });
+
+  it("does not let an older snapshot rewind current Orchestration", () => {
+    const current = orchestration(6, "Probe endpoint");
     let state = observerReducer(initialObserverState, {
       type: "snapshot",
       snapshot: {
-        schema_version: 3,
+        schema_version: 4,
         run: null,
         events: [],
-        todo: todo(6, "Probe endpoint"),
+        orchestration: current,
         latest_cursor: 12,
       },
     });
@@ -30,22 +35,19 @@ describe("observerReducer", () => {
     state = observerReducer(state, {
       type: "snapshot",
       snapshot: {
-        schema_version: 3,
+        schema_version: 4,
         run: null,
         events: [],
-        todo: todo(5, "Read schema"),
+        orchestration: orchestration(5, "Read schema"),
         latest_cursor: 10,
       },
     });
 
     expect(state.latestCursor).toBe(12);
-    expect(state.todo).toMatchObject({
-      revision: 6,
-      active_step: "Probe endpoint",
-    });
+    expect(state.orchestration).toBe(current);
   });
 
-  it("keeps a newer same-run Todo when another snapshot has a later cursor", () => {
+  it("keeps a newer same-run Orchestration projection with a later cursor", () => {
     const run = {
       run_id: "run-1",
       status: "running",
@@ -54,66 +56,46 @@ describe("observerReducer", () => {
       request: {},
       result: null,
     };
-    const currentTodo = {
-      revision: 6,
-      agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
-      explanation: null,
-      items: [],
-      completed_count: 0,
-      total_count: 0,
-      active_step: null,
-      percent: 0,
-    };
+    const current = orchestration(6, "Current mission");
     const state: ObserverState = {
       ...initialObserverState,
       run,
-      todo: currentTodo,
+      orchestration: current,
       latestCursor: 12,
     };
 
     const hydrated = observerReducer(state, {
       type: "snapshot",
       snapshot: {
-        schema_version: 3,
+        schema_version: 4,
         run,
         events: [],
-        todo: { ...currentTodo, revision: 5 },
+        orchestration: orchestration(5, "Stale mission"),
         latest_cursor: 13,
       },
     });
 
     expect(hydrated.latestCursor).toBe(13);
-    expect(hydrated.todo).toBe(currentTodo);
+    expect(hydrated.orchestration).toBe(current);
   });
 
-  it("advances the cursor without accepting an older Todo revision", () => {
-    const currentTodo = {
-      revision: 6,
-      agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
-      explanation: null,
-      items: [],
-      completed_count: 0,
-      total_count: 0,
-      active_step: null,
-      percent: 0,
-    };
+  it("advances the cursor without accepting an older Orchestration revision", () => {
+    const current = orchestration(6, "Current mission");
     let state: ObserverState = {
       ...initialObserverState,
-      todo: currentTodo,
+      orchestration: current,
       latestCursor: 12,
     };
 
     state = observerReducer(state, {
       type: "stream",
-      eventType: "todo.replace",
-      data: { ...currentTodo, revision: 5 },
+      eventType: "orchestration.replace",
+      data: orchestration(5, "Stale mission"),
       cursor: 13,
     });
 
     expect(state.latestCursor).toBe(13);
-    expect(state.todo).toMatchObject({
-      revision: 6,
-    });
+    expect(state.orchestration).toBe(current);
   });
 
   it("ignores duplicate and replayed stream cursors", () => {
@@ -142,10 +124,10 @@ describe("observerReducer", () => {
     let state = observerReducer(initialObserverState, {
       type: "snapshot",
       snapshot: {
-        schema_version: 3,
+        schema_version: 4,
         run: null,
         events: [later, earlier],
-        todo: null,
+        orchestration: null,
         latest_cursor: 3,
       },
     });
@@ -162,21 +144,12 @@ describe("observerReducer", () => {
     expect(state.latestCursor).toBe(4);
   });
 
-  it("clears prior events and Todo when a new run reset arrives", () => {
+  it("clears prior events and Orchestration when a new run reset arrives", () => {
     const populated = {
       ...initialObserverState,
       eventById: { old: makeEvent({ event_id: "old" }) },
       eventIds: ["old"],
-      todo: {
-        revision: 1,
-        agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" as const },
-        explanation: null,
-        items: [],
-        completed_count: 0,
-        total_count: 0,
-        active_step: null,
-        percent: 0,
-      },
+      orchestration: orchestration(1, "Old mission"),
     };
     const run = {
       run_id: "run-2",
@@ -196,6 +169,6 @@ describe("observerReducer", () => {
 
     expect(state.run).toEqual(run);
     expect(state.eventIds).toEqual([]);
-    expect(state.todo).toBeNull();
+    expect(state.orchestration).toBeNull();
   });
 });

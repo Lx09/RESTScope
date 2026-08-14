@@ -1,4 +1,4 @@
-/** Search and redundant visual metadata for schema-v3 conversation events. */
+/** Search and redundant visual metadata for schema-v4 conversation events. */
 
 import type { EventStatus, TimelineEvent, TimelineFilters } from "./types";
 

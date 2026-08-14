@@ -1,5 +1,25 @@
 # Findings & Decisions
 
+## Orchestrator observer workspace (2026-08-14)
+
+- The current UI selects only `lifecycle=main`, but production now starts fresh
+  `lifecycle=system` roots named `orchestrator` and `task-executor`; current live
+  runs therefore fall into the obsolete Main Agent empty state.
+- `SystemAgentResult.session_id` gives Orchestration a stable link to the exact
+  root that returned each accepted decision or Task result. Profile names are
+  labels only and must never merge conversations.
+- Reuse the existing `ConversationView` and `EventDetail` for left alignment,
+  Reasoning, Tool, and Subagent behavior. New UI code owns only Orchestration
+  hierarchy, session grouping, structured summaries, and Drawer navigation.
+- Schema v4 replaces Todo with one complete, revisioned Orchestration
+  projection. The approved browser-history migration deletes schema-v3 records
+  and keeps only the newest five complete schema-v4 snapshots.
+- The implementation must stay read only and fail open, add no backend
+  persistence, and avoid a parallel event or state platform.
+- A narrow local render confirmed the single-Drawer interaction. A subsequent
+  Chrome pass accepted the exact 1440, 1024, and 375 px widths and confirmed the
+  intended rail breakpoint plus no horizontal overflow at each size.
+
 ## Positive/negative Generator exploration (2026-08-13)
 
 - Reusing `InputGeneratorConfig` as one positive arm avoids a wrapper DTO;

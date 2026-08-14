@@ -17,7 +17,7 @@ import { makeEvent } from "./fixtures";
 
 function makeSnapshot(runId: string, cursor = 1): ObserverSnapshot {
   return {
-    schema_version: 3,
+    schema_version: 4,
     run: {
       run_id: runId,
       status: "running",
@@ -42,7 +42,23 @@ function makeSnapshot(runId: string, cursor = 1): ObserverSnapshot {
         output: { tool_result: { token: "tool-secret" } },
       },
     })],
-    todo: null,
+    orchestration: {
+      revision: 1,
+      goal: {
+        mission: "Inspect the target API.",
+        focus: null,
+        success_criteria: [],
+      },
+      ledger: {
+        plan_revision: 0,
+        run_status: "planning",
+        plan_revisions: [],
+        milestones: [],
+        tasks: [],
+        attempts: [],
+      },
+      sessions: [],
+    },
     latest_cursor: cursor,
   };
 }
@@ -72,10 +88,10 @@ afterEach(() => {
 });
 
 describe("RunHistoryStore", () => {
-  it("clears every pre-v3 record during the database upgrade", async () => {
+  it("clears every schema-v3 record during the database upgrade", async () => {
     const factory = new FakeIDBFactory();
     const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = factory.open(RUN_HISTORY_DATABASE_NAME, 1);
+      const request = factory.open(RUN_HISTORY_DATABASE_NAME, 3);
       request.onupgradeneeded = () => {
         request.result.createObjectStore("runs", { keyPath: "run_id" });
       };
@@ -85,10 +101,15 @@ describe("RunHistoryStore", () => {
     await new Promise<void>((resolve, reject) => {
       const transaction = legacyDatabase.transaction("runs", "readwrite");
       transaction.objectStore("runs").put({
-        storage_schema_version: 1,
-        run_id: "canvas-run",
+        storage_schema_version: 3,
+        run_id: "main-agent-run",
         saved_at: "2026-08-07T00:00:00.000Z",
-        snapshot: makeSnapshot("canvas-run"),
+        snapshot: {
+          ...makeSnapshot("main-agent-run"),
+          schema_version: 3,
+          orchestration: undefined,
+          todo: null,
+        },
       });
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
@@ -130,6 +151,9 @@ describe("RunHistoryStore", () => {
       reasoning: "complete already-redacted reasoning",
       output: { tool_result: { token: "tool-secret" } },
     });
+    expect(loaded.record?.snapshot.orchestration?.goal.mission).toBe(
+      "Inspect the target API.",
+    );
     store.close();
   });
 

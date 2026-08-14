@@ -1,12 +1,22 @@
 # Task Plan: RESTScope Evolution
 
 ## Goal
-Replace the Live Observer's graph canvas with the approved Main-Agent conversation UI while preserving the read-only schema-v2 observer boundary, complete evidence, and browser-only recovery.
+Upgrade the Live Observer to the approved Orchestrator workspace while preserving the current conversation presentation, read-only runtime boundary, complete evidence, and browser-only recovery.
 
 ## Current Phase
-Phase 29 positive/negative Generator exploration is complete; Phase 19 exact 375 px confirmation remains pending
+Phase 31 Orchestrator observer workspace is complete and verified
 
 ## Phases
+
+### Phase 31: Orchestrator observer workspace
+- [x] Confirm the schema-v4 Orchestration projection, text hierarchy, session identity, retained conversation styling, and browser-history replacement
+- [x] Create `codex/orchestration-observer-ui` in a dedicated worktree
+- [x] Add public-seam red tests for Orchestration observation, snapshot/SSE v4, session isolation, workspace rendering, and IndexedDB migration
+- [x] Implement the smallest read-only observation seam and schema-v4 browser state
+- [x] Build the Milestone/Task/Attempt rail, segmented Orchestrator flow, and unified Agent Drawer while reusing current conversation rendering
+- [x] Update current architecture records and deterministic built assets
+- [x] Run focused and complete backend/frontend verification and review the scoped diff
+- **Status:** complete and verified; no commit, merge, cleanup, or push is authorized
 
 ### Phase 29: Positive/negative Generator exploration
 - [x] Confirm Generator categories, e-greedy rewards, exceptional relaxation, and Main-Agent ownership
@@ -247,6 +257,8 @@ Phase 29 positive/negative Generator exploration is complete; Phase 19 exact 375
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Phase 31 public-seam tests fail because schema v4 and the observation callback do not exist | 1 | Expected TDD red state; implement only the approved observation DTO, runtime publication, and Observer replacement event. |
+| Phase 31 first planning-log patch used a stale empty error-table row | 1 | No partial edit occurred; inspect the current append-only files and apply exact anchors. |
 | Phase 30 stale-document scan included Markdown backticks in a shell argument | 1 | The shell attempted one harmless nonexistent command before the read-only scan; rerun searches with literal-safe expressions and change no files through the failed command. |
 | Phase 30 combined governance/documentation patch used an inexact Harness anchor in `AGENTS.md` | 1 | No partial change occurred; inspect exact current paragraphs and apply ownership, persistence, and Orchestrator rules in smaller patches. |
 | Phase 30 first complete suite found one stale App bootstrap table set | 1 | Add the approved `resource_state_events` table to the exact bootstrap contract; no production change was required. |
@@ -299,5 +311,5 @@ Phase 29 positive/negative Generator exploration is complete; Phase 19 exact 375
 | Restricted page evaluation did not expose DOM `click()` or constructible `MouseEvent` objects | 1 | Use supported locator clicks and rely on the Web Animations regression for frame-level reversal behavior. |
 
 ## Notes
-- Current work occurs only in `/Users/lixin/Workplace/RESTScope-conversation-observer-ui` on `codex/conversation-observer-ui`.
+- Current work occurs only in `/Users/lixin/Workplace/RESTScope-worktrees/orchestration-observer-ui` on `codex/orchestration-observer-ui`.
 - Implementation is authorized. Commit, merge, push, branch deletion, and worktree cleanup remain unauthorized.

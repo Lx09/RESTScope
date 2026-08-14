@@ -9,7 +9,7 @@ const EVENT_TYPES: StreamEventType[] = [
   "run.reset",
   "run.update",
   "timeline.upsert",
-  "todo.replace",
+  "orchestration.replace",
 ];
 
 export interface LiveConnection {
@@ -44,7 +44,7 @@ export async function connectLiveRun(
     }
     const snapshot = (await response.json()) as ObserverSnapshot;
     if (closed) return inactiveConnection;
-    if (snapshot.schema_version !== 3) {
+    if (snapshot.schema_version !== 4) {
       throw new Error(`Unsupported observer schema version ${String(snapshot.schema_version)}`);
     }
     dispatch({ type: "snapshot", snapshot });

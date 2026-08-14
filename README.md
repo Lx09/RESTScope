@@ -218,13 +218,12 @@ not available. After App construction, `app.ui_url` is the actual page URL or
 an occupied port, a disconnected viewer, or observation errors do not change a
 test result.
 
-The page shows a read-only Codex-style document conversation for the one generic
-Agent explicitly marked `lifecycle=main`. A transitional run without that
-identity shows “此运行未启动 Main Agent”; legacy workflow Agents are never
-silently promoted. The conversation has no profile or message-type heading and
-uses the complete page width. Incremental System, Developer, User, and ordinary
-Assistant text is rendered directly as prose without `User Task`, `Commentary`,
-or `Final Answer` annotations.
+The page is a read-only Orchestrator workspace. A fixed left rail renders the
+current `Milestone → Task → Attempt` Ledger hierarchy, while the main area keeps
+fresh Orchestrator System roots as separate chronological sections. Every root
+is keyed by its full `session_id` and labelled with a stable role sequence plus
+short ID; reusable Profile names never merge conversations. Accepted `replan`,
+`dispatch_task`, and `complete` outputs provide the result-first section summary.
 
 Provider Reasoning appears immediately before its response, expanded by default
 as muted synthetic-oblique text on the same left edge as ordinary prose. It has
@@ -234,21 +233,17 @@ Assistant Tool Call messages and Tool Result messages are not repeated as prose.
 Ordinary Tools appear as compact no-chevron rows that are collapsed by default
 and open their complete detail in place. Subagent lifecycle calls are aggregated
 by child session and display the child Profile name instead of protocol names;
-clicking opens the child's same-style conversation in a focus-trapped Drawer
-with navigation through at most three levels. System Agents triggered while an
+clicking opens the child's same-style conversation in a single focus-trapped
+Agent Drawer with breadcrumb navigation through at most three levels. Tasks open
+their exact associated Task Executor session and show Attempt criteria, Findings,
+and unresolved issues before the unchanged conversation. System Agents triggered while an
 HTTP Tool is running remain independent root sessions, but appear as named,
 status-labelled rows inside that Tool card. A focus-trapped Drawer shows their
-complete conversation and any nested Tools. Schema-v3 contains only Agent-turn
-and ordinary Tool-call events; Batch and Patch Apply therefore render as Tool
-cards. Older browser snapshots are ignored.
-
-The floating page state is Todo, sourced only from a successful `plan.update`
-owned by the explicit Main Agent. It shows completed/total counts, explanation,
-and every generic Plan step in a focus-trapped right Drawer. The in-progress
-item is evident from its row status and is not repeated in a “当前” summary.
-Historical Todo state is labeled read only. Search, status filtering, detail
-expansion, copying, theme switching, and auto-follow are viewer-only; the
-service exposes no mutation route.
+complete conversation and any nested Tools. Schema-v4 contains only Agent-turn
+and ordinary Tool-call timeline events plus one revisioned Orchestration
+replacement. Batch, Patch Apply, and every Agent's private `plan.update` remain
+ordinary Tool cards. Search, status filtering, detail expansion, copying, theme
+switching, and auto-follow are viewer-only; the service exposes no mutation route.
 
 Observer data lives only in the RESTScope process and browser memory. A new run
 replaces the previous run, and App shutdown clears it. Details are deliberately
@@ -261,7 +256,7 @@ page as a developer diagnostic surface, not a credential boundary.
 Interrupting the blocking Orchestration loop and closing the App are separate lifecycle
 events. A `KeyboardInterrupt` such as Ctrl-C marks the observed run lifetime
 as `stopped` and re-raises, while the App, UI server, complete event snapshot,
-and latest Todo remain available until explicit close:
+and latest Orchestration snapshot remain available until explicit close:
 
 ```python
 app = RESTScopeApp.from_environment()

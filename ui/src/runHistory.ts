@@ -3,22 +3,22 @@
  *
  * The live backend remains the authority for a running test. This module only
  * gives the loopback UI a browser-local history: it converts normalized React
- * state back to the schema-v3 snapshot, stores at most five complete runs in
+ * state back to the schema-v4 snapshot, stores at most five complete runs in
  * IndexedDB, and rejects incompatible records before they reach render code.
  */
 
 import type {
   ObserverSnapshot,
   ObserverState,
+  OrchestrationState,
   TimelineEvent,
-  TodoState,
 } from "./types";
 
 export const RUN_HISTORY_DATABASE_NAME = "restscope-live-observer";
-export const RUN_HISTORY_DATABASE_VERSION = 3;
+export const RUN_HISTORY_DATABASE_VERSION = 4;
 const RUN_HISTORY_STORE_NAME = "runs";
 const RUN_HISTORY_INDEX_NAME = "saved_at";
-const RUN_HISTORY_RECORD_VERSION = 3;
+const RUN_HISTORY_RECORD_VERSION = 4;
 const MAX_SAVED_RUNS = 5;
 
 export type HistoryViewMode = "auto" | "live" | "history";
@@ -27,7 +27,7 @@ export type RunHistoryStorageStatus = "loading" | "ready" | "saving" | "saved" |
 
 /** A complete browser-local record for one observer Run. */
 export interface StoredRunRecord {
-  storage_schema_version: 3;
+  storage_schema_version: 4;
   run_id: string;
   saved_at: string;
   snapshot: ObserverSnapshot;
@@ -114,16 +114,29 @@ function isTimelineEvent(value: unknown): value is TimelineEvent {
   );
 }
 
-function isTodo(value: unknown): value is TodoState | null {
+function isOrchestration(value: unknown): value is OrchestrationState | null {
   if (value === null) return true;
   if (!isObject(value)) return false;
-  return typeof value.revision === "number" && Array.isArray(value.items);
+  return (
+    typeof value.revision === "number"
+    && isObject(value.goal)
+    && typeof value.goal.mission === "string"
+    && isObject(value.ledger)
+    && typeof value.ledger.plan_revision === "number"
+    && Array.isArray(value.ledger.milestones)
+    && Array.isArray(value.ledger.tasks)
+    && Array.isArray(value.ledger.attempts)
+    && Array.isArray(value.sessions)
+  );
 }
 
 function isObserverSnapshot(value: unknown): value is ObserverSnapshot {
-  if (!isObject(value) || value.schema_version !== 3) return false;
+  if (!isObject(value) || value.schema_version !== 4) return false;
   if (!Array.isArray(value.events) || !value.events.every(isTimelineEvent)) return false;
-  if (typeof value.latest_cursor !== "number" || !isTodo(value.todo)) return false;
+  if (
+    typeof value.latest_cursor !== "number"
+    || !isOrchestration(value.orchestration)
+  ) return false;
   if (value.run === null) return true;
   return (
     isObject(value.run)
@@ -137,7 +150,7 @@ function isObserverSnapshot(value: unknown): value is ObserverSnapshot {
 /**
  * Return whether an unknown IndexedDB value is safe to pass into the UI.
  * Validation is intentionally structural rather than semantic: the backend
- * still owns schema-v3 meaning, while this guard prevents malformed local data
+ * still owns schema-v4 meaning, while this guard prevents malformed local data
  * from crashing the browser after a deployment or manual database edit.
  */
 export function isStoredRunRecord(value: unknown): value is StoredRunRecord {
@@ -171,13 +184,13 @@ function listingFor(values: unknown[]): RunHistoryListing {
   };
 }
 
-/** Convert the live reducer's normalized maps back into the schema-v3 wire shape. */
+/** Convert the live reducer's normalized maps back into the schema-v4 wire shape. */
 export function observerStateToSnapshot(state: ObserverState): ObserverSnapshot {
   return {
-    schema_version: 3,
+    schema_version: 4,
     run: state.run,
     events: state.eventIds.map((eventId) => state.eventById[eventId]),
-    todo: state.todo,
+    orchestration: state.orchestration,
     latest_cursor: state.latestCursor,
   };
 }
@@ -192,7 +205,7 @@ export function observerSnapshotToState(snapshot: ObserverSnapshot): ObserverSta
     run: snapshot.run,
     eventById,
     eventIds,
-    todo: snapshot.todo,
+    orchestration: snapshot.orchestration,
     latestCursor: snapshot.latest_cursor,
   };
 }
@@ -253,10 +266,9 @@ export class RunHistoryStore implements RunHistoryPersistence {
         if (!database.objectStoreNames.contains(RUN_HISTORY_STORE_NAME)) {
           const store = database.createObjectStore(RUN_HISTORY_STORE_NAME, { keyPath: "run_id" });
           store.createIndex(RUN_HISTORY_INDEX_NAME, "saved_at");
-        } else if (event.oldVersion < 3) {
-          // Schema-v2 records include a retired Smoke Batch event kind. Clear
-          // them in the upgrade transaction rather than presenting an obsolete
-          // card shape or mixing incompatible event contracts.
+        } else if (event.oldVersion < 4) {
+          // The user explicitly chose to remove schema-v3 Main/Todo history rather
+          // than mix it with the new Orchestration workspace contract.
           request.transaction?.objectStore(RUN_HISTORY_STORE_NAME).clear();
         }
       };

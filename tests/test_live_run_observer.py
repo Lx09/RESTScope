@@ -1,4 +1,4 @@
-"""Behavior contracts for the schema-v3 semantic run observer.
+"""Behavior contracts for the schema-v4 semantic run observer.
 
 These scenarios exercise the observer through the same tracing and target HTTP
 Interfaces used by production. They protect the user-visible meaning of Agent,
@@ -95,7 +95,7 @@ def test_live_observer_emits_only_agent_and_tool_cards_without_phoenix() -> None
 
     snapshot = observer.snapshot()
 
-    assert snapshot["schema_version"] == 3
+    assert snapshot["schema_version"] == 4
     assert [event["kind"] for event in snapshot["events"]] == [
         "agent_turn",
         "tool_call",
@@ -110,12 +110,12 @@ def test_live_observer_emits_only_agent_and_tool_cards_without_phoenix() -> None
     assert tool["detail"]["output"]["status"] == "succeeded"
     # An ordinary domain Tool does not become the Main Plan merely because the
     # payload happens to contain similarly shaped working data.
-    assert snapshot["todo"] is None
+    assert snapshot["orchestration"] is None
     assert "model-secret" not in str(snapshot)
 
 
-def test_main_agent_plan_update_projects_the_generic_todo() -> None:
-    """A successful Main Agent plan.update is the only floating Todo source."""
+def test_plan_update_remains_an_ordinary_task_executor_tool() -> None:
+    """Private Task Executor Plans never replace the outer Orchestration state."""
     from restscope.observability import LiveRunObserver, TracingRuntime
 
     observer = LiveRunObserver()
@@ -127,9 +127,9 @@ def test_main_agent_plan_update_projects_the_generic_todo() -> None:
         kind="CHAIN",
         input_value={"objective": "Inspect the API"},
         attributes={
-            "restscope.agent.session_id": "main-1",
-            "restscope.agent.profile": "main_profile",
-            "restscope.agent.lifecycle": "main",
+            "restscope.agent.session_id": "executor-1",
+            "restscope.agent.profile": "task-executor",
+            "restscope.agent.lifecycle": "system",
         },
     ), runtime.span("plan.update", kind="TOOL") as tool_span:
         tool_span.set_output(
@@ -148,21 +148,64 @@ def test_main_agent_plan_update_projects_the_generic_todo() -> None:
 
     snapshot = observer.snapshot()
 
-    assert snapshot["todo"] == {
-        "revision": 1,
-        "agent": snapshot["events"][0]["agent"],
-        "explanation": "Follow the evidence in order.",
-        "items": [
-            {"step": "Read the schema", "status": "completed"},
-            {"step": "Probe the endpoint", "status": "in_progress"},
-            {"step": "Report findings", "status": "pending"},
-        ],
-        "completed_count": 1,
-        "total_count": 3,
-        "active_step": "Probe the endpoint",
-        "percent": 33,
-    }
-    assert observer.wait_after(0)[-1]["type"] == "todo.replace"
+    assert snapshot["orchestration"] is None
+    assert snapshot["events"][0]["name"] == "plan.update"
+    assert observer.wait_after(0)[-1]["type"] == "timeline.upsert"
+
+
+def test_orchestration_projection_is_revisioned_redacted_and_streamed() -> None:
+    """The browser receives one complete safe replacement for each Ledger state."""
+    from restscope.observability import LiveRunObserver, Redactor
+    from restscope.orchestration.models import (
+        GoalContract,
+        GoalCriterion,
+        OrchestrationObservation,
+        OrchestrationSessionRecord,
+        TaskLedgerSnapshot,
+    )
+
+    observer = LiveRunObserver(redactor=Redactor(["model-secret"]))
+    observer.begin_run({})
+    observation = OrchestrationObservation(
+        revision=2,
+        goal=GoalContract(
+            mission="Inspect model-secret safely.",
+            success_criteria=(
+                GoalCriterion(criterion_id="goal_1", description="One result exists."),
+            ),
+        ),
+        ledger=TaskLedgerSnapshot(
+            plan_revision=0,
+            run_status="planning",
+            plan_revisions=(),
+            milestones=(),
+            tasks=(),
+            attempts=(),
+        ),
+        sessions=(
+            OrchestrationSessionRecord(
+                session_id="orchestrator-session-1",
+                profile_name="orchestrator",
+                role="orchestrator",
+                sequence=1,
+                status="completed",
+                decision_kind="replan",
+            ),
+        ),
+    )
+
+    observer.record_orchestration(observation)
+    snapshot = observer.snapshot()
+
+    assert snapshot["schema_version"] == 4
+    assert snapshot["orchestration"]["revision"] == 2
+    assert snapshot["orchestration"]["goal"]["mission"] == (
+        "Inspect ***REDACTED*** safely."
+    )
+    assert snapshot["orchestration"]["sessions"][0]["session_id"] == (
+        "orchestrator-session-1"
+    )
+    assert observer.wait_after(0)[-1]["type"] == "orchestration.replace"
 
 
 def test_generic_agent_task_exposes_identity_reasoning_and_validated_final_phase() -> None:
@@ -184,7 +227,7 @@ def test_generic_agent_task_exposes_identity_reasoning_and_validated_final_phase
             "restscope.agent.session_id": "main-1",
             "restscope.agent.profile": "main_profile",
             "restscope.agent.depth": 0,
-            "restscope.agent.lifecycle": "main",
+            "restscope.agent.lifecycle": "system",
         },
     ) as task_span:
         with runtime.span("LLMClient.invoke", kind="LLM") as model_span:
@@ -215,7 +258,7 @@ def test_generic_agent_task_exposes_identity_reasoning_and_validated_final_phase
         "parent_session_id": None,
         "name": "main_profile",
         "profile_name": "main_profile",
-        "lifecycle": "main",
+        "lifecycle": "system",
         "task_id": event["agent"]["task_id"],
         "path": ["main_profile"],
     }

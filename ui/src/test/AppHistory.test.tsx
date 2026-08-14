@@ -28,7 +28,7 @@ vi.mock("../stream", () => ({
 
 function snapshot(runId: string, cursor: number): ObserverSnapshot {
   return {
-    schema_version: 3,
+    schema_version: 4,
     run: {
       run_id: runId,
       status: "running",
@@ -47,7 +47,7 @@ function snapshot(runId: string, cursor: number): ObserverSnapshot {
         parent_session_id: null,
         name: `${runId}-main`,
         profile_name: `${runId}-main`,
-        lifecycle: "main",
+        lifecycle: "system",
         task_id: `${runId}-task`,
         path: [`${runId}-main`],
       },
@@ -58,7 +58,32 @@ function snapshot(runId: string, cursor: number): ObserverSnapshot {
         phase: "final_answer",
       },
     })],
-    todo: null,
+    orchestration: {
+      revision: 1,
+      goal: {
+        mission: `Observe ${runId}`,
+        focus: null,
+        success_criteria: [{ criterion_id: "goal_1", description: "Run is visible" }],
+      },
+      ledger: {
+        plan_revision: 1,
+        run_status: "running",
+        plan_revisions: [],
+        milestones: [],
+        tasks: [],
+        attempts: [],
+      },
+      sessions: [{
+        session_id: `${runId}-session`,
+        profile_name: `${runId}-main`,
+        role: "orchestrator",
+        sequence: 1,
+        status: "completed",
+        decision_kind: "replan",
+        task_id: null,
+        attempt_id: null,
+      }],
+    },
     latest_cursor: cursor,
   };
 }
@@ -125,6 +150,6 @@ describe("ObserverApp browser history lifecycle", () => {
 
     expect(screen.getByTestId("conversation-surface")).toHaveAttribute("data-run-id", "cached-run");
     await userEvent.click(screen.getByRole("button", { name: "返回实时" }));
-    expect(screen.getByText("此运行未启动 Main Agent")).toBeVisible();
+    expect(screen.getByText("等待 Orchestrator 会话")).toBeVisible();
   });
 });

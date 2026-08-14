@@ -1,10 +1,11 @@
-"""Build the schema-v3 semantic narrative for the current RESTScope run.
+"""Build the schema-v4 semantic narrative for the current RESTScope run.
 
 The :class:`LiveRunObserver` receives the App's existing trace and target HTTP
 activity. It folds that lower-level evidence into model turns and executed
-tools. Generic ``Agent.start`` and ``Agent.run`` scopes add stable Main,
-Subagent, or System Agent identities and the authoritative final-response phase
-used by the conversation projector. Browser adapters read JSON-safe snapshots
+tools. Generic ``Agent.start`` and ``Agent.run`` scopes add stable Subagent or
+System Agent identities and the authoritative final-response phase used by the
+conversation projector. Orchestration publishes a complete Goal, Ledger, and
+root-session association separately. Browser adapters read JSON-safe snapshots
 and cursor-addressed changes; workflow code never depends on UI DTOs.
 
 The observer never persists data and never raises into testing code. It keeps
@@ -24,6 +25,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
+
+from pydantic import BaseModel
 
 from .projection import (
     HTTP_TOOL_NAME,
@@ -52,7 +55,6 @@ if TYPE_CHECKING:
     from .span import LiveSpan
 
 _IGNORED_TOOL_SPANS = {"RESTScopeTestCase.execute"}
-_PLAN_UPDATE_TOOL = "plan.update"
 _HTTP_TOOL = HTTP_TOOL_NAME
 
 
@@ -107,8 +109,7 @@ class LiveRunObserver:
     Callers begin and end a run, while tracing and HTTP Modules open short-lived
     handles. Browser adapters call :meth:`snapshot` and :meth:`wait_after`.
     Locking, cursor management, semantic aggregation, redaction, Agent nesting,
-    message de-duplication, and Main Agent Plan-to-Todo projection stay private
-    here.
+    message de-duplication, and Orchestration projection stay private here.
     """
 
     def __init__(self, *, redactor: Redactor | None = None) -> None:
@@ -122,8 +123,7 @@ class LiveRunObserver:
         self._cursor = 0
         self._next_order = 0
         self._run: dict[str, object] | None = None
-        self._todo: dict[str, object] | None = None
-        self._todo_revision = 0
+        self._orchestration: dict[str, object] | None = None
         self._seen_message_counts: dict[str, Counter[str]] = {}
         self._latest_agent_turn: dict[str, str] = {}
         self._latest_agent_turn_by_task: dict[str, str] = {}
@@ -154,8 +154,7 @@ class LiveRunObserver:
                 return run_id
             self._events.clear()
             self._event_order.clear()
-            self._todo = None
-            self._todo_revision = 0
+            self._orchestration = None
             self._seen_message_counts.clear()
             self._latest_agent_turn.clear()
             self._latest_agent_turn_by_task.clear()
@@ -437,19 +436,51 @@ class LiveRunObserver:
             return None
 
     def snapshot(self) -> dict[str, object]:
-        """Return one atomic schema-v3 browser snapshot of the current run."""
+        """Return one atomic schema-v4 browser snapshot of the current run."""
         with self._lock:
             return {
-                "schema_version": 3,
+                "schema_version": 4,
                 "run": deepcopy(self._run),
                 "events": [
                     deepcopy(self._events[event_id])
                     for event_id in self._event_order
                     if event_id in self._events
                 ],
-                "todo": deepcopy(self._todo),
+                "orchestration": deepcopy(self._orchestration),
                 "latest_cursor": self._cursor,
             }
+
+    def record_orchestration(self, observation: BaseModel) -> None:
+        """Publish one complete redacted Goal, Ledger, and session replacement.
+
+        Args:
+            observation: Immutable domain projection created only after an
+                accepted Orchestration transition. Older revisions are ignored.
+
+        Observer failures remain local so the testing runtime never depends on
+        a browser diagnostic surface.
+        """
+        try:
+            safe = self._safe(observation.model_dump(mode="json"))
+            if not isinstance(safe, dict):
+                return
+            with self._condition:
+                if self._closed or self._run is None:
+                    return
+                current_revision = (
+                    int(self._orchestration.get("revision", 0))
+                    if self._orchestration is not None
+                    else 0
+                )
+                if int(safe.get("revision", 0)) <= current_revision:
+                    return
+                self._orchestration = deepcopy(safe)
+                self._publish_locked(
+                    "orchestration.replace",
+                    deepcopy(self._orchestration),
+                )
+        except Exception:  # noqa: BLE001
+            return
 
     def wait_after(
         self,
@@ -474,8 +505,7 @@ class LiveRunObserver:
             self._event_order.clear()
             self._changes.clear()
             self._run = None
-            self._todo = None
-            self._todo_revision = 0
+            self._orchestration = None
             self._seen_message_counts.clear()
             self._latest_agent_turn.clear()
             self._latest_agent_turn_by_task.clear()
@@ -535,19 +565,15 @@ class LiveRunObserver:
     ) -> tuple[dict[str, object], dict[str, object]]:
         """Create one explicit generic Agent identity and task scope.
 
-        Generic Main, Subagent, and System sessions supply their Harness-owned
+        Generic Subagent and System sessions supply their Harness-owned
         IDs in generic Agent lifecycle attributes. Unlike legacy ``kind=AGENT``
         spans, these identities are authoritative enough for the UI to select a
-        Main conversation and navigate its children without guessing names.
+        exact conversation and navigate its children without guessing names.
         """
         session_id = str(attributes.get("restscope.agent.session_id") or "")
         profile_name = str(attributes.get("restscope.agent.profile") or "")
         lifecycle = str(attributes.get("restscope.agent.lifecycle") or "")
-        if not session_id or not profile_name or lifecycle not in {
-            "main",
-            "subagent",
-            "system",
-        }:
+        if not session_id or not profile_name or lifecycle not in {"subagent", "system"}:
             return parent.agent or {}, scope
 
         parent_session_value = attributes.get("restscope.agent.parent_session_id")
@@ -766,46 +792,3 @@ class LiveRunObserver:
         detail = deepcopy(event.get("detail", {}))
         detail[name] = self._safe(value)
         self._update_event(event_id, detail=detail)
-
-    def _record_todo(self, tool_event: dict[str, object]) -> None:
-        """Project one successful Main Agent Plan replacement as the floating Todo.
-
-        Subagents own independent private Plans. A single page-level Todo must
-        therefore follow only the explicit Main Agent instead of allowing a
-        short-lived child to overwrite its parent's current work.
-        """
-        agent = tool_event.get("agent")
-        if not isinstance(agent, dict) or agent.get("lifecycle") != "main":
-            return
-        detail = tool_event.get("detail")
-        output = detail.get("output") if isinstance(detail, dict) else None
-        if not isinstance(output, dict) or output.get("status") != "succeeded":
-            return
-        plan = output.get("structured")
-        if not isinstance(plan, dict) or not isinstance(plan.get("plan"), list):
-            return
-        items = [
-            deepcopy(item)
-            for item in plan["plan"]
-            if isinstance(item, dict)
-            and isinstance(item.get("step"), str)
-            and item.get("status") in {"pending", "in_progress", "completed"}
-        ]
-        completed_count = sum(item["status"] == "completed" for item in items)
-        active_step = next(
-            (item["step"] for item in items if item["status"] == "in_progress"),
-            None,
-        )
-        with self._condition:
-            self._todo_revision += 1
-            self._todo = {
-                "revision": self._todo_revision,
-                "agent": deepcopy(agent),
-                "explanation": deepcopy(plan.get("explanation")),
-                "items": items,
-                "completed_count": completed_count,
-                "total_count": len(items),
-                "active_step": active_step,
-                "percent": round(completed_count * 100 / len(items)) if items else 0,
-            }
-            self._publish_locked("todo.replace", deepcopy(self._todo))

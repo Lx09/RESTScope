@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from restscope.agent import AgentFinding
+from restscope.agent.contracts import AgentFinding, AgentResultStatus
 
 
 class _FrozenModel(BaseModel):
@@ -249,3 +249,30 @@ class OrchestrationResult(_FrozenModel):
     unresolved: tuple[str, ...]
     goal: GoalContract
     ledger: TaskLedgerSnapshot
+
+
+class OrchestrationSessionRecord(_FrozenModel):
+    """Link one fresh System Agent root to accepted orchestration state.
+
+    Profile names describe capabilities but are not identities. ``session_id``
+    is therefore the only key a browser may use to open a conversation, while
+    the role-local sequence gives people a compact stable label.
+    """
+
+    session_id: str = Field(min_length=1, max_length=160)
+    profile_name: str = Field(min_length=1, max_length=120)
+    role: Literal["orchestrator", "task_executor"]
+    sequence: int = Field(ge=1)
+    status: AgentResultStatus
+    decision_kind: Literal["replan", "dispatch_task", "complete"] | None = None
+    task_id: str | None = Field(default=None, pattern=r"^task_[1-9][0-9]*$")
+    attempt_id: str | None = Field(default=None, pattern=r"^attempt_[1-9][0-9]*$")
+
+
+class OrchestrationObservation(_FrozenModel):
+    """Expose one complete read-only Goal, Ledger, and root-session projection."""
+
+    revision: int = Field(ge=1)
+    goal: GoalContract
+    ledger: TaskLedgerSnapshot
+    sessions: tuple[OrchestrationSessionRecord, ...] = Field(default=(), max_length=10_000)

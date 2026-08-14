@@ -1,15 +1,21 @@
-/** Convert schema-v3 Agent turns into a quiet prompt-and-response document flow.
+/** Convert schema-v4 Agent turns into a quiet prompt-and-response document flow.
  *
  * The backend remains authoritative for event order and revisions. This pure
  * frontend projector shows incremental LLM prompt messages and responses as
  * document text. Model messages that represent Tool calls or Tool results are
  * excluded from that text because the matching Tool event owns their complete
- * collapsed detail. Only the generic Main Agent Plan is
- * promoted to the page-level floating Todo.
+ * collapsed detail. Orchestration state selects root sessions by exact ID;
+ * this module never treats a reusable Profile name as an Agent identity.
  */
 
 import { eventMatches } from "./presentation";
-import type { AgentIdentity, TimelineEvent, TimelineFilters } from "./types";
+import type {
+  AgentIdentity,
+  OrchestrationSessionRecord,
+  OrchestrationState,
+  TimelineEvent,
+  TimelineFilters,
+} from "./types";
 
 export type ConversationItemKind =
   | "prompt"
@@ -40,10 +46,10 @@ export interface SystemAgentActivity {
   status: string;
 }
 
-export interface ConversationProjection {
-  mainAgent: AgentIdentity | null;
-  items: ConversationItem[];
-  sessionAgents: Record<string, AgentIdentity>;
+export interface RootSessionView extends Omit<OrchestrationSessionRecord, "status"> {
+  status: OrchestrationSessionRecord["status"] | "running";
+  order: number;
+  startedAt: string | null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -189,12 +195,80 @@ export function collectSessionAgents(events: TimelineEvent[]): Record<string, Ag
   return sessions;
 }
 
-/** Find the only UI-authoritative root conversation without legacy guessing. */
-export function selectMainAgent(events: TimelineEvent[]): AgentIdentity | null {
-  return events.find((event) => event.agent?.lifecycle === "main")?.agent ?? null;
+function rootStatus(events: TimelineEvent[], sessionId: string): RootSessionView["status"] {
+  if (events.some((event) => (
+    event.agent?.session_id === sessionId && event.status === "running"
+  ))) return "running";
+  return events.some((event) => (
+    event.agent?.session_id === sessionId && event.status === "failed"
+  )) ? "failed" : "completed";
 }
 
-/** Project one Main or Subagent session in original event-start order. */
+/** Merge accepted Ledger links with live roots that have not returned yet. */
+export function projectRootSessions(
+  events: TimelineEvent[],
+  orchestration: OrchestrationState | null,
+): RootSessionView[] {
+  if (!orchestration) return [];
+  const firstEvent = new Map<string, TimelineEvent>();
+  for (const event of [...events].sort((left, right) => left.order - right.order)) {
+    const sessionId = event.agent?.session_id;
+    if (sessionId && !firstEvent.has(sessionId)) firstEvent.set(sessionId, event);
+  }
+  const acceptedIds = new Set(orchestration.sessions.map((session) => session.session_id));
+  const roots: RootSessionView[] = orchestration.sessions.map((session, index) => ({
+    ...session,
+    order: firstEvent.get(session.session_id)?.order
+      ?? Number.MAX_SAFE_INTEGER - orchestration.sessions.length + index,
+    startedAt: firstEvent.get(session.session_id)?.started_at ?? null,
+  }));
+  const nextSequence = {
+    orchestrator: Math.max(0, ...roots.filter((item) => item.role === "orchestrator").map((item) => item.sequence)),
+    task_executor: Math.max(0, ...roots.filter((item) => item.role === "task_executor").map((item) => item.sequence)),
+  };
+
+  for (const [sessionId, event] of firstEvent) {
+    const profileName = event.agent?.profile_name ?? event.agent?.name;
+    const role = profileName === "orchestrator"
+      ? "orchestrator"
+      : profileName === "task-executor"
+        ? "task_executor"
+        : null;
+    if (!role || acceptedIds.has(sessionId) || event.agent?.lifecycle !== "system") continue;
+    nextSequence[role] += 1;
+    roots.push({
+      session_id: sessionId,
+      profile_name: profileName ?? role,
+      role,
+      sequence: nextSequence[role],
+      status: rootStatus(events, sessionId),
+      decision_kind: null,
+      task_id: null,
+      attempt_id: null,
+      order: event.order,
+      startedAt: event.started_at,
+    });
+  }
+  return roots.sort((left, right) => left.order - right.order || left.sequence - right.sequence);
+}
+
+/** Resolve one Task to its accepted or currently running Executor session. */
+export function taskExecutorSessionId(
+  taskId: string,
+  taskStatus: string,
+  sessions: RootSessionView[],
+): string | null {
+  const accepted = sessions.find((session) => (
+    session.role === "task_executor" && session.task_id === taskId
+  ));
+  if (accepted) return accepted.session_id;
+  if (taskStatus !== "running") return null;
+  return [...sessions].reverse().find((session) => (
+    session.role === "task_executor" && session.task_id === null
+  ))?.session_id ?? null;
+}
+
+/** Project one exact root or Subagent session in original event-start order. */
 export function projectConversation(
   events: TimelineEvent[],
   sessionId: string,
@@ -330,17 +404,4 @@ export function projectConversation(
   return items
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
     .filter((item) => itemMatches(item, filters));
-}
-
-/** Build the root projection used by the page empty state and conversation. */
-export function projectMainConversation(
-  events: TimelineEvent[],
-  filters?: TimelineFilters,
-): ConversationProjection {
-  const mainAgent = selectMainAgent(events);
-  return {
-    mainAgent,
-    items: mainAgent ? projectConversation(events, mainAgent.session_id, filters) : [],
-    sessionAgents: collectSessionAgents(events),
-  };
 }

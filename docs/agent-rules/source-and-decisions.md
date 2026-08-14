@@ -150,13 +150,14 @@ as the active project direction.
   Tool. Successful application proves only an in-memory generation-state
   change, not target API success.
 - The user has also approved a browser-only Live Observer recovery boundary.
-  The loopback React page may keep the latest five complete schema-v3 snapshots
+  The loopback React page may keep the latest five complete schema-v4 snapshots
   in same-origin IndexedDB. Those snapshots contain exactly the already-redacted
   UI payload, including raw Provider Reasoning, visible target credentials,
   Agent prompts, Tool results, HTTP exchanges, Subagent relationships, System
   Agent roots associated to their triggering HTTP Tool by `parent_event_id`,
-  and the latest Main Agent Plan projected as Todo. Batch and Patch activity appears as
-  ordinary Tool detail; pre-v3 browser history is ignored. This is local testing history, not
+  and the current Orchestration Goal, Ledger, and exact root-session links.
+  Task-local Plans, Batch, and Patch activity remain ordinary Tool detail;
+  schema-v3 browser history is cleared by the v4 upgrade. This is local testing history, not
   backend evidence or App recovery: no workflow reads it, no API, Phoenix span,
   or SQLite schema exposes the Reasoning, and clearing browser site data deletes
   the complete history.

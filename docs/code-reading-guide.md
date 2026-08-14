@@ -301,12 +301,16 @@ plan, queue, or candidate tables.
 ### `restscope/observability/`, `restscope/ui/`, and `ui/`
 
 Observability records redacted Agent turns, Tool calls, Subagent relationships,
-System Agent roots, HTTP exchanges, and the Main Plan. Browser schema-v3 has
-only `agent_turn` and `tool_call` events. A System root keeps an empty
+System Agent roots, and HTTP exchanges. Orchestration separately publishes
+schema-v4 complete replacements containing the Goal, current in-memory Ledger,
+and exact System-root session associations. The event timeline still has only
+`agent_turn` and `tool_call` events. A System root keeps an empty
 `parent_session_id` but uses the active HTTP Tool's `parent_event_id`, allowing
 the UI to nest one or more System conversations under that Tool without copying
-events. Batch and Patch Apply are ordinary Tool cards. Same-origin IndexedDB
-retains at most five complete v3 snapshots and ignores older schemas.
+events. Batch, Patch Apply, and private task Plans are ordinary Tool cards.
+Same-origin IndexedDB retains at most five complete v4 snapshots and clears v3
+records during upgrade. `ui/src/conversationProjector.ts` is the sole session
+projection path; Profile names are labels and full `session_id` values are keys.
 
 ## 5. Follow a Patch from diagnosis to target evidence
 

@@ -176,14 +176,14 @@ explicit project decision:
   or rollback state.
 - The Live Observer browser history is a second narrow exception approved only
   for local UI testing and recovery. The React page may persist the latest five
-  complete schema-v3 snapshots in same-origin IndexedDB, including the
+  complete schema-v4 snapshots in same-origin IndexedDB, including the
   already-redacted raw Provider Reasoning, Agent messages, target
   Authorization/Cookie values, Tool details, HTTP exchanges, Subagent
-  relationships, and the legacy ``lifecycle=main`` Plan projection as Todo
-  delivered to that browser. Current Task Executor Plans remain ordinary
-  System Agent tracing and do not replace that Todo. Batch execution and
-  Parameter Patch application appear as
-  ordinary Tool cards rather than special workflow events.
+  relationships, and the complete read-only Orchestration Goal, Ledger, and
+  exact root-session associations delivered to that browser. Schema-v3 history
+  is cleared during the v4 IndexedDB upgrade. Task Executor and Subagent private
+  Plans remain ordinary Tool tracing. Batch execution and Parameter Patch
+  application appear as ordinary Tool cards rather than special workflow events.
   It must not add a backend write API, SQLite record, cross-origin sync, or
   runtime input. Clearing browser site data removes this history; the App and
   workflows never read it, so it cannot resume or influence a test.

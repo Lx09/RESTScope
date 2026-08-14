@@ -7,7 +7,10 @@ Task Executor run, then asks :class:`TaskLedger` to validate every transition.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from restscope.agent import SystemAgentResult, SystemAgentTask
+from restscope.agent.contracts import AgentResultStatus
 from restscope.context import CompactTextWriter
 from restscope.harness import HarnessRuntime
 
@@ -19,7 +22,9 @@ from .models import (
     GoalContract,
     GoalCriterion,
     MilestoneRecord,
+    OrchestrationObservation,
     OrchestrationResult,
+    OrchestrationSessionRecord,
     OrchestratorDecision,
     PlanRevisionRecord,
     ReplanDecision,
@@ -37,9 +42,23 @@ _MISSION = (
 class OrchestrationRuntime:
     """Coordinate fresh planning and execution roots around one in-memory Ledger."""
 
-    def __init__(self, system_agents: HarnessRuntime) -> None:
-        """Accept the Harness-owned lifecycle without copying Agent machinery."""
+    def __init__(
+        self,
+        system_agents: HarnessRuntime,
+        *,
+        observe: Callable[[OrchestrationObservation], None] | None = None,
+    ) -> None:
+        """Accept the Harness lifecycle and an optional fail-open read-only sink.
+
+        Args:
+            system_agents: Harness entrypoint for fresh registered System roots.
+            observe: Optional UI-facing receiver for complete immutable state.
+                Receiver failures never change testing or Ledger behavior.
+        """
         self._system_agents = system_agents
+        self._observe = observe
+        self._observation_revision = 0
+        self._observed_sessions: list[OrchestrationSessionRecord] = []
 
     def run(self, focus: str | None = None) -> OrchestrationResult:
         """Run until the Orchestrator semantically completes the fixed Goal.
@@ -56,34 +75,58 @@ class OrchestrationRuntime:
             ValueError: If a System Agent fails or returns a decision/result
                 that violates the current Ledger contract.
         """
+        # One runtime normally serves one App start, but resetting here keeps a
+        # second explicit run from inheriting UI identities or revisions.
+        self._observation_revision = 0
+        self._observed_sessions.clear()
         goal = _build_goal(focus)
         ledger = TaskLedger(goal)
         first_decision = True
+        self._publish_observation(ledger)
 
         while True:
-            decision = self._run_orchestrator(ledger)
+            decision, orchestrator_result = self._run_orchestrator(ledger)
             if first_decision and not isinstance(decision, ReplanDecision):
                 raise ValueError("The first Orchestrator decision must be replan")
             first_decision = False
 
             if isinstance(decision, ReplanDecision):
                 ledger.apply_replan(decision)
+                self._record_orchestrator(orchestrator_result, decision.kind)
+                self._publish_observation(ledger)
                 continue
             if isinstance(decision, DispatchTaskDecision):
                 task = ledger.dispatch(
                     decision.task,
                     expected_revision=decision.expected_plan_revision,
                 )
+                self._record_orchestrator(
+                    orchestrator_result,
+                    decision.kind,
+                    task_id=task.task_id,
+                )
+                self._publish_observation(ledger)
                 try:
-                    execution_result = self._run_task_executor(goal, ledger, task)
+                    execution_result, executor_result = self._run_task_executor(
+                        goal,
+                        ledger,
+                        task,
+                    )
                 except _TaskExecutorLifecycleError as exc:
                     # A failed fresh root is still material history. Recording
                     # it lets the Orchestrator choose a changed recovery task.
-                    ledger.append_failure(
+                    attempt = ledger.append_failure(
                         task.task_id,
                         failure_code=exc.code,
                         failure_message=exc.message,
                     )
+                    self._record_task_executor(
+                        session_id=exc.session_id,
+                        status=exc.status,
+                        task_id=task.task_id,
+                        attempt_id=attempt.attempt_id,
+                    )
+                    self._publish_observation(ledger)
                 except RuntimeError as exc:
                     # Provider and Harness exceptions are terminal for this
                     # root, not for the outer Goal. Keep only a bounded safe
@@ -94,11 +137,21 @@ class OrchestrationRuntime:
                         failure_code="task_executor_lifecycle_error",
                         failure_message=message[:2_000],
                     )
+                    self._publish_observation(ledger)
                 else:
-                    ledger.append_attempt(execution_result)
+                    attempt = ledger.append_attempt(execution_result)
+                    self._record_task_executor(
+                        session_id=executor_result.session_id,
+                        status=executor_result.status,
+                        task_id=task.task_id,
+                        attempt_id=attempt.attempt_id,
+                    )
+                    self._publish_observation(ledger)
                 continue
 
             final_snapshot = ledger.complete(decision)
+            self._record_orchestrator(orchestrator_result, decision.kind)
+            self._publish_observation(ledger)
             return OrchestrationResult(
                 summary=decision.summary,
                 unresolved=decision.unresolved,
@@ -108,8 +161,11 @@ class OrchestrationRuntime:
 
     def _run_orchestrator(
         self, ledger: TaskLedger
-    ) -> ReplanDecision | DispatchTaskDecision | CompleteDecision:
-        """Request one exclusive decision using only bounded Ledger state."""
+    ) -> tuple[
+        ReplanDecision | DispatchTaskDecision | CompleteDecision,
+        SystemAgentResult,
+    ]:
+        """Request one exclusive decision and retain its exact root identity."""
         snapshot = ledger.snapshot()
         # The Harness uses these prompt-local identities to reject invented
         # revisions, Milestones, Attempts, and Goal criteria before return.
@@ -129,12 +185,12 @@ class OrchestrationRuntime:
         )
         result = self._system_agents.run_system_agent("orchestrator", task)
         output = _require_completed_output(result, profile_name="orchestrator")
-        return OrchestratorDecision.model_validate(output).root
+        return OrchestratorDecision.model_validate(output).root, result
 
     def _run_task_executor(
         self, goal: GoalContract, ledger: TaskLedger, task: TaskRecord
-    ) -> TaskExecutionResult:
-        """Run one fresh Task Executor with only its assignment and history."""
+    ) -> tuple[TaskExecutionResult, SystemAgentResult]:
+        """Run one fresh Task Executor and retain its exact root identity."""
         system_task = SystemAgentTask(
             objective=_render_task_execution(goal, ledger, task),
             allowed_result_aliases=(
@@ -149,9 +205,79 @@ class OrchestrationRuntime:
             if result.error is not None:
                 code = result.error.code
                 message = result.error.message
-            raise _TaskExecutorLifecycleError(code=code, message=message)
+            raise _TaskExecutorLifecycleError(
+                code=code,
+                message=message,
+                session_id=result.session_id,
+                status=result.status,
+            )
         output = result.output
-        return TaskExecutionResult.model_validate(output)
+        return TaskExecutionResult.model_validate(output), result
+
+    def _record_orchestrator(
+        self,
+        result: SystemAgentResult,
+        decision_kind: str,
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        """Remember one accepted Orchestrator decision without copying its output."""
+        sequence = sum(
+            item.role == "orchestrator" for item in self._observed_sessions
+        ) + 1
+        self._observed_sessions.append(
+            OrchestrationSessionRecord(
+                session_id=result.session_id,
+                profile_name=result.profile_name,
+                role="orchestrator",
+                sequence=sequence,
+                status=result.status,
+                decision_kind=decision_kind,
+                task_id=task_id,
+            )
+        )
+
+    def _record_task_executor(
+        self,
+        *,
+        session_id: str,
+        status: AgentResultStatus,
+        task_id: str,
+        attempt_id: str,
+    ) -> None:
+        """Link one terminal Task Executor root to its immutable Attempt."""
+        sequence = sum(
+            item.role == "task_executor" for item in self._observed_sessions
+        ) + 1
+        self._observed_sessions.append(
+            OrchestrationSessionRecord(
+                session_id=session_id,
+                profile_name="task-executor",
+                role="task_executor",
+                sequence=sequence,
+                status=status,
+                task_id=task_id,
+                attempt_id=attempt_id,
+            )
+        )
+
+    def _publish_observation(self, ledger: TaskLedger) -> None:
+        """Send one complete immutable replacement without affecting the run."""
+        if self._observe is None:
+            return
+        self._observation_revision += 1
+        observation = OrchestrationObservation(
+            revision=self._observation_revision,
+            goal=ledger.goal,
+            ledger=ledger.snapshot(),
+            sessions=tuple(self._observed_sessions),
+        )
+        try:
+            self._observe(observation)
+        except Exception:  # noqa: BLE001
+            # The loopback viewer is diagnostic only. A broken viewer must not
+            # change which API work runs or what the Ledger accepts.
+            return
 
 
 def _build_goal(focus: str | None) -> GoalContract:
@@ -373,8 +499,17 @@ def _require_completed_output(
 class _TaskExecutorLifecycleError(RuntimeError):
     """Carry one bounded Task Executor failure into the immutable Ledger."""
 
-    def __init__(self, *, code: str, message: str) -> None:
-        """Preserve stable failure details without exposing stack traces."""
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        session_id: str,
+        status: AgentResultStatus,
+    ) -> None:
+        """Preserve safe failure details and the exact failed root identity."""
         super().__init__(message)
         self.code = code[:120]
         self.message = message[:2_000]
+        self.session_id = session_id
+        self.status = status

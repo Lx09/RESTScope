@@ -3,21 +3,21 @@
 import type {
   ObserverSnapshot,
   ObserverState,
+  OrchestrationState,
   RunState,
   StreamEventType,
   TimelineEvent,
-  TodoState,
 } from "./types";
 
 export type ObserverAction =
   | { type: "snapshot"; snapshot: ObserverSnapshot }
-  | { type: "stream"; eventType: StreamEventType; data: any; cursor: number };
+  | { type: "stream"; eventType: StreamEventType; data: unknown; cursor: number };
 
 export const initialObserverState: ObserverState = {
   run: null,
   eventById: {},
   eventIds: [],
-  todo: null,
+  orchestration: null,
   latestCursor: 0,
 };
 
@@ -43,19 +43,21 @@ export function observerReducer(state: ObserverState, action: ObserverAction): O
     // must never replace state already hydrated from a newer observer cursor.
     if (action.snapshot.latest_cursor < state.latestCursor) return state;
     const sameRun = state.run?.run_id === action.snapshot.run?.run_id;
-    const snapshotTodo = action.snapshot.todo;
-    const keepCurrentTodo = (
+    const snapshotOrchestration = action.snapshot.orchestration;
+    const keepCurrentOrchestration = (
       sameRun
-      && state.todo !== null
+      && state.orchestration !== null
       && (
-        snapshotTodo === null
-        || snapshotTodo.revision <= state.todo.revision
+        snapshotOrchestration === null
+        || snapshotOrchestration.revision <= state.orchestration.revision
       )
     );
     return {
       run: action.snapshot.run,
       ...replaceEvents(action.snapshot.events),
-      todo: keepCurrentTodo ? state.todo : snapshotTodo,
+      orchestration: keepCurrentOrchestration
+        ? state.orchestration
+        : snapshotOrchestration,
       latestCursor: action.snapshot.latest_cursor,
     };
   }
@@ -74,17 +76,16 @@ export function observerReducer(state: ObserverState, action: ObserverAction): O
   if (action.eventType === "run.update") {
     return { ...state, run: action.data as RunState, latestCursor };
   }
-  if (action.eventType === "todo.replace") {
-    const nextTodo = action.data as TodoState;
-    // The cursor can advance while an older Todo payload is replayed. Keep the
-    // latest successful Main Agent Plan projection.
+  if (action.eventType === "orchestration.replace") {
+    const nextOrchestration = action.data as OrchestrationState;
+    // The cursor can advance while an older complete replacement is replayed.
     if (
-      state.todo !== null
-      && nextTodo.revision <= state.todo.revision
+      state.orchestration !== null
+      && nextOrchestration.revision <= state.orchestration.revision
     ) {
       return { ...state, latestCursor };
     }
-    return { ...state, todo: nextTodo, latestCursor };
+    return { ...state, orchestration: nextOrchestration, latestCursor };
   }
 
   const event = action.data as TimelineEvent;

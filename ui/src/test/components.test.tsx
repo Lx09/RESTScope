@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readThemePreference } from "../App";
 import { EventCard } from "../components/EventCard";
 import { CodeView } from "../components/ValueViews";
-import { TodoPanel } from "../components/TodoPanel";
 import { makeEvent } from "./fixtures";
 
 async function openCard(): Promise<void> {
@@ -97,7 +96,7 @@ describe("semantic event cards", () => {
   });
 });
 
-describe("copy, follow, theme, and Todo reading", () => {
+describe("copy, follow, and theme", () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
@@ -119,34 +118,4 @@ describe("copy, follow, theme, and Todo reading", () => {
     expect(readThemePreference()).toBe("light");
   });
 
-  it("shows every generic Plan step and its text status", () => {
-    render(
-      <TodoPanel
-        todo={{
-          revision: 4,
-          agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" },
-          explanation: "Follow the evidence in order.",
-          items: [
-            { step: "Read the schema", status: "completed" },
-            { step: "Probe the endpoint", status: "in_progress" },
-            { step: "Report findings", status: "pending" },
-          ],
-          completed_count: 1,
-          total_count: 3,
-          active_step: "Probe the endpoint",
-          percent: 33,
-        }}
-      />,
-    );
-
-    expect(screen.getByText("Revision 4")).toBeVisible();
-    expect(screen.getByText("Follow the evidence in order.")).toBeVisible();
-    expect(screen.queryByText("当前：Probe the endpoint")).not.toBeInTheDocument();
-    expect(screen.getByText("Read the schema")).toBeVisible();
-    expect(screen.getByText("Probe the endpoint")).toBeVisible();
-    expect(screen.getByText("Report findings")).toBeVisible();
-    expect(screen.getByText("已完成")).toBeVisible();
-    expect(screen.getByText("进行中")).toBeVisible();
-    expect(screen.getByText("待处理")).toBeVisible();
-  });
 });

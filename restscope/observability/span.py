@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from .observer import (
     _CURRENT_CONTEXT,
     _HTTP_TOOL,
-    _PLAN_UPDATE_TOOL,
     _ActiveContext,
     _utc_now,
 )
@@ -182,14 +181,12 @@ class LiveSpan:
                     if event
                     else "succeeded"
                 )
-                updated = self._observer._update_event(
+                self._observer._update_event(
                     self._event_id,
                     status=status,
                     ended_at=_utc_now(),
                     duration_ms=round((time.monotonic() - self._started) * 1000, 2),
                 )
-                if updated is not None and self._span_name == _PLAN_UPDATE_TOOL:
-                    self._observer._record_todo(updated)
         finally:
             try:
                 _CURRENT_CONTEXT.reset(self._context_token)

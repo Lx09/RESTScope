@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConversationView } from "../components/ConversationView";
-import { FloatingTodo } from "../components/FloatingTodo";
 import type { ConversationItem } from "../conversationProjector";
 import { makeEvent } from "./fixtures";
 
@@ -151,36 +150,5 @@ describe("Codex-style conversation components", () => {
     expect(screen.queryByText("subagent.start")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "打开 researcher 子会话" }));
     expect(openSubagent).toHaveBeenCalledWith("child-1");
-  });
-});
-
-describe("floating Todo", () => {
-  it("is absent without state and opens a historical read-only Drawer", async () => {
-    const { rerender } = render(<FloatingTodo historical={false} todo={null} />);
-    expect(screen.queryByRole("button", { name: /打开 Todo/ })).not.toBeInTheDocument();
-
-    rerender(
-      <FloatingTodo
-        historical
-        todo={{
-          revision: 3,
-          agent: { session_id: "main-1", name: "main", path: ["main"], lifecycle: "main" },
-          explanation: "Verify before reporting.",
-          items: [
-            { step: "Read schema", status: "completed" },
-            { step: "Probe endpoint", status: "in_progress" },
-          ],
-          completed_count: 1,
-          total_count: 2,
-          active_step: "Probe endpoint",
-          percent: 50,
-        }}
-      />,
-    );
-    await userEvent.click(screen.getByRole("button", { name: /打开 Todo/ }));
-
-    expect(await screen.findByText("历史 · 只读")).toBeVisible();
-    expect(screen.getByText("Revision 3")).toBeVisible();
-    expect(screen.queryByText("当前：Probe endpoint")).not.toBeInTheDocument();
   });
 });

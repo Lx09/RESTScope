@@ -160,7 +160,14 @@ class _AppResources:
         The public App intentionally keeps returning ``None``; final evidence
         remains available through existing observability and audit surfaces.
         """
-        OrchestrationRuntime(self.harness).run(focus)
+        OrchestrationRuntime(
+            self.harness,
+            observe=(
+                self.run_observer.record_orchestration
+                if self.run_observer is not None
+                else None
+            ),
+        ).run(focus)
 
     def close(self) -> None:
         """Attempt every resource cleanup in dependency order."""

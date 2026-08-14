@@ -1,21 +1,19 @@
-/** Assemble run controls, the Main Agent conversation, and auxiliary Drawers. */
+/** Assemble run controls, the Orchestrator workspace, and one Agent Drawer. */
 
 import {
   BugOutlined,
   DisconnectOutlined,
+  MenuOutlined,
   MoonOutlined,
-  RobotOutlined,
   SearchOutlined,
   SunOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
   Badge,
-  Breadcrumb,
   Button,
   ConfigProvider,
   Drawer,
-  Empty,
   Flex,
   Input,
   Select,
@@ -24,10 +22,11 @@ import {
 } from "antd";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { ConversationView } from "./components/ConversationView";
-import { FloatingTodo } from "./components/FloatingTodo";
+import { AgentDrawer } from "./components/AgentDrawer";
+import { OrchestrationRail } from "./components/OrchestrationRail";
+import { OrchestratorWorkspace } from "./components/OrchestratorWorkspace";
 import { RunHistoryBar } from "./components/RunHistoryBar";
-import { projectConversation, projectMainConversation } from "./conversationProjector";
+import { collectSessionAgents, projectRootSessions } from "./conversationProjector";
 import {
   EMPTY_FILTERS,
   STATUS_LABELS,
@@ -47,7 +46,6 @@ import { initialObserverState, observerReducer } from "./state";
 import { connectLiveRun, type LiveConnection } from "./stream";
 import { observerTheme, type ThemeMode } from "./theme";
 import type {
-  AgentIdentity,
   EventStatus,
   ObserverSnapshot,
   StreamStatus,
@@ -92,8 +90,8 @@ export default function ObserverApp() {
   const [historyMode, setHistoryMode] = useState<HistoryViewMode>("auto");
   const [filters, setFilters] = useState<TimelineFilters>(EMPTY_FILTERS);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
-  const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
-  const [selectedSystemAgentId, setSelectedSystemAgentId] = useState<string | null>(null);
+  const [agentPath, setAgentPath] = useState<string[]>([]);
+  const [railOpen, setRailOpen] = useState(false);
   const [, refreshElapsed] = useState(0);
   const historyStore = useRef<RunHistoryStore | null>(null);
   const historyWriter = useRef<RunHistoryWriter | null>(null);
@@ -243,57 +241,18 @@ export default function ObserverApp() {
     [state.eventById, state.eventIds],
   );
 
-  const conversation = useMemo(
-    () => projectMainConversation(allEvents, filters),
-    [allEvents, filters],
-  );
-  const selectedSubagent = selectedSubagentId
-    ? conversation.sessionAgents[selectedSubagentId] ?? null
-    : null;
-  const subagentItems = useMemo(
-    () => selectedSubagentId
-      ? projectConversation(allEvents, selectedSubagentId, filters)
-      : [],
-    [allEvents, filters, selectedSubagentId],
-  );
-  const selectedSystemAgent = selectedSystemAgentId
-    ? conversation.sessionAgents[selectedSystemAgentId] ?? null
-    : null;
-  const systemAgentItems = useMemo(
-    () => selectedSystemAgentId
-      ? projectConversation(allEvents, selectedSystemAgentId, filters)
-      : [],
-    [allEvents, filters, selectedSystemAgentId],
+  const sessionAgents = useMemo(() => collectSessionAgents(allEvents), [allEvents]);
+  const rootSessions = useMemo(
+    () => projectRootSessions(allEvents, state.orchestration),
+    [allEvents, state.orchestration],
   );
 
   useEffect(() => {
-    if (selectedSubagentId && !conversation.sessionAgents[selectedSubagentId]) {
-      setSelectedSubagentId(null);
-    }
-  }, [conversation.sessionAgents, selectedSubagentId]);
-
-  useEffect(() => {
-    if (
-      selectedSystemAgentId
-      && conversation.sessionAgents[selectedSystemAgentId]?.lifecycle !== "system"
-    ) {
-      setSelectedSystemAgentId(null);
-    }
-  }, [conversation.sessionAgents, selectedSystemAgentId]);
-
-  const subagentBreadcrumb = useMemo(() => {
-    if (!selectedSubagent) return [];
-    const agents = conversation.sessionAgents;
-    const path: AgentIdentity[] = [];
-    let current: AgentIdentity | undefined = selectedSubagent;
-    for (let depth = 0; current?.lifecycle === "subagent" && depth < 3; depth += 1) {
-      path.unshift(current);
-      const parentId: string | null | undefined = current.parent_session_id;
-      const parent: AgentIdentity | undefined = parentId ? agents[parentId] : undefined;
-      current = parent?.lifecycle === "subagent" ? parent : undefined;
-    }
-    return path;
-  }, [conversation.sessionAgents, selectedSubagent]);
+    const selected = agentPath.at(-1);
+    if (!selected) return;
+    const rootExists = rootSessions.some((session) => session.session_id === selected);
+    if (!rootExists && !sessionAgents[selected]) setAgentPath([]);
+  }, [agentPath, rootSessions, sessionAgents]);
   const runningEvents = allEvents.filter((event) => event.status === "running");
   const currentScopedEvent = [...runningEvents, ...allEvents].reverse().find((event) => event.operation_key);
   const failedCount = allEvents.filter((event) => event.status === "failed").length;
@@ -307,6 +266,16 @@ export default function ObserverApp() {
     const next = checked ? "light" : "dark";
     setThemeMode(next);
     window.localStorage.setItem(THEME_KEY, next);
+  }
+
+  function openAgent(sessionId: string): void {
+    setAgentPath((current) => {
+      const existing = current.indexOf(sessionId);
+      if (existing >= 0) return current.slice(0, existing + 1);
+      const parentId = sessionAgents[sessionId]?.parent_session_id;
+      return parentId === current.at(-1) ? [...current, sessionId] : [sessionId];
+    });
+    setRailOpen(false);
   }
 
   async function loadHistory(runId: string): Promise<void> {
@@ -480,108 +449,66 @@ export default function ObserverApp() {
         )}
 
         <main className="observer-main">
-          <section
-            aria-label="Main Agent 会话"
-            className="conversation-region"
-            data-cursor={state.latestCursor}
-            data-run-id={state.run?.run_id ?? ""}
-            data-testid="conversation-surface"
+          <Button
+            aria-label="打开编排进度"
+            className="rail-open-button"
+            icon={<MenuOutlined />}
+            onClick={() => setRailOpen(true)}
           >
-            {conversation.mainAgent ? (
-              <ConversationView
-                items={conversation.items}
-                onOpenSubagent={setSelectedSubagentId}
-                onOpenSystemAgent={setSelectedSystemAgentId}
+            编排进度
+          </Button>
+          <div className="observer-workspace">
+            <div className="desktop-rail">
+              <OrchestrationRail
+                onOpenAgent={openAgent}
+                orchestration={state.orchestration}
+                sessions={rootSessions}
               />
-            ) : (
-              <Empty
-                className="main-agent-empty"
-                description="此运行未启动 Main Agent"
-              >
-                <Text type="secondary">
-                  旧 Agent 运行不会被冒充为 Main Agent；会话将在 lifecycle=main 出现后展示。
-                </Text>
-              </Empty>
-            )}
-          </section>
+            </div>
+            <section
+              aria-label="Orchestrator 会话"
+              className="conversation-region"
+              data-cursor={state.latestCursor}
+              data-run-id={state.run?.run_id ?? ""}
+              data-testid="conversation-surface"
+            >
+              <OrchestratorWorkspace
+                events={allEvents}
+                filters={filters}
+                onOpenAgent={openAgent}
+                orchestration={state.orchestration}
+                sessions={rootSessions}
+              />
+            </section>
+          </div>
         </main>
 
-        <FloatingTodo
-          historical={selectedView.source === "history"}
-          todo={state.todo}
+        <Drawer
+          className="rail-drawer"
+          focusable={{ trap: true, focusTriggerAfterClose: true }}
+          onClose={() => setRailOpen(false)}
+          open={railOpen}
+          placement="left"
+          size={340}
+          title="编排进度"
+        >
+          <OrchestrationRail
+            onOpenAgent={openAgent}
+            orchestration={state.orchestration}
+            sessions={rootSessions}
+          />
+        </Drawer>
+
+        <AgentDrawer
+          events={allEvents}
+          filters={filters}
+          onClose={() => setAgentPath([])}
+          onNavigate={(depth) => setAgentPath((current) => current.slice(0, depth + 1))}
+          onOpenAgent={openAgent}
+          openPath={agentPath}
+          orchestration={state.orchestration}
+          rootSessions={rootSessions}
         />
-
-        <Drawer
-          className="subagent-drawer"
-          focusable={{ trap: true, focusTriggerAfterClose: true }}
-          onClose={() => setSelectedSubagentId(null)}
-          open={selectedSubagent !== null}
-          placement="right"
-          title={(
-            <Flex align="center" gap={8} wrap>
-              {selectedSubagent?.parent_session_id
-                && conversation.sessionAgents[selectedSubagent.parent_session_id]?.lifecycle
-                  === "subagent" && (
-                <Button
-                  onClick={() => setSelectedSubagentId(selectedSubagent.parent_session_id ?? null)}
-                  size="small"
-                  type="text"
-                >
-                  返回
-                </Button>
-              )}
-              <Breadcrumb
-                items={subagentBreadcrumb.map((agent) => ({
-                  title: agent.session_id === selectedSubagentId
-                    ? agent.profile_name ?? agent.name
-                    : (
-                      <button
-                        className="breadcrumb-button"
-                        onClick={() => setSelectedSubagentId(agent.session_id)}
-                        type="button"
-                      >
-                        {agent.profile_name ?? agent.name}
-                      </button>
-                    ),
-                }))}
-              />
-            </Flex>
-          )}
-          size={720}
-        >
-          {selectedSubagent && (
-            <ConversationView
-              emptyDescription="此 Subagent 尚无会话内容"
-              items={subagentItems}
-              onOpenSubagent={setSelectedSubagentId}
-              onOpenSystemAgent={setSelectedSystemAgentId}
-            />
-          )}
-        </Drawer>
-
-        <Drawer
-          className="system-agent-drawer"
-          focusable={{ trap: true, focusTriggerAfterClose: true }}
-          onClose={() => setSelectedSystemAgentId(null)}
-          open={selectedSystemAgent?.lifecycle === "system"}
-          placement="right"
-          title={(
-            <Flex align="center" gap={8}>
-              <RobotOutlined aria-hidden />
-              <span>{selectedSystemAgent?.profile_name ?? "System Agent"}</span>
-            </Flex>
-          )}
-          size={720}
-        >
-          {selectedSystemAgent?.lifecycle === "system" && (
-            <ConversationView
-              emptyDescription="此 System Agent 尚无会话内容"
-              items={systemAgentItems}
-              onOpenSubagent={setSelectedSubagentId}
-              onOpenSystemAgent={setSelectedSystemAgentId}
-            />
-          )}
-        </Drawer>
       </div>
     </ConfigProvider>
   );

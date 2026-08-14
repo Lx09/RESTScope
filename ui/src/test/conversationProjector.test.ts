@@ -2,32 +2,70 @@ import { describe, expect, it } from "vitest";
 
 import {
   projectConversation,
-  projectMainConversation,
-  selectMainAgent,
+  projectRootSessions,
+  taskExecutorSessionId,
 } from "../conversationProjector";
 import { EMPTY_FILTERS } from "../presentation";
+import type { OrchestrationState } from "../types";
 import { makeEvent } from "./fixtures";
 
-const mainAgent = {
-  session_id: "main-1",
+const orchestratorAgent = {
+  session_id: "orchestrator-1",
   parent_session_id: null,
-  name: "main_profile",
-  profile_name: "main_profile",
-  lifecycle: "main" as const,
-  task_id: "task-1",
-  path: ["main_profile"],
+  name: "orchestrator",
+  profile_name: "orchestrator",
+  lifecycle: "system" as const,
+  path: ["orchestrator"],
 };
 
+const orchestration = {
+  revision: 4,
+  goal: { mission: "Explore", focus: null, success_criteria: [] },
+  ledger: {
+    plan_revision: 1,
+    run_status: "running",
+    plan_revisions: [],
+    milestones: [],
+    tasks: [],
+    attempts: [],
+  },
+  sessions: [{
+    session_id: "orchestrator-1",
+    profile_name: "orchestrator",
+    role: "orchestrator",
+    sequence: 1,
+    status: "completed",
+    decision_kind: "replan",
+    task_id: null,
+    attempt_id: null,
+  }],
+} satisfies OrchestrationState;
+
 describe("conversation projector", () => {
-  it("refuses to reinterpret a legacy Agent as the Main Agent", () => {
-    expect(selectMainAgent([makeEvent()])).toBeNull();
-    expect(projectMainConversation([makeEvent()]).items).toEqual([]);
+  it("keeps same-profile root sessions separate and preserves stable numbering", () => {
+    const first = makeEvent({ event_id: "first", agent: orchestratorAgent });
+    const second = makeEvent({
+      event_id: "second",
+      order: 2,
+      agent: { ...orchestratorAgent, session_id: "orchestrator-2" },
+    });
+    const state: OrchestrationState = {
+      ...orchestration,
+      sessions: [
+        ...orchestration.sessions,
+        { ...orchestration.sessions[0], session_id: "orchestrator-2", sequence: 2 },
+      ],
+    };
+
+    expect(projectRootSessions([first, second], state).map((item) => (
+      [item.session_id, item.sequence]
+    ))).toEqual([["orchestrator-1", 1], ["orchestrator-2", 2]]);
   });
 
   it("places system and user prompts, reasoning, and response in stable order", () => {
     const turn = makeEvent({
       event_id: "turn-1",
-      agent: mainAgent,
+      agent: orchestratorAgent,
       detail: {
         task: { task_id: "task-1", objective: "Inspect the API" },
         input: { messages: [
@@ -36,14 +74,13 @@ describe("conversation projector", () => {
         ] },
         reasoning: "Check the schema first.",
         phase: "final_answer",
-        output: { content: '{"summary":"Complete"}' },
+        output: { content: "Complete" },
       },
     });
 
-    const projected = projectMainConversation([turn], EMPTY_FILTERS);
+    const projected = projectConversation([turn], "orchestrator-1", EMPTY_FILTERS);
 
-    expect(projected.mainAgent).toEqual(mainAgent);
-    expect(projected.items.map((item) => [item.id, item.kind])).toEqual([
+    expect(projected.map((item) => [item.id, item.kind])).toEqual([
       ["prompt:turn-1:0", "prompt"],
       ["prompt:turn-1:1", "prompt"],
       ["reasoning:turn-1", "reasoning"],
@@ -54,31 +91,31 @@ describe("conversation projector", () => {
   it("omits empty completed reasoning but shows a running reasoning status", () => {
     const completed = makeEvent({
       event_id: "completed",
-      agent: mainAgent,
+      agent: orchestratorAgent,
       detail: { input: { messages: [] }, output: { content: "done" }, phase: "commentary" },
     });
     const running = makeEvent({
       event_id: "running",
       order: 2,
       status: "running",
-      agent: mainAgent,
+      agent: orchestratorAgent,
       detail: { input: { messages: [] }, output: null, phase: "commentary" },
     });
 
-    expect(projectConversation([completed], "main-1").map((item) => item.kind)).toEqual([
+    expect(projectConversation([completed], "orchestrator-1").map((item) => item.kind)).toEqual([
       "commentary",
     ]);
-    expect(projectConversation([running], "main-1").map((item) => item.id)).toEqual([
+    expect(projectConversation([running], "orchestrator-1").map((item) => item.id)).toEqual([
       "reasoning:running",
     ]);
   });
 
-  it("keeps Tool and Subagent calls as collapsed conversation items", () => {
+  it("keeps Tool and Subagent calls as compact conversation items", () => {
     const start = makeEvent({
       event_id: "start",
       kind: "tool_call",
       name: "subagent.start",
-      agent: mainAgent,
+      agent: orchestratorAgent,
       detail: {
         input: { arguments: { profile_name: "researcher" } },
         output: { structured: { subagent_id: "child-1", profile_name: "researcher" } },
@@ -89,9 +126,9 @@ describe("conversation projector", () => {
       order: 2,
       kind: "tool_call",
       name: "diagnosis.record",
-      agent: mainAgent,
+      agent: orchestratorAgent,
     });
-    const items = projectConversation([start, worklist], "main-1");
+    const items = projectConversation([start, worklist], "orchestrator-1");
 
     expect(items.map((item) => [item.id, item.kind])).toEqual([
       ["subagent:child-1", "subagent"],
@@ -108,7 +145,7 @@ describe("conversation projector", () => {
       event_id: "http-1",
       kind: "tool_call",
       name: "restscope.http.request",
-      agent: mainAgent,
+      agent: orchestratorAgent,
     });
     const systemAgent = {
       session_id: "system-1",
@@ -125,10 +162,9 @@ describe("conversation projector", () => {
       agent: systemAgent,
     });
 
-    const projection = projectMainConversation([http, systemTurn]);
+    const projection = projectConversation([http, systemTurn], "orchestrator-1");
 
-    expect(projection.sessionAgents["system-1"]).toEqual(systemAgent);
-    expect(projection.items[0].systemAgents).toEqual([{
+    expect(projection[0].systemAgents).toEqual([{
       sessionId: "system-1",
       profileName: "resource-identifier-selector",
       status: "succeeded",
@@ -138,7 +174,7 @@ describe("conversation projector", () => {
   it("does not repeat Tool Call or Tool Result messages as body text", () => {
     const turn = makeEvent({
       event_id: "tool-turn",
-      agent: mainAgent,
+      agent: orchestratorAgent,
       detail: {
         input: { messages: [
           { role: "assistant", content: "Calling a tool", tool_calls: [{ id: "call-1" }] },
@@ -153,9 +189,28 @@ describe("conversation projector", () => {
       },
     });
 
-    const items = projectConversation([turn], "main-1");
+    const items = projectConversation([turn], "orchestrator-1");
 
     expect(items.map((item) => item.kind)).toEqual(["prompt"]);
     expect(items[0].message?.content).toBe("Continue");
+  });
+
+  it("routes a Task to its exact accepted Executor session", () => {
+    const sessions = projectRootSessions([], {
+      ...orchestration,
+      sessions: [{
+        session_id: "executor-2",
+        profile_name: "task-executor",
+        role: "task_executor",
+        sequence: 2,
+        status: "completed",
+        decision_kind: null,
+        task_id: "task_7",
+        attempt_id: "attempt_4",
+      }],
+    });
+
+    expect(taskExecutorSessionId("task_7", "completed", sessions)).toBe("executor-2");
+    expect(taskExecutorSessionId("task_8", "completed", sessions)).toBeNull();
   });
 });
