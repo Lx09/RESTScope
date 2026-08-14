@@ -31,9 +31,9 @@ def test_resolution_manifest_and_reference_library_are_exact() -> None:
     )
     expected_references = (
         "references/evidence-and-diagnosis.md",
-        "references/tools-and-controlled-probes.md",
-        "references/patch-subagent-delegation.md",
-        "references/patch-review-and-decisions.md",
+        "references/gather-and-test-evidence.md",
+        "references/delegate-input-repair.md",
+        "references/verify-repair-and-decide.md",
         "references/completion-checklist.md",
     )
     assert skill.manifest.version == "1.0"
@@ -53,7 +53,7 @@ def test_resolution_manifest_and_reference_library_are_exact() -> None:
 
 
 def test_resolution_delegates_application_and_verifies_real_effect() -> None:
-    """The parent confirms Store state itself and uses a fresh Batch afterward."""
+    """Diagnosis delegates repair, confirms current state, and reruns tests."""
     from restscope.skills import builtin_skill_catalog
 
     skill = builtin_skill_catalog().get(RESOLVE)
@@ -66,6 +66,20 @@ def test_resolution_delegates_application_and_verifies_real_effect() -> None:
     assert "test_case.run_batch" in combined
     assert "Do not construct or rewrite" in combined
     assert "unresolved" in combined
+    assert "grouped test-run Tool" in skill.instructions
+    assert "each returned case is one actual generated request" in skill.instructions
+    assert "request-input problems" in skill.manifest.description
+    for role_term in (
+        "Orchestrator",
+        "Task Executor",
+        "Profile",
+        "Agent",
+        "Subagent",
+        "parent session",
+        "child completion",
+        "child Profile",
+    ):
+        assert role_term not in combined
     for retired in (
         "generate_parameter_patch",
         "parameter_patch.read_candidate",

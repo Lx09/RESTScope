@@ -9,13 +9,13 @@ import yaml
 
 SKILL_NAME = "query-restscope-database"
 EXPECTED_REFERENCES = (
-    "references/schema-discovery.md",
-    "references/progress-and-coverage.md",
-    "references/batches-and-observations.md",
-    "references/bugs-and-oracles.md",
-    "references/resources-and-states.md",
-    "references/inputs-and-generation.md",
-    "references/openapi-and-contract-changes.md",
+    "references/database-structure.md",
+    "references/test-coverage.md",
+    "references/test-cases-and-results.md",
+    "references/confirmed-defects.md",
+    "references/api-resources-and-state.md",
+    "references/test-inputs-and-data-sources.md",
+    "references/api-contracts-and-changes.md",
 )
 
 
@@ -48,7 +48,7 @@ def test_database_query_skill_manifest_and_categories_are_exact() -> None:
 
 
 def test_database_query_skill_routes_every_purpose_and_preserves_evidence_meaning() -> None:
-    """Each current evidence purpose has one direct Reference and guarded interpretation."""
+    """Natural questions route to storage mappings without losing safety rules."""
 
     from restscope.skills import builtin_skill_catalog
 
@@ -56,21 +56,35 @@ def test_database_query_skill_routes_every_purpose_and_preserves_evidence_meanin
     combined = "\n".join(
         [skill.instructions, *(reference.content for reference in skill.references)]
     )
-    for term in (
-        "sqlite_schema",
-        "positive_attempts",
-        "response_headers",
-        "oracle_assessments.is_bug",
-        "resource_state_events",
-        "operation_input_sources",
-        "openapi_change_events",
+    expected_routes = {
+        "database structure": "sqlite_schema",
+        "test coverage": "positive_attempts",
+        "test cases and results": "response_headers",
+        "confirmed defects": "oracle_assessments",
+        "API resources and state": "resource_state_events",
+        "test inputs and data sources": "operation_input_sources",
+        "API contracts and changes": "openapi_change_events",
+    }
+    for purpose, storage_term in expected_routes.items():
+        assert purpose in skill.instructions
+        assert storage_term in combined
+    for role_term in (
+        "Orchestrator",
+        "Task Executor",
+        "Profile",
+        "Agent",
+        "Subagent",
+        "parent session",
+        "child Profile",
     ):
-        assert term in combined
-    assert "test-progress" in skill.instructions
-    assert "single complete selected" in skill.instructions
-    assert "not as a plan" in skill.instructions
-    assert "current mutable generation configuration" in combined
+        assert role_term not in combined
+    assert "test-progress" not in combined
+    assert "only selected column" in combined
+    assert "does not store the current mutable test-input configuration" in combined
     assert "response_headers, observation_id" not in combined
+    assert "each `observation_id` is the durable ID\nof an executed test case" in combined
+    assert "grouped test run a **Batch**" in combined
+    assert "**Bug Oracle\nAssessment**" in combined
 
 
 def test_one_reference_enters_context_only_after_file_read() -> None:
@@ -112,7 +126,7 @@ def test_one_reference_enters_context_only_after_file_read() -> None:
                             name="file.read",
                             arguments={
                                 "skill_name": SKILL_NAME,
-                                "path": "references/progress-and-coverage.md",
+                                "path": "references/test-coverage.md",
                             },
                         )
                     ],
@@ -167,10 +181,11 @@ def test_one_reference_enters_context_only_after_file_read() -> None:
         "\n".join(message.content for message in request.messages)
         for request in provider.requests
     ]
-    assert "Operation-level Batch progress" not in prompts[0]
-    assert "Operation-level Batch progress" not in prompts[1]
-    assert "Operation-level Batch progress" in prompts[2]
-    assert "Exact operation input sources" not in prompts[2]
+    reference_only_text = "Summarize coverage for every endpoint"
+    assert reference_only_text not in prompts[0]
+    assert reference_only_text not in prompts[1]
+    assert reference_only_text in prompts[2]
+    assert "Trace exact data sources for one consumer endpoint" not in prompts[2]
 
 
 @pytest.mark.parametrize("missing_tool", ("file.read", "database.query"))

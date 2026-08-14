@@ -201,13 +201,15 @@ availability never substitutes for authorization to call a live target.
 
 Built-in Skills are standard directories discovered from package data:
 
-- `apply-parameter-patch` teaches state read, complete Patch construction,
-  deterministic validation, value-level review, atomic apply, and confirmation.
-- `resolve-operation-failures` teaches diagnosis of one operation's inline Batch
-  evidence and delegation to an authorized Patch child Profile.
-- `query-restscope-database` selects one of seven lazily read query-purpose
-  References for durable schema, progress, Observation, Bug, Resource, input,
-  or OpenAPI evidence.
+- `apply-parameter-patch` teaches how to change future test-input rules, then
+  maps that task to complete Generator/Constraint replacement, deterministic
+  validation, value-level review, atomic apply, and confirmation.
+- `resolve-operation-failures` teaches how to diagnose failed test cases,
+  distinguish input from non-input causes, delegate a confirmed input repair,
+  and verify it with new test evidence.
+- `query-restscope-database` routes seven user-facing question types—database
+  structure, test coverage, test cases, confirmed defects, API resources, input
+  data sources, and API contracts—to lazily loaded storage/query References.
 
 `skill.read` reveals only the selected `SKILL.md`; `file.read` reveals only a
 directly linked first-level Markdown Reference registered at startup. Neither

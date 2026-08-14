@@ -1,4 +1,4 @@
-# Evidence Tools and controlled Probes
+# Gather evidence and test a specific hypothesis
 
 Use `openapi.list_inputs` and `openapi.list_response_fields` for discovery, then
 query only exact relevant nodes with the Schema Tools. OpenAPI data explains
@@ -8,9 +8,10 @@ Use `request_generation.get_input_state` to inspect the actual current
 Generator state and complete Constraint closure. A state digest identifies
 content; it does not prove target behavior.
 
-Use the inline output of `test_case.run_batch` as the actual generated request
-and outcome. Case numbers are local to that result and must not be treated as
-stable references. Read-only evidence calls may be grouped when independent.
+Use `test_case.run_batch` to create one grouped test run. Its inline cases are
+the actual generated requests and outcomes; case numbers are local to that
+result and must not become stable references. Read-only evidence calls may be
+grouped when independent.
 
 Send a controlled `restscope.http.request` only when existing evidence cannot
 distinguish competing hypotheses and the external action is authorized:
@@ -26,6 +27,6 @@ distinguish competing hypotheses and the external action is authorized:
 6. Compare the result with the prediction. Do not treat a successful Tool call
    as a successful HTTP outcome.
 
-After a Patch is confirmed in Generation Store, run a new full
-`test_case.run_batch`. That Batch measures target effect at the new frozen
+After a Patch is confirmed in current request-generation state, run a new full
+`test_case.run_batch`. That test run measures target effect at the new frozen
 revision; it does not retroactively prove the semantic review.

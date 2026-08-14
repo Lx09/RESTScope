@@ -1,4 +1,4 @@
-# Value-level semantic self-review
+# Review generated values and relationships
 
 ## Self-review validated final state
 
@@ -26,13 +26,12 @@ Check in this order:
 7. Reject unnecessary changes or weakening of unrelated behavior.
 
 Do not replace value checks with compiler success, Apply success, HTTP success,
-an API status, or disappearance of a Failure. A later real Batch measures
+an API status, or disappearance of a failure. A later real test run measures
 target effects. Apply only
 when final Generators and Constraints guarantee every predicate and samples
 show no counterexample; otherwise report exact unmet predicates.
 
 Keep root cause, affected boundary, and evidence authority fixed while
 revising. Review feedback does not justify a new diagnosis or more
-target-coupled source. The Skill-owning Agent performs this checklist itself.
-There is no independent Reviewer, candidate Registry, or Finalizer to
-compensate for skipped checks.
+target-coupled source. Perform this checklist before application; no separate
+reviewer or finalizer compensates for skipped checks.

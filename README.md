@@ -129,15 +129,13 @@ resolution path for repeatable synchronous System Agent roots, but only for
 Profiles registered with a Harness-owned result contract. Each call gets an
 isolated prompt session and Agent tree and is closed after its validated result.
 
-The project currently ships two built-in standard Skills. The medium-risk
-`apply-parameter-patch` Skill reads current generation state, builds a complete
-Generator/Constraint replacement, validates and samples it, performs value-level
-semantic review, atomically applies it, and confirms the new revision. The
-medium-risk `resolve-operation-failures` Skill owns evidence-driven diagnosis
-for one operation and delegates a confirmed Parameter repair to an authorized
-child Profile that selects `apply-parameter-patch`. The parent confirms the
-applied revision from the Store and uses a later complete Batch to measure the
-real target effect.
+The project currently ships three built-in standard Skills. In user-facing
+terms, `query-restscope-database` answers read-only questions about API tests and
+stored evidence; `resolve-operation-failures` diagnoses failed test cases and
+delegates confirmed test-input repairs; and `apply-parameter-patch` changes,
+validates, reviews, applies, and confirms future test-input rules. Their detailed
+References introduce RESTScope's internal table names, Generator/Constraint
+language, and lifecycle Tools only after the corresponding general concept.
 
 Each standard `SKILL.md` frontmatter contains only `name` and `description`,
 while `restscope.yaml` declares version, risk, required Tools, and bounded
@@ -145,8 +143,10 @@ Context Sources. `restscope.skills` automatically discovers these packaged
 files and exposes an immutable built-in Catalog; callers may add test
 definitions but cannot replace a built-in. Cross-Task REST API exploration is
 always-required Orchestrator Profile guidance rather than an optional Skill.
-The production Task Executor selects only `resolve-operation-failures`; its
-Parameter Patch child selects only `apply-parameter-patch`.
+The production Task Executor selects `resolve-operation-failures` and
+`query-restscope-database`; its Parameter Patch child selects only
+`apply-parameter-patch`. The Orchestrator also selects
+`query-restscope-database` for bounded evidence drill-down.
 The retired specialized Failure Resolution, Patch, Review, and Compact Agents
 are not runtime fallbacks.
 

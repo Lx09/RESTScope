@@ -5,9 +5,10 @@
 Use current evidence in this order:
 
 1. A failure message that states a concrete value or presence rule.
-2. The actual inline Batch request and its HTTP/transport outcome.
+2. The actual request and HTTP/transport outcome from a grouped test run.
 3. A controlled Probe that changes only inputs in one explicit hypothesis.
-4. Current Generator/Constraint state and current observed reference values.
+4. Current input value strategies (Generators), cross-input rules
+   (Constraints), and observed reference values.
 5. OpenAPI Schema, description, example, and response contract.
 6. Model knowledge, which may form a hypothesis but never prove one.
 
@@ -40,4 +41,4 @@ not restate the message or describe the desired Patch as the cause.
 Authentication, authorization, unsupported methods, resource lifecycle/state,
 server failure, transport failure, and response-contract changes may have no
 safe request-generation Patch. State the evidence and leave uncertain causes
-unresolved. Do not patch arbitrary inputs merely because a Batch failed.
+unresolved. Do not change arbitrary inputs merely because a test case failed.

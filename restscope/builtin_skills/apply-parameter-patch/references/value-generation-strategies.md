@@ -1,14 +1,18 @@
-# Generator construction and complete replacement
+# Test-input value generation strategies
+
+A Generator is RESTScope's stored strategy for producing one future request
+input. Use this Reference after deciding the input's required value domain,
+presence, structure, or evidence-backed data source.
 
 ## Contents
 
-- Configuration and Patch boundary
+- Current configuration and change boundary
 - Scalar strategies
 - Containers and variants
 - Reference-backed strategies
 - Presence and minimal repair
 
-## Configuration and Patch boundary
+## Current configuration and change boundary
 
 Every active input node owns one to eight positive Generator candidates. Each
 candidate has a strategy plus an `inclusion_probability` from 0 through 1;

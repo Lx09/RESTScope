@@ -1,4 +1,8 @@
-# Validation, compilation, generation, and sampling
+# Validate and preview a test-input rule change
+
+Validation converts the semantic test-input change into RESTScope's Generator
+and Constraint runtime representation, previews deterministic test cases, and
+returns a digest that binds the exact reviewed content.
 
 ## Validation Tool contract
 

@@ -1,4 +1,8 @@
-# Constraint replacement and solving
+# Cross-input rules and solving
+
+A Constraint is RESTScope's representation of a relationship that must hold
+among values or presence states in the same generated request. Use Generators
+for single-input domains and Constraints only for these cross-input rules.
 
 ## Contents
 

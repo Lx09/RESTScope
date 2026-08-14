@@ -25,12 +25,12 @@ def test_apply_parameter_patch_manifest_and_references_are_exact() -> None:
         "parameter_patch.apply",
     )
     expected_references = (
-        "references/proposal-protocol.md",
-        "references/generators.md",
-        "references/constraints.md",
-        "references/compiler-and-sampling.md",
-        "references/review.md",
-        "references/application.md",
+        "references/design-input-rule-change.md",
+        "references/value-generation-strategies.md",
+        "references/cross-input-rules.md",
+        "references/validate-and-preview.md",
+        "references/semantic-review.md",
+        "references/apply-and-confirm.md",
     )
 
     assert skill.manifest.name == SKILL_NAME
@@ -81,6 +81,20 @@ def test_patch_skill_requires_state_validate_review_apply_and_confirmation() -> 
     assert "HTTP success" in combined
     assert "prove" in combined.lower()
     assert "build-parameter-patch" not in combined
+    assert "future API test inputs" in skill.manifest.description
+    assert "RESTScope calls one\ninput's value strategy a **Generator**" in skill.instructions
+    for role_term in (
+        "Orchestrator",
+        "Task Executor",
+        "Profile",
+        "Agent",
+        "Subagent",
+        "Skill-owning Agent",
+        "parent-confirmed",
+        "parent session",
+        "child Profile",
+    ):
+        assert role_term not in combined
 
 
 @pytest.mark.parametrize(

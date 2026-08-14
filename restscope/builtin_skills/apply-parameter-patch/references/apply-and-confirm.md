@@ -1,4 +1,7 @@
-# Atomic application and confirmation
+# Apply the reviewed change and confirm current state
+
+Application atomically replaces RESTScope's future test-input configuration.
+It changes no target API state and supplies no HTTP evidence by itself.
 
 ## Apply only an exact validated replacement
 

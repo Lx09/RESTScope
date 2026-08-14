@@ -1,6 +1,6 @@
 # Database Query Tool and Purpose-Specific Skill
 
-Status: Implemented and verified; Git delivery awaits separate authorization
+Status: Completed and merged into local `main` at `a8be8fc`
 
 ## Objective
 
@@ -43,7 +43,10 @@ database query guidance.
 
 ## Verification
 
-- `uv run pytest -q`: 657 passed, 13 skipped.
+- Feature-Worktree verification: `uv run pytest -q` reported 657 passed and 13
+  skipped.
+- Merged-`main` verification: `uv run pytest -q` reported 676 passed and 2
+  skipped.
 - `uv run ruff check restscope tests`: all checks passed.
 - `uv run python -m compileall -q restscope tests`: passed.
 - `uv run pytest -q tests/test_no_typing_any.py`: 1 passed.
@@ -51,4 +54,5 @@ database query guidance.
 - `git diff --check`: passed.
 
 No real model, target API, external database, or other live service was called.
-The feature remains uncommitted in its dedicated Worktree as required.
+Commit `a8be8fc` was fast-forwarded into local `main`; its feature Worktree and
+branch were removed after merged-result verification.
