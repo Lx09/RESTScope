@@ -204,7 +204,7 @@ ask which direction to preserve if the answer would affect implementation.
 
 These seven terms are RESTScope's core runtime language and hard constraints:
 
-- **Orchestrator** is the outer, no-Tool System Agent that owns REST API
+- **Orchestrator** is the outer planning System Agent that owns REST API
   exploration strategy, Operation ordering, prerequisites, happy-path and
   exceptional phase selection, Milestones, Task dispatch, Replan, and semantic
   completion through the App-lifetime in-memory Task Ledger. **Task Executor**
@@ -218,13 +218,18 @@ These seven terms are RESTScope's core runtime language and hard constraints:
   `*Agent` classes. `RESTScopeApp.start(focus)` blocks on
   `OrchestrationRuntime.run(focus)`; the removed FIFO Run Harness and taskless
   Main Agent lifecycle must not be restored.
-- The Orchestrator Profile has no Tools, Skills, or child Profiles. Its sole
-  Context Source is the Harness-owned read-only `test-progress` projection.
+- The Orchestrator Profile has no child Profiles, test-execution Tools, or
+  mutation capability. It grants only `database.query`, `file.read`, and the
+  `query-restscope-database` Skill for bounded durable-evidence drill-down. Its
+  sole Context Source and default coverage summary remain the Harness-owned
+  read-only `test-progress` projection.
   The Reader calls only `APIBehaviorCatalog.read_test_progress()`, renders at
   most 12,000 characters through `CompactTextWriter`, and fails the fresh root
   if progress cannot be read; it does not query tables or interpret states.
   The always-required REST API exploration policy lives in the Orchestrator's
-  stable Profile instructions rather than an optional Skill.
+  stable Profile instructions rather than an optional Skill. Database rows are
+  evidence for planning, Replan, and completion, never permission to execute a
+  Task or persistent planning state.
 - **System Agent** is a synchronous, repeatable root use of the same generic
   Agent, started only through a Harness-registered Profile/result contract.
   Every call owns an isolated prompt session and Agent tree and is closed after
@@ -250,8 +255,8 @@ These seven terms are RESTScope's core runtime language and hard constraints:
   `skill.read` call.
 - **Tool** is one model-callable domain behavior. Every RESTScope-owned Tool
   lives under `restscope.tools`, grouped by the thing it handles, such as HTTP,
-  OpenAPI, Resource, Test Case, Request Generation, Parameter Patch, Plan, or
-  Skill. Its Tool Module owns the
+  Database, OpenAPI, Resource, Test Case, Request Generation, Parameter Patch,
+  Plan, or Skill. Its Tool Module owns the
   complete ToolSpec, execution Adapter, safe failure translation, output
   bounding, and directly supporting presentation code. Workflows and Harnesses
   may inject state but must not define private Tool contracts.

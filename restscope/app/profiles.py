@@ -42,7 +42,10 @@ from restscope.orchestration.models import OrchestratorDecision, TaskExecutionRe
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
 
 _PATCH_PROFILE_NAME = "parameter-patch"
-_TASK_EXECUTOR_SKILLS = ("resolve-operation-failures",)
+_DATABASE_QUERY_SKILL = "query-restscope-database"
+_ORCHESTRATOR_TOOLS = ("database.query", "file.read")
+_ORCHESTRATOR_SKILLS = (_DATABASE_QUERY_SKILL,)
+_TASK_EXECUTOR_SKILLS = ("resolve-operation-failures", _DATABASE_QUERY_SKILL)
 _TASK_EXECUTOR_TOOLS = (
     PLAN_READ_TOOL_NAME,
     PLAN_UPDATE_TOOL_NAME,
@@ -59,6 +62,7 @@ _TASK_EXECUTOR_TOOLS = (
     "subagent.start",
     "subagent.wait",
     "subagent.cancel",
+    "database.query",
     "file.read",
 )
 _PATCH_TOOLS = (
@@ -75,8 +79,11 @@ _PATCH_TOOLS = (
 _ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator.
 
 - Use the Goal, Task Ledger projection, and current test-progress Context Source
-  in this task. You have no Tools, Skills, child Profiles, direct behavior
-  database access, or hidden history.
+  in this task. Treat test-progress as the default coverage summary. Load
+  `query-restscope-database` and use `database.query` only when a planning,
+  Replan, or completion decision needs narrower durable evidence.
+- You have no child Profiles, testing or mutation Tools, or hidden history.
+  Database rows are evidence, not permission to execute the next Task yourself.
 - On the first call, return replan and create a small rolling set of verifiable
   Milestones. On later calls, return exactly one replan, dispatch_task, or
   complete decision.
@@ -178,6 +185,8 @@ def _build_agent_runtime_definition(
                 name="orchestrator",
                 instructions=_ORCHESTRATOR_INSTRUCTIONS,
                 model_config_name="thinking",
+                tool_names=_ORCHESTRATOR_TOOLS,
+                skill_names=_ORCHESTRATOR_SKILLS,
                 context_sources=(TEST_PROGRESS_CONTEXT_SOURCE,),
             )
         )

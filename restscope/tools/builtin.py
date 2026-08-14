@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from restscope.tools.database import database_query_tool_spec
 from restscope.tools.file import file_read_tool_spec
 from restscope.tools.http import http_request_tool_spec
 from restscope.tools.openapi import (
@@ -43,6 +44,7 @@ from .catalog import ToolCatalog, ToolDefinition
 def builtin_tool_catalog() -> ToolCatalog:
     """Return the one immutable Catalog of built-in Tool definitions."""
     grouped = (
+        ("database", (database_query_tool_spec(),)),
         ("http", (http_request_tool_spec(),)),
         (
             "openapi",

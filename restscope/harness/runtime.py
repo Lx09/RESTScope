@@ -18,6 +18,10 @@ from restscope.tools import (
     builtin_tool_catalog,
 )
 from restscope.tools.context import ToolContext, ToolContextError
+from restscope.tools.database import (
+    DatabaseQueryToolBackend,
+    database_query_tool_binding,
+)
 from restscope.tools.external import register_tool_source
 from restscope.tools.external.mcp import (
     MCPHost,
@@ -180,6 +184,7 @@ def build_harness(
     target_api_client: TargetAPIClient | None = None,
     observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
+    database_query_backend: DatabaseQueryToolBackend | None = None,
     request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None,
     operation_testing_service: OperationTestingService | None = None,
     test_case_query_backend: TestCaseQueryToolBackend | None = None,
@@ -238,6 +243,7 @@ def build_harness(
             request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,
             test_case_query_backend=test_case_query_backend,
+            database_query_backend=database_query_backend,
         )
         agent_runtime = replace(
             agent_runtime,
@@ -263,6 +269,7 @@ def _production_tool_binding_factories(
     request_generation_patch_runtime: RequestGenerationPatchRuntime | None,
     operation_testing_service: OperationTestingService | None,
     test_case_query_backend: TestCaseQueryToolBackend | None,
+    database_query_backend: DatabaseQueryToolBackend | None,
 ) -> tuple[ToolBindingFactory, ...]:
     """Create implementations for every App-owned built-in domain Tool.
 
@@ -270,6 +277,8 @@ def _production_tool_binding_factories(
     names to any Profile and therefore confer no model permission by themselves.
     """
     bindings: list[ToolBinding] = []
+    if database_query_backend is not None:
+        bindings.append(database_query_tool_binding(database_query_backend))
     if include_http:
         bindings.append(
             ToolBinding(
@@ -352,6 +361,7 @@ def build_harness_with_mcp_host(
     target_api_client: TargetAPIClient | None = None,
     observed_response_reader: ObservedResponseReader | None = None,
     resource_tool_backend: ResourceToolBackend | None = None,
+    database_query_backend: DatabaseQueryToolBackend | None = None,
     request_generation_patch_runtime: RequestGenerationPatchRuntime | None = None,
     operation_testing_service: OperationTestingService | None = None,
     test_case_query_backend: TestCaseQueryToolBackend | None = None,
@@ -379,6 +389,7 @@ def build_harness_with_mcp_host(
             target_api_client=target_api_client,
             observed_response_reader=observed_response_reader,
             resource_tool_backend=resource_tool_backend,
+            database_query_backend=database_query_backend,
             request_generation_patch_runtime=request_generation_patch_runtime,
             operation_testing_service=operation_testing_service,
             test_case_query_backend=test_case_query_backend,

@@ -184,6 +184,8 @@ There is no concrete per-case registry or `TC*`/`E*` identity layer.
 Each subject package owns its complete Tool schema, execution binding, output
 validation, bounding, and safe failures. The important new Tools are:
 
+- `database.query` — run one parameterized bounded read-only SQLite query;
+  complete response-header maps are verified and redacted before disclosure.
 - `openapi.list_operations` — discover initialized operations.
 - `request_generation.get_input_state` — read selected Generator state and the
   complete intersecting Constraint closure.
@@ -203,6 +205,9 @@ Built-in Skills are standard directories discovered from package data:
   deterministic validation, value-level review, atomic apply, and confirmation.
 - `resolve-operation-failures` teaches diagnosis of one operation's inline Batch
   evidence and delegation to an authorized Patch child Profile.
+- `query-restscope-database` selects one of seven lazily read query-purpose
+  References for durable schema, progress, Observation, Bug, Resource, input,
+  or OpenAPI evidence.
 
 `skill.read` reveals only the selected `SKILL.md`; `file.read` reveals only a
 directly linked first-level Markdown Reference registered at startup. Neither
@@ -219,17 +224,20 @@ limit, while the Harness still records usage and validates final output until
 it is valid or a terminal runtime event occurs. The Harness performs mechanical
 validation and execution but does not decide testing semantics.
 
-The Orchestrator Profile has no Tools, Skills, or children. Its only Context
-Source is `test-progress`, freshly read through the Catalog's one aggregate and
-safely rendered by `harness/test_progress.py`. Each operation record carries
+The Orchestrator Profile has no children, test-execution Tools, or mutation
+capability. It grants only `database.query`, `file.read`, and
+`query-restscope-database` for bounded evidence drill-down. Its only automatic
+Context Source and default summary are `test-progress`, freshly read through
+the Catalog's one aggregate and safely rendered by `harness/test_progress.py`.
+Each operation record carries
 four independent progress values: positive/negative Batch attempts and
 positive/negative executed cases. Its stable instructions own cross-Task REST
 API exploration, including Operation priority, prerequisites, testing phase,
 coverage, and completion. A read failure stops the root. The Task Executor
-Profile has API-testing Tools, the Failure Resolution Skill, a private
-intra-task Plan, and one Parameter Patch child. It executes only the assigned
-Operation and testing purpose. Neither profile carries state between root
-invocations.
+Profile has API-testing Tools, the Failure Resolution and database-query Skills,
+a private intra-task Plan, and one Parameter Patch child. It executes only the
+assigned Operation and testing purpose. Neither profile carries state between
+root invocations.
 
 ### `restscope/orchestration/`
 
@@ -321,6 +329,8 @@ every semantic predicate was correct. A failed Batch does not roll back state.
 - Change Generator or Constraint meaning in `request_generation`, then expose
   only the smallest needed Tool behavior.
 - Change Agent methodology in the relevant built-in Skill and its References.
+- Change generic SQLite query safety or projection only in
+  `restscope.tools.database`; do not duplicate it in a Skill or Harness.
 - Change authorization in a Profile; never infer it from Catalog discovery.
 - Change persistence only in the API Behavior Adapter and baseline
   migration after explicit approval.

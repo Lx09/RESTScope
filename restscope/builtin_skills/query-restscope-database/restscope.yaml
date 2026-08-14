@@ -1,0 +1,6 @@
+version: "1.0"
+risk_level: medium
+required_tools:
+  - file.read
+  - database.query
+required_context_sources: []

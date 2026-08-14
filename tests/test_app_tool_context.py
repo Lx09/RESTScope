@@ -127,8 +127,8 @@ def test_production_profiles_separate_planning_from_task_execution(
     profile = definition.profiles[1]
 
     assert orchestrator.name == "orchestrator"
-    assert orchestrator.tool_names == ()
-    assert orchestrator.skill_names == ()
+    assert orchestrator.tool_names == ("database.query", "file.read")
+    assert orchestrator.skill_names == ("query-restscope-database",)
     assert orchestrator.subagent_profile_names == ()
     assert orchestrator.context_sources == ("test-progress",)
     assert [item.name for item in definition.context_sources] == ["test-progress"]
@@ -150,9 +150,13 @@ def test_production_profiles_separate_planning_from_task_execution(
         "subagent.start",
         "subagent.wait",
         "subagent.cancel",
+        "database.query",
         "file.read",
     )
-    assert profile.skill_names == ("resolve-operation-failures",)
+    assert profile.skill_names == (
+        "resolve-operation-failures",
+        "query-restscope-database",
+    )
     assert profile.context_sources == ()
     assert profile.subagent_profile_names == ("parameter-patch",)
     patch_profile = next(
@@ -160,6 +164,17 @@ def test_production_profiles_separate_planning_from_task_execution(
     )
     assert patch_profile.skill_names == ("apply-parameter-patch",)
     assert "parameter_patch.apply" in patch_profile.tool_names
+    assert "database.query" not in patch_profile.tool_names
+    assert "query-restscope-database" not in patch_profile.skill_names
+    for narrow_profile_name in (
+        "resource-identifier-selector",
+        "resource-state-selector",
+    ):
+        narrow_profile = next(
+            item for item in definition.profiles if item.name == narrow_profile_name
+        )
+        assert narrow_profile.tool_names == ()
+        assert narrow_profile.skill_names == ()
 
     assert "Prioritize operations" in orchestrator.instructions
     assert "reproducible happy-path" in orchestrator.instructions
@@ -184,8 +199,9 @@ def test_production_profiles_separate_planning_from_task_execution(
 def test_harness_binds_new_domain_tools_without_granting_them_to_main(
     api_behavior_catalog,
 ) -> None:
-    """A caller Profile can resolve every new binding, while production Main stays unchanged."""
+    """Binding a domain Tool grants it only to a Profile that names it."""
     from restscope.agent import AgentProfile
+    from restscope.db import create_engine_from_url
     from restscope.harness import AgentRuntimeDefinition, build_harness
     from restscope.harness.operation_testing import OperationTestingService
     from restscope.llm import LLMClient, LLMModelConfig
@@ -194,6 +210,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
         RequestGenerationConfigStore,
         RequestGenerationPatchRuntime,
     )
+    from restscope.tools.database import DatabaseQueryToolBackend
     from restscope.tools.test_case import TestCaseQueryToolBackend
 
     class UnusedProvider:
@@ -218,6 +235,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
             "test_case.run_batch",
             "test_case.get_batch_results",
             "test_case.get",
+            "database.query",
         ),
     )
     runtime = build_harness(
@@ -231,6 +249,9 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
         ),
         test_case_query_backend=TestCaseQueryToolBackend(
             catalog=api_behavior_catalog
+        ),
+        database_query_backend=DatabaseQueryToolBackend(
+            engine=create_engine_from_url("sqlite:///:memory:")
         ),
         agent_runtime=AgentRuntimeDefinition(
             profiles=(profile,),

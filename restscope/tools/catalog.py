@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from restscope.llm import ToolSpec
 
 ToolSubject = Literal[
+    "database",
     "http",
     "openapi",
     "resource",

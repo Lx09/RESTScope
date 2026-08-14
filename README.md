@@ -423,11 +423,13 @@ new revision. Batch execution can mutate the target API and does not retry,
 follow redirects, or roll back effects.
 
 These capabilities are bound by the production Harness but are not thereby
-authorized as Tools. The Orchestrator has no Tools, Skills, or child Profiles;
-its sole `test-progress` Context Source is a fresh bounded Harness projection of
-the deep Catalog aggregate. A progress-read failure stops that root before a
-completion decision. The Task Executor receives only its explicit testing Tool
-and Skill set. The default App does not start MCP processes.
+authorized as Tools. The Orchestrator has no child, test-execution, or mutation
+capability; it grants only bounded `database.query`, `file.read`, and the
+`query-restscope-database` Skill for durable-evidence drill-down. Its sole
+automatic Context Source and default summary remain the fresh `test-progress`
+projection. A progress-read failure stops that root before a completion
+decision. The Task Executor receives only its explicit testing and database
+query Tool/Skill set. The default App does not start MCP processes.
 
 ## API Behavior Monitor Coordinator
 
@@ -473,11 +475,13 @@ generated Observation points to its Batch and stable zero-based Case index.
 
 The public read-only Tool Backend exposes `resource.list_resources`,
 `resource.list_ids`, `openapi.find_observed_response_fields`,
-`test_case.get_batch_results`, and `test_case.get`. Batch results paginate and
+`test_case.get_batch_results`, `test_case.get`, and `database.query`. Batch results paginate and
 group Observation IDs by operation/outcome/status; Test Case reads return the
 complete persisted request/result metadata, a 16 KiB body projection, and
-redacted sensitive response header values. These contracts are registered and
-bound but are not granted to the initial Main or System Profiles. The OpenAPI Tool
+redacted sensitive response header values. The database Tool executes only
+bounded parameterized SQLite reads, returns raw Body and Resource JSON prefixes,
+and permits response headers only as one verified complete map before redaction.
+These contracts are registered and bound but are granted only by exact Profiles. The OpenAPI Tool
 discovers scalar selectors directly from raw observations without returning
 their values. A source transaction stages exact producer-to-consumer rows,
 publishes matching in-memory Store state, and restores the old Store revision
@@ -538,11 +542,13 @@ Python embedders may instead construct `RESTScopeApp(config)`, or call
 
 `RESTScopeApp.start(focus=None)` blocks until the outer Orchestrator completes,
 is interrupted, or fails safely. The optional focus narrows a run but cannot
-replace RESTScope's fixed mission. The Orchestrator has only the read-only
-`test-progress` Context Source and no Tool, Skill, or child capability. Its
-stable instructions own Operation ordering, prerequisites, testing phase,
-coverage, and completion. Each fresh Task Executor has the API-testing Tools,
-Failure Resolution Skill, and Parameter Patch child needed to execute one
+replace RESTScope's fixed mission. The Orchestrator keeps the read-only
+`test-progress` Context Source as its default summary and may use only the
+bounded database query Skill/Tools for narrower durable evidence; it has no
+child, test-execution, or mutation capability. Its stable instructions own
+Operation ordering, prerequisites, testing phase, coverage, and completion.
+Each fresh Task Executor has the API-testing Tools, Failure Resolution and
+database-query Skills, and Parameter Patch child needed to execute one
 dispatched Task without choosing what comes next.
 
 App construction prepares the database before building the default capability

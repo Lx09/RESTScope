@@ -53,6 +53,7 @@ from restscope.request_generation import (
 )
 from restscope.target_api import TargetAPIClient
 from restscope.tools.context import ToolContext
+from restscope.tools.database import DatabaseQueryToolBackend
 from restscope.tools.resource import ResourceToolBackend
 from restscope.tools.test_case import TestCaseQueryToolBackend
 from restscope.ui import UIService, start_ui_service
@@ -261,6 +262,7 @@ def _compose_app_resources(config: RESTScopeConfig) -> _AppResources:
             target_api_client=target_api_client,
             observed_response_reader=catalog,
             resource_tool_backend=ResourceToolBackend(catalog=catalog),
+            database_query_backend=DatabaseQueryToolBackend(engine=database_engine),
             request_generation_patch_runtime=patch_runtime,
             operation_testing_service=operation_testing_service,
             test_case_query_backend=TestCaseQueryToolBackend(catalog=catalog),

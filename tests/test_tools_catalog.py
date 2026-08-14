@@ -8,6 +8,7 @@ from jsonschema import ValidationError, validate
 from restscope.llm import ToolSpec
 
 EXPECTED_BUILTIN_TOOLS = {
+    "database.query": "database",
     "restscope.http.request": "http",
     "openapi.list_inputs": "openapi",
     "openapi.list_response_fields": "openapi",

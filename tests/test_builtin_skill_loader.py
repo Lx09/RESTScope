@@ -239,14 +239,15 @@ def test_additional_definitions_cannot_replace_a_builtin() -> None:
         )
 
 
-def test_production_catalog_contains_only_reusable_execution_methods() -> None:
-    """Cross-Task exploration policy belongs to the Orchestrator instructions."""
+def test_production_catalog_contains_only_approved_reusable_methods() -> None:
+    """Discovery exposes the three approved methods and no private workflow role."""
     from restscope.skills import builtin_skill_catalog
 
     assert tuple(
         skill.name for skill in builtin_skill_catalog().definitions()
     ) == (
         "apply-parameter-patch",
+        "query-restscope-database",
         "resolve-operation-failures",
     )
 
