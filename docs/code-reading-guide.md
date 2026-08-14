@@ -11,7 +11,7 @@ a rolling Task Ledger and dispatches one bounded Task Executor at a time. Every
 Orchestrator and Task Executor call is a fresh registered System Agent root, so task
 memory lives in the Ledger rather than a long conversation.
 
-The runtime has five distinct responsibilities:
+The runtime has seven distinct responsibilities:
 
 1. `restscope.openapi_parser` turns an OpenAPI document into an in-memory
    representation (IR).
@@ -22,7 +22,7 @@ The runtime has five distinct responsibilities:
    prepares a complete Batch, and sends its requests.
 4. `restscope.tools` exposes narrow model-callable behaviors. Profiles—not the
    global Catalog—decide which Tools an Agent may call.
-5. `restscope.api_behavior_monitor` owns the eleven-table evidence/audit Catalog
+5. `restscope.api_behavior_monitor` owns the twelve-table evidence/audit Catalog
    and the ordered response-processing and Bug Oracle flow.
 6. `restscope.orchestration` owns the immutable Goal, revisioned rolling plan,
    append-only Attempts, Replan rules, and completion loop.
@@ -57,8 +57,10 @@ source.
 ### Resource definition, instance, and input source
 
 A Resource definition has one normalized name and immutable direct identity
-fields. A Resource instance uses typed canonical JSON over those fields as its
-identity and keeps recursively merged current state. An operation input source
+fields. An operation/resource edge has one immutable semantic result state. A
+Resource instance uses typed canonical JSON over those fields as its identity,
+keeps recursively merged current JSON plus a separate current semantic state,
+and has append-only state events linked to causal Observations. An operation input source
 connects one consumer input to an exact producer operation, actual status,
 media type, selector, and field as either RESOURCE or VALUE_REUSE. Composite
 resource fields always come from one complete current instance.
@@ -106,22 +108,23 @@ a stale or changed Patch from being applied.
    `ledger.py`, `models.py`, and `contracts.py` for state and validation.
 3. `restscope/agent/profile.py` and `restscope/agent/runtime.py` — Profile
    authorization and the generic model/Tool loop.
-4. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
-   Context, Subagent lifecycle, and repeatable synchronous System Agent roots.
-   App-owned domain runtimes arrive already constructed. `build_harness()`
-   returns the concrete `HarnessRuntime` used directly by the App; there is no
-   second App-private Harness Protocol.
-5. `restscope/request_generation/store.py` — revisioned operation state,
+4. `restscope/harness/agent_runtime.py` — Profile graph validation, Tool
+   binding, Context Sources, Subagent lifecycle, and repeatable synchronous
+   System Agent roots. Then read `harness/runtime.py` for the concrete App-facing
+   `HarnessRuntime`; there is no second App-private Harness Protocol.
+5. `restscope/harness/test_progress.py` — the sole bounded Orchestrator progress
+   projection over the Catalog's deep aggregate.
+6. `restscope/request_generation/store.py` — revisioned operation state,
    snapshots, locks, and atomic replacement.
-5. `restscope/request_generation/parameter_patch/models.py` — semantic Patch
+7. `restscope/request_generation/parameter_patch/models.py` — semantic Patch
    language.
-6. `restscope/request_generation/parameter_patch/runtime.py` — state reads,
+8. `restscope/request_generation/parameter_patch/runtime.py` — state reads,
    validation orchestration, deterministic samples, digests, and atomic Apply.
-7. `restscope/harness/operation_testing/service.py` — frozen-revision Batch
+9. `restscope/harness/operation_testing/service.py` — frozen-revision Batch
    generation and execution.
-8. `restscope/tools/request_generation/`, `restscope/tools/parameter_patch/`,
+10. `restscope/tools/request_generation/`, `restscope/tools/parameter_patch/`,
    and `restscope/tools/test_case/` — the Agent-visible contracts.
-9. `restscope/builtin_skills/apply-parameter-patch/` and
+11. `restscope/builtin_skills/apply-parameter-patch/` and
    `restscope/builtin_skills/resolve-operation-failures/` — progressively
    disclosed Agent methods.
 
@@ -216,7 +219,10 @@ limit, while the Harness still records usage and validates final output until
 it is valid or a terminal runtime event occurs. The Harness performs mechanical
 validation and execution but does not decide testing semantics.
 
-The Orchestrator Profile has no capabilities. The Task Executor Profile has the
+The Orchestrator Profile has no Tools, Skills, or children. Its only Context
+Source is `test-progress`, freshly read through the Catalog's one aggregate and
+safely rendered by `harness/test_progress.py`; a read failure stops the root.
+The Task Executor Profile has the
 API-testing Tools, exploration and failure-resolution Skills, a private
 intra-task Plan, and one Parameter Patch child. Neither profile carries state
 between root invocations.
@@ -233,14 +239,16 @@ validation to registered System Agent Profiles. The Ledger is App-memory only.
 The API Behavior Monitor first persists every matched HTTP or transport
 Observation, evolves the current response Contract, and then allows only complete
 valid 2xx JSON evidence to derive resource state in a separate transaction.
-`catalog.py` owns all eleven persisted tables, including the current OpenAPI and
+`catalog.py` owns all twelve persisted tables, including the current OpenAPI and
 final Oracle Assessments. `response_evidence.py` decodes each response once;
 `contract_monitor.py` updates current responses; `oracle.py` classifies statuses
 and finalizes replay-confirmed bugs; `coordinator.py` owns stage ordering;
-`resource_monitor.py` derives resources;
-and `resource_identity.py` contains the bounded System Agent contract used for
-an unknown identity. The Monitor never calls an LLM client directly and does
-not persist extraction rules or reasoning.
+`resource_monitor.py` derives resources and coordinates missing state selection;
+`resource_identity.py` owns the bounded unknown-identity contract; and
+`resource_state.py` owns the bounded operation-result-state contract. State
+selection sees method, path, resource, and established names but no response
+content. The Monitor never calls an LLM client directly and does not persist
+extraction rules or reasoning.
 
 `tools/test_case/query.py` is the Agent safety boundary for durable results. It
 groups paginated Batch Observation IDs, bounds body output to 16 KiB, and hides
@@ -269,7 +277,7 @@ generated Batch execution consume the same Client; Harness does not own it.
 
 ### `restscope/db/`
 
-The one baseline migration creates eleven business tables. Their SQLAlchemy
+The one baseline migration creates twelve business tables. Their SQLAlchemy
 mappings live together in `orm/api_behavior_monitor.py`, and the sole concrete
 transaction Adapter is `adapters/api_behavior_monitor.py`.
 The concrete Test Case identity is the Observation row rather than a second

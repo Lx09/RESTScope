@@ -11,6 +11,7 @@ BUSINESS_TABLES = {
     "resources",
     "operation_resource_edges",
     "resource_instances",
+    "resource_state_events",
     "batches",
     "observations",
     "oracle_assessments",
@@ -74,6 +75,7 @@ def test_response_monitor_tables_enforce_status_source_and_prior_shapes() -> Non
         "operation_input_source_beta",
         "operation_resource_edge_alpha",
         "operation_resource_edge_beta",
+        "operation_resource_edge_result_state",
     }
     assert all(
         any(name.endswith(suffix) for name in check_names)
@@ -162,9 +164,9 @@ def test_response_monitor_natural_primary_keys_match_the_approved_model() -> Non
         "operation_resource_edges": (
             "operation_id",
             "resource_id",
-            "role",
         ),
         "resource_instances": ("resource_type", "resource_instance_id"),
+        "resource_state_events": ("event_id",),
         "batches": ("batch_id",),
         "observations": ("observation_id",),
         "operation_input_sources": (
@@ -185,8 +187,11 @@ def test_response_monitor_natural_primary_keys_match_the_approved_model() -> Non
         assert tuple(item.name for item in table.primary_key.columns) == columns
 
     edge = Base.metadata.tables["operation_resource_edges"]
+    instances = Base.metadata.tables["resource_instances"]
     source = Base.metadata.tables["operation_input_sources"]
     assert {"_alpha", "_beta"} <= {item.name for item in edge.columns}
+    assert {"role", "result_state"} <= {item.name for item in edge.columns}
+    assert "semantic_state" in instances.columns
     assert {"_alpha", "_beta"} <= {item.name for item in source.columns}
 
 
@@ -207,3 +212,12 @@ def test_alembic_baseline_creates_and_drops_the_exact_current_schema(
 
     command.downgrade(config, "base")
     assert inspect(engine).get_table_names() == ["alembic_version"]
+
+
+def test_resource_state_events_expose_no_update_or_delete_catalog_path() -> None:
+    """State history is append-only through the owning public Interface."""
+
+    from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
+
+    assert not hasattr(APIBehaviorCatalog, "update_resource_state_event")
+    assert not hasattr(APIBehaviorCatalog, "delete_resource_state_event")

@@ -166,6 +166,7 @@ class APIBehaviorMonitorCoordinator:
                 try:
                     resources = self.resource_tracker.observe(
                         operation=operation,
+                        observation_id=observation_id,
                         body=parsed_body,
                     )
                 except Exception as exc:  # noqa: BLE001

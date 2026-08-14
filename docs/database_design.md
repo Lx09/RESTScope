@@ -1,18 +1,19 @@
 # RESTScope Database Design
 
-Status: Active exploratory design (2026-08-13)
+Status: Active exploratory design (2026-08-14)
 
 RESTScope creates one SQLite file for one App. The file is an evidence and audit
 artifact, not a recovery image: a later App rejects the existing path and never
-resumes it. The fresh baseline contains eleven business tables plus Alembic's
+resumes it. The fresh baseline contains twelve business tables plus Alembic's
 `alembic_version` table.
 
 ## Boundary
 
 - `restscope.api_behavior_monitor.catalog` is the single database-independent
   Interface for the current normalized OpenAPI, append-only contract changes,
-  operations, batches, observations, resources, input sources, abstract test
-  cases, and final Bug Oracle assessments.
+  operations, batches, observations, resources, current semantic states,
+  append-only state events, input sources, abstract test cases, and final Bug
+  Oracle assessments.
 - `restscope.request_generation` keeps the current revisioned
   Generator/Constraint state in memory. Exact source bindings participate in
   that state, but producer values are parsed from observations on demand.
@@ -27,9 +28,9 @@ with integrity and foreign-key checks. Request headers conventionally carrying
 authorization, cookies, tokens, API keys, or secrets are removed before an
 observation is written.
 
-## API Behavior Catalog: 11 tables
+## API Behavior Catalog: 12 tables
 
-All eleven tables belong to one Catalog and one SQLAlchemy transaction family.
+All twelve tables belong to one Catalog and one SQLAlchemy transaction family.
 The headings below group their contents for explanation; they are not separate
 runtime repositories or App collaborators.
 
@@ -47,7 +48,7 @@ Each real response-contract change records operation text, actual status,
 normalized media type, change labels, and affected Response before/after data.
 Contract matches, pending retries, and internal check failures add no event.
 
-### Response and resource evidence: 8 tables
+### Response and resource evidence: 10 tables
 
 #### `operations`
 
@@ -63,10 +64,11 @@ every field as a string or non-Boolean integer.
 
 #### `operation_resource_edges`
 
-The primary key is `(operation_id, resource_id, role)`. Roles describe how the
-response uses the resource: `CREATED`, `REFERENCED`, `UPDATED`, or `DELETED`.
-`_alpha` and `_beta` store the neutral Beta(1,1) proposition evidence. This
-version defines no evidence-update policy or Tool.
+The primary key is `(operation_id, resource_id)`. The immutable role describes
+how the response uses the resource: `CREATED`, `REFERENCED`, `UPDATED`, or
+`DELETED`. Immutable `result_state` is the operation's one semantic result for
+that resource. `_alpha` and `_beta` store neutral Beta(1,1) proposition
+evidence. This version defines no evidence-update policy or Tool.
 
 #### `resource_instances`
 
@@ -74,8 +76,20 @@ The primary key is `(resource_type, resource_instance_id)`, where
 `resource_type` stores `resources.name` and the instance ID is canonical typed
 JSON over all identity fields. `current_state_json` is updated incrementally:
 missing properties stay, nested objects merge recursively, arrays replace as a
-whole, and a new null never overwrites old state. `_deleted=true` is logical
-deletion and deleted instances are hidden from ordinary generation and Tools.
+whole, and a new null never overwrites old state. `semantic_state` separately
+stores the operation result state last assigned to the instance. `_deleted=true`
+remains the independent logical-deletion bit, and deleted instances are hidden
+from ordinary generation and Tools.
+
+#### `resource_state_events`
+
+Each append-only row stores resource type, canonical instance ID, nullable
+previous state, current state, the causal Observation, and creation time. The
+initial assignment uses `previous_state=null`; an unchanged state adds no row.
+`(observation_id, resource_type, resource_instance_id)` is unique, so repeated
+appearances of one instance in one response produce only its final transition.
+Operation, Batch, and Case index are read by joining the Observation rather than
+copied into this table.
 
 #### `observations`
 
@@ -150,8 +164,25 @@ Observation or summary update produces a bounded warning without suppressing
 later requests or already available inline results.
 
 Unknown resource groups ask the bounded Resource Identifier System Agent for
-direct identity fields. Existing unambiguous definitions are reused. No model
-reasoning or extraction rule is persisted.
+direct identity fields. Existing unambiguous definitions are reused. A missing
+operation/resource edge asks the separate FAST Resource State System Agent using
+only method, path, resource, and established names. Its result-state edge,
+complete instance merges, current semantic states, and final per-instance events
+commit in one transaction; failure rolls all four back while the earlier
+Observation remains and produces a Monitor warning. Existing edge state is the
+sole durable authority, so no App-level state cache exists. No model reasoning
+or extraction rule is persisted.
+
+Only complete, untruncated 2xx JSON with identifiable instances enters that
+resource transaction. Failed HTTP responses, transport failures, empty 204
+responses, and state-unchanged instances produce no state event.
+
+`APIBehaviorCatalog.read_test_progress()` reads one aggregate transaction:
+every OpenAPI operation with positive (`happy_path`) and negative
+(`exceptional`) schema-v1 Batch `executed_case_count`, plus current instance
+counts grouped by resource and semantic state. Running, failed, and completed
+Batches all contribute executed cases; skipped slots and ordinary HTTP Tool
+Observations do not.
 
 ## Lifecycle and compatibility
 

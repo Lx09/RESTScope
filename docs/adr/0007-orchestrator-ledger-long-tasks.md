@@ -21,8 +21,10 @@ Attempts. It is not persisted and cannot resume an App after process restart.
 The outer Orchestrator and every Task Executor run through registered
 `HarnessRuntime.run_system_agent()` calls. Each call receives bounded Markdown,
 owns a fresh Prompt Session and Agent tree, returns one validated structured
-result, and closes. The Orchestrator has no Tools, Skills, Context Sources, or
-children. The Task Executor owns execution inside one Task, may use API-testing
+result, and closes. The Orchestrator has no Tools, Skills, or children. Its one
+later-approved input is the read-only `test-progress` Context Source.
+Harness freshly reads its deep Catalog aggregate for every root and stops the
+root if that read fails. The Task Executor owns execution inside one Task, may use API-testing
 Tools and Skills, and may delegate only Parameter Patch work to its child.
 
 The Orchestrator may revise future work but cannot modify the fixed Goal or
@@ -49,8 +51,9 @@ Orchestrator, while cancellation and resource shutdown remain deterministic.
   removed. Generic Agent execution and Subagents remain.
 - `plan.read` and `plan.update` are private intra-Task-Executor memory only. They
   are not the outer Ledger and never cross Task Executor sessions.
-- Orchestrator output trusts validated Task Execution Results and Ledger state; v1 adds
-  no independent verifier or behavior-database query.
+- Orchestrator output trusts validated Task Execution Results, Ledger state, and
+  the bounded `test-progress` projection. It has no direct behavior-database
+  query or independent verifier.
 - The Ledger is operational memory, not durable evidence. Existing Batches,
   Observations, Contracts, Resources, and Oracle Assessments remain the audit
   records owned by the API Behavior Monitor.

@@ -214,6 +214,15 @@ Phase 29 positive/negative Generator exploration is complete; Phase 19 exact 375
 - [x] Run frontend, Ant Design, Python, deterministic-build, diff, and real-page browser verification
 - **Status:** complete; Git delivery remains unauthorized
 
+### Phase 30: Harness test progress and resource semantic states
+- [x] Create a dedicated feature branch and worktree from the current local `main`
+- [x] Lock the resource-state System Agent and atomic persistence behavior with focused tests
+- [x] Add the Catalog-owned test-progress aggregate and Harness-owned bounded Context Reader
+- [x] Inject only `test-progress` into the Orchestrator Profile
+- [x] Update project ownership rules, persistence decisions, navigation, README, and task record
+- [x] Run focused, lint, compile, complete-suite, changed-scope typing, and diff verification
+- **Status:** implementation complete and verified; Git delivery remains unauthorized
+
 ## Key Questions
 1. How can final worklist decisions be committed atomically without persisting provisional Agent state?
 2. How can Patch candidates remain authoritative registry objects while worklist writes contain only opaque references?
@@ -238,6 +247,10 @@ Phase 29 positive/negative Generator exploration is complete; Phase 19 exact 375
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Phase 30 stale-document scan included Markdown backticks in a shell argument | 1 | The shell attempted one harmless nonexistent command before the read-only scan; rerun searches with literal-safe expressions and change no files through the failed command. |
+| Phase 30 combined governance/documentation patch used an inexact Harness anchor in `AGENTS.md` | 1 | No partial change occurred; inspect exact current paragraphs and apply ownership, persistence, and Orchestrator rules in smaller patches. |
+| Phase 30 first complete suite found one stale App bootstrap table set | 1 | Add the approved `resource_state_events` table to the exact bootstrap contract; no production change was required. |
+| Phase 30 red tests could not import state/progress contracts or call the new Catalog methods | 1 | Expected TDD red state; implement the API Behavior and Harness owning Modules without weakening assertions. |
 | Direct removal of the two ignored wheel-build directories was rejected by the environment's destructive-operation guard | 1 | Move only the exact `build/` and `restscope.egg-info/` directories into a new system temporary directory instead; keep `.venv`. |
 | Python 3.12 red test used `--no-sync` before the feature worktree had a virtual environment | 1 | Let `uv` sync the existing lock into the new Python 3.12 environment, then rerun the unchanged contract. |
 | Phase 24 UI tests patched the facade after App adopted a direct concrete import | 1 | Patch `restscope.app.start_ui_service`, the actual consumer binding; the production lifecycle behavior was unchanged. |

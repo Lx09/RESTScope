@@ -231,6 +231,7 @@ def test_resource_source_returns_complete_correlated_current_instances() -> None
     """Two identity fields resolve through one operation-resource edge."""
 
     from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
         OperationDefinition,
         ResourceDerivation,
     )
@@ -250,13 +251,27 @@ def test_resource_source_returns_complete_correlated_current_instances() -> None
             path="/memberships",
         )
     )
+    observation = catalog.record_observation(
+        ObservationWrite(
+            operation_id="GET /memberships",
+            timestamp=datetime(2026, 8, 14, tzinfo=UTC),
+            outcome_kind="http",
+            request_json={"path": "/memberships"},
+            status_code=200,
+            response_headers={},
+            response_body=b"{}",
+            body_format="json",
+        )
+    )
     catalog.record_resource_derivations(
         operation_id="GET /memberships",
+        observation_id=observation.observation_id,
         derivations=[
             ResourceDerivation(
                 resource_name="memberships",
                 identity_fields=["organization_id", "user_id"],
                 role="REFERENCED",
+                result_state="available",
                 instances=[
                     {"organization_id": "acme", "user_id": 42},
                     {"organization_id": "globex", "user_id": 77},

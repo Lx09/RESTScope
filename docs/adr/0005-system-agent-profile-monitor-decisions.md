@@ -39,12 +39,13 @@ failed safe compaction may still terminate the call.
 
 The API Behavior Monitor registers two no-Tool Profiles using the directly
 named `fast` model configuration: `resource-identifier-selector` and
-`response-source-selector`. Stable judgment guidance lives in Profile
-instructions; bounded request evidence and temporary `I*` or `S*` aliases live
-in each task. Monitor state changes only after Harness Schema validation and
-local candidate validation succeed. Trackers depend only on a narrow System
-Agent runner, using a private bind-once adapter to avoid the App composition
-cycle with HTTP transport.
+`resource-state-selector`. Stable judgment guidance lives in Profile
+instructions. Identifier tasks carry bounded field evidence and temporary `I*`
+aliases. State tasks carry only method, path, resource name, and established
+state names; they never contain response content. Monitor state changes only
+after Harness Schema validation and local validation succeed. Trackers depend
+only on a narrow System Agent runner, using a private bind-once adapter to avoid
+the App composition cycle with HTTP transport.
 
 ## Consequences
 

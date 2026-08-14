@@ -27,12 +27,17 @@ from restscope.api_behavior_monitor.catalog import (
     OpenAPIChangeEventWrite,
     OperationDefinition,
     OperationInputSource,
+    OperationTestProgress,
     OracleAssessment,
     OracleAssessmentRecord,
     ResourceDefinitionRecord,
     ResourceDerivation,
     ResourceDerivationResult,
     ResourceInstanceRecord,
+    ResourceStateContext,
+    ResourceStateCount,
+    ResourceStateEventRecord,
+    TestProgressSnapshot,
     merge_resource_state,
     resource_instance_id,
 )
@@ -49,6 +54,7 @@ from ..orm import (
     OracleAssessmentORM,
     ResourceInstanceORM,
     ResourceORM,
+    ResourceStateEventORM,
 )
 from ..time import as_utc, utc_now
 from ._transaction import _SqlAlchemyUnitOfWork
@@ -371,12 +377,18 @@ class _SqlAlchemyAPIBehaviorRepository:
         self,
         *,
         operation_id: str,
+        observation_id: str,
         derivations: list[ResourceDerivation],
     ) -> ResourceDerivationResult:
-        """Write resources and instances while isolating immutable identity conflicts."""
+        """Write one Observation's resource facts and final transitions atomically."""
 
-        resources: list[ResourceDefinitionRecord] = []
-        instances: list[ResourceInstanceRecord] = []
+        observation = self.session.get(ObservationORM, observation_id)
+        if observation is None or observation.operation_id != operation_id:
+            raise ValueError("resource state Observation must exist for the operation")
+
+        resources: dict[str, ResourceDefinitionRecord] = {}
+        instances: dict[tuple[str, str], ResourceInstanceORM] = {}
+        previous_states: dict[tuple[str, str], str | None] = {}
         conflicts: list[str] = []
         for derivation in derivations:
             resource = self.session.scalar(
@@ -394,17 +406,15 @@ class _SqlAlchemyAPIBehaviorRepository:
                 conflicts.append(derivation.resource_name)
                 continue
 
-            edge_key = (
-                operation_id,
-                resource.resource_id,
-                derivation.role,
-            )
-            if self.session.get(OperationResourceEdgeORM, edge_key) is None:
+            edge_key = (operation_id, resource.resource_id)
+            edge = self.session.get(OperationResourceEdgeORM, edge_key)
+            if edge is None:
                 self.session.add(
                     OperationResourceEdgeORM(
                         operation_id=operation_id,
                         resource_id=resource.resource_id,
                         role=derivation.role,
+                        result_state=derivation.result_state,
                         _alpha=1,
                         _beta=1,
                     )
@@ -413,8 +423,15 @@ class _SqlAlchemyAPIBehaviorRepository:
                 # natural key now so a later derivation in the same response
                 # can observe and reuse it instead of scheduling a duplicate.
                 self.session.flush()
+            elif (
+                edge.role != derivation.role
+                or edge.result_state != derivation.result_state
+            ):
+                raise ValueError(
+                    "operation resource role and result state are immutable"
+                )
 
-            resources.append(_resource_definition(resource))
+            resources[resource.name] = _resource_definition(resource)
             for observed in derivation.instances:
                 instance_key = resource_instance_id(
                     derivation.identity_fields,
@@ -423,6 +440,11 @@ class _SqlAlchemyAPIBehaviorRepository:
                 row = self.session.get(
                     ResourceInstanceORM,
                     (resource.name, instance_key),
+                )
+                transition_key = (resource.name, instance_key)
+                previous_states.setdefault(
+                    transition_key,
+                    row.semantic_state if row is not None else None,
                 )
                 merged = merge_resource_state(
                     row.current_state_json if row is not None else None,
@@ -434,19 +456,83 @@ class _SqlAlchemyAPIBehaviorRepository:
                         resource_type=resource.name,
                         resource_instance_id=instance_key,
                         current_state_json=merged,
+                        semantic_state=derivation.result_state,
                     )
                     self.session.add(row)
                 else:
                     row.current_state_json = merged
+                    row.semantic_state = derivation.result_state
                 # Repeated appearances of the same instance must merge in
                 # response order, including across normalized derivations.
                 self.session.flush()
-                instances.append(_resource_instance_record(row))
+                instances[transition_key] = row
+
+        # One Observation may repeat an instance in several response groups.
+        # Compare its pre-response state with the final assigned state and emit
+        # at most one causal transition after all recursive merges finish.
+        for transition_key, row in instances.items():
+            previous_state = previous_states[transition_key]
+            if previous_state == row.semantic_state:
+                continue
+            self.session.add(
+                ResourceStateEventORM(
+                    event_id=f"resource_state_event_{uuid4().hex}",
+                    resource_type=row.resource_type,
+                    resource_instance_id=row.resource_instance_id,
+                    previous_state=previous_state,
+                    current_state=row.semantic_state,
+                    observation_id=observation_id,
+                )
+            )
+        self.session.flush()
         return ResourceDerivationResult(
-            resources=tuple(resources),
-            instances=tuple(instances),
+            resources=tuple(resources.values()),
+            instances=tuple(
+                _resource_instance_record(row) for row in instances.values()
+            ),
             conflicts=tuple(conflicts),
         )
+
+    def read_resource_state_contexts(
+        self,
+        *,
+        operation_id: str,
+        resource_names: tuple[str, ...],
+    ) -> list[ResourceStateContext]:
+        """Read current edge mappings and the complete established vocabulary."""
+
+        vocabulary_rows = self.session.execute(
+            select(ResourceORM.name, OperationResourceEdgeORM.result_state)
+            .join(
+                OperationResourceEdgeORM,
+                OperationResourceEdgeORM.resource_id == ResourceORM.resource_id,
+            )
+            .where(ResourceORM.name.in_(resource_names))
+            .distinct()
+        ).all()
+        current_rows = self.session.execute(
+            select(ResourceORM.name, OperationResourceEdgeORM.result_state)
+            .join(
+                OperationResourceEdgeORM,
+                OperationResourceEdgeORM.resource_id == ResourceORM.resource_id,
+            )
+            .where(
+                ResourceORM.name.in_(resource_names),
+                OperationResourceEdgeORM.operation_id == operation_id,
+            )
+        ).all()
+        vocabulary: dict[str, set[str]] = {name: set() for name in resource_names}
+        for resource_name, result_state in vocabulary_rows:
+            vocabulary[resource_name].add(result_state)
+        current = dict(current_rows)
+        return [
+            ResourceStateContext(
+                resource_name=name,
+                operation_result_state=current.get(name),
+                existing_states=tuple(sorted(vocabulary[name])),
+            )
+            for name in resource_names
+        ]
 
     def list_resources(
         self,
@@ -494,6 +580,112 @@ class _SqlAlchemyAPIBehaviorRepository:
             .limit(limit)
         ).all()
         return [_resource_instance_record(row) for row in rows], total
+
+    def list_resource_state_events(
+        self,
+        *,
+        resource_type: str,
+        resource_instance_id: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ResourceStateEventRecord], int]:
+        """Return chronological transitions joined to their stored Test Case facts."""
+
+        where = [ResourceStateEventORM.resource_type == resource_type]
+        if resource_instance_id is not None:
+            where.append(
+                ResourceStateEventORM.resource_instance_id == resource_instance_id
+            )
+        total = self.session.scalar(
+            select(func.count()).select_from(ResourceStateEventORM).where(*where)
+        ) or 0
+        rows = self.session.execute(
+            select(ResourceStateEventORM, ObservationORM)
+            .join(
+                ObservationORM,
+                ObservationORM.observation_id == ResourceStateEventORM.observation_id,
+            )
+            .where(*where)
+            .order_by(
+                ResourceStateEventORM.created_at,
+                ResourceStateEventORM.event_id,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [
+            _resource_state_event_record(event, observation)
+            for event, observation in rows
+        ], total
+
+    def read_test_progress(self) -> TestProgressSnapshot:
+        """Aggregate all operation Batch counts and current resource states."""
+
+        operations = self.session.scalars(
+            select(OperationORM).order_by(OperationORM.operation_id)
+        ).all()
+        counts: dict[tuple[str, str], int] = {}
+        for batch in self.session.scalars(select(BatchORM)).all():
+            summary = batch.summary
+            if summary.get("schema_version") != 1:
+                continue
+            batch_status = summary.get("status")
+            operation_key = summary.get("operation_key")
+            test_mode = summary.get("test_mode")
+            executed = summary.get("executed_case_count")
+            if (
+                batch_status not in {"running", "failed", "completed"}
+                or not isinstance(operation_key, str)
+                or test_mode not in {"happy_path", "exceptional"}
+                or isinstance(executed, bool)
+                or not isinstance(executed, int)
+                or executed < 0
+            ):
+                continue
+            key = (operation_key, test_mode)
+            counts[key] = counts.get(key, 0) + executed
+
+        state_rows = self.session.execute(
+            select(
+                ResourceInstanceORM.resource_type,
+                ResourceInstanceORM.semantic_state,
+                func.count(),
+            )
+            .group_by(
+                ResourceInstanceORM.resource_type,
+                ResourceInstanceORM.semantic_state,
+            )
+            .order_by(
+                ResourceInstanceORM.resource_type,
+                ResourceInstanceORM.semantic_state,
+            )
+        ).all()
+        return TestProgressSnapshot(
+            operations=tuple(
+                OperationTestProgress(
+                    operation_id=row.operation_id,
+                    method=row.method,
+                    path=row.path,
+                    positive_case_count=counts.get(
+                        (row.operation_id, "happy_path"),
+                        0,
+                    ),
+                    negative_case_count=counts.get(
+                        (row.operation_id, "exceptional"),
+                        0,
+                    ),
+                )
+                for row in operations
+            ),
+            resource_states=tuple(
+                ResourceStateCount(
+                    resource_type=resource_type,
+                    semantic_state=semantic_state,
+                    instance_count=instance_count,
+                )
+                for resource_type, semantic_state, instance_count in state_rows
+            ),
+        )
 
     def list_operation_resources(
         self,
@@ -696,6 +888,27 @@ def _resource_instance_record(row: ResourceInstanceORM) -> ResourceInstanceRecor
         resource_type=row.resource_type,
         resource_instance_id=row.resource_instance_id,
         current_state_json=deepcopy(row.current_state_json),
+        semantic_state=row.semantic_state,
+    )
+
+
+def _resource_state_event_record(
+    row: ResourceStateEventORM,
+    observation: ObservationORM,
+) -> ResourceStateEventRecord:
+    """Detach one transition while deriving operation and Batch causality."""
+
+    return ResourceStateEventRecord(
+        event_id=row.event_id,
+        resource_type=row.resource_type,
+        resource_instance_id=row.resource_instance_id,
+        previous_state=row.previous_state,
+        current_state=row.current_state,
+        observation_id=row.observation_id,
+        operation_id=observation.operation_id,
+        batch_id=observation.batch_id,
+        batch_case_index=observation.batch_case_index,
+        created_at=as_utc(row.created_at),
     )
 
 

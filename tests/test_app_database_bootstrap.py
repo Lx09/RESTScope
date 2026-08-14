@@ -15,6 +15,7 @@ BUSINESS_TABLES = {
     "resources",
     "operation_resource_edges",
     "resource_instances",
+    "resource_state_events",
     "batches",
     "observations",
     "operation_input_sources",

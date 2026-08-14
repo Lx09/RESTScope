@@ -29,7 +29,8 @@ def upgrade() -> None:
     Alembic already owns the ``alembic_version`` table.  SQLAlchemy metadata
     contains only the current OpenAPI Audit and API Behavior Monitor tables, so
     ``create_all`` does not alter Alembic's bookkeeping. This baseline is the
-    sole supported schema and includes durable Batches and complete Observations.
+    sole supported schema and includes durable Batches, complete Observations,
+    and causal resource semantic-state history.
     """
     Base.metadata.create_all(bind=op.get_bind())
 

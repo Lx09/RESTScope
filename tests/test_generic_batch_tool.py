@@ -203,7 +203,10 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
     store = RequestGenerationConfigStore()
     store.initialize_once(ir)
     catalog = _api_behavior_catalog()
+    from datetime import UTC, datetime
+
     from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
         OperationDefinition,
         ResourceDerivation,
     )
@@ -215,13 +218,27 @@ def test_batch_freezes_reference_values_with_generation_revision() -> None:
             path="/limits",
         )
     )
+    observation = catalog.record_observation(
+        ObservationWrite(
+            operation_id="GET /limits",
+            timestamp=datetime(2026, 8, 14, tzinfo=UTC),
+            outcome_kind="http",
+            request_json={"path": "/limits"},
+            status_code=200,
+            response_headers={},
+            response_body=b'{"limit":1}',
+            body_format="json",
+        )
+    )
     catalog.record_resource_derivations(
         operation_id="GET /limits",
+        observation_id=observation.observation_id,
         derivations=[
             ResourceDerivation(
                 resource_name="limits",
                 identity_fields=["limit"],
                 role="REFERENCED",
+                result_state="available",
                 instances=[{"limit": 1}],
             )
         ],

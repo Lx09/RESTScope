@@ -74,9 +74,10 @@ def test_production_profiles_separate_planning_from_task_execution(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Orchestrator has no grants; each Task Executor may use one Patch child."""
+    """Orchestrator sees only progress; each Executor may use one Patch child."""
     from restscope.app.profiles import _build_agent_runtime_definition
     from restscope.config import RESTScopeConfig
+    from restscope.harness import ContextSourceBinding
     from restscope.llm import LLMClient, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
     from restscope.observability import TracingRuntime
@@ -116,6 +117,10 @@ def test_production_profiles_separate_planning_from_task_execution(
     definition = _build_agent_runtime_definition(
         RESTScopeConfig.from_environment(env_file),
         tracing_runtime=TracingRuntime.disabled(),
+        test_progress_context=ContextSourceBinding(
+            name="test-progress",
+            read=lambda: "current progress",
+        ),
     )
     assert definition is not None
     orchestrator = definition.profiles[0]
@@ -125,6 +130,8 @@ def test_production_profiles_separate_planning_from_task_execution(
     assert orchestrator.tool_names == ()
     assert orchestrator.skill_names == ()
     assert orchestrator.subagent_profile_names == ()
+    assert orchestrator.context_sources == ("test-progress",)
+    assert [item.name for item in definition.context_sources] == ["test-progress"]
     assert profile.name == "task-executor"
     assert profile.model_config_name == "thinking"
     assert "test_case.run_batch" in profile.tool_names

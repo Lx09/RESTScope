@@ -23,7 +23,10 @@ def _catalog(tmp_path: Path):
 
 def _record_resource(catalog, *, name: str = "assignment") -> None:
     """Record one real composite observation through the Catalog Interface."""
+    from datetime import UTC, datetime
+
     from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
         OperationDefinition,
         ResourceDerivation,
     )
@@ -35,13 +38,27 @@ def _record_resource(catalog, *, name: str = "assignment") -> None:
             path="/assignments",
         )
     )
+    observation = catalog.record_observation(
+        ObservationWrite(
+            operation_id="GET /assignments",
+            timestamp=datetime(2026, 8, 14, tzinfo=UTC),
+            outcome_kind="http",
+            request_json={"path": "/assignments"},
+            status_code=200,
+            response_headers={},
+            response_body=b"{}",
+            body_format="json",
+        )
+    )
     catalog.record_resource_derivations(
         operation_id="GET /assignments",
+        observation_id=observation.observation_id,
         derivations=[
             ResourceDerivation(
                 resource_name=name,
                 identity_fields=["employee_id", "project_id"],
                 role="REFERENCED",
+                result_state="available",
                 instances=[{"employee_id": "e1", "project_id": 7}],
             )
         ],

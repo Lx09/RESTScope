@@ -9,8 +9,7 @@ from restscope.observability import TracingRuntime
 from .contract_monitor import ResponseContractTracker
 from .coordinator import APIBehaviorMonitorCoordinator
 from .oracle import BugOracle
-from .resource_identity import SystemAgentRunner
-from .resource_monitor import ResourceResponseTracker
+from .resource_monitor import ResourceResponseTracker, SystemAgentRunner
 
 
 def build_api_behavior_monitor_coordinator(
@@ -25,7 +24,8 @@ def build_api_behavior_monitor_coordinator(
     The Catalog is the single persistence Interface for raw successful JSON,
     resource state, source propositions, and abstract test cases.  The System
     Agent runner remains Harness-owned and is used only when a new response
-    group needs identity-field judgment.
+    group needs identity-field judgment or an operation/resource edge lacks its
+    immutable result state.
     """
 
     runtime = tracing_runtime or TracingRuntime.disabled()

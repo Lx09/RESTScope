@@ -73,7 +73,10 @@ as the active project direction.
   choices only inside its dispatched Task. The Harness validates and executes
   authorized contracts but chooses no testing work. `RESTScopeApp.start()`
   blocks on this loop; the former FIFO Run Harness and taskless Main lifecycle
-  are retired.
+  are retired. The Orchestrator has no Tools, Skills, or child Profiles; its one
+  read-only `test-progress` Context Source is freshly rendered by Harness from a
+  deep Catalog aggregate, and a read failure stops that root before a completion
+  decision.
 - Deterministic runtime code may synchronously start a registered System Agent
   through `run_system_agent(profile_name, task)`. It is another lifecycle of the
   same generic Agent, not a domain-specific Agent class. Every invocation is an
@@ -108,8 +111,10 @@ as the active project direction.
   persisting parsed catalogs, plans, operation graphs, or Agent memory.
 - The user has separately approved a narrow API Behavior Monitor evidence
   catalog: normalized operations; resource names and immutable direct identity
-  fields; operation-resource role propositions; recursively merged current
-  resource instances with logical deletion; exact RESOURCE and VALUE_REUSE
+  fields; operation-resource role propositions with one immutable semantic
+  result state; recursively merged current resource instances with separate
+  semantic state and logical deletion; append-only semantic state transitions
+  linked to their causal Observations; exact RESOURCE and VALUE_REUSE
   consumer input-source propositions; immutable abstract Batch state; bounded
   Batch summaries; and every matched HTTP or transport Observation permanently.
   Observations include exact response bytes, complete response headers, and an
@@ -120,10 +125,13 @@ as the active project direction.
   protection as other target evidence. It does not authorize LLM reasoning,
   extraction rules, evolved-IR recovery snapshots, plans, queues, or general
   Agent memory.
-  Unknown resource identity fields use one registered no-Tool `fast` System
-  Agent Profile. Its dynamic `I*` aliases are restricted by a per-invocation
-  Schema and local validation before Monitor state changes. Identity fields may
-  be composite; generation selects all components from one complete current
+  Unknown resource identity fields and missing operation/resource result states
+  use separate registered no-Tool `fast` System Agent Profiles. Identity `I*`
+  aliases and established state names are restricted by per-invocation Schemas
+  and local validation before one atomic Monitor transaction changes edges,
+  instances, or state events. State selection receives method, path, resource,
+  and existing names only, never response content. Identity fields may be
+  composite; generation selects all components from one complete current
   resource instance. Response values are discovered and parsed directly from
   observations, never copied into a shared producer-value table.
 - Operation Smoke, its persistent Failure/Attempt/Generator tables, specialized

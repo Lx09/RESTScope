@@ -1,11 +1,11 @@
 """Production Profile registration after the deterministic Oracle simplification."""
 
 
-def test_fast_runtime_registers_only_the_resource_monitor_system_agent(
+def test_fast_runtime_registers_both_resource_monitor_system_agents(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """Bug Oracle status checks require no model Profile or result contract."""
+    """Identity and state use FAST Profiles; Bug Oracle stays deterministic."""
 
     from restscope.app.profiles import _build_agent_runtime_definition
     from restscope.config import RESTScopeConfig
@@ -27,12 +27,15 @@ def test_fast_runtime_registers_only_the_resource_monitor_system_agent(
     definition = _build_agent_runtime_definition(
         RESTScopeConfig.from_environment(env_file),
         tracing_runtime=TracingRuntime.disabled(),
+        test_progress_context=None,
     )
 
     assert definition is not None
     assert [profile.name for profile in definition.profiles] == [
-        "resource-identifier-selector"
+        "resource-identifier-selector",
+        "resource-state-selector",
     ]
     assert [item.profile_name for item in definition.system_agents] == [
-        "resource-identifier-selector"
+        "resource-identifier-selector",
+        "resource-state-selector",
     ]

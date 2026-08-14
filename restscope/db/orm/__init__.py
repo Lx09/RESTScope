@@ -12,6 +12,7 @@ from .api_behavior_monitor import (
     OracleAssessmentORM,
     ResourceInstanceORM,
     ResourceORM,
+    ResourceStateEventORM,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "OracleAssessmentORM",
     "ResourceInstanceORM",
     "ResourceORM",
+    "ResourceStateEventORM",
 ]

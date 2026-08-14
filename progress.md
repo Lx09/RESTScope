@@ -719,3 +719,29 @@
 - Confirmed behavior through interactive pseudocode and flow review, including
   complete connected-Constraint removal for a negative input and one fallback
   generation attempt with all Constraints removed.
+
+# Phase 30: Harness test progress and resource semantic states (2026-08-14)
+
+- Read the approved plan, current project rules, file-planning instructions,
+  and deep-Module design vocabulary.
+- Confirmed local `main` is clean and three commits ahead of `origin/main`.
+- Created `/Users/lixin/Workplace/RESTScope-test-progress-resource-states` on
+  `codex/test-progress-resource-states` at `1fa8880`.
+- Began test-first implementation. No commit, merge, push, branch deletion, or
+  worktree cleanup has been performed.
+- Added the FAST resource-state contract, edge/state/event schema, atomic
+  Catalog transaction, causal event reader, and retry-safe Monitor flow.
+- Added the deep schema-v1 Batch progress aggregate and Harness-owned bounded
+  `test-progress` Context Reader, then granted exactly that source to the
+  otherwise capability-free Orchestrator Profile.
+- Updated ownership rules, current architecture decisions, ADRs, database
+  design, README, and the code-reading guide for the 12-table runtime.
+- Focused cross-module verification currently passes 74 tests and Ruff passes.
+  The first full run passed 626 tests with 13 skips and found one stale
+  eleven-table App bootstrap assertion; that assertion now names the approved
+  `resource_state_events` table. Final full verification is pending.
+- Final fresh verification passed: 83 focused tests; Ruff; Python compilation;
+  the repository-wide AST `typing.Any` guard; `git diff --check`; and the full
+  suite with 629 passed and 13 skipped. No external service was called.
+- Implementation is verified but remains unstaged and uncommitted pending Git
+  authorization.

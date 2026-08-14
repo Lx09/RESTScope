@@ -524,5 +524,31 @@
   isolated by operation revision, and never persisted.
 - Same-Batch cases use statistics frozen at Batch start; feedback affects the
   next Batch. Resource-instance/state-level learning is intentionally deferred.
+
+# 2026-08-14: Harness test progress and resource semantic states
+
+- The user approved the API Behavior Monitor as the sole owner of operation-to-
+  resource state semantics, resource-instance state changes, and their durable
+  records. Harness may start the FAST System Agent mechanically but must not
+  interpret those states.
+- The existing operation/resource edge is the unique durable authority for one
+  operation's result state. A missing mapping may call the FAST System Agent;
+  an existing mapping must be reused without an App-lifetime authority cache.
+- `read_test_progress()` is intentionally a deep Catalog query: it joins all
+  OpenAPI operations with schema-v1 Batch summaries and groups current resource
+  instance states inside one read transaction. Harness renders only its result.
+- A fresh Orchestrator root must receive a freshly read `test-progress` Context
+  Source. Failure to read that source is terminal for the root so missing
+  progress cannot be mistaken for semantic completion.
+- Work is isolated in `/Users/lixin/Workplace/RESTScope-test-progress-resource-states`
+  on `codex/test-progress-resource-states`; commit, merge, branch deletion, and
+  worktree cleanup remain unauthorized.
+- The state-name pattern is one shared `SemanticStateName` contract used by
+  Agent output, Catalog writes, current instances, events, and progress counts;
+  no parallel validation path remains.
+- The new Modules have distinct depth: `resource_state.py` owns model-facing
+  semantic selection and validation, while `harness/test_progress.py` owns
+  prioritization, safe rendering, and Context budgeting. SQL, aggregation, and
+  transition rules remain in the Catalog Adapter rather than either Module.
 - TDD seams are the Generation Store frozen state, the public Batch execution
   result/Tool contract, and exact production Profile authorization.

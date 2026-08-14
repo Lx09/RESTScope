@@ -285,22 +285,35 @@ def test_catalog_persists_one_replay_and_immutable_oracle_assessment() -> None:
 def test_composite_resource_instances_merge_nested_state_without_null_overwrite() -> None:
     """All identity components stay correlated while later state updates merge."""
     from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
         OperationDefinition,
         ResourceDerivation,
     )
 
     catalog = _catalog()
-    catalog.ensure_operation(
-        OperationDefinition(
-            operation_id="PATCH /memberships/{organizationId}/{userId}",
-            method="PATCH",
-            path="/memberships/{organizationId}/{userId}",
+    operation = OperationDefinition(
+        operation_id="PATCH /memberships/{organizationId}/{userId}",
+        method="PATCH",
+        path="/memberships/{organizationId}/{userId}",
+    )
+    catalog.ensure_operation(operation)
+    observation = catalog.record_observation(
+        ObservationWrite(
+            operation_id=operation.operation_id,
+            timestamp=datetime(2026, 8, 14, tzinfo=UTC),
+            outcome_kind="http",
+            request_json={"path": "/memberships/acme/42"},
+            status_code=200,
+            response_headers={},
+            response_body=b"{}",
+            body_format="json",
         )
     )
     first = ResourceDerivation(
         resource_name="Memberships",
         identity_fields=["organization_id", "user_id"],
         role="UPDATED",
+        result_state="updated",
         instances=[
             {
                 "organization_id": "acme",
@@ -314,6 +327,7 @@ def test_composite_resource_instances_merge_nested_state_without_null_overwrite(
         resource_name="memberships",
         identity_fields=["user_id", "organization_id"],
         role="UPDATED",
+        result_state="updated",
         instances=[
             {
                 "organization_id": "acme",
@@ -326,6 +340,7 @@ def test_composite_resource_instances_merge_nested_state_without_null_overwrite(
 
     catalog.record_resource_derivations(
         operation_id="PATCH /memberships/{organizationId}/{userId}",
+        observation_id=observation.observation_id,
         derivations=[first, second],
     )
 
@@ -348,6 +363,274 @@ def test_composite_resource_instances_merge_nested_state_without_null_overwrite(
         "tags": ["admin"],
         "_deleted": False,
     }
+    events, event_total = catalog.list_resource_state_events(
+        resource_type="memberships",
+        offset=0,
+        limit=10,
+    )
+    assert event_total == 1
+    assert len(events) == 1
+
+
+def test_resource_state_events_capture_initial_and_changed_test_case_causality() -> None:
+    """Only real semantic transitions append events linked to their Test Cases."""
+
+    from restscope.api_behavior_monitor.catalog import (
+        BatchWrite,
+        ObservationWrite,
+        OperationDefinition,
+        ResourceDerivation,
+    )
+
+    catalog = _catalog()
+    initial_operation = OperationDefinition(
+        operation_id="POST /users",
+        method="POST",
+        path="/users",
+    )
+    changed_operation = OperationDefinition(
+        operation_id="PATCH /users/{id}",
+        method="PATCH",
+        path="/users/{id}",
+    )
+    catalog.ensure_operation(initial_operation)
+    catalog.ensure_operation(changed_operation)
+    batch = catalog.create_batch(
+        BatchWrite(
+            summary={
+                "schema_version": 1,
+                "status": "running",
+                "operation_key": changed_operation.operation_id,
+                "test_mode": "happy_path",
+                "executed_case_count": 1,
+            }
+        )
+    )
+
+    def observation(index: int, operation: OperationDefinition):
+        """Persist one concrete Batch Test Case that can cause a state event."""
+
+        return catalog.record_observation(
+            ObservationWrite(
+                operation_id=operation.operation_id,
+                timestamp=datetime(2026, 8, 14, index, tzinfo=UTC),
+                outcome_kind="http",
+                request_json={"path": "/users/7"},
+                status_code=200,
+                response_headers={"content-type": "application/json"},
+                response_body=b'{"id":7}',
+                body_format="json",
+                batch_id=batch.batch_id,
+                batch_case_index=index,
+            )
+        )
+
+    initial = observation(0, initial_operation)
+    unchanged = observation(1, initial_operation)
+    changed = observation(2, changed_operation)
+    base = {
+        "resource_name": "users",
+        "identity_fields": ["id"],
+        "instances": [{"id": 7, "name": "Ada"}],
+    }
+    catalog.record_resource_derivations(
+        operation_id=initial_operation.operation_id,
+        observation_id=initial.observation_id,
+        derivations=[
+            ResourceDerivation(**base, role="CREATED", result_state="active")
+        ],
+    )
+    catalog.record_resource_derivations(
+        operation_id=initial_operation.operation_id,
+        observation_id=unchanged.observation_id,
+        derivations=[
+            ResourceDerivation(**base, role="CREATED", result_state="active")
+        ],
+    )
+    catalog.record_resource_derivations(
+        operation_id=changed_operation.operation_id,
+        observation_id=changed.observation_id,
+        derivations=[
+            ResourceDerivation(**base, role="UPDATED", result_state="suspended")
+        ],
+    )
+
+    first_page, total = catalog.list_resource_state_events(
+        resource_type="users",
+        resource_instance_id='{"id":7}',
+        offset=0,
+        limit=1,
+    )
+    second_page, second_total = catalog.list_resource_state_events(
+        resource_type="users",
+        resource_instance_id='{"id":7}',
+        offset=1,
+        limit=1,
+    )
+    events = [*first_page, *second_page]
+    instances, _ = catalog.list_resource_instances(
+        resource_type="users",
+        offset=0,
+        limit=10,
+    )
+
+    assert total == 2
+    assert second_total == 2
+    assert [(item.previous_state, item.current_state) for item in events] == [
+        (None, "active"),
+        ("active", "suspended"),
+    ]
+    assert events[-1].observation_id == changed.observation_id
+    assert events[-1].operation_id == changed_operation.operation_id
+    assert events[-1].batch_id == batch.batch_id
+    assert events[-1].batch_case_index == 2
+    assert instances[0].semantic_state == "suspended"
+    snapshot = catalog.read_test_progress()
+    assert [
+        (item.resource_type, item.semantic_state, item.instance_count)
+        for item in snapshot.resource_states
+    ] == [("users", "suspended", 1)]
+
+
+def test_resource_state_write_is_atomic_and_observation_remains_independent() -> None:
+    """A late edge conflict rolls back edge, instance, and event but not Observation."""
+
+    import pytest
+
+    from restscope.api_behavior_monitor.catalog import (
+        ObservationWrite,
+        OperationDefinition,
+        ResourceDerivation,
+    )
+
+    catalog = _catalog()
+    operation = OperationDefinition(
+        operation_id="POST /users",
+        method="POST",
+        path="/users",
+    )
+    catalog.ensure_operation(operation)
+    saved = catalog.record_observation(
+        ObservationWrite(
+            operation_id=operation.operation_id,
+            timestamp=datetime(2026, 8, 14, tzinfo=UTC),
+            outcome_kind="http",
+            request_json={"path": "/users"},
+            status_code=201,
+            response_headers={"content-type": "application/json"},
+            response_body=b'{"id":7}',
+            body_format="json",
+        )
+    )
+
+    with pytest.raises(ValueError, match="immutable"):
+        catalog.record_resource_derivations(
+            operation_id=operation.operation_id,
+            observation_id=saved.observation_id,
+            derivations=[
+                ResourceDerivation(
+                    resource_name="users",
+                    identity_fields=["id"],
+                    role="CREATED",
+                    result_state="created",
+                    instances=[{"id": 7}],
+                ),
+                ResourceDerivation(
+                    resource_name="users",
+                    identity_fields=["id"],
+                    role="CREATED",
+                    result_state="active",
+                    instances=[{"id": 7}],
+                ),
+            ],
+        )
+
+    assert catalog.get_observation(saved.observation_id) == saved
+    assert catalog.list_resources(offset=0, limit=10) == ([], 0)
+    assert catalog.list_resource_state_events(
+        resource_type="users",
+        offset=0,
+        limit=10,
+    ) == ([], 0)
+
+
+def test_progress_counts_only_schema_v1_batch_execution_summaries() -> None:
+    """Skipped slots and ordinary Observations cannot inflate executed progress."""
+
+    from restscope.api_behavior_monitor.catalog import (
+        BatchWrite,
+        ObservationWrite,
+        OperationDefinition,
+    )
+
+    catalog = _catalog()
+    for operation in (
+        OperationDefinition(operation_id="GET /untested", method="GET", path="/untested"),
+        OperationDefinition(operation_id="POST /items", method="POST", path="/items"),
+    ):
+        catalog.ensure_operation(operation)
+    for summary in (
+        {
+            "schema_version": 1,
+            "status": "completed",
+            "operation_key": "POST /items",
+            "test_mode": "happy_path",
+            "requested_case_count": 5,
+            "executed_case_count": 3,
+            "skipped_case_count": 2,
+        },
+        {
+            "schema_version": 1,
+            "status": "failed",
+            "operation_key": "POST /items",
+            "test_mode": "exceptional",
+            "executed_case_count": 2,
+        },
+        {
+            "schema_version": 2,
+            "status": "completed",
+            "operation_key": "POST /items",
+            "test_mode": "happy_path",
+            "executed_case_count": 99,
+        },
+        {
+            "schema_version": 1,
+            "status": "running",
+            "operation_key": "POST /items",
+            "test_mode": "happy_path",
+            "executed_case_count": 1,
+        },
+        {
+            "schema_version": 1,
+            "status": "queued",
+            "operation_key": "POST /items",
+            "test_mode": "happy_path",
+            "executed_case_count": 99,
+        },
+    ):
+        catalog.create_batch(BatchWrite(summary=summary))
+    catalog.record_observation(
+        ObservationWrite(
+            operation_id="POST /items",
+            timestamp=datetime(2026, 8, 14, tzinfo=UTC),
+            outcome_kind="http",
+            request_json={"path": "/items"},
+            status_code=200,
+            response_headers={},
+            response_body=b"{}",
+            body_format="json",
+        )
+    )
+
+    snapshot = catalog.read_test_progress()
+
+    assert [
+        (item.operation_id, item.positive_case_count, item.negative_case_count)
+        for item in snapshot.operations
+    ] == [
+        ("GET /untested", 0, 0),
+        ("POST /items", 4, 2),
+    ]
 
 
 def test_identical_source_coordinates_can_keep_both_consumer_meanings() -> None:

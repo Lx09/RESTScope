@@ -81,12 +81,14 @@ uv run pytest
 
 ## Database
 
-The database is one audit artifact for one App. It contains exactly 13 business
-tables: the complete current normalized OpenAPI and response-change events plus
-narrow Resource Identifier and bounded Response Value evidence. Request
-Generation state is revisioned App-lifetime memory. The database never stores
-Generators, Constraints, Patches, Failures, Batches, model conversations,
-plans, queues, scheduler progress, or authentication material.
+The database is one audit artifact for one App. It contains exactly 12 business
+tables: the complete current normalized OpenAPI, response-change events,
+operations, resources and their semantic state history, exact input sources,
+immutable abstract generation snapshots, Batches, Observations, and final Bug
+Oracle Assessments. Request Generation state remains revisioned App-lifetime
+memory. The database never stores mutable Generators or Constraints, Patches,
+Failures, generated samples, model conversations, plans, queues, scheduler
+state, or authentication material.
 
 Successful App construction leaves its SQLite file in place, including after
 `close()`. A later process must use a new `DB_URL` or explicitly inspect and
@@ -409,14 +411,20 @@ revision, a durable `batch_id`, and persistence warnings. The Batch summary and
 each matched case Observation are audit evidence; `observation_id` is the Test
 Case ID. This creates no planning registry, Failure memory, candidate, or
 resumable scheduler.
+The Catalog's read-only `read_test_progress()` aggregate counts only these
+schema-v1 Batch summaries: `happy_path` executed cases are positive,
+`exceptional` executed cases are negative, and skipped slots are excluded.
+Every OpenAPI operation remains visible at `0/0` until tested.
 An already-running Batch is unaffected by a later Patch; a later Batch sees the
 new revision. Batch execution can mutate the target API and does not retry,
 follow redirects, or roll back effects.
 
 These capabilities are bound by the production Harness but are not thereby
-authorized to an Agent. The Orchestrator grants none of them; the Task Executor
-receives only its explicit testing Tool and Skill set. The default App does not
-start MCP processes.
+authorized as Tools. The Orchestrator has no Tools, Skills, or child Profiles;
+its sole `test-progress` Context Source is a fresh bounded Harness projection of
+the deep Catalog aggregate. A progress-read failure stops that root before a
+completion decision. The Task Executor receives only its explicit testing Tool
+and Skill set. The default App does not start MCP processes.
 
 ## API Behavior Monitor Coordinator
 
@@ -438,9 +446,13 @@ The Monitor and Bug Oracle coordinate four ordered responsibilities:
   document/event atomically.
 - Resource Monitor reuses unambiguous known identity fields or asks the bounded
   FAST Resource Identifier System Agent for a new direct field combination. It
-  then stores operation roles and recursively merged current instance state.
-  DELETE observations mark instances logically deleted. Extraction rules and
-  model reasoning are not persisted.
+  asks a separate FAST Resource State System Agent only when an
+  operation/resource edge lacks its immutable result state. That Agent receives
+  method, path, resource name, and established state names only—never response
+  content. The Catalog atomically stores the edge, recursively merged instance
+  JSON, separate current semantic state, and append-only transition events
+  linked to the causal Observation. DELETE observations still mark instances
+  logically deleted. Extraction rules and model reasoning are not persisted.
 - Bug Oracle deterministically flags any 5xx and invalid-input 2xx or 5xx
   response. One candidate triggers one exact-request Replay through the same
   Monitor path; only an identical complete trigger-reason set creates a durable
@@ -523,9 +535,10 @@ Python embedders may instead construct `RESTScopeApp(config)`, or call
 
 `RESTScopeApp.start(focus=None)` blocks until the outer Orchestrator completes,
 is interrupted, or fails safely. The optional focus narrows a run but cannot
-replace RESTScope's fixed mission. The Orchestrator has no capabilities; each
-fresh Task Executor has the API-testing Tools and Skills needed for one dispatched
-Task plus one Parameter Patch child.
+replace RESTScope's fixed mission. The Orchestrator has only the read-only
+`test-progress` Context Source and no Tool, Skill, or child capability; each
+fresh Task Executor has the API-testing Tools and Skills needed for one
+dispatched Task plus one Parameter Patch child.
 
 App construction prepares the database before building the default capability
 and LLM runtimes. If construction fails, RESTScope removes only the SQLite file

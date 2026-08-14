@@ -238,6 +238,121 @@ def test_transport_failure_is_saved_without_an_http_status() -> None:
     assert saved.transport_code == "request_timeout"
 
 
+def test_only_complete_2xx_json_with_an_instance_reaches_resource_monitor() -> None:
+    """Failures, transport, empty 204, and truncated JSON never change resources."""
+
+    from restscope.api_behavior_monitor.catalog import ResourceDerivationResult
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.target_api import (
+        TargetResponseObservation,
+        TargetResponseOperationContext,
+        TargetTransportObservation,
+    )
+
+    class RecordingResources:
+        """Fail the scenario if an ineligible response reaches this boundary."""
+
+        calls = 0
+
+        def observe(self, *, operation, observation_id, body):
+            """Record one eligible call; this scenario expects none."""
+
+            del operation, observation_id, body
+            self.calls += 1
+            return ResourceDerivationResult()
+
+    _old, catalog = _runtime()
+    resources = RecordingResources()
+    coordinator = APIBehaviorMonitorCoordinator(
+        contract_tracker=ResponseContractTracker(catalog),
+        catalog=catalog,
+        resource_tracker=resources,
+    )
+    context = TargetResponseOperationContext(ir=_ir(), operation_key="GET /items")
+    for status_code, body, truncated in (
+        (404, b'{"id":7}', False),
+        (500, b'{"id":7}', False),
+        (204, b"", False),
+        (200, b'{"id":7}', True),
+    ):
+        coordinator.observe_response(
+            TargetResponseObservation(
+                method="GET",
+                path="/items",
+                    url="https://example.test/items",
+                    status_code=status_code,
+                    reason_phrase="",
+                headers={"content-type": "application/json"},
+                body=body,
+                body_truncated=truncated,
+                request_json={"path": "/items", "headers": {}},
+            ),
+            context,
+        )
+    coordinator.observe_transport(
+        TargetTransportObservation(
+            method="GET",
+            path="/items",
+            url="https://example.test/items",
+            code="request_timeout",
+            message="timed out",
+            request_json={"path": "/items", "headers": {}},
+        ),
+        context,
+    )
+
+    assert resources.calls == 0
+
+
+def test_resource_transaction_failure_warns_after_observation_stays_saved() -> None:
+    """The advisory state stage cannot roll back its causal HTTP Observation."""
+
+    from restscope.api_behavior_monitor.contract_monitor import ResponseContractTracker
+    from restscope.api_behavior_monitor.coordinator import APIBehaviorMonitorCoordinator
+    from restscope.target_api import (
+        TargetResponseObservation,
+        TargetResponseOperationContext,
+    )
+
+    class BrokenResources:
+        """Represent an atomic Catalog state transaction failure."""
+
+        def observe(self, *, operation, observation_id, body):
+            """Fail after confirming the causal Observation already exists."""
+
+            del operation, observation_id, body
+            raise RuntimeError("state transaction failed")
+
+    _old, catalog = _runtime()
+    coordinator = APIBehaviorMonitorCoordinator(
+        contract_tracker=ResponseContractTracker(catalog),
+        catalog=catalog,
+        resource_tracker=BrokenResources(),
+    )
+
+    result = coordinator.observe_response(
+        TargetResponseObservation(
+            method="GET",
+            path="/items",
+            url="https://example.test/items",
+            status_code=200,
+            reason_phrase="OK",
+            headers={"content-type": "application/json"},
+            body=b'{"id":7}',
+            body_truncated=False,
+            request_json={"path": "/items", "headers": {}},
+        ),
+        TargetResponseOperationContext(ir=_ir(), operation_key="GET /items"),
+    )
+
+    assert result.observation_id is not None
+    assert catalog.get_observation(result.observation_id) is not None
+    assert [warning.code for warning in result.warnings] == [
+        "resource_derivation_failed"
+    ]
+
+
 def test_invalid_server_error_replays_once_and_persists_exact_reason_set() -> None:
     """The full pipeline monitors Primary and Replay before storing one status Bug."""
 
@@ -432,9 +547,11 @@ def test_invalid_success_replay_runs_resource_monitor_twice() -> None:
         def __init__(self) -> None:
             self.bodies: list[object] = []
 
-        def observe(self, *, operation, body):
+        def observe(self, *, operation, observation_id, body):
             """Capture each eligible response and report no derived resources."""
 
+            assert operation.operation_id == "GET /items"
+            assert observation_id.startswith("observation_")
             self.bodies.append(body)
             return ResourceDerivationResult()
 

@@ -3,16 +3,18 @@
 The Resource Response Tracker first reuses immutable identity fields from the
 unified Catalog.  For a previously unknown response group it asks the bounded
 Resource Identifier System Agent which direct scalar field or fields identify
-one persistent instance.  It stores only resource definitions, operation
-roles, neutral Beta evidence, and recursively merged current instance state;
-no extraction rule or model reasoning is persisted.
+one persistent instance. A missing operation/resource edge then asks the FAST
+Resource State System Agent for one stable semantic result state without
+showing it response content. The Catalog atomically stores the edge, recursively
+merged instances, current semantic states, and transition events.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
-from restscope.agent import SystemAgentTask
+from restscope.agent import SystemAgentResult, SystemAgentTask
 from restscope.api_behavior_monitor.catalog import (
     APIBehaviorCatalog,
     OperationDefinition,
@@ -28,15 +30,33 @@ from .resource_identity import (
     RESOURCE_IDENTIFIER_PROFILE_NAME,
     IdentifierCandidateView,
     IdentifierSelectionDecision,
-    SystemAgentRunner,
     build_identifier_prompt,
     validate_identifier_decision,
+)
+from .resource_state import (
+    RESOURCE_STATE_PROFILE_NAME,
+    ResourceStateDecision,
+    build_state_prompt,
+    validate_resource_state_output,
 )
 
 _MAX_GROUPS = 50
 _MAX_INSTANCES = 1000
 _MAX_CANDIDATES = 100
 _GENERIC_WRAPPERS = frozenset({"data", "items", "results", "collection"})
+
+
+class SystemAgentRunner(Protocol):
+    """Run both registered resource decisions through the Agent Harness."""
+
+    def run_system_agent(
+        self,
+        profile_name: str,
+        task: SystemAgentTask,
+    ) -> SystemAgentResult:
+        """Return one Harness-validated decision or terminal failure."""
+
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,13 +88,21 @@ class ResourceResponseTracker:
         self,
         *,
         operation: OperationDefinition,
+        observation_id: str,
         body: JSONValue,
     ) -> ResourceDerivationResult:
-        """Derive bounded object groups and atomically write valid resources."""
+        """Derive identities and states, then atomically persist final instances.
+
+        Args:
+            operation: Matched normalized OpenAPI operation.
+            observation_id: Already persisted HTTP Test Case causing the update.
+            body: Complete, untruncated 2xx JSON body used only for identities
+                and instance snapshots, never for semantic-state prompting.
+        """
 
         groups = _response_groups(body, operation=operation)
         known = self._all_resources()
-        derivations: list[ResourceDerivation] = []
+        identified: list[tuple[str, tuple[str, ...], list[dict[str, object]]]] = []
         for group in groups:
             reusable = _matching_resources(group.instances, known)
             selected = _select_known_resource(group, reusable)
@@ -102,18 +130,43 @@ class ResourceResponseTracker:
             ]
             if not valid_instances:
                 continue
+            identified.append((resource_name, identity_fields, valid_instances))
+        if not identified:
+            return ResourceDerivationResult()
+
+        contexts = {
+            item.resource_name: item
+            for item in self.catalog.read_resource_state_contexts(
+                operation_id=operation.operation_id,
+                resource_names=tuple(name for name, _fields, _instances in identified),
+            )
+        }
+        selected_states: dict[str, str] = {}
+        derivations: list[ResourceDerivation] = []
+        for resource_name, identity_fields, instances in identified:
+            context = contexts[resource_name]
+            result_state = context.operation_result_state
+            if result_state is None:
+                result_state = selected_states.get(resource_name)
+            if result_state is None:
+                result_state = self._select_result_state(
+                    operation=operation,
+                    resource_name=resource_name,
+                    existing_states=context.existing_states,
+                )
+            selected_states[resource_name] = result_state
             derivations.append(
                 ResourceDerivation(
                     resource_name=resource_name,
                     identity_fields=list(identity_fields),
                     role=_operation_role(operation.method),
-                    instances=valid_instances,
+                    result_state=result_state,
+                    instances=instances,
                 )
             )
-        if not derivations:
-            return ResourceDerivationResult()
         return self.catalog.record_resource_derivations(
             operation_id=operation.operation_id,
+            observation_id=observation_id,
             derivations=derivations,
         )
 
@@ -204,6 +257,43 @@ class ResourceResponseTracker:
         return tuple(
             sorted(aliases[alias] for alias in decision.identifier.fields)
         )
+
+    def _select_result_state(
+        self,
+        *,
+        operation: OperationDefinition,
+        resource_name: str,
+        existing_states: tuple[str, ...],
+    ) -> str:
+        """Ask the registered FAST Profile for one missing edge's stable state."""
+
+        prompt = build_state_prompt(
+            method=operation.method,
+            path=operation.path,
+            resource_name=resource_name,
+            existing_states=existing_states,
+        )
+        task = SystemAgentTask(
+            objective=prompt.user,
+            allowed_result_aliases=prompt.existing_states,
+        )
+        with self.tracing_runtime.span(
+            "ResourceResponseTracker.select_state",
+            kind="CHAIN",
+            input_value={"existing_state_count": len(existing_states)},
+        ) as span:
+            result = self.system_agent_runner.run_system_agent(
+                RESOURCE_STATE_PROFILE_NAME,
+                task,
+            )
+            span.set_output({"status": result.status})
+        if result.status != "completed" or result.output is None:
+            raise RuntimeError("Resource State System Agent failed")
+        decision = ResourceStateDecision.model_validate(result.output)
+        issues = validate_resource_state_output(decision, task)
+        if issues:
+            raise ValueError(issues[0])
+        return decision.selected_state
 
 
 def _response_groups(

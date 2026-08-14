@@ -54,6 +54,14 @@ and task records. Do not load unrelated large documents by default.
   configuration field, or persistence record. Every new abstraction must have
   a concrete current consumer and must hide or remove more complexity than its
   Interface adds. Prefer deleting, reusing, or deepening an existing Module.
+- Give every behavior exactly one owning Module and one canonical
+  implementation. Prefer deepening or simplifying that Module over adding a
+  parallel helper, DTO, Adapter, Repository, or forwarding wrapper. Do not
+  duplicate validation, queries, serialization, state transitions, or Context
+  rendering. When ownership, an Interface, or the main runtime path changes,
+  update `docs/code-reading-guide.md` in the same change. Before completion,
+  inspect the changed scope for duplicate logic and shallow Modules, then remove
+  any old path replaced by the approved implementation.
 - Do not use `typing.Any` in production code or tests. Express opaque values as
   `object`, and use concrete types, unions, type variables, or Protocols when
   callers rely on specific behavior. Do not evade this rule by omitting useful
@@ -137,10 +145,12 @@ explicit project decision:
   approved audit/export artifacts, but they do not enable App recovery.
 - The API Behavior Monitor catalog is one explicit narrow exception. It may
   persist normalized operations, resource definitions and operation roles,
-  recursively merged current resource instances, exact consumer input sources,
-  and every matched HTTP response or transport failure as a permanent
-  Observation. Stored requests exclude sensitive headers; stored responses keep
-  complete headers and body bytes. It may also persist Batch identities and
+  one immutable semantic result state per operation/resource edge, recursively
+  merged current resource instances and their current semantic state, append-
+  only instance state transitions linked to the causal Observation, exact
+  consumer input sources, and every matched HTTP response or transport failure
+  as a permanent Observation. Stored requests exclude sensitive headers; stored
+  responses keep complete headers and body bytes. It may also persist Batch identities and
   bounded summaries, immutable abstract Generator/Constraint snapshots used by
   Batches, the complete current normalized OpenAPI, and append-only response
   change events. It may persist one immutable final Bug Oracle Assessment for a
@@ -205,6 +215,11 @@ These seven terms are RESTScope's core runtime language and hard constraints:
   `*Agent` classes. `RESTScopeApp.start(focus)` blocks on
   `OrchestrationRuntime.run(focus)`; the removed FIFO Run Harness and taskless
   Main Agent lifecycle must not be restored.
+- The Orchestrator Profile has no Tools, Skills, or child Profiles. Its sole
+  Context Source is the Harness-owned read-only `test-progress` projection.
+  The Reader calls only `APIBehaviorCatalog.read_test_progress()`, renders at
+  most 12,000 characters through `CompactTextWriter`, and fails the fresh root
+  if progress cannot be read; it does not query tables or interpret states.
 - **System Agent** is a synchronous, repeatable root use of the same generic
   Agent, started only through a Harness-registered Profile/result contract.
   Every call owns an isolated prompt session and Agent tree and is closed after

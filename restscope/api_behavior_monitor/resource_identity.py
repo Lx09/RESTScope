@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from restscope.agent import SystemAgentResult, SystemAgentTask
+from restscope.agent import SystemAgentTask
 from restscope.context import CompactTextWriter, ContextMetrics
 
 IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS = (
@@ -22,19 +21,6 @@ IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS = (
 )
 
 RESOURCE_IDENTIFIER_PROFILE_NAME = "resource-identifier-selector"
-
-
-class SystemAgentRunner(Protocol):
-    """Run the registered identity-selection Profile through the Agent Harness."""
-
-    def run_system_agent(
-        self,
-        profile_name: str,
-        task: SystemAgentTask,
-    ) -> SystemAgentResult:
-        """Return one Harness-validated decision or terminal failure."""
-
-        ...
 
 
 class _PromptModel(BaseModel):

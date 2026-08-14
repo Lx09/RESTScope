@@ -278,7 +278,7 @@ def test_protocol_inventory_contains_only_reviewed_real_seams() -> None:
         ("agent/ports.py", "BudgetChargeView"),
         ("api_behavior_monitor/catalog.py", "_APIBehaviorRepository"),
         ("api_behavior_monitor/catalog.py", "_APIBehaviorUnitOfWork"),
-        ("api_behavior_monitor/resource_identity.py", "SystemAgentRunner"),
+        ("api_behavior_monitor/resource_monitor.py", "SystemAgentRunner"),
         ("request_generation/ports.py", "ReferenceValueProvider"),
         ("skills/loader.py", "_Traversable"),
         ("target_api/observation.py", "TargetResponseProcessor"),

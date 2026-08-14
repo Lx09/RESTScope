@@ -93,12 +93,16 @@ class ResourceORM(Base):
 
 
 class OperationResourceEdgeORM(Base):
-    """Map the proposition that one operation uses one resource in one role."""
+    """Map one operation/resource role and its immutable semantic result state."""
 
     __tablename__ = "operation_resource_edges"
     __table_args__ = (
         CheckConstraint("_alpha >= 1", name="operation_resource_edge_alpha"),
         CheckConstraint("_beta >= 1", name="operation_resource_edge_beta"),
+        CheckConstraint(
+            "length(result_state) BETWEEN 1 AND 20",
+            name="operation_resource_edge_result_state",
+        ),
     )
 
     operation_id: Mapped[str] = mapped_column(
@@ -109,13 +113,14 @@ class OperationResourceEdgeORM(Base):
         ForeignKey("resources.resource_id"),
         primary_key=True,
     )
-    role: Mapped[str] = mapped_column(String(100), primary_key=True)
+    role: Mapped[str] = mapped_column(String(100), nullable=False)
+    result_state: Mapped[str] = mapped_column(String(20), nullable=False)
     _alpha: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     _beta: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class ResourceInstanceORM(Base):
-    """Map the latest recursively merged state of one typed resource instance."""
+    """Map one instance's full merged JSON and current semantic state."""
 
     __tablename__ = "resource_instances"
 
@@ -125,6 +130,46 @@ class ResourceInstanceORM(Base):
     )
     resource_instance_id: Mapped[str] = mapped_column(Text, primary_key=True)
     current_state_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    semantic_state: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class ResourceStateEventORM(CreatedAtMixin, Base):
+    """Map one append-only state transition caused by a concrete Observation."""
+
+    __tablename__ = "resource_state_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["resource_type", "resource_instance_id"],
+            [
+                "resource_instances.resource_type",
+                "resource_instances.resource_instance_id",
+            ],
+            name="resource_state_event_instance",
+        ),
+        UniqueConstraint(
+            "observation_id",
+            "resource_type",
+            "resource_instance_id",
+            name="resource_state_event_observation_instance",
+        ),
+        Index(
+            "ix_resource_state_events_instance_created",
+            "resource_type",
+            "resource_instance_id",
+            "created_at",
+            "event_id",
+        ),
+    )
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    resource_type: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_instance_id: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    current_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    observation_id: Mapped[str] = mapped_column(
+        ForeignKey("observations.observation_id"),
+        nullable=False,
+    )
 
 
 class AbstractTestCaseORM(CreatedAtMixin, Base):

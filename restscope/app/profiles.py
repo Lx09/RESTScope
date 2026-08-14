@@ -1,9 +1,9 @@
 """Build the Agent Profiles owned by RESTScope's production App.
 
 The module translates App model configuration into Orchestrator, Task Executor,
-Parameter Patch, and Resource Identifier Profiles. Harness remains responsible
-for validating and running those definitions; composition only requests this
-one App-specific runtime definition.
+Parameter Patch, Resource Identifier, and Resource State Profiles. Harness
+remains responsible for validating and running those definitions; composition
+only requests this one App-specific runtime definition.
 """
 
 from __future__ import annotations
@@ -16,8 +16,20 @@ from restscope.api_behavior_monitor.resource_identity import (
     identifier_system_output_schema,
     validate_identifier_system_output,
 )
+from restscope.api_behavior_monitor.resource_state import (
+    RESOURCE_STATE_PROFILE_NAME,
+    RESOURCE_STATE_SYSTEM_AGENT_INSTRUCTIONS,
+    ResourceStateDecision,
+    resource_state_output_schema,
+    validate_resource_state_output,
+)
 from restscope.config import RESTScopeConfig
-from restscope.harness import AgentRuntimeDefinition, SystemAgentDefinition
+from restscope.harness import (
+    AgentRuntimeDefinition,
+    ContextSourceBinding,
+    SystemAgentDefinition,
+)
+from restscope.harness.test_progress import TEST_PROGRESS_CONTEXT_SOURCE
 from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.observability import TracingRuntime
 from restscope.orchestration.contracts import (
@@ -62,8 +74,9 @@ _PATCH_TOOLS = (
 
 _ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator.
 
-- Use only the Goal and Task Ledger projection in the current task. You have no
-  Tools, Skills, child Profiles, behavior database access, or hidden history.
+- Use the Goal, Task Ledger projection, and current test-progress Context Source
+  in this task. You have no Tools, Skills, child Profiles, direct behavior
+  database access, or hidden history.
 - On the first call, return replan and create a small rolling set of verifiable
   Milestones. On later calls, return exactly one replan, dispatch_task, or
   complete decision.
@@ -74,7 +87,9 @@ _ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator
   must never change the Goal or rewrite prior Tasks or Attempts.
 - Do not repeat a failed Task unchanged unless a new reason or changed state
   makes the next attempt materially different.
-- Complete only after assessing every Goal criterion and naming unresolved work.
+- Treat missing positive or negative progress as current evidence, not proof that
+  an operation is irrelevant. Complete only after assessing every Goal criterion,
+  the current test progress, and naming unresolved work.
 - Return only the required structured OrchestratorDecision.
 """
 
@@ -107,12 +122,15 @@ def _build_agent_runtime_definition(
     config: RESTScopeConfig,
     *,
     tracing_runtime: TracingRuntime,
+    test_progress_context: ContextSourceBinding | None,
 ) -> AgentRuntimeDefinition | None:
     """Compose App-authorized Orchestration and Monitor Agent Profiles.
 
     Args:
         config: Validated model-provider configuration for the process.
         tracing_runtime: App-owned tracing used by the shared model client.
+        test_progress_context: Harness-owned bounded Reader required by the
+            Orchestrator, or ``None`` when no thinking Profile can be built.
 
     Returns:
         The Profiles, models, client, and System Agent contracts enabled by the
@@ -124,12 +142,17 @@ def _build_agent_runtime_definition(
     system_agents: list[SystemAgentDefinition] = []
     models = []
     if thinking.enabled:
+        if test_progress_context is None:
+            raise ValueError("Orchestrator requires the test-progress Context Source")
+        if test_progress_context.name != TEST_PROGRESS_CONTEXT_SOURCE:
+            raise ValueError("Orchestrator Context Source must be test-progress")
         models.append(thinking)
         profiles.append(
             AgentProfile(
                 name="orchestrator",
                 instructions=_ORCHESTRATOR_INSTRUCTIONS,
                 model_config_name="thinking",
+                context_sources=(TEST_PROGRESS_CONTEXT_SOURCE,),
             )
         )
         profiles.append(
@@ -193,6 +216,23 @@ def _build_agent_runtime_definition(
                 output_schema_name="IdentifierSelectionDecision",
             )
         )
+        profiles.append(
+            AgentProfile(
+                name=RESOURCE_STATE_PROFILE_NAME,
+                instructions=RESOURCE_STATE_SYSTEM_AGENT_INSTRUCTIONS,
+                model_config_name="fast",
+            )
+        )
+        system_agents.append(
+            SystemAgentDefinition(
+                profile_name=RESOURCE_STATE_PROFILE_NAME,
+                adapt_task=SystemAgentTask.model_validate,
+                output_model=ResourceStateDecision,
+                build_output_schema=resource_state_output_schema,
+                validate_output=validate_resource_state_output,
+                output_schema_name="ResourceStateDecision",
+            )
+        )
     if not profiles:
         return None
     return AgentRuntimeDefinition(
@@ -200,4 +240,9 @@ def _build_agent_runtime_definition(
         models=tuple(models),
         client=build_llm_client(config.llm, tracing_runtime=tracing_runtime),
         system_agents=tuple(system_agents),
+        context_sources=(
+            (test_progress_context,)
+            if thinking.enabled and test_progress_context is not None
+            else ()
+        ),
     )

@@ -290,6 +290,17 @@ class ObservedResponseCoordinate(_CatalogModel):
     media_type: str
 
 
+SemanticStateName = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=20,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    ),
+]
+"""One stable lowercase snake-case state shared by Agent and persistence."""
+
+
 def normalize_resource_name(value: str) -> str:
     """Return the established lowercase alphanumeric resource identity.
 
@@ -313,6 +324,7 @@ class ResourceDerivation(_CatalogModel):
     resource_name: str = Field(min_length=1, max_length=200)
     identity_fields: list[str] = Field(min_length=1, max_length=20)
     role: str = Field(min_length=1, max_length=100)
+    result_state: SemanticStateName
     instances: list[JSONObject]
 
     @field_validator("resource_name")
@@ -374,6 +386,55 @@ class ResourceInstanceRecord(_CatalogModel):
     resource_type: str
     resource_instance_id: str
     current_state_json: JSONObject
+    semantic_state: SemanticStateName
+
+
+class ResourceStateContext(_CatalogModel):
+    """Return the durable state facts needed before one Monitor update."""
+
+    resource_name: str
+    operation_result_state: SemanticStateName | None = None
+    existing_states: tuple[SemanticStateName, ...] = ()
+
+
+class ResourceStateEventRecord(_CatalogModel):
+    """Return one append-only semantic transition and its Test Case cause."""
+
+    event_id: str
+    resource_type: str
+    resource_instance_id: str
+    previous_state: SemanticStateName | None = None
+    current_state: SemanticStateName
+    observation_id: str
+    operation_id: str
+    batch_id: str | None = None
+    batch_case_index: int | None = None
+    created_at: datetime
+
+
+class OperationTestProgress(_CatalogModel):
+    """Summarize executed positive and negative Batch cases for one operation."""
+
+    operation_id: str
+    method: str
+    path: str
+    positive_case_count: int = Field(default=0, ge=0)
+    negative_case_count: int = Field(default=0, ge=0)
+
+
+class ResourceStateCount(_CatalogModel):
+    """Count current instances in one semantic state for one resource type."""
+
+    resource_type: str
+    semantic_state: SemanticStateName
+    instance_count: int = Field(ge=1)
+
+
+class TestProgressSnapshot(_CatalogModel):
+    """Return the complete current aggregate consumed by the Harness reader."""
+
+    operations: tuple[OperationTestProgress, ...] = ()
+    resource_states: tuple[ResourceStateCount, ...] = ()
 
 
 class ResourceDerivationResult(_CatalogModel):
@@ -553,8 +614,16 @@ class _APIBehaviorRepository(Protocol):
         self,
         *,
         operation_id: str,
+        observation_id: str,
         derivations: list[ResourceDerivation],
     ) -> ResourceDerivationResult: ...
+
+    def read_resource_state_contexts(
+        self,
+        *,
+        operation_id: str,
+        resource_names: tuple[str, ...],
+    ) -> list[ResourceStateContext]: ...
 
     def list_resources(
         self,
@@ -573,6 +642,17 @@ class _APIBehaviorRepository(Protocol):
         limit: int,
         include_deleted: bool,
     ) -> tuple[list[ResourceInstanceRecord], int]: ...
+
+    def list_resource_state_events(
+        self,
+        *,
+        resource_type: str,
+        resource_instance_id: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ResourceStateEventRecord], int]: ...
+
+    def read_test_progress(self) -> TestProgressSnapshot: ...
 
     def list_operation_resources(
         self,
@@ -857,23 +937,44 @@ class APIBehaviorCatalog:
         self,
         *,
         operation_id: str,
+        observation_id: str,
         derivations: list[ResourceDerivation],
     ) -> ResourceDerivationResult:
-        """Atomically write valid resources, edges, and merged instances.
+        """Atomically write edges, merged instances, states, and transition events.
 
         Identity conflicts are reported by the repository and skipped per
         resource.  Unrelated derivations in the same response still commit.
         """
 
-        if not operation_id.strip():
-            raise ValueError("operation_id cannot be blank")
+        if not operation_id.strip() or not observation_id.strip():
+            raise ValueError("operation_id and observation_id cannot be blank")
         with self._unit_of_work_factory() as uow:
             result = uow.api_behavior.record_resource_derivations(
                 operation_id=operation_id,
+                observation_id=observation_id,
                 derivations=derivations,
             )
             uow.commit()
             return result
+
+    def read_resource_state_contexts(
+        self,
+        *,
+        operation_id: str,
+        resource_names: tuple[str, ...],
+    ) -> list[ResourceStateContext]:
+        """Read edge mappings and existing names for several resources at once."""
+
+        if not operation_id.strip():
+            raise ValueError("operation_id cannot be blank")
+        normalized = tuple(sorted({normalize_resource_name(name) for name in resource_names}))
+        if not normalized:
+            return []
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.read_resource_state_contexts(
+                operation_id=operation_id,
+                resource_names=normalized,
+            )
 
     def list_resources(
         self,
@@ -915,6 +1016,34 @@ class APIBehaviorCatalog:
                 limit=limit,
                 include_deleted=include_deleted,
             )
+
+    def list_resource_state_events(
+        self,
+        *,
+        resource_type: str,
+        resource_instance_id: str | None = None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ResourceStateEventRecord], int]:
+        """Return a chronological page of semantic transitions and Test Case causes."""
+
+        normalized_type = normalize_resource_name(resource_type)
+        if resource_instance_id is not None and not resource_instance_id.strip():
+            raise ValueError("resource_instance_id cannot be blank")
+        _require_page(offset=offset, limit=limit)
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.list_resource_state_events(
+                resource_type=normalized_type,
+                resource_instance_id=resource_instance_id,
+                offset=offset,
+                limit=limit,
+            )
+
+    def read_test_progress(self) -> TestProgressSnapshot:
+        """Read the complete current test and resource-state aggregate atomically."""
+
+        with self._unit_of_work_factory() as uow:
+            return uow.api_behavior.read_test_progress()
 
     def list_operation_resources(
         self,
@@ -1021,6 +1150,7 @@ __all__ = [
     "OpenAPIChangeEventWrite",
     "OperationDefinition",
     "OperationInputSource",
+    "OperationTestProgress",
     "OracleAssessment",
     "OracleAssessmentRecord",
     "OracleCheck",
@@ -1033,4 +1163,9 @@ __all__ = [
     "ResourceDerivation",
     "ResourceDerivationResult",
     "ResourceInstanceRecord",
+    "ResourceStateContext",
+    "ResourceStateCount",
+    "ResourceStateEventRecord",
+    "SemanticStateName",
+    "TestProgressSnapshot",
 ]

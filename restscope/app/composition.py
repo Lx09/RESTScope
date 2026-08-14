@@ -30,8 +30,12 @@ from restscope.db import (
     make_session_factory,
 )
 from restscope.db.bootstrap import _FreshSQLiteDatabase, prepare_fresh_sqlite
-from restscope.harness import HarnessRuntime, build_harness
+from restscope.harness import ContextSourceBinding, HarnessRuntime, build_harness
 from restscope.harness.operation_testing import OperationTestingService
+from restscope.harness.test_progress import (
+    TEST_PROGRESS_CONTEXT_SOURCE,
+    TestProgressContextReader,
+)
 from restscope.observability import (
     LiveRunObserver,
     Redactor,
@@ -251,6 +255,7 @@ def _compose_app_resources(config: RESTScopeConfig) -> _AppResources:
             ir_provider=current_ir,
             references=references,
         )
+        test_progress_reader = TestProgressContextReader(catalog)
         harness = build_harness(
             tracing_runtime=tracing,
             target_api_client=target_api_client,
@@ -262,6 +267,10 @@ def _compose_app_resources(config: RESTScopeConfig) -> _AppResources:
             agent_runtime=_build_agent_runtime_definition(
                 config,
                 tracing_runtime=tracing,
+                test_progress_context=ContextSourceBinding(
+                    name=TEST_PROGRESS_CONTEXT_SOURCE,
+                    read=test_progress_reader.read,
+                ),
             ),
         )
         system_agent_runner.bind(harness.run_system_agent)
