@@ -4,6 +4,11 @@ status: accepted
 
 # Use Profile-authorized System Agents for Monitor model decisions
 
+[ADR 0007](0007-orchestrator-ledger-long-tasks.md) later removes
+`start_main_agent` and uses this registered System Agent lifecycle for both the
+outer Orchestrator and every Main Worker. The isolation, authorization,
+validation, correction, cancellation, and cleanup rules below remain active.
+
 ## Decision
 
 RESTScope keeps `start_main_agent` for the one App-lifetime Main Agent and adds

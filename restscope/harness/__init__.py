@@ -18,7 +18,6 @@ if TYPE_CHECKING:
         ToolBindingFactory,
     )
     from .runtime import (
-        AgentRuntimeNotConfiguredError,
         HarnessRuntime,
         SystemAgentNotConfiguredError,
         build_harness,
@@ -28,7 +27,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AgentRuntimeDefinition",
-    "AgentRuntimeNotConfiguredError",
     "ContextSourceBinding",
     "HarnessRuntime",
     "SystemAgentDefinition",

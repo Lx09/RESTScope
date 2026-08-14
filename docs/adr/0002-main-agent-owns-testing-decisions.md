@@ -4,12 +4,15 @@ status: accepted
 
 # Let the Main Agent own API-testing decisions
 
-The ownership decision remains active. Its final paragraph's run-local Test
+The ownership decision is superseded by
+[ADR 0007](0007-orchestrator-ledger-long-tasks.md): cross-Task scheduling now
+belongs to the outer Orchestrator, while each fresh Main Worker owns semantic
+execution inside one bounded Task. Its final paragraph's run-local Test
 Case/Probe description is superseded by
 [ADR 0003](0003-retire-operation-smoke-and-apply-parameter-patches.md), which
 uses inline Batch evidence and an App-lifetime generation Store.
 
-RESTScope's product entry uses its single long-lived Main Agent to decide which
+Historically, RESTScope's product entry used its single long-lived Main Agent to decide which
 Skills, Tools, or Subagents to use, including ordering, retries, and completion.
 The Main Profile supplies the App-lifetime mission; startup does not create a
 public task DTO. The Harness retains

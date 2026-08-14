@@ -67,13 +67,13 @@ as the active project direction.
 - OpenAPI operations are discovered from the supplied source at runtime.
 - Testing evidence may change dependency analysis and scheduling while a run is
   in progress.
-- The approved target Main Agent owns semantic testing decisions, including
-  Skill and Tool choice, delegation, ordering, domain retries, and completion.
-  The Harness enforces and executes authorized runtime contracts but does not
-  choose testing work. `RESTScopeApp.start()` now blocks on one taskless Main
-  loop; the former FIFO Run Harness and its request/report DTOs are retired.
-  The initial Main Profile intentionally has only its private Plan Tools until
-  separate testing Skills and Tools are approved and connected.
+- The approved Orchestrator owns long-task planning, ordering, Replan, and
+  completion through an App-lifetime in-memory Ledger. Each bounded Main Worker
+  owns Skill, Tool, Parameter Patch delegation, and evidence-driven retry
+  choices only inside its dispatched Task. The Harness validates and executes
+  authorized contracts but chooses no testing work. `RESTScopeApp.start()`
+  blocks on this loop; the former FIFO Run Harness and taskless Main lifecycle
+  are retired.
 - Deterministic runtime code may synchronously start a registered System Agent
   through `run_system_agent(profile_name, task)`. It is another lifecycle of the
   same generic Agent, not a domain-specific Agent class. Every invocation is an

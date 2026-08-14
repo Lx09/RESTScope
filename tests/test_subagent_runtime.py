@@ -6,6 +6,8 @@ from threading import Event
 
 import pytest
 
+from tests.agent_helpers import start_test_agent
+
 
 class _ChildProvider:
     """Finish child Profiles locally, optionally waiting for test release."""
@@ -168,7 +170,7 @@ def test_start_wait_collects_direct_child_and_releases_open_slot() -> None:
     from restscope.llm import ToolCall
 
     runtime, _provider = _runtime(max_open_agents=2)
-    main = runtime.start_main_agent("main")
+    main = start_test_agent(runtime)
 
     started = main.toolbox.execute(
         ToolCall(
@@ -221,7 +223,7 @@ def test_wait_timeout_cancel_and_non_child_access_are_safe() -> None:
 
     release = Event()
     runtime, _provider = _runtime(release=release)
-    main = runtime.start_main_agent("main")
+    main = start_test_agent(runtime)
     started = main.toolbox.execute(
         ToolCall(
             id="start",

@@ -1,7 +1,7 @@
 """Expose RESTScope's small target and process lifecycle Interface.
 
 ``RESTScopeApp`` composes one production runtime, binds one validated target,
-starts one blocking Main Agent, and releases all resources. Target parsing and
+starts one blocking Orchestration loop, and releases all resources. Target parsing and
 production wiring remain private so callers need to understand only the App's
 four lifecycle operations and optional observer URL.
 """
@@ -95,8 +95,13 @@ class RESTScopeApp:
         self._resources.bind_target(context)
         self._initialized = True
 
-    def start(self) -> None:
-        """Start the initialized Main Agent once and block until it finishes."""
+    def start(self, focus: str | None = None) -> None:
+        """Start the initialized Orchestration loop once and block until completion.
+
+        Args:
+            focus: Optional emphasis or restriction appended to RESTScope's
+                fixed product mission for this run.
+        """
         self._ensure_open()
         if not self._initialized:
             raise ToolContextError(
@@ -104,9 +109,9 @@ class RESTScopeApp:
                 "Tool context is not initialized",
             )
         if self._started:
-            raise RuntimeError("RESTScope Main Agent loop has already started")
+            raise RuntimeError("RESTScope Orchestration loop has already started")
         self._started = True
-        marker = {"profile_name": "main", "mode": "blocking"}
+        marker = {"runtime": "orchestration", "mode": "blocking", "focus": focus}
         observer = self._resources.run_observer
         if observer is not None:
             observer.begin_run(marker)
@@ -116,9 +121,8 @@ class RESTScopeApp:
                 kind="CHAIN",
                 input_value=marker,
             ) as span:
-                main_agent = self._resources.start_main_agent()
-                main_agent.start()
-                terminal = {"profile_name": "main", "status": "completed"}
+                self._resources.run_orchestration(focus)
+                terminal = {"runtime": "orchestration", "status": "completed"}
                 span.set_output(terminal)
                 span.set_attribute("restscope.agent.status", "completed")
         except KeyboardInterrupt:

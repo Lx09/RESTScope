@@ -8,6 +8,8 @@ import pytest
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate
 
+from tests.agent_helpers import start_test_agent
+
 
 def _plan(step: str, status: str = "pending") -> dict[str, object]:
     """Build one model-facing Plan item for readable test scenarios."""
@@ -263,11 +265,11 @@ def test_profile_plan_grants_are_paired_and_harness_owned() -> None:
     unselected_runtime, _provider = _plan_runtime(
         profiles=(AgentProfile(name="main", model_config_name="thinking"),)
     )
-    assert unselected_runtime.start_main_agent("main").toolbox.specs() == []
+    assert start_test_agent(unselected_runtime).toolbox.specs() == []
 
 
 def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
-    """Parent, children, and later Main turns cannot cross Plan ownership."""
+    """Worker roots and children cannot cross private Plan ownership."""
     from restscope.agent import AgentProfile, AgentTask
     from restscope.llm import ToolCall
 
@@ -289,7 +291,7 @@ def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
             ),
         )
     )
-    main = runtime.start_main_agent("main")
+    main = start_test_agent(runtime)
     parent_update = main.toolbox.execute(
         ToolCall(
             id="parent-update",
@@ -328,9 +330,8 @@ def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
     between_tasks = main.toolbox.execute(
         ToolCall(id="parent-read", name="plan.read", arguments={})
     )
-    second = main.run(AgentTask(objective="Exercise the existing reusable contract."))
     main.close()
-    replacement = runtime.start_main_agent("main")
+    replacement = start_test_agent(runtime)
     replacement_plan = replacement.toolbox.execute(
         ToolCall(id="replacement-read", name="plan.read", arguments={})
     )
@@ -341,5 +342,5 @@ def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
         {"explanation": None, "plan": []},
     ]
     assert between_tasks.structured == parent_update.structured
-    assert first.status == second.status == "completed"
+    assert first.status == "completed"
     assert replacement_plan.structured == {"explanation": None, "plan": []}

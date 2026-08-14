@@ -169,7 +169,7 @@ explicit project decision:
   complete schema-v3 snapshots in same-origin IndexedDB, including the
   already-redacted raw Provider Reasoning, Agent messages, target
   Authorization/Cookie values, Tool details, HTTP exchanges, Subagent
-  relationships, and the Main Agent's generic Plan projection as Todo delivered
+  relationships, and the current Main Worker's private Plan projection as Todo delivered
   to that browser. Batch execution and Parameter Patch application appear as
   ordinary Tool cards rather than special workflow events.
   It must not add a backend write API, SQLite record, cross-origin sync, or
@@ -188,18 +188,21 @@ Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.
 
-## Main Agent, Subagent, System Agent, Skill, Tool, and Harness boundaries
+## Orchestrator, Main Worker, Subagent, System Agent, Skill, Tool, and Harness boundaries
 
-These six terms are RESTScope's core runtime language and hard constraints:
+These seven terms are RESTScope's core runtime language and hard constraints:
 
-- **Main Agent** is the App's single long-lived LLM Agent. **Subagent** is an
-  independent, task-scoped use of the same configurable Agent runtime, started
-  by the Harness only after the Main Agent requests it. Do not create separate
-  Agent inheritance trees or new domain-specific `*Agent` classes. The approved
-  product runtime makes the Main LLM responsible for choosing testing methods,
-  Tools, Subagents, ordering, domain retries, and completion. The current
-  blocking `RESTScopeApp.start()` entry launches that loop without a public
-  task or result DTO; the removed FIFO Run Harness must not be restored.
+- **Orchestrator** is the outer, no-Tool System Agent that owns Milestones,
+  Task dispatch, Replan, and semantic completion through the App-lifetime
+  in-memory Task Ledger. **Main Worker** is a fresh System Agent root that owns
+  execution only inside one dispatched Task. It may choose authorized Skills,
+  Tools, Parameter Patch Subagent work, and evidence-driven retries, but never
+  the next Task. **Subagent** is an independent, task-scoped use of the same
+  configurable Agent runtime, started only after its direct parent requests it.
+  Do not create separate Agent inheritance trees or new domain-specific
+  `*Agent` classes. `RESTScopeApp.start(focus)` blocks on
+  `OrchestrationRuntime.run(focus)`; the removed FIFO Run Harness and taskless
+  Main Agent lifecycle must not be restored.
 - **System Agent** is a synchronous, repeatable root use of the same generic
   Agent, started only through a Harness-registered Profile/result contract.
   Every call owns an isolated prompt session and Agent tree and is closed after
@@ -209,8 +212,8 @@ These six terms are RESTScope's core runtime language and hard constraints:
   Profile may include a bounded description; every Profile named as a child
   must include one for its direct parent's delegation guidance. Global
   discovery never grants execution permission. The Harness validates the
-  complete Profile graph once and constructs Agents through
-  `start_main_agent` or registered `run_system_agent` calls; do not expose a
+  complete Profile graph once and constructs roots through registered
+  `run_system_agent` calls; do not expose a
   separate resolve-and-assemble seam.
   A Subagent receives no hidden Main-Agent state and returns only a structured,
   bounded result. Failure Resolution and Parameter Patch methods now live in
@@ -239,8 +242,8 @@ These six terms are RESTScope's core runtime language and hard constraints:
   deterministic operation execution and the mechanical injection of those
   capabilities into authorized Tools. `test_case.run_batch` returns bounded
   inline evidence and creates no run-local registry. The retired run-scoped FIFO and
-  retry scheduler must not be restored; the blocking Main loop owns any future
-  semantic scheduling through explicitly granted Skills and Tools.
+  retry scheduler must not be restored; Orchestration owns cross-Task semantic
+  scheduling while a Main Worker owns only its bounded execution.
 - `run_system_agent(profile_name, task)` may start only a Profile registered by
   an immutable `SystemAgentDefinition`. Registration binds bounded task input
   and the structured result contract but grants no capability: the unchanged
@@ -262,9 +265,9 @@ These six terms are RESTScope's core runtime language and hard constraints:
   three.
 - `plan.read` and `plan.update` are an optional paired Profile grant for one
   Agent's private task Plan. The Harness creates a separate in-memory Plan for
-  every Main Agent and Subagent session. Plans are not shared between Agents,
+  every Main Worker and Subagent session. Plans are not shared between Agents,
   persisted, or exposed as scheduler state.
-- Main and child Agents share only deterministic tree control: weighted model
+- Parent and child Agents share only deterministic tree control: weighted model
   budget, open/active slots, cancellation, tracing parentage, and bounded
   results. They do not share hidden conversation history. Model input is
   compacted at 80% with the same Profile model and no Tools; failed compaction

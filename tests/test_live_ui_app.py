@@ -16,19 +16,24 @@ if TYPE_CHECKING:
 
 
 def _interrupting_agent_definition() -> AgentRuntimeDefinition:
-    """Build one production-shaped Main definition that simulates Ctrl-C."""
-    from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition
+    """Build one registered Orchestrator definition that simulates Ctrl-C."""
+    from restscope.agent import AgentProfile, SystemAgentTask
+    from restscope.harness import AgentRuntimeDefinition, SystemAgentDefinition
     from restscope.llm import LLMClient, LLMModelConfig
     from restscope.llm.registry import LLMProviderRegistry
+    from restscope.orchestration.contracts import (
+        orchestrator_output_schema,
+        validate_orchestrator_output,
+    )
+    from restscope.orchestration.models import OrchestratorDecision
 
     class InterruptingProvider:
-        """Raise KeyboardInterrupt from the normal Main Agent model seam."""
+        """Raise KeyboardInterrupt from the normal System Agent model seam."""
 
         name = "interrupting"
 
         def invoke(self, request):
-            """Interrupt the blocking Main loop before it can return output."""
+            """Interrupt the blocking Orchestration loop before a decision."""
 
             del request
             raise KeyboardInterrupt()
@@ -36,7 +41,7 @@ def _interrupting_agent_definition() -> AgentRuntimeDefinition:
     registry = LLMProviderRegistry()
     registry.register(InterruptingProvider())
     return AgentRuntimeDefinition(
-        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        profiles=(AgentProfile(name="orchestrator", model_config_name="thinking"),),
         models=(
             LLMModelConfig(
                 name="thinking",
@@ -47,6 +52,16 @@ def _interrupting_agent_definition() -> AgentRuntimeDefinition:
             ),
         ),
         client=LLMClient(registry),
+        system_agents=(
+            SystemAgentDefinition(
+                profile_name="orchestrator",
+                adapt_task=SystemAgentTask.model_validate,
+                output_model=OrchestratorDecision,
+                build_output_schema=orchestrator_output_schema,
+                validate_output=validate_orchestrator_output,
+                output_schema_name="OrchestratorDecision",
+            ),
+        ),
     )
 
 
@@ -102,7 +117,7 @@ def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path
     assert tracing.run_observer.snapshot()["run"] is None
 
 
-def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
+def test_keyboard_interrupt_stops_orchestration_and_keeps_ui_available(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -151,7 +166,7 @@ def test_keyboard_interrupt_stops_the_main_loop_and_keeps_ui_available(
     assert stopped["run"]["status"] == "stopped"
     assert stopped["run"]["ended_at"] is not None
     # The interrupting test double emits no model or Tool spans, so the stopped
-    # Main lifetime correctly has an empty semantic timeline.
+    # Orchestration lifetime correctly has an empty semantic timeline.
     assert stopped["events"] == []
     assert app.ui_url == "http://127.0.0.1:9987"
     assert service.closed is False

@@ -46,12 +46,6 @@ if TYPE_CHECKING:
     from restscope.tools.test_case import TestCaseQueryToolBackend
 
 
-class AgentRuntimeNotConfiguredError(RuntimeError):
-    """Report that this Harness has no generic Agent composition definition."""
-
-    code = "agent_runtime_not_configured"
-
-
 class SystemAgentNotConfiguredError(RuntimeError):
     """Report an unknown or unavailable Harness-owned System Agent Profile."""
 
@@ -60,7 +54,7 @@ class SystemAgentNotConfiguredError(RuntimeError):
 
 @dataclass
 class HarnessRuntime:
-    """Own deterministic state and start one fully authorized Main Agent.
+    """Own deterministic state and run fully authorized System Agents.
 
     The built-in Catalog is globally discoverable but grants no execution
     permission. External MCP definitions remain in a separate Catalog. Live
@@ -84,7 +78,6 @@ class HarnessRuntime:
         init=False,
         repr=False,
     )
-    _main_agent: Agent | None = field(default=None, init=False, repr=False)
     _system_agents: dict[str, Agent] = field(
         default_factory=dict,
         init=False,
@@ -137,17 +130,6 @@ class HarnessRuntime:
         """Release App-bound target state during shutdown."""
         self._tool_context = None
 
-    def start_main_agent(self, profile_name: str) -> Agent:
-        """Resolve and start the App's one long-lived generic Main Agent."""
-        if self.agent_runtime is None:
-            raise AgentRuntimeNotConfiguredError(
-                "Generic Agent runtime is not configured"
-            )
-        if self._main_agent is not None and not self._main_agent.closed:
-            raise ValueError("Main Agent is already started")
-        self._main_agent = self.agent_runtime.start_main(profile_name)
-        return self._main_agent
-
     def run_system_agent(
         self,
         profile_name: str,
@@ -182,16 +164,13 @@ class HarnessRuntime:
             with self._system_agents_lock:
                 self._system_agents.pop(agent.session_id, None)
 
-    def close_main_agent(self) -> None:
-        """Close Main and active System roots, cancelling all descendants."""
+    def close_agents(self) -> None:
+        """Cancel every active System root and all of its descendants."""
         with self._system_agents_lock:
             self._system_agents_closing = True
             active_system_agents = tuple(self._system_agents.values())
         for agent in active_system_agents:
             agent.close()
-        if self._main_agent is not None:
-            self._main_agent.close()
-            self._main_agent = None
 
 
 def build_harness(

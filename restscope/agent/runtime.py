@@ -4,8 +4,7 @@ The Harness is the only production constructor. It supplies an already-resolved
 model, toolbox, and private Prompt Session. This Module owns the one-Tool-or-
 final model loop, local output validation, and lifecycle results; prompt roles,
 Context projection, fixed protocols, and compaction assembly remain cohesive in
-the Prompt Session. A Main Agent may start one taskless App-lifetime loop;
-task-scoped callers and Subagents continue to use the bounded task protocol.
+the Prompt Session. Every root and Subagent receives one bounded task.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from .profile import AgentProfile
 from .prompt import AgentPromptSession, PromptSessionError
 
 _HARNESS_CONSTRUCTION_TOKEN = object()
-AgentLifecycle = Literal["main", "subagent", "system"]
+AgentLifecycle = Literal["subagent", "system"]
 AgentLoopResult = AgentResult | SystemAgentResult
 
 
@@ -50,7 +49,7 @@ class Agent:
         session_id: str | None = None,
         tree_control: AgentTreeControlPort | None = None,
         cancel_event: Event | None = None,
-        lifecycle: AgentLifecycle = "main",
+        lifecycle: AgentLifecycle = "system",
         output_model: type[BaseModel] = AgentCompletion,
         validate_output: Callable[[BaseModel], tuple[str, ...]] | None = None,
         depth: int = 0,
@@ -76,7 +75,6 @@ class Agent:
         self.parent_session_id = parent_session_id
         self._closed = False
         self._has_run = False
-        self._has_started = False
 
     @classmethod
     def _from_harness(cls, **dependencies) -> Agent:
@@ -111,59 +109,11 @@ class Agent:
                 span.mark_error(result.error.message if result.error else result.status)
             return result
 
-    def start(self) -> None:
-        """Run the Main Profile's App-lifetime loop and block until it ends.
-
-        The Main Agent receives no ``AgentTask`` because its stable Profile
-        instructions define its continuing mission. A normal completion is an
-        internal model-loop boundary and therefore returns nothing to the App.
-        Safe terminal runtime failures are raised so a blocking caller cannot
-        mistake cancellation or exhausted capacity for successful shutdown.
-        """
-        with self.client.tracing_runtime.span(
-            "Agent.start",
-            kind="CHAIN",
-            input_value={"profile_name": self.profile.name},
-            attributes={
-                "restscope.agent.session_id": self.session_id,
-                "restscope.agent.profile": self.profile.name,
-                "restscope.agent.depth": self.depth,
-                "restscope.agent.lifecycle": self.lifecycle,
-            },
-        ) as span:
-            result = self._start_main_loop()
-            span.set_output(result)
-            span.set_attribute("restscope.agent.status", result.status)
-            if result.status != "completed":
-                message = result.error.message if result.error else result.status
-                span.mark_error(message)
-                code = result.error.code if result.error else result.status
-                raise RuntimeError(f"{code}: {message}")
-
-    def _start_main_loop(self) -> AgentLoopResult:
-        """Prepare the taskless Main prompt before entering the shared loop."""
-        if self._closed:
-            raise RuntimeError("Agent is closed")
-        if self.lifecycle != "main":
-            raise RuntimeError("Taskless start is available only to the Main Agent")
-        if self._has_started or self._has_run:
-            raise RuntimeError("Main Agent loop is already started")
-        self._has_started = True
-        if self.cancel_event.is_set():
-            return self._cancelled_result()
-        try:
-            self.prompt_session.prepare_start()
-        except PromptSessionError as exc:
-            return self._prompt_error_result(exc)
-        return self._execute_loop()
-
     def _run_task(self, task: AgentTask | SystemAgentTask) -> AgentLoopResult:
-        """Execute the correction loop while retaining bounded Main history."""
+        """Execute one bounded correction loop for this isolated session."""
         if self._closed:
             raise RuntimeError("Agent is closed")
-        if self._has_started:
-            raise RuntimeError("Main Agent loop is already started")
-        if self.lifecycle in {"subagent", "system"} and self._has_run:
+        if self._has_run:
             raise RuntimeError(f"{self.lifecycle.title()} Agent accepts only one task")
         self._has_run = True
         if self.cancel_event.is_set():

@@ -14,7 +14,7 @@ from threading import RLock
 
 from sqlalchemy import Engine
 
-from restscope.agent import Agent, SystemAgentResult, SystemAgentTask
+from restscope.agent import SystemAgentResult, SystemAgentTask
 from restscope.api_behavior_monitor import (
     APIBehaviorResponseProcessor,
     build_api_behavior_monitor_coordinator,
@@ -40,6 +40,7 @@ from restscope.observability import (
     configure_logging,
 )
 from restscope.openapi_parser import OpenAPISpecIR, build_openapi_document
+from restscope.orchestration import OrchestrationRuntime
 from restscope.request_generation import (
     BehaviorMonitorReferences,
     RequestGenerationConfigStore,
@@ -102,8 +103,8 @@ class _DeferredSystemAgentRunner:
 class _AppResources:
     """Own every long-lived production implementation used by one App.
 
-    ``RESTScopeApp`` delegates target publication, Main Agent creation, optional
-    observer discovery, and shutdown here. This keeps the public lifecycle free
+    ``RESTScopeApp`` delegates target publication, Orchestration execution,
+    optional observer discovery, and shutdown here. This keeps the public lifecycle free
     of database, Monitor, Request Generation, and Harness navigation details.
     """
 
@@ -145,14 +146,21 @@ class _AppResources:
         self.generation_store.initialize_once(ir)
         self.harness.bind_context(context)
 
-    def start_main_agent(self) -> Agent:
-        """Create the App's sole long-lived Main Agent through the Harness."""
-        return self.harness.start_main_agent("main")
+    def run_orchestration(self, focus: str | None = None) -> None:
+        """Run the App-lifetime Ledger loop through fresh System Agent roots.
+
+        Args:
+            focus: Optional user emphasis appended to RESTScope's fixed Goal.
+
+        The public App intentionally keeps returning ``None``; final evidence
+        remains available through existing observability and audit surfaces.
+        """
+        OrchestrationRuntime(self.harness).run(focus)
 
     def close(self) -> None:
         """Attempt every resource cleanup in dependency order."""
         steps: list[Callable[[], None]] = [
-            self.harness.close_main_agent,
+            self.harness.close_agents,
             self.harness.clear_context,
         ]
         if self.harness.mcp_host is not None:

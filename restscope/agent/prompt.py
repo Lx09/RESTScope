@@ -1,15 +1,14 @@
 """Assemble one generic Profile Agent's private, bounded prompt session.
 
 The deterministic Harness creates this Module after resolving a Profile. It
-owns stable system/developer instructions, taskless Main bootstrap or bounded
-task, and Context projection,
+owns stable system/developer instructions, one bounded task, and Context projection,
 on-demand Skill instruction messages, immutable Tool/output protocols, and
 compaction requests. The generic Agent asks for ready provider requests and
 records model/Tool events; :class:`AgentContext` remains the internal history
 and window-projection implementation.
 
 This Module is intentionally absent from the public ``restscope.agent`` facade.
-Each Main Agent and Subagent receives a separate in-memory instance, and none of
+Each root Agent and Subagent receives a separate in-memory instance, and none of
 its fingerprints, messages, or loaded instructions are persisted or shared.
 """
 
@@ -53,12 +52,6 @@ facts, evidence references, unresolved questions, and safety constraints.
 Return only a non-empty Markdown summary of at most 24,000 characters. Do not
 call Tools and do not return JSON."""
 
-_MAIN_LOOP_START = """MAIN AGENT LOOP START — UNTRUSTED
-
-Begin the App-lifetime work defined by your Profile instructions. Use only the
-currently authorized Skills, Tools, Context Sources, and child Profiles."""
-
-
 class PromptSessionError(RuntimeError):
     """Report a safe prompt assembly failure before model or Tool execution."""
 
@@ -84,7 +77,7 @@ class AgentPromptSession:
         output_schema: dict[str, object],
         output_schema_name: str = "AgentCompletion",
     ) -> None:
-        """Freeze resolved access until Main startup or a bounded task arrives.
+        """Freeze resolved access until one bounded task arrives.
 
         Args:
             profile: The exact Profile whose Agent owns this session.
@@ -128,8 +121,8 @@ class AgentPromptSession:
                     ),
                 )
         except PromptSessionError as exc:
-            # Construction stays side-effect free and start_main_agent remains
-            # usable. The preparation entry turns this into a stable internal
+            # Construction stays side-effect free. Task preparation turns this
+            # into a stable internal
             # terminal result before any model or Tool can run.
             self._system = _BASE_SYSTEM
             self._developer = None
@@ -157,24 +150,6 @@ class AgentPromptSession:
 
         self._prepare_message(rendered, append_when_started=True)
 
-    def prepare_start(self) -> None:
-        """Start one taskless Main loop from its stable Profile instructions.
-
-        This entry point deliberately accepts no objective. The Main Profile
-        owns the continuing App-lifetime mission, while any authorized Context
-        Sources provide the initial changing evidence. Subagents never use
-        this protocol because their parent must supply a bounded ``AgentTask``.
-        """
-        self._raise_startup_error()
-        if self._context is not None:
-            raise RuntimeError("Agent Prompt Session is already started")
-        sources = self._read_sources()
-        rendered = _MAIN_LOOP_START
-        if sources:
-            rendered = f"{rendered}\n\n{_render_context_sources(sources)}"
-        self._remember_sources(sources)
-        self._prepare_message(rendered, append_when_started=False)
-
     def _prepare_message(self, rendered: str, *, append_when_started: bool) -> None:
         """Install or append one bounded user message and verify it fits."""
 
@@ -195,7 +170,7 @@ class AgentPromptSession:
             )
         elif append_when_started:
             self._context.append_feedback(rendered)
-        else:  # pragma: no cover - guarded by ``prepare_start`` above.
+        else:  # pragma: no cover - current Agents accept one bounded task.
             raise RuntimeError("Agent Prompt Session is already started")
         # Force one projection now so impossible stable/latest combinations fail
         # before the Agent makes a provider call or executes any Tool.

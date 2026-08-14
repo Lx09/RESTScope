@@ -1,0 +1,306 @@
+"""Run RESTScope's complete Plan, Execute, Record, and Replan cycle.
+
+This is the only module that knows the long-task control flow. It calls the
+existing Harness System Agent lifecycle for each Orchestrator decision and each
+Main Worker task, then asks :class:`TaskLedger` to validate every transition.
+"""
+
+from __future__ import annotations
+
+from restscope.agent import SystemAgentResult, SystemAgentTask
+from restscope.context import CompactTextWriter
+from restscope.harness import HarnessRuntime
+
+from .ledger import TaskLedger
+from .models import (
+    CompleteDecision,
+    DispatchTaskDecision,
+    GoalContract,
+    GoalCriterion,
+    MainTaskResult,
+    OrchestrationResult,
+    OrchestratorDecision,
+    ReplanDecision,
+    TaskRecord,
+)
+
+_MISSION = (
+    "Explore the target REST API dynamically, confirm useful happy paths, perform "
+    "worthwhile exceptional testing, and report only replay-confirmed Bug Oracle "
+    "findings. Preserve evidence and adapt future work as each result is learned."
+)
+
+
+class OrchestrationRuntime:
+    """Coordinate fresh Orchestrator and Worker roots around one durable Ledger."""
+
+    def __init__(self, system_agents: HarnessRuntime) -> None:
+        """Accept the Harness-owned lifecycle without copying Agent machinery."""
+        self._system_agents = system_agents
+
+    def run(self, focus: str | None = None) -> OrchestrationResult:
+        """Run until the Orchestrator semantically completes the fixed Goal.
+
+        Args:
+            focus: Optional run emphasis or restriction appended to the fixed
+                product mission. It cannot replace that mission.
+
+        Returns:
+            The final summary, unresolved issues, immutable Goal, and Ledger
+            snapshot. There is deliberately no artificial round limit.
+
+        Raises:
+            ValueError: If a System Agent fails or returns a decision/result
+                that violates the current Ledger contract.
+        """
+        goal = _build_goal(focus)
+        ledger = TaskLedger(goal)
+        first_decision = True
+
+        while True:
+            decision = self._run_orchestrator(ledger)
+            if first_decision and not isinstance(decision, ReplanDecision):
+                raise ValueError("The first Orchestrator decision must be replan")
+            first_decision = False
+
+            if isinstance(decision, ReplanDecision):
+                ledger.apply_replan(decision)
+                continue
+            if isinstance(decision, DispatchTaskDecision):
+                task = ledger.dispatch(
+                    decision.task,
+                    expected_revision=decision.expected_plan_revision,
+                )
+                try:
+                    worker_result = self._run_worker(goal, ledger, task)
+                except _WorkerLifecycleError as exc:
+                    # A failed fresh root is still material history. Recording
+                    # it lets the Orchestrator choose a changed recovery task.
+                    ledger.append_failure(
+                        task.task_id,
+                        failure_code=exc.code,
+                        failure_message=exc.message,
+                    )
+                except RuntimeError as exc:
+                    # Provider and Harness exceptions are terminal for this
+                    # root, not for the outer Goal. Keep only a bounded safe
+                    # explanation; stack traces never enter Agent context.
+                    message = str(exc).strip() or type(exc).__name__
+                    ledger.append_failure(
+                        task.task_id,
+                        failure_code="worker_lifecycle_error",
+                        failure_message=message[:2_000],
+                    )
+                else:
+                    ledger.append_attempt(worker_result)
+                continue
+
+            final_snapshot = ledger.complete(decision)
+            return OrchestrationResult(
+                summary=decision.summary,
+                unresolved=decision.unresolved,
+                goal=goal,
+                ledger=final_snapshot,
+            )
+
+    def _run_orchestrator(
+        self, ledger: TaskLedger
+    ) -> ReplanDecision | DispatchTaskDecision | CompleteDecision:
+        """Request one exclusive decision using only bounded Ledger state."""
+        snapshot = ledger.snapshot()
+        # The Harness uses these prompt-local identities to reject invented
+        # revisions, Milestones, Attempts, and Goal criteria before return.
+        aliases = (
+            f"revision_{snapshot.plan_revision}",
+            *(item.criterion_id for item in ledger.goal.success_criteria),
+            *(
+                item.milestone_id
+                for item in snapshot.milestones
+                if item.status == "pending"
+            ),
+            *(item.attempt_id for item in snapshot.attempts[-20:]),
+        )
+        task = SystemAgentTask(
+            objective=_render_orchestrator_task(ledger),
+            allowed_result_aliases=aliases,
+        )
+        result = self._system_agents.run_system_agent("orchestrator", task)
+        output = _require_completed_output(result, profile_name="orchestrator")
+        return OrchestratorDecision.model_validate(output).root
+
+    def _run_worker(
+        self, goal: GoalContract, ledger: TaskLedger, task: TaskRecord
+    ) -> MainTaskResult:
+        """Run one fresh Worker against only its assignment and selected history."""
+        system_task = SystemAgentTask(
+            objective=_render_worker_task(goal, ledger, task),
+            allowed_result_aliases=(
+                task.task_id,
+                *(criterion.criterion_id for criterion in task.success_criteria),
+            ),
+        )
+        result = self._system_agents.run_system_agent("main-worker", system_task)
+        if result.status != "completed" or result.output is None:
+            code = result.status
+            message = "Main Worker ended without a structured result."
+            if result.error is not None:
+                code = result.error.code
+                message = result.error.message
+            raise _WorkerLifecycleError(code=code, message=message)
+        output = result.output
+        return MainTaskResult.model_validate(output)
+
+
+def _build_goal(focus: str | None) -> GoalContract:
+    """Construct the fixed mission and stable completion questions for one run."""
+    return GoalContract(
+        mission=_MISSION,
+        focus=focus,
+        success_criteria=(
+            GoalCriterion(
+                criterion_id="goal_1",
+                description="Relevant testable operations have reproducible happy-path evidence.",
+            ),
+            GoalCriterion(
+                criterion_id="goal_2",
+                description="Worthwhile exceptional behavior has been tested or left explicit.",
+            ),
+            GoalCriterion(
+                criterion_id="goal_3",
+                description="Only replay-confirmed unexpected responses are reported as Bugs.",
+            ),
+        ),
+    )
+
+
+def _render_orchestrator_task(ledger: TaskLedger) -> str:
+    """Project current state as bounded Markdown without prior Agent transcripts."""
+    snapshot = ledger.snapshot()
+    writer = CompactTextWriter(max_value_chars=1_000)
+    writer.section("Goal contract")
+    writer.text("Mission", ledger.goal.mission)
+    writer.text("Run focus", ledger.goal.focus)
+    writer.detail(
+        "Goal criteria",
+        {
+            item.criterion_id: item.description for item in ledger.goal.success_criteria
+        },
+    )
+    writer.section("Current Ledger")
+    writer.text("Plan revision", snapshot.plan_revision)
+    writer.text("Run status", snapshot.run_status)
+    visible_milestones = tuple(
+        item for item in snapshot.milestones if item.status == "pending"
+    ) + tuple(
+        item for item in snapshot.milestones if item.status != "pending"
+    )[-10:]
+    writer.detail(
+        "Current and recent Milestones",
+        [_milestone_projection(item) for item in visible_milestones],
+    )
+    writer.detail("Recent Attempts", [_attempt_projection(item) for item in snapshot.attempts[-20:]])
+    writer.section("Required decision")
+    writer.text(
+        "Instruction",
+        "Return exactly one replan, dispatch_task, or complete decision for this state.",
+    )
+    return writer.render(18_000).text
+
+
+def _render_worker_task(goal: GoalContract, ledger: TaskLedger, task: TaskRecord) -> str:
+    """Render one bounded assignment plus only explicitly related Attempt history."""
+    milestone = next(
+        item for item in ledger.snapshot().milestones if item.milestone_id == task.milestone_id
+    )
+    writer = CompactTextWriter(max_value_chars=1_000)
+    writer.section("Bounded Goal")
+    writer.text("Mission", goal.mission)
+    writer.text("Run focus", goal.focus)
+    writer.section("Current Milestone")
+    writer.record(
+        milestone.milestone_id,
+        title=milestone.title,
+        purpose=milestone.purpose,
+        success_criteria=milestone.success_criteria,
+    )
+    writer.section("Single Worker Task")
+    writer.record(
+        task.task_id,
+        objective=task.objective,
+        purpose=task.purpose,
+        retry_reason=task.retry_reason,
+        success_criteria={
+            item.criterion_id: item.description for item in task.success_criteria
+        },
+    )
+    writer.section("Related Attempt history")
+    writer.detail(
+        "Attempts",
+        [_attempt_projection(item) for item in ledger.related_attempts(task)],
+    )
+    writer.section("Required result")
+    writer.text(
+        "Instruction",
+        "Execute only this Task and report each criterion exactly once; do not plan the next Task.",
+    )
+    return writer.render(18_000).text
+
+
+def _milestone_projection(milestone: object) -> dict[str, object]:
+    """Keep one Milestone prompt entry small and free of implementation details."""
+    from .models import MilestoneRecord
+
+    if not isinstance(milestone, MilestoneRecord):
+        raise TypeError("Expected a MilestoneRecord")
+    return {
+        "milestone_id": milestone.milestone_id,
+        "revision": milestone.plan_revision,
+        "title": milestone.title,
+        "purpose": milestone.purpose,
+        "success_criteria": milestone.success_criteria,
+        "status": milestone.status,
+    }
+
+
+def _attempt_projection(attempt: object) -> dict[str, object]:
+    """Bound historical evidence to conclusions needed for future decisions."""
+    from .models import AttemptRecord
+
+    if not isinstance(attempt, AttemptRecord):
+        raise TypeError("Expected an AttemptRecord")
+    result = attempt.result
+    return {
+        "attempt_id": attempt.attempt_id,
+        "task_id": attempt.task_id,
+        "outcome": attempt.outcome,
+        "criteria": () if result is None else result.criteria,
+        "findings": () if result is None else result.findings,
+        "unresolved_issues": () if result is None else result.unresolved_issues,
+        "target_state_changes": (
+            () if result is None else result.target_state_changes
+        ),
+        "failure_code": attempt.failure_code,
+        "failure_message": attempt.failure_message,
+    }
+
+
+def _require_completed_output(
+    result: SystemAgentResult, *, profile_name: str
+) -> dict[str, object]:
+    """Translate a terminal System Agent lifecycle result into one clear failure."""
+    if result.status != "completed" or result.output is None:
+        detail = "unknown lifecycle failure"
+        if result.error is not None:
+            detail = f"{result.error.code}: {result.error.message}"
+        raise ValueError(f"{profile_name} System Agent failed: {detail}")
+    return result.output
+
+
+class _WorkerLifecycleError(RuntimeError):
+    """Carry one bounded terminal Worker failure into the immutable Ledger."""
+
+    def __init__(self, *, code: str, message: str) -> None:
+        """Preserve stable failure details without exposing stack traces."""
+        super().__init__(message)
+        self.code = code[:120]
+        self.message = message[:2_000]

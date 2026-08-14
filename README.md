@@ -112,8 +112,8 @@ defines explicit Profiles;
 `restscope.tools` owns the global subject-grouped Tool Catalog and execution
 runtime; `restscope.skills` owns reusable instruction metadata; and
 `restscope.harness` validates every Profile and child relationship at
-construction, then `start_main_agent(profile_name)` atomically resolves and
-binds only that Profile's model configuration, ordered Tools, selected Skill
+construction. Registered `run_system_agent(profile_name, task)` calls atomically
+resolve and bind only that Profile's model configuration, ordered Tools, selected Skill
 metadata, bounded Context Sources, and described direct child Profiles. A
 private Prompt Session automatically adds `skill.read` when Skills are selected
 so the model can load only an authorized `SKILL.md` body on demand. A Profile
@@ -141,13 +141,14 @@ Each standard `SKILL.md` frontmatter contains only `name` and `description`,
 while `restscope.yaml` declares version, risk, required Tools, and bounded
 Context Sources. `restscope.skills` automatically discovers these packaged
 files and exposes an immutable built-in Catalog; callers may add test
-definitions but cannot replace a built-in. No production Profile selects these
-Skills yet: the initial Main Profile still grants only its private Plan pair.
+definitions but cannot replace a built-in. The production Main Worker selects
+both exploration and failure-resolution Skills; its Parameter Patch child
+selects only `apply-parameter-patch`.
 The retired specialized Failure Resolution, Patch, Review, and Compact Agents
 are not runtime fallbacks.
 
-The same generic `Agent` class runs the reusable Main Agent, task-scoped
-Subagents, and deterministic-caller-started System Agents. A child receives its
+The same generic `Agent` class runs task-scoped Subagents and
+deterministic-caller-started System Agents. A child receives its
 own Profile and objective, never its parent's
 conversation. The global `subagent.start`, `subagent.wait`, and
 `subagent.cancel` Tools provide asynchronous direct-child control. The tree
@@ -159,7 +160,7 @@ failure can still terminate it. No Profile, task, queue, transcript, budget, or
 compacted history is persisted.
 
 A Profile may also select the paired `plan.read` and `plan.update` Tools. The
-Harness gives each selected Main Agent, Subagent, or System Agent a separate
+Harness gives each selected Main Worker, Subagent, or System Agent a separate
 session-memory
 Plan containing an optional update explanation and up to 100 ordered
 `pending`, `in_progress`, or `completed` steps. At most one step may be active.
@@ -254,8 +255,8 @@ THINK, FAST, and Phoenix API key values are replaced, while ordinary target
 Authorization, Cookie, and business fields remain visible. Use the loopback
 page as a developer diagnostic surface, not a credential boundary.
 
-Interrupting the blocking Main loop and closing the App are separate lifecycle
-events. A `KeyboardInterrupt` such as Ctrl-C marks the observed Main lifetime
+Interrupting the blocking Orchestration loop and closing the App are separate lifecycle
+events. A `KeyboardInterrupt` such as Ctrl-C marks the observed run lifetime
 as `stopped` and re-raises, while the App, UI server, complete event snapshot,
 and latest Todo remain available until explicit close:
 
@@ -269,7 +270,7 @@ try:
     try:
         app.start()
     except KeyboardInterrupt:
-        print(f"Main Agent stopped; observer retained at {app.ui_url}")
+        print(f"Orchestration stopped; observer retained at {app.ui_url}")
         input("Press Enter to close RESTScope and its observer...")
 finally:
     app.close()
@@ -278,7 +279,7 @@ finally:
 This is process-local interruption, not a remote control interface: the page
 remains GET-only and offers no stop, pause, retry, or mutation action.
 `app.close()` remains the only operation that shuts down the App-owned UI and
-clears its memory. A Main loop can start only once per App.
+clears its memory. One Orchestration loop can start only once per App.
 
 ## Local trace monitoring with Phoenix
 
@@ -413,10 +414,9 @@ new revision. Batch execution can mutate the target API and does not retry,
 follow redirects, or roll back effects.
 
 These capabilities are bound by the production Harness but are not thereby
-authorized to an Agent. The initial Main Profile still grants only
-`plan.read` and `plan.update`; it selects neither testing Skill and cannot call
-the new Tools until a later Profile decision explicitly grants them. The
-default App does not start MCP processes.
+authorized to an Agent. The Orchestrator grants none of them; the Main Worker
+receives only its explicit testing Tool and Skill set. The default App does not
+start MCP processes.
 
 ## API Behavior Monitor Coordinator
 
@@ -504,7 +504,7 @@ evidence for another explicit diagnosis and replacement.
 
 The installed `restscope` command is the standalone program entrypoint. It
 loads configuration, binds one local OpenAPI file and target, then starts one
-blocking generic Main Agent:
+blocking Orchestration loop:
 
 ```bash
 restscope assets/openapi/petstore-v3.json \
@@ -521,13 +521,11 @@ Python embedders may instead construct `RESTScopeApp(config)`, or call
 `RESTScopeApp.from_environment()`, then use `initialize()`, `start()`, and
 `close()`. The App exposes no database, Harness, Context, or tracing objects.
 
-`RESTScopeApp.start()` blocks until the Main Agent returns its internal bounded
-`AgentCompletion`, is interrupted, or fails safely. The initial production
-Profile intentionally has only the private Plan pair: no testing Skills,
-OpenAPI discovery Tool, HTTP Tool, Context Source, or child Profile is yet
-authorized. It therefore reports the missing capability instead of testing the
-target. Later capability work must still obtain authorization before any live
-external action.
+`RESTScopeApp.start(focus=None)` blocks until the outer Orchestrator completes,
+is interrupted, or fails safely. The optional focus narrows a run but cannot
+replace RESTScope's fixed mission. The Orchestrator has no capabilities; each
+fresh Main Worker has the API-testing Tools and Skills needed for one dispatched
+Task plus one Parameter Patch child.
 
 App construction prepares the database before building the default capability
 and LLM runtimes. If construction fails, RESTScope removes only the SQLite file
@@ -541,8 +539,6 @@ exactly once for the lifetime of the App. The resulting IR and target settings
 are bound out-of-band to trusted tool handlers; they are not copied into Harness
 state, tool schemas, or model arguments.
 
-The Main Profile currently has no Operation discovery or testing method, so App
-startup does not generate or send cases. Smoke still receives one operation key
-when an internal focused caller invokes it, and its legacy coordinators retain
-their existing stop and persistence contracts while they await Skill/Subagent
-migration. No FIFO or retry scheduler is part of the App entrypoint.
+The App entrypoint stores long-task state only in the in-memory Goal and Task
+Ledger. It does not persist plans, queues, Agent conversations, or recovery
+snapshots, and it has no FIFO or retry scheduler.

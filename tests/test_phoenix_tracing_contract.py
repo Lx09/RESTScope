@@ -116,7 +116,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
     assert runtime.enabled is True
 
     class MainProvider(BaseLLMProvider):
-        """Finish the taskless Main loop without calling a real provider."""
+        """Finish the historical trace fixture without calling a real provider."""
 
         name = "main-contract"
 

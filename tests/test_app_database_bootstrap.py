@@ -156,7 +156,7 @@ def test_close_releases_later_resources_when_agent_cleanup_fails(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """A Main-Agent close error cannot strand Context or tracing resources."""
+    """An Agent close error cannot strand Context or tracing resources."""
     from sqlalchemy import create_engine
 
     from restscope.api_behavior_monitor.catalog import APIBehaviorCatalog
@@ -170,7 +170,7 @@ def test_close_releases_later_resources_when_agent_cleanup_fails(
     tracing_closed: list[bool] = []
     monkeypatch.setattr(
         runtime,
-        "close_main_agent",
+        "close_agents",
         lambda: (_ for _ in ()).throw(RuntimeError("agent close failed")),
     )
     monkeypatch.setattr(tracing, "close", lambda: tracing_closed.append(True))

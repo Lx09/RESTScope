@@ -36,10 +36,11 @@ assertion.
 | `test_testing_constraints.py`, `test_testing_constraint_solver.py` | Constraint schema, semantic validation, normalization, partial evaluation, bounded solving, and request-tree consistency. |
 | `test_generic_batch_tool.py` | Frozen generation revisions, preflight, bounded inline request/outcome evidence, and absence of Test Case registries. |
 | `test_parameter_patch_runtime.py` | State closure, deterministic validation, digests, zero-mutation failures, atomic Apply, and revision conflicts. |
-| `test_workflow_package_boundaries.py` | Main Agent/Subagent migration guard, global Tool locality, Harness ownership, and deliberately small public facades. |
+| `test_workflow_package_boundaries.py` | Sole Orchestration owner, removal of taskless Main startup, global Tool locality, Harness ownership, and deliberately small public facades. |
 | `test_builtin_skill_loader.py`, `test_parameter_patch_skill.py`, `test_resolve_operation_failures_skill.py`, `test_file_read_tool.py` | Strict built-in Skill discovery, Apply Patch naming and workflow, lazy Profile-scoped References, parent/child authorization, and removal of retired Tool names. |
 | `test_api_behavior_*`, `test_resource_*` | The narrow persistent behavior-monitor catalog and App-lifetime contract learning. |
-| `test_app_tool_context.py`, `test_agent_profile.py`, `test_agent_runtime.py`, `test_agent_plan.py` | Blocking taskless Main startup, bounded Profile instructions, capability-light production Profile, private Agent Plans, exact Provider payloads, correction loops, shared budget, and Context compaction. |
+| `test_orchestration_runtime.py`, `test_task_ledger.py` | Immutable Goal, rolling Replan, fresh Worker roots, failure Attempts, criterion validation, completion, and bounded hundred-round projection. |
+| `test_app_tool_context.py`, `test_agent_profile.py`, `test_agent_runtime.py`, `test_agent_plan.py` | App Orchestration startup, bounded Profile instructions, private per-task Agent Plans, exact Provider payloads, correction loops, shared budget, and Context compaction. |
 | `test_subagent_runtime.py` | Asynchronous direct-child start/wait/cancel, Profile DAG/depth rules, slot release, timeout, and cooperative cancellation. |
 | `test_http_request_tool.py`, `test_tool_*`, `test_mcp_*` | Tool validation, operation scope, execution, separate external Catalogs, and MCP adaptation. |
 | `test_observability*`, `test_phoenix_tracing_contract.py` | Redaction and trace hierarchy/attributes without changing business behavior. |

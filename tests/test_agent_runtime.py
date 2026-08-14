@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.agent_helpers import start_test_agent
+
 
 class _ScriptedProvider:
     """Return prebuilt provider-neutral responses without external I/O."""
@@ -45,8 +47,8 @@ def _model(name: str = "thinking"):
     )
 
 
-def test_harness_starts_one_reusable_main_agent_from_an_authoritative_profile() -> None:
-    """A Profile resolves before launch and determines the provider request."""
+def test_each_bounded_root_uses_an_authoritative_profile() -> None:
+    """Fresh task-scoped roots resolve the Profile before every model call."""
     from restscope.agent import AgentCompletion, AgentProfile, AgentTask
     from restscope.harness import AgentRuntimeDefinition, build_harness
     from restscope.llm import LLMResponse
@@ -79,9 +81,11 @@ def test_harness_starts_one_reusable_main_agent_from_an_authoritative_profile() 
         )
     )
 
-    agent = runtime.start_main_agent("main")
-    first = agent.run(AgentTask(objective="Inspect the first bounded task."))
-    second = agent.run(AgentTask(objective="Continue with the second task."))
+    first_agent = start_test_agent(runtime)
+    first = first_agent.run(AgentTask(objective="Inspect the first bounded task."))
+    first_agent.close()
+    second_agent = start_test_agent(runtime)
+    second = second_agent.run(AgentTask(objective="Continue with the second task."))
 
     assert first.status == "completed"
     assert first.completion == AgentCompletion(
@@ -93,138 +97,11 @@ def test_harness_starts_one_reusable_main_agent_from_an_authoritative_profile() 
         "thinking-model",
         "thinking-model",
     ]
-    assert "Inspect the first bounded task." in provider.requests[1].messages[1].content
     assert any(
         "Continue with the second task." in message.content
         for message in provider.requests[1].messages
     )
-
-    with pytest.raises(ValueError, match="Main Agent is already started"):
-        runtime.start_main_agent("main")
-
-    agent.close()
-    replacement = runtime.start_main_agent("main")
-    assert replacement is not agent
-
-
-def test_main_agent_start_blocks_until_completion_without_an_agent_task() -> None:
-    """The App-lifetime Main loop starts from Profile guidance, not a task DTO."""
-    from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition, build_harness
-    from restscope.llm import LLMResponse
-
-    client, provider = _client(
-        LLMResponse(
-            provider="scripted",
-            model="thinking-model",
-            parsed_json={"summary": "Main loop complete.", "findings": []},
-        )
-    )
-    runtime = build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    instructions="Own the App-lifetime API testing loop.",
-                    model_config_name="thinking",
-                ),
-            ),
-            models=(_model(),),
-            client=client,
-        )
-    )
-    agent = runtime.start_main_agent("main")
-
-    assert agent.start() is None
-    assert len(provider.requests) == 1
-    assert any(
-        "MAIN AGENT LOOP START" in message.content
-        for message in provider.requests[0].messages
-    )
-    assert all(
-        "AGENT TASK" not in message.content
-        for message in provider.requests[0].messages
-    )
-
-    with pytest.raises(RuntimeError, match="already started"):
-        agent.start()
-
-
-def test_subagent_cannot_use_the_taskless_main_start_protocol() -> None:
-    """Children always need the complete bounded objective supplied by a parent."""
-    from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition, build_harness
-
-    client, provider = _client()
-    runtime = build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    tool_names=(
-                        "subagent.start",
-                        "subagent.wait",
-                        "subagent.cancel",
-                    ),
-                    subagent_profile_names=("child",),
-                ),
-                AgentProfile(
-                    name="child",
-                    description="Handle one bounded delegated task.",
-                    model_config_name="thinking",
-                ),
-            ),
-            models=(_model(),),
-            client=client,
-        )
-    )
-    main = runtime.start_main_agent("main")
-    child = main.tree_control._build_child(
-        "child",
-        main.tree_control,
-        1,
-        main.session_id,
-        "agent_child",
-        main.cancel_event,
-    )
-
-    with pytest.raises(RuntimeError, match="Main Agent"):
-        child.start()
-
-    assert provider.requests == []
-
-
-def test_blocking_main_start_raises_safe_terminal_runtime_failures() -> None:
-    """A void App entry cannot silently treat cancellation as completion."""
-    from restscope.agent import AgentProfile
-    from restscope.harness import AgentRuntimeDefinition, build_harness
-
-    client, provider = _client()
-    runtime = build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-            models=(_model(),),
-            client=client,
-        )
-    )
-    agent = runtime.start_main_agent("main")
-    agent.cancel_event.set()
-
-    with pytest.raises(RuntimeError, match="agent_cancelled"):
-        agent.start()
-
-    assert provider.requests == []
-
-
-def test_unconfigured_harness_returns_a_stable_startup_error() -> None:
-    """Default Operation Smoke composition remains valid but has no Main Profile."""
-    from restscope.harness import AgentRuntimeNotConfiguredError, build_harness
-
-    with pytest.raises(AgentRuntimeNotConfiguredError) as caught:
-        build_harness().start_main_agent("missing")
-
-    assert caught.value.code == "agent_runtime_not_configured"
+    second_agent.close()
 
 
 def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch() -> None:
@@ -571,7 +448,7 @@ def test_profile_resolves_exact_skill_context_and_tool_binding_into_agent() -> N
         )
     )
 
-    result = runtime.start_main_agent("main").run(
+    result = start_test_agent(runtime).run(
         AgentTask(objective="Inspect the current operation.")
     )
 
@@ -652,7 +529,7 @@ def test_agent_corrects_mixed_and_invalid_tool_outputs_without_executing_them() 
         )
     )
 
-    result = runtime.start_main_agent("main").run(AgentTask(objective="Recover."))
+    result = start_test_agent(runtime).run(AgentTask(objective="Recover."))
 
     assert result.status == "completed"
     assert calls == []
@@ -716,7 +593,7 @@ def test_shared_rollout_budget_uses_cached_input_and_blocks_overage_action() -> 
         )
     )
 
-    result = runtime.start_main_agent("main").run(AgentTask(objective="Stay safe."))
+    result = start_test_agent(runtime).run(AgentTask(objective="Stay safe."))
 
     assert result.status == "rollout_budget_exceeded"
     assert result.usage.weighted_tokens == 16
@@ -788,7 +665,7 @@ def test_rollout_budget_reminder_is_injected_once_after_crossing() -> None:
         )
     )
 
-    result = runtime.start_main_agent("main").run(AgentTask(objective="Finish."))
+    result = start_test_agent(runtime).run(AgentTask(objective="Finish."))
 
     reminders = [
         message.content
@@ -875,7 +752,7 @@ def test_agent_compacts_at_eighty_percent_with_same_model_and_no_tools() -> None
         )
     )
 
-    result = runtime.start_main_agent("main").run(AgentTask(objective="Inspect."))
+    result = start_test_agent(runtime).run(AgentTask(objective="Inspect."))
 
     compact_request = provider.requests[1]
     final_request = provider.requests[2]
@@ -953,7 +830,7 @@ def test_agent_returns_stable_failure_after_two_invalid_compactions() -> None:
         )
     )
 
-    result = runtime.start_main_agent("main").run(AgentTask(objective="Inspect."))
+    result = start_test_agent(runtime).run(AgentTask(objective="Inspect."))
 
     assert result.status == "context_compaction_failed"
     assert result.error.code == "context_compaction_failed"

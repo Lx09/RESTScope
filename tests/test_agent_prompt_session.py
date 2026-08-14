@@ -6,6 +6,8 @@ from dataclasses import replace
 
 import pytest
 
+from tests.agent_helpers import start_test_agent
+
 
 class _PromptProvider:
     """Return a fixed response sequence and retain every complete request."""
@@ -71,7 +73,7 @@ def test_profile_instructions_are_complete_stable_developer_guidance() -> None:
 
     instructions = "Own every semantic decision for the current bounded task."
     client, provider = _client(_completion())
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -84,7 +86,7 @@ def test_profile_instructions_are_complete_stable_developer_guidance() -> None:
             models=(_model(),),
             client=client,
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="Inspect the current objective."))
 
@@ -103,7 +105,7 @@ def test_profile_instructions_fail_closed_when_the_stable_prefix_cannot_fit() ->
     from restscope.harness import AgentRuntimeDefinition, build_harness
 
     client, provider = _client()
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -117,7 +119,7 @@ def test_profile_instructions_fail_closed_when_the_stable_prefix_cannot_fit() ->
             ),
             client=client,
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="Do not reach the model."))
 
@@ -173,7 +175,7 @@ def test_skill_read_is_auto_appended_and_injects_only_authorized_instructions() 
         )
     )
 
-    result = runtime.start_main_agent("main").run(
+    result = start_test_agent(runtime).run(
         AgentTask(objective="Inspect the current evidence.")
     )
 
@@ -229,7 +231,7 @@ def test_skill_loader_denies_unselected_names_and_cannot_be_overridden() -> None
             ),
         ),
     )
-    agent = build_harness(agent_runtime=definition).start_main_agent("main")
+    agent = start_test_agent(build_harness(agent_runtime=definition))
 
     allowed = agent.toolbox.execute(
         ToolCall(id="good", name="skill.read", arguments={"name": "inspect"})
@@ -285,8 +287,8 @@ def test_skill_loader_denies_unselected_names_and_cannot_be_overridden() -> None
         )
 
 
-def test_context_sources_are_incremental_and_empty_changes_are_explicit() -> None:
-    """One Main session sends full first state and only later replacements."""
+def test_each_fresh_root_receives_the_current_complete_context_source() -> None:
+    """Isolated Worker roots read current Context without predecessor history."""
     from restscope.agent import AgentProfile, AgentTask
     from restscope.harness import (
         AgentRuntimeDefinition,
@@ -301,7 +303,7 @@ def test_context_sources_are_incremental_and_empty_changes_are_explicit() -> Non
         _completion("three"),
         _completion("four"),
     )
-    agent = build_harness(
+    runtime = build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -316,14 +318,14 @@ def test_context_sources_are_incremental_and_empty_changes_are_explicit() -> Non
                 ContextSourceBinding(name="operation", read=lambda: current["value"]),
             ),
         )
-    ).start_main_agent("main")
+    )
 
-    agent.run(AgentTask(objective="First task"))
-    agent.run(AgentTask(objective="Second task"))
+    start_test_agent(runtime).run(AgentTask(objective="First task"))
+    start_test_agent(runtime).run(AgentTask(objective="Second task"))
     current["value"] = "## Operation\nPOST /pets"
-    agent.run(AgentTask(objective="Third task"))
+    start_test_agent(runtime).run(AgentTask(objective="Third task"))
     current["value"] = ""
-    agent.run(AgentTask(objective="Fourth task"))
+    start_test_agent(runtime).run(AgentTask(objective="Fourth task"))
 
     first_task = next(
         message.content
@@ -347,7 +349,8 @@ def test_context_sources_are_incremental_and_empty_changes_are_explicit() -> Non
     )
     assert "AUTHORIZED CONTEXT: operation" in first_task
     assert "## Operation\nGET /pets" in first_task
-    assert "AUTHORIZED CONTEXT: operation" not in second_task
+    assert "AUTHORIZED CONTEXT: operation" in second_task
+    assert "GET /pets" in second_task
     assert "AUTHORIZED CONTEXT: operation" in third_task
     assert "POST /pets" in third_task
     assert "AUTHORIZED CONTEXT: operation" in fourth_task
@@ -361,7 +364,7 @@ def test_parent_prompt_lists_only_direct_children_in_developer_role() -> None:
 
     lifecycle_tools = ("subagent.start", "subagent.wait", "subagent.cancel")
     client, provider = _client(_completion())
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -386,7 +389,7 @@ def test_parent_prompt_lists_only_direct_children_in_developer_role() -> None:
             models=(_model(),),
             client=client,
         )
-    ).start_main_agent("main")
+    ))
 
     agent.run(AgentTask(objective="Delegate if useful."))
 
@@ -410,7 +413,7 @@ def test_child_uses_its_own_profile_prompt_and_not_parent_history() -> None:
 
     lifecycle_tools = ("subagent.start", "subagent.wait", "subagent.cancel")
     client, provider = _client(_completion("parent"), _completion("child"))
-    main = build_harness(
+    main = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -457,7 +460,7 @@ def test_child_uses_its_own_profile_prompt_and_not_parent_history() -> None:
                 ContextSourceBinding(name="child-context", read=lambda: "CHILD-EVIDENCE"),
             ),
         )
-    ).start_main_agent("main")
+    ))
     main.run(AgentTask(objective="PARENT-OBJECTIVE"))
 
     started = main.toolbox.execute(
@@ -499,13 +502,13 @@ def test_protocol_reservation_can_stop_before_model_or_tool_execution() -> None:
     from restscope.harness import AgentRuntimeDefinition, build_harness
 
     client, provider = _client()
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(AgentProfile(name="main", model_config_name="thinking"),),
             models=(_model(context_window_tokens=300, max_tokens=128),),
             client=client,
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="This must not reach the model."))
 
@@ -524,7 +527,7 @@ def test_oversized_context_source_stops_before_model_use() -> None:
     )
 
     client, provider = _client()
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -543,7 +546,7 @@ def test_oversized_context_source_stops_before_model_use() -> None:
                 ),
             ),
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="Inspect."))
 
@@ -561,7 +564,7 @@ def test_non_text_context_source_is_rejected_by_the_harness_reader() -> None:
     )
 
     client, provider = _client()
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -579,7 +582,7 @@ def test_non_text_context_source_is_rejected_by_the_harness_reader() -> None:
                 ),
             ),
         )
-    ).start_main_agent("main")
+    ))
 
     with pytest.raises(TypeError, match="Context Source must return text: operation"):
         agent.run(AgentTask(objective="Inspect."))
@@ -604,7 +607,7 @@ def test_stable_prefix_keeps_all_names_and_omits_later_descriptions_in_order() -
         for index in range(15)
     )
     client, provider = _client(_completion())
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -617,7 +620,7 @@ def test_stable_prefix_keeps_all_names_and_omits_later_descriptions_in_order() -
             client=client,
             skills=skills,
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="Inspect metadata."))
 
@@ -647,7 +650,7 @@ def test_stable_prefix_rejects_essential_names_before_model_use() -> None:
         for index in range(220)
     )
     client, provider = _client()
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -660,7 +663,7 @@ def test_stable_prefix_rejects_essential_names_before_model_use() -> None:
             client=client,
             skills=skills,
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="Do not clip authorization names."))
 
@@ -708,7 +711,7 @@ def test_compaction_reanchors_context_but_not_loaded_skill_instructions() -> Non
         ),
         _completion(),
     )
-    agent = build_harness(
+    agent = start_test_agent(build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
                 AgentProfile(
@@ -756,7 +759,7 @@ def test_compaction_reanchors_context_but_not_loaded_skill_instructions() -> Non
                 ),
             ),
         )
-    ).start_main_agent("main")
+    ))
 
     result = agent.run(AgentTask(objective="Inspect."))
 

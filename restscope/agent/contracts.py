@@ -1,7 +1,7 @@
 """Define bounded contracts for generic Agent executions.
 
-Subagents and focused internal callers receive one :class:`AgentTask`; the
-taskless Main startup does not. Every model loop may finish only with
+Subagents and focused internal callers receive one :class:`AgentTask`. Every
+model loop may finish only with
 :class:`AgentCompletion` unless the Harness starts a registered System Agent
 with a narrower result contract. Runtime failures are added internally, so
 model-authored content cannot forge lifecycle state.
@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class AgentTask(BaseModel):
-    """Give one Main Agent or Subagent a single bounded objective."""
+    """Give one task-scoped Agent or Subagent a single bounded objective."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

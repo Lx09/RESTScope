@@ -310,7 +310,7 @@ def test_harness_close_cancels_an_active_system_agent_and_cleans_it_up() -> None
     worker.start()
     assert provider.entered.wait(timeout=5)
 
-    runtime.close_main_agent()
+    runtime.close_agents()
     provider.release.set()
     worker.join(timeout=5)
 

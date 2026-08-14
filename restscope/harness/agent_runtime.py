@@ -2,7 +2,7 @@
 
 Callers provide immutable runtime definitions at the composition root. This
 Module indexes and validates them once, then hides model and Tool resolution
-behind the Harness's small ``start_main_agent`` Interface.
+behind the Harness's registered System Agent Interface.
 """
 
 from __future__ import annotations
@@ -206,18 +206,6 @@ class AgentRuntimeResolver:
         self.system_agents = _unique_system_agents(definition.system_agents)
         self._validate()
 
-    def start_main(self, profile_name: str) -> Agent:
-        """Construct one Main Agent and its isolated in-memory tree control."""
-        return self._start_root(
-            profile_name=profile_name,
-            lifecycle="main",
-            rollout_budget_weighted_tokens=self.definition.rollout_budget_weighted_tokens,
-            output_model=AgentCompletion,
-            output_schema=AgentCompletion.model_json_schema(),
-            output_schema_name="AgentCompletion",
-            validate_output=lambda _output: (),
-        )
-
     def start_system(
         self,
         profile_name: str,
@@ -261,7 +249,7 @@ class AgentRuntimeResolver:
         output_schema_name: str,
         validate_output: Callable[[BaseModel], tuple[str, ...]],
     ) -> Agent:
-        """Build one isolated Main or System root behind the launch Interfaces."""
+        """Build one isolated registered System root behind the launch Interface."""
         from uuid import uuid4
 
         profile = self.profiles.get(profile_name)
@@ -327,7 +315,7 @@ class AgentRuntimeResolver:
         output_schema_name: str,
         validate_output: Callable[[BaseModel], tuple[str, ...]],
     ) -> Agent:
-        """Resolve fixed grants and create one Main or Subagent instance."""
+        """Resolve fixed grants and create one root or Subagent instance."""
         profile = self.profiles.get(profile_name)
         selected_skills = self.skills.select(profile.skill_names)
         effective_tool_names = (
@@ -359,7 +347,7 @@ class AgentRuntimeResolver:
             )
         }
         # The Store is constructed here rather than by a caller-supplied
-        # factory so every Main Agent and Subagent receives a private Plan.
+        # factory so every root Agent and Subagent receives a private Plan.
         if set(_PLAN_TOOL_NAMES).issubset(profile.tool_names):
             special_bindings.update(
                 {

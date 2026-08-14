@@ -6,9 +6,10 @@ runtime that exists now.
 
 ## 1. The shortest mental model
 
-RESTScope starts one long-lived generic Main Agent. The Main Profile currently
-grants only a private in-memory Plan, so the new testing capabilities are built
-and bound but are not yet activated for production Agent use.
+RESTScope starts one in-memory Orchestration loop. An outer Orchestrator revises
+a rolling Task Ledger and dispatches one bounded Main Worker at a time. Every
+Orchestrator and Worker call is a fresh registered System Agent root, so task
+memory lives in the Ledger rather than a long conversation.
 
 The runtime has five distinct responsibilities:
 
@@ -23,9 +24,11 @@ The runtime has five distinct responsibilities:
    global Catalog—decide which Tools an Agent may call.
 5. `restscope.api_behavior_monitor` owns the eleven-table evidence/audit Catalog
    and the ordered response-processing and Bug Oracle flow.
-6. `restscope.agent`, `restscope.skills`, and `restscope.harness` run the same
-   generic Agent as a Main Agent, Subagent, or System Agent. Skills teach a
-   method but do not execute code or grant Tools.
+6. `restscope.orchestration` owns the immutable Goal, revisioned rolling plan,
+   append-only Attempts, Replan rules, and completion loop.
+7. `restscope.agent`, `restscope.skills`, and `restscope.harness` run fresh
+   System Agent roots and task-scoped Subagents. Skills teach a method but do
+   not execute code or grant Tools.
 
 Operation Smoke and its dedicated Failure Resolution, Patch, Review, Compact,
 candidate, Finalizer, and Memory Modules have been retired. Do not look for a
@@ -99,14 +102,16 @@ a stale or changed Patch from being applied.
    complete process lifetime. Then read `restscope/app/runtime.py` for the
    embeddable App lifecycle, `restscope/app/target.py` for target validation,
    and `restscope/app/composition.py` only for the production object graph.
-2. `restscope/agent/profile.py` and `restscope/agent/runtime.py` — Profile
+2. `restscope/orchestration/runtime.py` — the only long-task loop. Then read
+   `ledger.py`, `models.py`, and `contracts.py` for state and validation.
+3. `restscope/agent/profile.py` and `restscope/agent/runtime.py` — Profile
    authorization and the generic model/Tool loop.
-3. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
+4. `restscope/harness/runtime.py` — Profile graph validation, Tool binding,
    Context, Subagent lifecycle, and repeatable synchronous System Agent roots.
    App-owned domain runtimes arrive already constructed. `build_harness()`
    returns the concrete `HarnessRuntime` used directly by the App; there is no
    second App-private Harness Protocol.
-4. `restscope/request_generation/store.py` — revisioned operation state,
+5. `restscope/request_generation/store.py` — revisioned operation state,
    snapshots, locks, and atomic replacement.
 5. `restscope/request_generation/parameter_patch/models.py` — semantic Patch
    language.
@@ -202,7 +207,7 @@ Tool grants the domain Tools named by a Skill.
 
 ### `restscope/agent/` and `restscope/harness/`
 
-There is one generic Agent implementation for Main, child, and System sessions.
+There is one generic Agent implementation for child and System sessions.
 A Profile selects a model, ordered Tools, Skills, Context Sources, child
 Profiles, and bounded instructions. A registered `SystemAgentDefinition` binds
 only the expected result contract and task adapter; it does not grant
@@ -211,8 +216,17 @@ limit, while the Harness still records usage and validates final output until
 it is valid or a terminal runtime event occurs. The Harness performs mechanical
 validation and execution but does not decide testing semantics.
 
-The Main Profile is intentionally plan-only today. The new testing Tools and
-Skills cannot be used by it until a later approved Profile change.
+The Orchestrator Profile has no capabilities. The Main Worker Profile has the
+API-testing Tools, exploration and failure-resolution Skills, a private
+intra-task Plan, and one Parameter Patch child. Neither profile carries state
+between root invocations.
+
+### `restscope/orchestration/`
+
+`runtime.py` is the sole long-task entry. `ledger.py` is the only owner of
+state transitions; `models.py` defines the immutable Goal, Milestone, Task,
+Attempt, and result values; `contracts.py` binds Orchestrator and Worker output
+validation to registered System Agent Profiles. The Ledger is App-memory only.
 
 ### `restscope/api_behavior_monitor/`
 

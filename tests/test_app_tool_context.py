@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from tests.agent_helpers import start_test_agent
+
 
 def _spec(*, operation_id: str = "listPets") -> dict:
     return {
@@ -31,12 +33,6 @@ def _app_and_resources(monkeypatch, tmp_path):
     from restscope.config import RESTScopeConfig
     from restscope.observability import TracingRuntime
 
-    class MainAgent:
-        """Record completion through the same method the App invokes."""
-
-        def start(self) -> None:
-            resources.started += 1
-
     class Resources:
         """Implement only the private resource operations consumed by runtime."""
 
@@ -52,8 +48,9 @@ def _app_and_resources(monkeypatch, tmp_path):
         def bind_target(self, context) -> None:
             self.context = context
 
-        def start_main_agent(self) -> MainAgent:
-            return MainAgent()
+        def run_orchestration(self, focus: str | None = None) -> None:
+            self.started += 1
+            self.focus = focus
 
         def close(self) -> None:
             self.context = None
@@ -73,11 +70,11 @@ def _app(monkeypatch, tmp_path):
     return app
 
 
-def test_production_main_profile_owns_exploration_and_one_patch_child(
+def test_production_profiles_separate_planning_from_worker_execution(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Production Main can explore while Patch mutation stays in one child."""
+    """Orchestrator has no grants; each Worker may use one Patch child."""
     from restscope.app.profiles import _build_agent_runtime_definition
     from restscope.config import RESTScopeConfig
     from restscope.llm import LLMClient, LLMResponse
@@ -121,9 +118,14 @@ def test_production_main_profile_owns_exploration_and_one_patch_child(
         tracing_runtime=TracingRuntime.disabled(),
     )
     assert definition is not None
-    profile = definition.profiles[0]
+    orchestrator = definition.profiles[0]
+    profile = definition.profiles[1]
 
-    assert profile.name == "main"
+    assert orchestrator.name == "orchestrator"
+    assert orchestrator.tool_names == ()
+    assert orchestrator.skill_names == ()
+    assert orchestrator.subagent_profile_names == ()
+    assert profile.name == "main-worker"
     assert profile.model_config_name == "thinking"
     assert "test_case.run_batch" in profile.tool_names
     assert "parameter_patch.apply" not in profile.tool_names
@@ -139,7 +141,11 @@ def test_production_main_profile_owns_exploration_and_one_patch_child(
     assert patch_profile.skill_names == ("apply-parameter-patch",)
     assert "parameter_patch.apply" in patch_profile.tool_names
 
-    assert "single long-lived Main Agent" in profile.instructions
+    assert "single Task" in profile.instructions
+    assert {item.profile_name for item in definition.system_agents}.issuperset({
+        "orchestrator",
+        "main-worker",
+    })
 
 
 def test_harness_binds_new_domain_tools_without_granting_them_to_main(
@@ -208,13 +214,13 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
         ),
     )
 
-    agent = runtime.start_main_agent("binding-check")
+    agent = start_test_agent(runtime, "binding-check")
     assert tuple(tool.name for tool in agent.toolbox.specs()) == profile.tool_names
     agent.close()
 
 
-def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp_path) -> None:
-    """One parsed target feeds the only taskless Main loop in this App."""
+def test_app_initializes_once_and_starts_one_blocking_orchestration(monkeypatch, tmp_path) -> None:
+    """One parsed target and optional focus feed the sole long-task loop."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.tools.context import ToolContextError
 
@@ -239,12 +245,13 @@ def test_app_initializes_once_and_starts_one_blocking_main_loop(monkeypatch, tmp
     source["content"] = "changed"
     headers["Authorization"] = "changed"
 
-    assert app.start() is None
+    assert app.start("Prefer read-only operations.") is None
 
     assert len(seen) == 1
     assert result is None
     assert resources.context.baseline_schema_source["content"] != "changed"
     assert resources.context.headers["Authorization"] == "Bearer runtime-secret"
+    assert resources.focus == "Prefer read-only operations."
     assert "runtime-secret" not in repr(resources.context)
 
     with pytest.raises(ToolContextError) as exc_info:

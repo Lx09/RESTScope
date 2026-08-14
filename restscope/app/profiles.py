@@ -1,7 +1,7 @@
 """Build the Agent Profiles owned by RESTScope's production App.
 
-The module translates App model configuration into the Main Agent Profile and
-the Resource Identifier System Agent registration. Harness remains responsible
+The module translates App model configuration into Orchestrator, Main Worker,
+Parameter Patch, and Resource Identifier Profiles. Harness remains responsible
 for validating and running those definitions; composition only requests this
 one App-specific runtime definition.
 """
@@ -20,11 +20,18 @@ from restscope.config import RESTScopeConfig
 from restscope.harness import AgentRuntimeDefinition, SystemAgentDefinition
 from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.observability import TracingRuntime
+from restscope.orchestration.contracts import (
+    orchestrator_output_schema,
+    validate_orchestrator_output,
+    validate_worker_output,
+    worker_output_schema,
+)
+from restscope.orchestration.models import MainTaskResult, OrchestratorDecision
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
 
 _PATCH_PROFILE_NAME = "parameter-patch"
-_MAIN_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
-_MAIN_TOOLS = (
+_WORKER_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
+_WORKER_TOOLS = (
     PLAN_READ_TOOL_NAME,
     PLAN_UPDATE_TOOL_NAME,
     "openapi.list_operations",
@@ -53,36 +60,46 @@ _PATCH_TOOLS = (
 )
 
 
-_MAIN_PROFILE_INSTRUCTIONS = """You are RESTScope's single long-lived Main Agent.
+_ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator.
 
-- Work on the API target already initialized for this App lifetime. Treat these
-  Profile instructions as the continuing mission; there is no separate task
-  request or user-authored objective at startup.
-- Own every semantic workflow decision. Decide what to investigate, which
-  authorized Skills to load, which Tools or Subagents to use, what order to
-  follow, whether another attempt is useful, and when to finish.
-- Find reproducible happy paths, including useful resource states, then perform
-  exceptional testing to discover as many replay-confirmed Bugs as practical.
-  Happy-path discovery guides the order but never blocks worthwhile exceptional
-  testing.
+- Use only the Goal and Task Ledger projection in the current task. You have no
+  Tools, Skills, child Profiles, behavior database access, or hidden history.
+- On the first call, return replan and create a small rolling set of verifiable
+  Milestones. On later calls, return exactly one replan, dispatch_task, or
+  complete decision.
+- Every dispatched Task must name one current Milestone, explain why it serves
+  the Goal, and give criterion IDs that the Worker can report exactly once.
+- Replan when evidence changes what future work is useful. A replan may split,
+  merge, reorder, supersede, or reopen work, but must change the future plan and
+  must never change the Goal or rewrite prior Tasks or Attempts.
+- Do not repeat a failed Task unchanged unless a new reason or changed state
+  makes the next attempt materially different.
+- Complete only after assessing every Goal criterion and naming unresolved work.
+- Return only the required structured OrchestratorDecision.
+"""
+
+_WORKER_PROFILE_INSTRUCTIONS = """You are RESTScope's Main Worker for one task.
+
+- Work only on the Goal summary, current Milestone, single Task, success
+  criteria, and selected Attempt history supplied in this fresh root call.
+- Own semantic execution inside that Task: choose appropriate authorized Skills,
+  Tools, Parameter Patch child work, order, and evidence-driven retries.
+- Find reproducible happy-path or exceptional evidence required by the Task.
+  Report a Bug only when the authorized behavior workflow confirms it by replay.
 - Inspect authorized Skill metadata and load the Skills relevant to the current
   work. Skills provide methods; they do not grant access or override this
   Profile or the Harness contract.
-- Initialize the private Plan for the current work and revise it as evidence
-  changes. The Plan is working memory, not evidence, a scheduler, or persistent
-  state.
+- Use the private Plan only as short-lived intra-task working memory. It is not
+  the outer Ledger, evidence, a scheduler, or cross-task memory.
 - Use a child Profile only when its described capability fits a bounded piece
   of the work. Supply a complete objective and required evidence because the
   child receives no parent conversation or hidden state.
 - Base factual conclusions on current authorized Tool or Subagent results.
   Never invent evidence references or treat a plan, prior belief, Skill text,
   OpenAPI description, or successful Tool execution as proof of an API outcome.
-- Do not repeat an action unless new evidence, changed state, or a specific
-  predicted benefit makes the next attempt materially different.
-- Finish when the current authorized capabilities cannot make meaningful safe
-  progress. Report unsupported, blocked, safety-skipped, and unresolved work
-  explicitly.
-- Return only the required bounded AgentCompletion result.
+- Return one criterion verdict for every supplied criterion. State partial or
+  blocked work explicitly, and never choose or propose the next Task.
+- Return only the required structured MainTaskResult.
 """
 
 
@@ -91,7 +108,7 @@ def _build_agent_runtime_definition(
     *,
     tracing_runtime: TracingRuntime,
 ) -> AgentRuntimeDefinition | None:
-    """Compose the App-authorized Main and Monitor System Agent Profiles.
+    """Compose App-authorized Orchestration and Monitor Agent Profiles.
 
     Args:
         config: Validated model-provider configuration for the process.
@@ -110,11 +127,18 @@ def _build_agent_runtime_definition(
         models.append(thinking)
         profiles.append(
             AgentProfile(
-                name="main",
-                instructions=_MAIN_PROFILE_INSTRUCTIONS,
+                name="orchestrator",
+                instructions=_ORCHESTRATOR_INSTRUCTIONS,
                 model_config_name="thinking",
-                tool_names=_MAIN_TOOLS,
-                skill_names=_MAIN_SKILLS,
+            )
+        )
+        profiles.append(
+            AgentProfile(
+                name="main-worker",
+                instructions=_WORKER_PROFILE_INSTRUCTIONS,
+                model_config_name="thinking",
+                tool_names=_WORKER_TOOLS,
+                skill_names=_WORKER_SKILLS,
                 subagent_profile_names=(_PATCH_PROFILE_NAME,),
             )
         )
@@ -128,6 +152,26 @@ def _build_agent_runtime_definition(
                 model_config_name="thinking",
                 tool_names=_PATCH_TOOLS,
                 skill_names=("apply-parameter-patch",),
+            )
+        )
+        system_agents.extend(
+            (
+                SystemAgentDefinition(
+                    profile_name="orchestrator",
+                    adapt_task=SystemAgentTask.model_validate,
+                    output_model=OrchestratorDecision,
+                    build_output_schema=orchestrator_output_schema,
+                    validate_output=validate_orchestrator_output,
+                    output_schema_name="OrchestratorDecision",
+                ),
+                SystemAgentDefinition(
+                    profile_name="main-worker",
+                    adapt_task=SystemAgentTask.model_validate,
+                    output_model=MainTaskResult,
+                    build_output_schema=worker_output_schema,
+                    validate_output=validate_worker_output,
+                    output_schema_name="MainTaskResult",
+                ),
             )
         )
     if fast.enabled:

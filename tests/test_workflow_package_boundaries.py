@@ -47,6 +47,10 @@ def test_app_exposes_lifecycle_not_composed_domain_objects() -> None:
     assert tuple(inspect.signature(RESTScopeApp.from_environment).parameters) == (
         "env_file",
     )
+    assert tuple(inspect.signature(RESTScopeApp.start).parameters) == (
+        "self",
+        "focus",
+    )
     assert not hasattr(RESTScopeApp, "from_config")
     assert {
         name
@@ -145,6 +149,27 @@ def test_retired_root_and_broad_owner_modules_are_absent() -> None:
         SOURCE_ROOT / "api_behavior_monitor" / "response_evidence.py",
     ):
         assert expected.is_file(), f"missing focused owner: {expected}"
+
+
+def test_orchestration_is_the_only_long_task_owner() -> None:
+    """App and Harness cannot retain a second taskless Main Agent loop."""
+    orchestration_package = SOURCE_ROOT / "orchestration"
+    assert {path.name for path in orchestration_package.glob("*.py")} == {
+        "__init__.py",
+        "contracts.py",
+        "ledger.py",
+        "models.py",
+        "runtime.py",
+    }
+    app_source = (SOURCE_ROOT / "app" / "runtime.py").read_text(encoding="utf-8")
+    harness_source = (SOURCE_ROOT / "harness" / "runtime.py").read_text(
+        encoding="utf-8"
+    )
+    assert "OrchestrationRuntime" in (
+        SOURCE_ROOT / "app" / "composition.py"
+    ).read_text(encoding="utf-8")
+    assert "start_main_agent" not in app_source
+    assert "start_main_agent" not in harness_source
 
 
 def test_parameter_patch_is_one_request_generation_runtime_capability() -> None:
@@ -484,7 +509,7 @@ def test_current_sources_do_not_restore_retired_agent_names_or_paths() -> None:
 
 
 def test_main_agent_replacement_removes_run_harness_and_graph_dependencies() -> None:
-    """The blocking Main loop has no legacy FIFO module or graph framework."""
+    """The Orchestration loop has no legacy FIFO module or graph framework."""
     import restscope
     from restscope import RESTScopeApp, harness
 

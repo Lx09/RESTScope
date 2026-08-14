@@ -11,6 +11,10 @@ Catalog, Skill loading, Prompt Session, and mechanical Harness responsibilities
 recorded here remain accepted. The old FIFO implementation has since been
 removed.
 
+[ADR 0007](0007-orchestrator-ledger-long-tasks.md) supersedes this record's
+taskless App-lifetime Main launch. The generic Agent, Profile, Skill, Tool,
+Subagent, Prompt Session, and deterministic Harness boundaries remain active.
+
 RESTScope will converge on one configurable Agent runtime: one long-lived Main
 Agent may request independent task-scoped Subagents, while Agent Profiles name
 the exact model, Skills, global Tools, and bounded context sources each instance

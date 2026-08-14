@@ -1,7 +1,7 @@
 """Start one complete RESTScope process from an installed shell command.
 
 The command reads App configuration, validates one local OpenAPI document and
-target, starts the blocking Main Agent, and always closes the App. It returns
+target, starts the blocking Orchestration loop, and always closes the App. It returns
 small process-facing exit codes while keeping target secrets and internal stack
 traces out of terminal error messages.
 """
