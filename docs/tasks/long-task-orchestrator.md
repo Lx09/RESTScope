@@ -40,7 +40,7 @@ each bounded task.
 ## Verification
 
 - `uv run ruff check restscope tests` — passed.
-- `uv run pytest -q` — 610 passed, 13 skipped.
+- `uv run pytest -q` — 629 passed, 2 skipped.
 - The skipped tests are existing opt-in live service/provider checks.
 - `mypy` is not installed in the locked workspace environment, so no mypy
   result is claimed.

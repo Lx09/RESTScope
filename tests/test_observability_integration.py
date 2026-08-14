@@ -464,24 +464,61 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
 
 
 def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: Path) -> None:
-    """The blocking App, Main Agent, and model call form one trace hierarchy."""
+    """The blocking App and fresh Orchestrator roots form one trace hierarchy."""
     from restscope import RESTScopeApp
-    from restscope.agent import AgentProfile
+    from restscope.agent import AgentProfile, SystemAgentTask
     from restscope.config import RESTScopeConfig
-    from restscope.harness import AgentRuntimeDefinition
+    from restscope.harness import AgentRuntimeDefinition, SystemAgentDefinition
     from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
     from restscope.llm.registry import LLMProviderRegistry
+    from restscope.orchestration.contracts import (
+        orchestrator_output_schema,
+        validate_orchestrator_output,
+    )
+    from restscope.orchestration.models import OrchestratorDecision
 
     class Provider:
-        """Return a local Main completion and expose the request to tracing."""
+        """Return a minimal local replan and completion for tracing."""
 
         name = "scripted"
 
+        def __init__(self) -> None:
+            """Keep the two decisions required by a valid Orchestration run."""
+            self.outputs = [
+                {
+                    "kind": "replan",
+                    "expected_plan_revision": 0,
+                    "reason": "Create one bounded tracing milestone.",
+                    "milestones": [
+                        {
+                            "title": "Trace startup",
+                            "purpose": "Exercise the App-owned Orchestrator lifecycle.",
+                            "success_criteria": ["The tracing chain is recorded."],
+                        }
+                    ],
+                },
+                {
+                    "kind": "complete",
+                    "expected_plan_revision": 1,
+                    "goal_criteria": [
+                        {
+                            "criterion_id": f"goal_{index}",
+                            "status": "unknown",
+                            "explanation": "This test checks tracing, not API evidence.",
+                        }
+                        for index in range(1, 4)
+                    ],
+                    "summary": "Tracing lifecycle completed.",
+                    "unresolved": ["API evidence is outside this tracing scenario."],
+                },
+            ]
+
         def invoke(self, request):
+            """Return the next decision while the real client records its span."""
             return LLMResponse(
                 provider=self.name,
                 model=request.model,
-                parsed_json={"summary": "Main complete.", "findings": []},
+                parsed_json=self.outputs.pop(0),
             )
 
     schema = {
@@ -512,7 +549,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
     registry = LLMProviderRegistry()
     registry.register(Provider())
     agent_definition = AgentRuntimeDefinition(
-        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        profiles=(AgentProfile(name="orchestrator", model_config_name="thinking"),),
         models=(
             LLMModelConfig(
                 name="thinking",
@@ -523,6 +560,16 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
             ),
         ),
         client=LLMClient(registry, tracing_runtime=runtime),
+        system_agents=(
+            SystemAgentDefinition(
+                profile_name="orchestrator",
+                adapt_task=SystemAgentTask.model_validate,
+                output_model=OrchestratorDecision,
+                build_output_schema=orchestrator_output_schema,
+                validate_output=validate_orchestrator_output,
+                output_schema_name="OrchestratorDecision",
+            ),
+        ),
     )
     monkeypatch.setattr(
         "restscope.app.composition._build_app_tracing_runtime",
@@ -551,22 +598,39 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
         pass
     app.close()
 
-    spans = {span.name: span for span in exporter.get_finished_spans()}
+    finished_spans = exporter.get_finished_spans()
+    spans = {span.name: span for span in finished_spans}
     app_span = spans["RESTScopeApp.start"]
-    agent_span = spans["Agent.start"]
-    model_span = spans["LLMClient.invoke"]
+    agent_spans = [span for span in finished_spans if span.name == "Agent.run"]
+    model_spans = [span for span in finished_spans if span.name == "LLMClient.invoke"]
     rendered = json.dumps(
-        [dict(span.attributes) for span in spans.values()],
+        [dict(span.attributes) for span in finished_spans],
         default=str,
     )
 
-    assert agent_span.parent.span_id == app_span.context.span_id
-    assert model_span.parent.span_id == agent_span.context.span_id
+    assert len(agent_spans) == 2
+    assert len(model_spans) == 2
+    assert all(
+        span.parent is not None
+        and span.parent.span_id == app_span.context.span_id
+        for span in agent_spans
+    )
+    agent_span_ids = {span.context.span_id for span in agent_spans}
+    assert all(
+        span.parent is not None and span.parent.span_id in agent_span_ids
+        for span in model_spans
+    )
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert agent_span.attributes["openinference.span.kind"] == "CHAIN"
-    assert model_span.attributes["openinference.span.kind"] == "LLM"
+    assert all(
+        span.attributes["openinference.span.kind"] == "CHAIN"
+        for span in agent_spans
+    )
+    assert all(
+        span.attributes["openinference.span.kind"] == "LLM"
+        for span in model_spans
+    )
     assert json.loads(app_span.attributes["output.value"]) == {
-        "profile_name": "main",
+        "runtime": "orchestration",
         "status": "completed",
     }
     assert app_span.attributes["restscope.output.truncated"] is False
