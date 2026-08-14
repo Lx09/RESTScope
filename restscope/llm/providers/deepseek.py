@@ -23,11 +23,12 @@ from restscope.llm.schemas import (
     LLMResponse,
 )
 
-# DeepSeek occasionally returns a thinking-mode tool call without the
-# ``reasoning_content`` that its own continuation contract requires. Three
-# total requests absorb a short transient streak without creating an
-# unbounded provider loop. No tool is visible to workflow code during retries.
-_REASONING_RESPONSE_ATTEMPTS = 3
+# DeepSeek V4 Flash can return a thinking-mode tool call without the
+# ``reasoning_content`` that its own continuation contract requires, especially
+# later in a long Tool sequence. Eight distinct total requests give this
+# Provider defect room to recover without creating an unbounded Agent or Tool
+# loop. No rejected Tool call is visible to workflow code during these retries.
+_REASONING_RESPONSE_ATTEMPTS = 8
 
 
 class DeepSeekCompatibilityError(ProviderInvokeError):
@@ -89,12 +90,13 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     def invoke(self, request: LLMRequest) -> LLMResponse:
         """Route strict tools to Beta and retry incomplete reasoning briefly.
 
-        A DeepSeek strict request must contain only strict functions. The
-        official Beta endpoint validates those schemas before generation. If
-        that endpoint remains unavailable after SDK retries, the same request
-        gets one attempt through the standard official URL before any tool
-        call can be returned to an Agent. Custom gateways are not assumed to
-        expose Beta and still report :class:`StrictToolUnavailableError`.
+        DeepSeek's Beta endpoint accepts only all-strict function sets whose
+        schemas fit its documented subset. Other Tool sets are projected as
+        uniformly non-strict on the standard endpoint, while RESTScope keeps
+        their complete local validation contracts. If a valid Beta request is
+        unavailable after SDK retries, the same request gets one attempt
+        through the standard official URL before any tool call can be returned
+        to an Agent. Custom gateways are not assumed to expose Beta.
 
         DeepSeek requires ``reasoning_content`` from a tool-calling assistant
         message to be replayed verbatim in every later request.  The field
@@ -107,11 +109,14 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         instead of creating an unbounded loop.
         """
         strict_tools = [tool for tool in request.tools if tool.strict]
-        if strict_tools and len(strict_tools) != len(request.tools):
-            raise DeepSeekCompatibilityError(
-                "deepseek_mixed_strict_tools",
-                "DeepSeek strict requests require every supplied function to be strict",
+        if strict_tools and (
+            len(strict_tools) != len(request.tools)
+            or not all(
+                _supports_deepseek_strict_schema(tool.input_schema)
+                for tool in strict_tools
             )
+        ):
+            return self._invoke_non_strict_projection(request)
         if strict_tools:
             if self._strict_base_url is None:
                 raise StrictToolUnavailableError(
@@ -151,6 +156,42 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             )
         return self._invoke_with_reasoning_retry(request, client=self.client)
 
+    def _invoke_non_strict_projection(self, request: LLMRequest) -> LLMResponse:
+        """Send one locally strict Tool set through DeepSeek's standard route.
+
+        Args:
+            request: Original Provider-neutral request. Its Tool definitions
+                remain unchanged for callers and local execution validation.
+
+        Returns:
+            The standard-endpoint response with explicit projection metadata.
+        """
+        # DeepSeek requires every function in one Beta request to be strict and
+        # supports a narrower schema language than RESTScope. Removing all
+        # Provider-facing strict flags makes the set legal without weakening
+        # the authoritative Tool Schema held by the Harness.
+        projected_request = request.model_copy(
+            update={
+                "tools": [
+                    tool.model_copy(update={"strict": False})
+                    for tool in request.tools
+                ]
+            }
+        )
+        response = self._invoke_with_reasoning_retry(
+            projected_request,
+            client=self.client,
+        )
+        return response.model_copy(
+            update={
+                "metadata": {
+                    **response.metadata,
+                    "strict_tool_beta": False,
+                    "strict_projection_downgraded": True,
+                }
+            }
+        )
+
     def _invoke_with_reasoning_retry(
         self,
         request: LLMRequest,
@@ -173,8 +214,16 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             reasoning=self._effective_reasoning(request),
         )
         for attempt_index in range(_REASONING_RESPONSE_ATTEMPTS):
+            attempt_request = (
+                request
+                if attempt_index == 0
+                else _with_reasoning_retry_instruction(
+                    request,
+                    attempt_index=attempt_index,
+                )
+            )
             try:
-                response = self._invoke_with_client(request, client=client)
+                response = self._invoke_with_client(attempt_request, client=client)
             except DeepSeekCompatibilityError as exc:
                 if (
                     exc.code != "deepseek_reasoning_content_missing"
@@ -374,6 +423,121 @@ def _merge_developer_messages(request: LLMRequest) -> LLMRequest:
         else:
             messages.append(LLMMessage(role="system", content=message.content))
     return request.model_copy(update={"messages": messages})
+
+
+def _with_reasoning_retry_instruction(
+    request: LLMRequest,
+    *,
+    attempt_index: int,
+) -> LLMRequest:
+    """Diversify one incomplete-response retry without changing Agent state.
+
+    Args:
+        request: Original request whose rejected response was never exposed to
+            the Agent and therefore caused no Tool or target side effect.
+        attempt_index: One-based retry number after the original request.
+
+    Returns:
+        A Provider-only copy with a final user correction and distinct retry
+        identity. The Agent's saved Prompt Session remains unchanged.
+    """
+    retry_count = _REASONING_RESPONSE_ATTEMPTS - 1
+    instruction = (
+        f"Provider retry {attempt_index} of {retry_count}: the prior response "
+        "called a tool but omitted the non-empty reasoning_content required "
+        "for DeepSeek thinking-mode continuation. Return a complete response "
+        "with reasoning_content when calling a tool. Do not change the task or "
+        "decision solely because this is a transport-contract retry."
+    )
+    messages = [message.model_copy(deep=True) for message in request.messages]
+    # A missing field occurs while DeepSeek is continuing after the latest
+    # Tool result. Put the correction at that continuation boundary; changing
+    # an earlier system prefix did not recover repeated real responses.
+    messages.append(LLMMessage(role="user", content=instruction))
+    return request.model_copy(update={"messages": messages})
+
+
+def _supports_deepseek_strict_schema(schema: object) -> bool:
+    """Return whether one Tool schema fits DeepSeek's documented Beta subset.
+
+    DeepSeek strict mode requires every object to be closed and every declared
+    property to be required. It also rejects several otherwise ordinary JSON
+    Schema bounds. Returning ``False`` is intentionally conservative: the
+    request can still use the standard Tool endpoint and RESTScope will apply
+    the complete authoritative schema locally before executing the Tool.
+
+    Args:
+        schema: One JSON Schema node from a Provider-neutral Tool definition.
+
+    Returns:
+        ``True`` only when this node and every nested node satisfy the known
+        strict-mode constraints.
+    """
+    if not isinstance(schema, dict):
+        return False
+
+    definitions = schema.get("$defs")
+    if definitions is not None and (
+        not isinstance(definitions, dict)
+        or not all(
+            _supports_deepseek_strict_schema(definition)
+            for definition in definitions.values()
+        )
+    ):
+        return False
+
+    reference = schema.get("$ref")
+    if reference is not None and not isinstance(reference, str):
+        return False
+
+    alternatives = schema.get("anyOf")
+    if alternatives is not None:
+        if not isinstance(alternatives, list) or not alternatives:
+            return False
+        if not all(
+            _supports_deepseek_strict_schema(alternative)
+            for alternative in alternatives
+        ):
+            return False
+
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        return False
+    if schema_type is None:
+        return any(key in schema for key in ("enum", "anyOf", "$ref", "$defs"))
+
+    if schema_type == "object":
+        if any(
+            key in schema
+            for key in (
+                "maxProperties",
+                "minProperties",
+                "patternProperties",
+                "propertyNames",
+            )
+        ):
+            return False
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return False
+        if schema.get("additionalProperties") is not False:
+            return False
+        if len(required) != len(set(required)) or set(required) != set(properties):
+            return False
+        return all(
+            _supports_deepseek_strict_schema(property_schema)
+            for property_schema in properties.values()
+        )
+
+    if schema_type == "string":
+        return not any(key in schema for key in ("minLength", "maxLength"))
+    if schema_type == "array":
+        if any(key in schema for key in ("minItems", "maxItems", "uniqueItems")):
+            return False
+        items = schema.get("items")
+        return items is not None and _supports_deepseek_strict_schema(items)
+    return schema_type in {"number", "integer", "boolean"}
 
 
 def _strict_unavailable_reason(exc: BaseException | None) -> str | None:

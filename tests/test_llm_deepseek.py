@@ -359,6 +359,64 @@ def test_deepseek_strict_tools_use_only_the_beta_endpoint() -> None:
     assert response.metadata["strict_tool_beta"] is True
 
 
+def test_deepseek_projects_unsupported_strict_schema_to_standard_endpoint() -> None:
+    """A locally strict Tool keeps validation while Beta-incompatible JSON does not fail."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest, ToolSpec
+    from restscope.llm.providers.deepseek import DeepSeekProvider
+
+    # DeepSeek strict mode requires closed objects whose every property is
+    # required. RESTScope still needs a free-form named parameter map, so this
+    # exact authoritative Tool contract can only be offered non-strictly to
+    # DeepSeek and then validated locally before execution.
+    tool = ToolSpec(
+        name="database_query",
+        description="Query bounded evidence.",
+        kind="local_function",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "sql": {"type": "string", "minLength": 1},
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": ["string", "number", "boolean", "null"]
+                    },
+                },
+            },
+            "required": ["sql"],
+            "additionalProperties": False,
+        },
+        strict=True,
+    )
+    standard_client = RecordingClient()
+    beta_client = RecordingClient()
+    response = DeepSeekProvider(
+        api_key="test-key",
+        client=standard_client,
+        beta_client=beta_client,
+    ).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Inspect evidence")],
+            response_format="text",
+            tools=[tool],
+            tool_choice="auto",
+            reasoning=LLMReasoningConfig(mode="enabled", effort="high"),
+        )
+    )
+
+    assert beta_client.chat.completions.kwargs is None
+    kwargs = standard_client.chat.completions.kwargs
+    assert kwargs is not None
+    assert "strict" not in kwargs["tools"][0]["function"]
+    assert tool.strict is True
+    assert response.metadata == {
+        "strict_tool_beta": False,
+        "strict_projection_downgraded": True,
+    }
+
+
 @pytest.mark.parametrize("status_code", [408, 409, 429, 500, 503, 599])
 def test_deepseek_strict_beta_capacity_failure_retries_standard_url_once(
     status_code: int,
@@ -398,35 +456,36 @@ def test_deepseek_strict_beta_capacity_failure_retries_standard_url_once(
     assert response.metadata["strict_tool_beta"] is False
 
 
-def test_deepseek_rejects_mixed_strict_tools_before_network() -> None:
-    """DeepSeek Beta requires every function in one request to be strict."""
+def test_deepseek_projects_mixed_strict_tools_to_standard_endpoint() -> None:
+    """Mixed local strictness becomes one legal non-strict DeepSeek request."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
-    from restscope.llm.providers.deepseek import (
-        DeepSeekCompatibilityError,
-        DeepSeekProvider,
-    )
+    from restscope.llm.providers.deepseek import DeepSeekProvider
 
     standard_client = RecordingClient()
     beta_client = RecordingClient()
-    with pytest.raises(DeepSeekCompatibilityError) as exc_info:
-        DeepSeekProvider(
-            api_key="test-key",
-            client=standard_client,
-            beta_client=beta_client,
-        ).invoke(
-            LLMRequest(
-                provider="deepseek",
-                model="deepseek-v4-flash",
-                messages=[LLMMessage(role="user", content="Submit")],
-                tools=[_strict_submit_tool(), _search_tool()],
-                tool_choice="required",
-                reasoning=LLMReasoningConfig(mode="disabled"),
-            )
+    response = DeepSeekProvider(
+        api_key="test-key",
+        client=standard_client,
+        beta_client=beta_client,
+    ).invoke(
+        LLMRequest(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            messages=[LLMMessage(role="user", content="Submit")],
+            tools=[_strict_submit_tool(), _search_tool()],
+            tool_choice="required",
+            reasoning=LLMReasoningConfig(mode="disabled"),
         )
+    )
 
-    assert exc_info.value.code == "deepseek_mixed_strict_tools"
-    assert standard_client.chat.completions.kwargs is None
     assert beta_client.chat.completions.kwargs is None
+    kwargs = standard_client.chat.completions.kwargs
+    assert kwargs is not None
+    assert all("strict" not in tool["function"] for tool in kwargs["tools"])
+    assert response.metadata == {
+        "strict_tool_beta": False,
+        "strict_projection_downgraded": True,
+    }
 
 
 def test_deepseek_custom_gateway_reports_strict_endpoint_unavailable() -> None:
@@ -826,6 +885,37 @@ def test_deepseek_provider_rejects_tool_response_without_reasoning() -> None:
     assert exc_info.value.code == "deepseek_reasoning_content_missing"
 
 
+def test_deepseek_provider_bounds_repeated_incomplete_tool_responses() -> None:
+    """Eight omitted reasoning fields stop without exposing any Tool call."""
+    from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
+    from restscope.llm.providers.deepseek import (
+        DeepSeekCompatibilityError,
+        DeepSeekProvider,
+    )
+
+    incomplete = deepseek_response(
+        content="",
+        tool_calls=[_provider_tool_call()],
+        reasoning_content=None,
+    )
+    client = SequencedClient([incomplete] * 8)
+
+    with pytest.raises(DeepSeekCompatibilityError) as exc_info:
+        DeepSeekProvider(api_key="test-key", client=client).invoke(
+            LLMRequest(
+                provider="deepseek",
+                model="deepseek-v4-pro",
+                messages=[LLMMessage(role="user", content="Investigate")],
+                tools=[_search_tool()],
+                tool_choice="auto",
+                reasoning=LLMReasoningConfig(mode="enabled", effort="high"),
+            )
+        )
+
+    assert exc_info.value.code == "deepseek_reasoning_content_missing"
+    assert len(client.chat.completions.requests) == 8
+
+
 def test_deepseek_provider_retries_one_incomplete_tool_response() -> None:
     """A transient missing reasoning field is retried before any tool runs."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
@@ -898,6 +988,14 @@ def test_deepseek_provider_recovers_after_two_incomplete_tool_responses() -> Non
     )
 
     assert len(client.chat.completions.requests) == 3
+    first_messages = client.chat.completions.requests[0]["messages"]
+    second_messages = client.chat.completions.requests[1]["messages"]
+    third_messages = client.chat.completions.requests[2]["messages"]
+    assert first_messages != second_messages != third_messages
+    assert second_messages[-1]["role"] == "user"
+    assert third_messages[-1]["role"] == "user"
+    assert "Provider retry 1 of 7" in second_messages[-1]["content"]
+    assert "Provider retry 2 of 7" in third_messages[-1]["content"]
     assert response.tool_calls[0].provider_context["reasoning_content"] == (
         "Search the catalog before deciding."
     )

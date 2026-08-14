@@ -826,3 +826,134 @@
 - Final fresh verification passed: 730 tests with 2 skips; Ruff; Python
   compilation; the repository `typing.Any` guard; retired runtime-read scan;
   and `git diff --check`. No DeepSeek, Phoenix, MCP, or target API was called.
+
+# Phase 33: GitLab/DeepSeek live endurance verification (2026-08-14)
+
+- User instructed that the real GitLab test must keep running until it completes
+  cleanly with matching traces/UI/logs or three hours of attempts have elapsed.
+- User first authorized Git delivery. The repository had only the `main`
+  worktree and no other worktree branch to merge. Committed the complete model
+  catalog/Profile effort change as `5e8067c`, then freshly verified Ruff and
+  the full suite (`730 passed, 2 skipped`) on committed `main`.
+- Started the live-attempt clock at `2026-08-14T08:27:45Z`; hard deadline is
+  `2026-08-14T11:27:45Z`.
+- Initial external preflight: `gitlab-test` is healthy on port 7077 and Phoenix
+  is up on loopback port 6006. DeepSeek configuration is present locally;
+  GitLab credential discovery and live-run entrypoint recovery are next.
+- Confirmed the current blocking entrypoint is `RESTScopeApp.start(focus)` and
+  that it runs the production Orchestrator/Task Executor lifecycle. The
+  historical Operation Smoke runner is incompatible and will not be restored.
+- Parsed the checked-in GitLab schema: it contains 1,740 operations and all
+  five intended Projects collection/item operations. Selected a run-scoped
+  five-operation schema so the live Agent cannot test unrelated endpoints.
+- Two planning-log patches used empty update hunks and were rejected without
+  changing files; reapplied the findings and progress updates against exact
+  anchors.
+- The first launch command omitted the repository import path and failed before
+  external calls; the corrected command reached the real Provider.
+- First real run `gitlab-current-20260814T083307Z-4a09e463` ended cleanly at the
+  App boundary before any GitLab test request because DeepSeek strict Beta
+  rejected the Orchestrator's `database.query` Schema with HTTP 400.
+- Added a deterministic Provider regression, observed it fail, implemented a
+  conservative DeepSeek strict-subset projection, then passed all 38 DeepSeek
+  tests and Ruff. The original real one-Tool probe now succeeds.
+- A read-only process check constructed an empty PID argument and produced a
+  harmless `ps` usage error; run status was instead confirmed from the unique
+  metadata file and closed UI port.
+- Second run reached Task Executor and found DeepSeek's all-strict-or-none rule
+  for mixed Tools. Replaced the old pre-network rejection with a standard-route
+  projection, added its regression, and kept the full DeepSeek file at 38
+  passing tests plus Ruff and a successful real schema probe.
+- Third run displayed correctly in Live Observer with 5 scoped operations,
+  live SSE, Orchestrator decisions/reasoning, zero console warnings, and no
+  unrelated operation. It persisted a GET Projects Batch and three target
+  responses before a known missing-`reasoning_content` Provider condition
+  exhausted three safe retries.
+- Initial ad-hoc database evidence queries used historical column/table names;
+  both failed read-only. `PRAGMA table_info` identified the current schema and
+  the corrected queries confirmed the Batch/Observation evidence.
+- Fourth run persisted two GET Projects Batches: revision 0 had two HTTP 400
+  cases, while revision 1 had three HTTP 200 cases after Patch recovery. It
+  later ended on the same missing-reasoning condition, so the failure was
+  promoted from transient to reproducible Provider recovery work.
+- Six real miniature DeepSeek tool-call probes (three text, three JSON Output)
+  all included reasoning. Added a red regression proving retries were
+  identical, then diversified only the two rejected Provider attempts with a
+  numbered continuation-contract reminder. All 38 Provider tests and Ruff pass.
+- Fifth run `gitlab-current-20260814T085850Z-2eeed6f3` still exhausted three
+  diversified missing-reasoning attempts after fourteen successful Tool
+  continuations. Raised the bounded Provider attempts to eight, added its exact
+  limit regression, and freshly passed all 39 DeepSeek tests.
+- Fresh offline verification after the DeepSeek fixes passed Ruff, the full
+  suite (`732 passed, 2 skipped`), and `git diff --check`.
+- Sixth run `gitlab-current-20260814T090259Z-22bc60eb` crossed the earlier
+  failure point, then its Parameter Patch child repeatedly received an opaque
+  mandatory-ancestor ID that cannot be expressed through the Tool contract.
+  Reproduced the exact optional multipart `$ref` shape with a red regression,
+  accepted only unnameable structural ancestors implicitly, and passed 68
+  focused request-generation tests. The old-code run was interrupted normally
+  after 13 minutes so tracing could flush before restart.
+- One focused verification command used an unmatched zsh glob and ran no
+  tests; reran it with the four exact test paths and obtained the 68-pass result.
+- Seventh run `gitlab-current-20260814T091751Z-d49a3ff0` crossed the compile
+  fix, completed two GET Batches (five HTTP 200 cases), and reached a real POST
+  Batch. The POST 400 exposed conflicting optional GitLab fields as intended.
+  Its repair Patch validated internally but the Tool-result projection raised
+  `KeyError` on the same private ancestor node, so the run was stopped normally.
+- Extended the faithful multipart regression through `validation_payload`,
+  filtered only unnameable expanded nodes from semantic `final_generators`,
+  and freshly passed 68 focused tests plus the full suite (`733 passed, 2
+  skipped`), Ruff, and `git diff --check`.
+- Eighth run `gitlab-current-20260814T092841Z-dc862a8e` verified the complete
+  Patch path: GET list and GET item happy paths persisted 11 HTTP 200 cases,
+  and the POST repair passed both `validate_patch` and
+  `parameter_patch.apply`. It later stopped safely when a Task Executor Tool
+  call omitted DeepSeek `reasoning_content` on all eight Provider attempts.
+- Briefly implemented the user's earlier “medium” wording as a literal Profile
+  value, then the user clarified that simplicity wins and no medium-to-high
+  alias should exist. Reverted the alias: Task Executor is directly `high` and
+  Parameter Patch remains `low`.
+- The first focused medium-effort command used three guessed test node names
+  and collected no tests; reran with the exact discovered names and observed
+  the intended five red contract failures. A combined source/docs patch then
+  used an inexact Profile anchor and changed no files; reapplied it against the
+  exact current blocks.
+- The temporary medium-effort state passed 734 tests with 2 skips before it was
+  superseded; fresh verification of the final high/low state follows.
+- Ninth run `gitlab-current-20260814T094536Z-66800288` began with the temporary
+  medium Task Executor and persisted five GET-list HTTP 200 observations. It
+  was interrupted normally immediately after the user's simplification so no
+  further live evidence would be attributed to the superseded configuration.
+- Fresh verification of the final compact effort vocabulary passed 733 tests
+  with 2 skips, Ruff, and `git diff --check`.
+- Tenth run `gitlab-current-20260814T095223Z-34d5b2fc` persisted 16 GET-list
+  HTTP 200 cases, repaired POST generation twice, and obtained the first real
+  POST 201 with a new resource instance. It later exhausted all eight
+  missing-reasoning attempts in the next long Tool chain and stopped safely.
+- Changed only the Provider-internal retry placement: each rejected attempt
+  now appends one numbered user correction at the latest continuation boundary
+  instead of editing the distant system prefix. Agent Prompt state and Tool
+  execution remain unchanged. All 39 DeepSeek tests and the complete suite
+  (`733 passed, 2 skipped`), Ruff, and diff checks pass.
+- Eleventh run `gitlab-current-20260814T101908Z-b31c6d03` verified the final
+  direct `high` Task Executor and `low` Parameter Patch configuration for more
+  than an hour without another missing-reasoning terminal failure. It persisted
+  8 Batches, 42 Observations, and 24 resource instances.
+- The eleventh run obtained real successes for four operations: POST had three
+  HTTP 201 responses, collection GET had three HTTP 200 responses, item GET
+  had twenty HTTP 200 responses, and PUT had six HTTP 200 responses. DELETE
+  was not scheduled before the deadline.
+- Full Phoenix pagination returned 1,188 spans: 1,140 OK and 48 ERROR. The
+  errors were correctable input/SQL/Patch rejections, one bounded generated-
+  request rejection at Tool and service scopes, and the deadline cancellation
+  chain. No rejected Tool call executed.
+- Live Observer remained responsive with no browser console warnings before
+  shutdown. The final App log contains only the expected OpenTelemetry notice
+  caused by the deadline interrupt; the UI port closed with the App.
+- At `2026-08-14T11:27:45Z` the clean end-to-end stop condition had not been
+  reached. Sent the approved interrupt, the runner exited with code 130,
+  metadata recorded `interrupted`, and all SQLite/Phoenix artifacts remain
+  available for diagnosis.
+- Final fresh offline verification passed Ruff, the complete suite (`733
+  passed, 2 skipped`), `git diff --check`, the retired-name scan, and exact
+  production Profile effort inspection.

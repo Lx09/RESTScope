@@ -115,6 +115,10 @@ def validation_payload(validated: ValidatedPatch) -> dict[str, object]:
                 *(
                     semantic.handle_by_node[item.input_node_id]
                     for item in validated.compiled_patch.updates
+                    # Presence expansion owns private request-body containers.
+                    # They have no Agent-facing name and therefore cannot
+                    # appear in this semantic Tool result.
+                    if item.input_node_id in semantic.handle_by_node
                 ),
             )
         )

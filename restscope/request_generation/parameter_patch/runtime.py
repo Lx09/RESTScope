@@ -486,11 +486,18 @@ class RequestGenerationPatchRuntime:
         expanded = expand_generator_patch_presence(config, updates) if updates else []
         expanded_ids = {item.input_node_id for item in expanded}
         allowed_ids = {semantic.node_by_handle[item] for item in allowed}
-        missing_scope = sorted(expanded_ids - allowed_ids)
+        # Presence expansion may add request-body or media-type containers that
+        # are intentionally absent from the semantic handles exposed to an
+        # Agent.  The caller cannot name those private structural nodes, so the
+        # runtime owns their deterministic inclusion.  Addressable ancestors
+        # remain explicit affected_inputs and still fail when omitted.
+        missing_scope = sorted(
+            node_id
+            for node_id in expanded_ids - allowed_ids
+            if node_id in semantic.handle_by_node
+        )
         if missing_scope:
-            missing_handles = [
-                semantic.handle_by_node.get(item, item) for item in missing_scope
-            ]
+            missing_handles = [semantic.handle_by_node[item] for item in missing_scope]
             raise ParameterPatchValidationError(
                 "affected_input_scope_incomplete",
                 "affected_inputs must include mandatory ancestors: "

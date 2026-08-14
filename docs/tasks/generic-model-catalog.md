@@ -35,9 +35,10 @@ environment Interface.
   model-file path and secret values only.
 - Agent Profiles own reasoning effort. Model configurations contain no
   reasoning defaults.
-- Current production Profiles initially share the `default` model. The
-  Orchestrator and Task Executor use `high`, Parameter Patch uses `low`, and
-  resource identity and state Profiles use `none`.
+- Current production Profiles share the `default` model. The Orchestrator and
+  Task Executor use `high`, Parameter Patch uses `low`, and resource identity
+  and state Profiles use `none`. RESTScope does not expose `medium` as a synonym
+  for Provider-side `high`.
 - Old environment names fail fast and are never read as configuration.
 
 ## Verification

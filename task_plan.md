@@ -1,14 +1,29 @@
 # Task Plan: RESTScope Evolution
 
 ## Goal
-Replace fixed model slots with a validated named TOML catalog, make thinking
-effort explicit per Profile, and shorten the environment Interface without
-adding runtime model selection or compatibility aliases.
+Run the real DeepSeek-backed RESTScope workflow continuously against the
+authorized disposable GitLab API, inspect logs, Phoenix traces, and the Live
+Observer UI, and stop only after a clean end-to-end completion or the explicit
+three-hour deadline.
 
 ## Current Phase
-Phase 32 generic model catalog and Profile reasoning effort is complete
+Phase 33 GitLab/DeepSeek live endurance verification stopped at its approved
+three-hour deadline with retained evidence; end-to-end completion was not
+reached
 
 ## Phases
+
+### Phase 33: GitLab/DeepSeek live endurance verification
+- [x] Commit the completed model/Profile migration and verify the only worktree
+- [x] Fix the attempt window at 2026-08-14T08:27:45Z–11:27:45Z
+- [x] Recover the existing authorized GitLab acceptance entrypoint and local API credential without exposing secrets
+- [x] Verify GitLab, Phoenix, target schema, DeepSeek, tracing, logging, and Live Observer preconditions
+- [x] Run the real workflow and continuously inspect process, database, logs, traces, and UI
+- [x] Diagnose and repair product bugs, run offline regressions, and restart live verification
+- [x] Audit the final retained evidence and stop at the three-hour deadline
+- **Status:** complete at the approved deadline; four of five operations reached
+  real 2xx responses, DELETE was not scheduled, and the final run was
+  interrupted normally with evidence retained; no push is authorized
 
 ### Phase 32: Generic model catalog and compact environment configuration
 - [x] Confirm the TOML model catalog, Profile-owned effort, incompatible environment migration, and no-Git boundary
@@ -328,6 +343,9 @@ Phase 32 generic model catalog and Profile reasoning effort is complete
 | Ant Design CLI had no `Drawer basic` demo | 1 | Use the listed `basic-right` Drawer demo; no project file was changed. |
 | The first browser locator call targeted the tab wrapper instead of its Playwright surface | 1 | Use `observerTab.playwright.locator`; no page action occurred. |
 | Restricted page evaluation did not expose DOM `click()` or constructible `MouseEvent` objects | 1 | Use supported locator clicks and rely on the Web Animations regression for frame-level reversal behavior. |
+| Final Phoenix audit requested an unsupported 2,000-span page | 1 | No runtime state changed; follow Phoenix's `next_cursor` with supported 1,000-span pages and obtain all 1,188 spans. |
+| Post-shutdown Observer reload landed on the browser's blocked error page | 1 | Do not bypass browser policy; rely on the successful pre-shutdown console audit and the expected closed UI port. |
+| Final verification scan contained an unmatched shell quote | 1 | The shell rejected it before any check ran; split tests and scans into literal-safe commands, then pass both. |
 
 ## Notes
 - Current work occurs only in `/Users/lixin/Workplace/RESTScope-worktrees/orchestration-observer-ui` on `codex/orchestration-observer-ui`.

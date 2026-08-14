@@ -158,6 +158,112 @@ def test_validation_is_deterministic_and_apply_advances_one_revision() -> None:
     assert len(minimum_state["constraints"]) == 1
 
 
+def test_body_leaf_patch_implicitly_includes_unnameable_request_ancestors() -> None:
+    """Optional multipart leaves may require private structural containers."""
+    from restscope.openapi_parser import OpenAPIParser
+    from restscope.request_generation import (
+        RequestGenerationConfigStore,
+        RequestGenerationPatchRuntime,
+    )
+    from restscope.request_generation.parameter_patch import SemanticParameterPatch
+    from restscope.request_generation.parameter_patch.projection import (
+        validation_payload,
+    )
+
+    ir = OpenAPIParser.parse(
+        {
+            "openapi": "3.0.3",
+            "info": {"title": "Nested body patch", "version": "1"},
+            "paths": {
+                "/projects": {
+                    "post": {
+                        "requestBody": {
+                            "required": False,
+                            "content": {
+                                "multipart/form-data": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/ProjectBody"
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {"201": {"description": "created"}},
+                    }
+                }
+            },
+            "components": {
+                "schemas": {
+                    "ProjectBody": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "nullable": True},
+                            "path": {"type": "string", "nullable": True},
+                            "visibility": {
+                                "type": "string",
+                                "enum": ["private", "internal", "public"],
+                                "nullable": True,
+                            },
+                        },
+                    }
+                }
+            },
+        }
+    )
+    store = RequestGenerationConfigStore()
+    assert store.initialize_once(ir) is True
+    runtime = RequestGenerationPatchRuntime(store=store, ir_provider=lambda: ir)
+    patch = SemanticParameterPatch.model_validate(
+        {
+            "changes": [
+                {
+                    "input": "body.name",
+                    "inclusion_probability": 1,
+                    "strategy": {"type": "constant", "value": "restscope-live"},
+                },
+                {
+                    "input": "body.path",
+                    "inclusion_probability": 1,
+                    "strategy": {"type": "constant", "value": "restscope-live"},
+                },
+                {
+                    "input": "body.visibility",
+                    "inclusion_probability": 1,
+                    "strategy": {"type": "constant", "value": "private"},
+                }
+            ]
+        }
+    )
+
+    validated = runtime.validate(
+        operation_key="POST /projects",
+        expected_revision=0,
+        affected_inputs=("body.name", "body.path", "body.visibility"),
+        patch=patch,
+    )
+
+    assert validated.affected_inputs == (
+        "body.name",
+        "body.path",
+        "body.visibility",
+    )
+    assert all(
+        sample["presence"]["body.name"] is True
+        and sample["presence"]["body.path"] is True
+        and sample["presence"]["body.visibility"] is True
+        for sample in validated.samples
+    )
+    assert all(
+        sample["values"]["body.name"] == "restscope-live"
+        for sample in validated.samples
+    )
+    payload = validation_payload(validated)
+    assert [item["input"] for item in payload["final_generators"]] == [
+        "body.name",
+        "body.path",
+        "body.visibility",
+    ]
+
+
 def test_digest_mismatch_and_no_change_leave_store_untouched() -> None:
     """Failed Apply attempts never increment revision or replace content."""
     from restscope.request_generation.parameter_patch import (

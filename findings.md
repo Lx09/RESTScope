@@ -1,5 +1,104 @@
 # Findings & Decisions
 
+## GitLab/DeepSeek live endurance verification (2026-08-14)
+
+- The user authorized real DeepSeek and disposable local GitLab API calls,
+  including messages and mutating requests, plus Phoenix and Live Observer
+  inspection. This does not authorize a Git push.
+- The attempt clock starts at `2026-08-14T08:27:45Z` and ends at
+  `2026-08-14T11:27:45Z`; successful completion still requires evidence from
+  the workflow, logs, trace hierarchy, and UI rather than mere process survival.
+- Local `gitlab-test` is already healthy on port 7077 and the Phoenix container
+  is already serving port 6006. The current dotenv has the DeepSeek secret but
+  no GitLab API credential name, so the existing live harness or container
+  initialization must remain the source of that target credential.
+- No tracked live runner remains, but prior ignored artifacts and compiled test
+  files show the established five-operation acceptance harness existed. Recover
+  its exact contract from current task records and Git history before creating
+  any temporary replacement.
+- The current public live entrypoint is `RESTScopeApp.initialize(...)` followed
+  by blocking `RESTScopeApp.start(focus)`. It executes the production
+  Orchestration runtime; the deleted Operation Smoke acceptance API is only
+  historical evidence and must not be restored.
+- The GitLab 18.9.2 document contains 1,740 operations, including all five
+  approved Projects operations. A run-scoped schema copy will retain only
+  `/api/v4/projects` and `/api/v4/projects/{id}` plus their reusable components,
+  preventing the live Agent from scheduling unrelated endpoints.
+- The current App root trace is `RESTScopeApp.start`, not the historical
+  `RESTScopeApp.run`; trace checks must use the current Orchestrator, Task
+  Executor, Tool, HTTP, and Provider hierarchy.
+- The first current-architecture run reached DeepSeek but Beta strict schema
+  validation rejected `database.query` with HTTP 400: schema-valued
+  `additionalProperties` was parsed where DeepSeek requires a boolean.
+- A one-Tool real-provider probe reproduced the failure twice. The unchanged
+  Schema succeeded through DeepSeek's standard non-strict route, while a
+  minimal closed strict Schema succeeded in both thinking modes. This excludes
+  thinking mode and general Beta availability as causes.
+- DeepSeek's current official strict documentation requires every object
+  property to be required, `additionalProperties=false`, and rejects ordinary
+  bounds including `minLength`/`maxLength` and `minItems`/`maxItems`. Provider-
+  facing strict downgrade is therefore the correct seam: Tool Schema and local
+  validation stay authoritative while only unsupported strict projection uses
+  the standard endpoint.
+- The second live run passed the Orchestrator and exposed a mixed Tool set in
+  Task Executor. DeepSeek requires all Tools in one Beta request to share
+  strictness, so the same Provider projection now uniformly removes strict for
+  mixed sets while Harness-local schemas remain unchanged.
+- The third run entered the full current Agent tree and persisted one completed
+  GET Projects Batch plus three Observations (400, 400, 200), one resource, and
+  20 resource instances. It then stopped safely after a later thinking tool
+  call omitted `reasoning_content` on all three bounded Provider attempts.
+- The third run's UI accurately changed from running/zero failures to errored,
+  retained 69 events in browser history, and reported no browser console
+  warnings or errors. Phoenix exported 84 spans and the expected root/Agent/
+  LLM/Tool/HTTP/resource hierarchy; its six ERROR spans form the causal
+  Provider failure/cancellation chain rather than unrelated failures.
+- The fourth run recovered from one missing-reasoning Parameter Patch child,
+  completed an initial failing GET Projects Batch, applied a Patch, and then
+  completed a second Batch with three HTTP 200 cases. A later root call again
+  exhausted the identical-response retry and ended the App, proving the
+  omission is frequent enough to require a recovery improvement.
+- Three real small tool-call probes with text output and three with JSON Output
+  all returned reasoning, so JSON Output is not established as the cause.
+  Inspection of the deterministic unit seam confirmed all three existing
+  Provider attempts sent identical messages, making cached bad responses a
+  likely reason that the bounded retry had little recovery value.
+- Provider retries now add a distinct numbered system reminder only to the
+  rejected retry request. It does not enter Agent Prompt state, change effort,
+  expose the rejected Tool call, or loosen the continuation check.
+- The fifth run still exhausted three diversified attempts after fourteen
+  successful Tool continuations. Its failing request contained only 28
+  messages and roughly 37 KiB, excluding context capacity as the cause. Eight
+  bounded attempts preserve the same safety contract while giving this real
+  Provider omission more opportunity to recover.
+- The sixth run crossed that previous failure point without an Agent, LLM, or
+  App error, then a Parameter Patch child became trapped on
+  `affected_input_scope_incomplete`. The validator named an opaque input-node
+  ID for the optional multipart request-body container, while every Agent Tool
+  accepts only semantic handles such as `body.name`; the requested correction
+  was therefore impossible.
+- Presence expansion deterministically owns private structural ancestors.
+  `affected_inputs` must continue to include every addressable ancestor, but a
+  request-body or media-type container absent from the semantic map must be
+  accepted implicitly because no caller can name it.
+- The seventh run proved the compile-side fix through the real child and
+  created a POST Batch. The first request correctly became evidence for a
+  broader Patch, but successful Patch validation then failed while projecting
+  `final_generators`: the output boundary repeated the same false assumption
+  that every expanded update has a public semantic handle. Tool projection
+  must omit those private containers for the same reason compile scope accepts
+  them implicitly.
+- The user explicitly rejected a `medium` alias that DeepSeek maps back to
+  high. Keep the internal effort vocabulary compact and configure Task Executor
+  directly as `high`; Parameter Patch remains `low`.
+- The tenth run reached the first real POST 201 and therefore proved all model,
+  Patch, target-mutation, Monitor, and trace paths through resource creation.
+  A later Task Executor continuation still exhausted eight missing-reasoning
+  responses. The numbered reminder was being appended to the earliest system
+  prefix even though DeepSeek was continuing from the last Tool result; a
+  Provider-only final user correction is the smaller, causally relevant retry
+  boundary and still leaves Agent history and rejected Tool calls untouched.
+
 ## Orchestrator observer workspace (2026-08-14)
 
 - The current UI selects only `lifecycle=main`, but production now starts fresh
@@ -319,9 +418,10 @@
   index already supports arbitrary names and lets many Profiles reuse one
   configuration. Only App configuration and Profile composition were shallow.
 - DeepSeek's current official contract accepts `thinking.type` as
-  `enabled/disabled`, accepts only `low/high/max` as Chat Completion effort,
-  and requires `reasoning_content` to be returned after a tool call. Profile
-  `none` therefore maps to disabled with no effort field.
+  `enabled/disabled`, treats `medium` as a compatibility alias for `high`, and
+  requires `reasoning_content` after a tool call. RESTScope keeps only the
+  distinct `low/high/max` enabled values; Profile `none` maps to disabled with
+  no effort field.
 - A configured model file must contain at least one model; parser-only behavior
   is represented only by omitting `MODELS_FILE`. This avoids silently treating
   a misspelled or incomplete runtime catalog as parser-only configuration.
@@ -602,3 +702,31 @@
   transition rules remain in the Catalog Adapter rather than either Module.
 - TDD seams are the Generation Store frozen state, the public Batch execution
   result/Tool contract, and exact production Profile authorization.
+
+## 2026-08-14 live endurance deadline findings
+
+- Moving the missing-reasoning correction to the latest Provider-only user
+  boundary eliminated the previously repeatable terminal condition throughout
+  the final 69-minute run. The Provider still rejects incomplete continuation
+  responses before Tool execution and never synthesizes reasoning content.
+- The final run proves the generic Profile wiring through production roots and
+  children: Orchestrator and Task Executor used `default + high`, Parameter
+  Patch used `default + low`, and resource identity/state System Agents used
+  `default + none`.
+- Direct probes established valid PUT behavior, but generated PUT batches still
+  over-selected optional fields. Three cases returned HTTP 400, and a later
+  generated request was rejected locally because its bounded evidence exceeded
+  2,400 characters. Parameter Patch then spent the remaining window querying
+  many nonexistent fields instead of converging to a minimal request.
+- This remaining inefficiency is safe Tool-level Agent behavior, not a hidden
+  application exception: invalid semantic names never changed generation
+  state, overlong evidence never reached the target, and the final cancellation
+  propagated through the root trace.
+- The eleventh run did not satisfy end-to-end completion because DELETE never
+  started and the root ended by the approved deadline interrupt. Its retained
+  evidence is 8 Batches, 42 Observations, 24 resource instances, and 1,188
+  Phoenix spans (1,140 OK / 48 ERROR).
+- Live Observer had no console warnings during running checks. Reloading after
+  the App stopped correctly reached connection refused because the UI lifecycle
+  is App-owned; the final App log otherwise contains only the OpenTelemetry
+  shutdown notice emitted by interruption.
