@@ -2,7 +2,7 @@
 
 The Resource Response Tracker supplies only an operation's method and path, one
 normalized resource name, and state names already established for that resource.
-This Module renders those facts for the FAST System Agent and validates its
+This Module renders those facts for the Resource State System Agent and validates its
 structured result. Response bodies and instance values never cross this seam.
 """
 

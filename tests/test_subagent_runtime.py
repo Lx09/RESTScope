@@ -29,7 +29,10 @@ class _ChildProvider:
         return LLMResponse(
             provider="scripted",
             model=request.model,
-            parsed_json={"summary": f"{request.metadata['role']} finished.", "findings": []},
+            parsed_json={
+                "summary": f"{request.metadata['role']} finished.",
+                "findings": [],
+            },
             prompt_tokens=100,
             completion_tokens=20,
         )
@@ -59,6 +62,7 @@ def _runtime(*, release: Event | None = None, max_open_agents: int = 4):
                 AgentProfile(
                     name="main",
                     model_config_name="fast",
+                    reasoning_effort="none",
                     tool_names=(
                         "subagent.start",
                         "subagent.wait",
@@ -70,6 +74,7 @@ def _runtime(*, release: Event | None = None, max_open_agents: int = 4):
                     name="child",
                     description="Inspect one bounded fact for the parent.",
                     model_config_name="fast",
+                    reasoning_effort="none",
                 ),
             ),
             models=(model,),
@@ -94,8 +99,13 @@ def test_subagent_tools_are_global_closed_and_deep_contracts() -> None:
     for definition in definitions:
         assert definition.spec.input_schema["additionalProperties"] is False
         assert definition.spec.output_schema["additionalProperties"] is False
-    assert definitions[0].spec.input_schema["properties"]["objective"]["maxLength"] == 12_000
-    assert definitions[1].spec.input_schema["properties"]["subagent_ids"]["maxItems"] == 3
+    assert (
+        definitions[0].spec.input_schema["properties"]["objective"]["maxLength"]
+        == 12_000
+    )
+    assert (
+        definitions[1].spec.input_schema["properties"]["subagent_ids"]["maxItems"] == 3
+    )
     wait_schema = definitions[1].spec.output_schema
     snapshot_name = wait_schema["properties"]["agents"]["items"]["$ref"].split("/")[-1]
     assert wait_schema["$defs"][snapshot_name]["properties"]["completion"]
@@ -130,6 +140,7 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
                     AgentProfile(
                         name="main",
                         model_config_name="fast",
+                        reasoning_effort="none",
                         tool_names=("subagent.start",),
                         subagent_profile_names=("child",),
                     ),
@@ -137,6 +148,7 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
                         name="child",
                         description="Inspect one bounded fact for the parent.",
                         model_config_name="fast",
+                        reasoning_effort="none",
                     ),
                 ),
                 **definition,
@@ -148,6 +160,7 @@ def test_profile_child_grants_require_all_subagent_tools_and_a_bounded_dag() -> 
             name=f"level-{index}",
             description=f"Run bounded level {index} work.",
             model_config_name="fast",
+            reasoning_effort="none",
             tool_names=(
                 "subagent.start",
                 "subagent.wait",
@@ -213,7 +226,9 @@ def test_start_wait_collects_direct_child_and_releases_open_slot() -> None:
     assert started.status == "succeeded"
     assert blocked.error["code"] == "subagent_capacity_exceeded"
     assert collected.structured["agents"][0]["status"] == "completed"
-    assert collected.structured["agents"][0]["completion"]["summary"] == "child finished."
+    assert (
+        collected.structured["agents"][0]["completion"]["summary"] == "child finished."
+    )
     assert restarted.status == "succeeded"
 
 

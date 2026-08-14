@@ -1,0 +1,11 @@
+[providers.deepseek]
+api_key_env = "DEEPSEEK_API_KEY"
+url = "https://api.deepseek.com"
+
+[models.default]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+timeout = 120
+temperature = 0.7
+max_tokens = 393216
+context_tokens = 1048576

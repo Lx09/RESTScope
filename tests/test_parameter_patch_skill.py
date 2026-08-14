@@ -38,14 +38,18 @@ def test_apply_parameter_patch_manifest_and_references_are_exact() -> None:
     assert skill.manifest.risk_level == "medium"
     assert skill.manifest.required_tools == expected_tools
     assert skill.manifest.required_context_sources == ()
-    assert tuple(reference.path for reference in skill.references) == expected_references
+    assert (
+        tuple(reference.path for reference in skill.references) == expected_references
+    )
     assert len(skill.instructions) <= 24_000
     assert all(0 < len(reference.content) <= 24_000 for reference in skill.references)
 
     root = files("restscope.builtin_skills").joinpath(SKILL_NAME)
     source = root.joinpath("SKILL.md").read_text(encoding="utf-8")
     frontmatter = yaml.safe_load(source.split("---", 2)[1])
-    manifest = yaml.safe_load(root.joinpath("restscope.yaml").read_text(encoding="utf-8"))
+    manifest = yaml.safe_load(
+        root.joinpath("restscope.yaml").read_text(encoding="utf-8")
+    )
     assert frontmatter == {
         "name": SKILL_NAME,
         "description": skill.manifest.description,
@@ -82,7 +86,10 @@ def test_patch_skill_requires_state_validate_review_apply_and_confirmation() -> 
     assert "prove" in combined.lower()
     assert "build-parameter-patch" not in combined
     assert "future API test inputs" in skill.manifest.description
-    assert "RESTScope calls one\ninput's value strategy a **Generator**" in skill.instructions
+    assert (
+        "RESTScope calls one\ninput's value strategy a **Generator**"
+        in skill.instructions
+    )
     for role_term in (
         "Orchestrator",
         "Task Executor",
@@ -119,6 +126,7 @@ def test_profile_missing_any_patch_dependency_is_rejected(missing_tool: str) -> 
 
     required = builtin_skill_catalog().get(SKILL_NAME).manifest.required_tools
     granted = tuple(name for name in required if name != missing_tool)
+
     class Provider:
         """Exist only so Profile validation reaches Skill dependencies."""
 
@@ -133,6 +141,7 @@ def test_profile_missing_any_patch_dependency_is_rejected(missing_tool: str) -> 
                     AgentProfile(
                         name="patch",
                         model_config_name="fast",
+                        reasoning_effort="none",
                         tool_names=granted,
                         skill_names=(SKILL_NAME,),
                     ),

@@ -208,8 +208,7 @@ def test_deepseek_json_mode_does_not_duplicate_an_existing_json_instruction() ->
 
     client = RecordingClient()
     system = (
-        'Task: choose one option. Return JSON like {"choice":"A1"}. '
-        "Do not explain."
+        'Task: choose one option. Return JSON like {"choice":"A1"}. Do not explain.'
     )
 
     DeepSeekProvider(api_key="test-key", client=client).invoke(
@@ -230,8 +229,9 @@ def test_deepseek_json_mode_does_not_duplicate_an_existing_json_instruction() ->
     assert kwargs["messages"][0]["content"] == system
 
 
-def test_deepseek_provider_applies_configured_reasoning_without_agent_changes() -> None:
-    """Scenario: verify that deepseek provider applies configured reasoning without agent changes."""
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
+def test_deepseek_provider_applies_every_enabled_effort(effort: str) -> None:
+    """Enabled Profile efforts use the official DeepSeek request fields."""
     from restscope.llm import LLMMessage, LLMReasoningConfig, LLMRequest
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
@@ -239,7 +239,7 @@ def test_deepseek_provider_applies_configured_reasoning_without_agent_changes() 
     DeepSeekProvider(
         api_key="test-key",
         client=client,
-        default_reasoning=LLMReasoningConfig(mode="enabled", effort="max"),
+        default_reasoning=LLMReasoningConfig(mode="enabled", effort=effort),
     ).invoke(
         LLMRequest(
             provider="deepseek",
@@ -251,7 +251,7 @@ def test_deepseek_provider_applies_configured_reasoning_without_agent_changes() 
     kwargs = client.chat.completions.kwargs
     assert kwargs is not None
     assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
-    assert kwargs["reasoning_effort"] == "max"
+    assert kwargs["reasoning_effort"] == effort
 
 
 def test_deepseek_non_thinking_omits_reasoning_effort() -> None:
@@ -783,8 +783,13 @@ def test_deepseek_provider_carries_and_replays_tool_call_reasoning() -> None:
     )
 
     messages = second_client.chat.completions.kwargs["messages"]
-    assistant_message = next(message for message in messages if message["role"] == "assistant")
-    assert assistant_message["reasoning_content"] == "I should search for orderId producers."
+    assistant_message = next(
+        message for message in messages if message["role"] == "assistant"
+    )
+    assert (
+        assistant_message["reasoning_content"]
+        == "I should search for orderId producers."
+    )
 
 
 def test_deepseek_provider_rejects_tool_response_without_reasoning() -> None:

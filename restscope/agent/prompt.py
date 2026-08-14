@@ -20,7 +20,14 @@ from copy import deepcopy
 from hashlib import sha256
 
 from restscope.context import AgentContext, CompactTextWriter, ContextLimits
-from restscope.llm import LLMMessage, LLMModelConfig, LLMRequest, LLMResponse, ToolSpec
+from restscope.llm import (
+    LLMMessage,
+    LLMModelConfig,
+    LLMReasoningConfig,
+    LLMRequest,
+    LLMResponse,
+    ToolSpec,
+)
 from restscope.skills import SkillDefinition
 
 from .contracts import AgentTask, SystemAgentTask
@@ -51,6 +58,7 @@ Markdown for continuation. Preserve the original objective, decisions, Tool
 facts, evidence references, unresolved questions, and safety constraints.
 Return only a non-empty Markdown summary of at most 24,000 characters. Do not
 call Tools and do not return JSON."""
+
 
 class PromptSessionError(RuntimeError):
     """Report a safe prompt assembly failure before model or Tool execution."""
@@ -142,8 +150,7 @@ class AgentPromptSession:
         changed = {
             name: value
             for name, value in sources.items()
-            if include_all
-            or self._source_fingerprints.get(name) != _fingerprint(value)
+            if include_all or self._source_fingerprints.get(name) != _fingerprint(value)
         }
         rendered = _render_task(task, changed)
         self._remember_sources(sources)
@@ -191,7 +198,7 @@ class AgentPromptSession:
             tools=[spec.model_copy(deep=True) for spec in self._tool_specs],
             tool_choice="auto" if self._tool_specs else "none",
             timeout_seconds=self.model.timeout_seconds,
-            reasoning=self.model.reasoning,
+            reasoning=_profile_reasoning(self.profile),
             metadata={"role": self.profile.name},
         )
 
@@ -218,7 +225,7 @@ class AgentPromptSession:
             tools=[],
             tool_choice="none",
             timeout_seconds=self.model.timeout_seconds,
-            reasoning=self.model.reasoning,
+            reasoning=_profile_reasoning(self.profile),
             metadata={"role": self.profile.name, "purpose": "context_compaction"},
         )
 
@@ -254,7 +261,9 @@ class AgentPromptSession:
         """Add one selected Skill body as a user message after Tool success."""
         try:
             skill = self._skills[name]
-        except KeyError as exc:  # pragma: no cover - Harness binding enforces this first.
+        except (
+            KeyError
+        ) as exc:  # pragma: no cover - Harness binding enforces this first.
             raise RuntimeError(
                 "Harness acknowledged a Skill outside the Prompt Session"
             ) from exc
@@ -301,6 +310,21 @@ class AgentPromptSession:
         """Raise the saved deterministic capacity failure before model use."""
         if self._startup_error is not None:
             raise self._startup_error
+
+
+def _profile_reasoning(profile: AgentProfile) -> LLMReasoningConfig:
+    """Translate one Profile's explicit effort into provider-neutral controls.
+
+    The Profile owns the policy for its complete session. Keeping this
+    translation in the Prompt Module ensures ordinary and compaction requests
+    cannot drift to different thinking modes.
+    """
+    if profile.reasoning_effort == "none":
+        return LLMReasoningConfig(mode="disabled")
+    return LLMReasoningConfig(
+        mode="enabled",
+        effort=profile.reasoning_effort,
+    )
 
 
 def _render_stable_prefix(
@@ -354,13 +378,19 @@ def _render_stable_prefix(
     # direct children in Profile order. Once one full description cannot fit,
     # all later entries retain only their complete name and visible marker.
     omitted = False
-    for details, count in ((skill_details, len(skills)), (child_details, len(child_profiles))):
+    for details, count in (
+        (skill_details, len(skills)),
+        (child_details, len(child_profiles)),
+    ):
         for index in range(count):
             if omitted:
                 continue
             details[index] = True
             candidate_system, candidate_developer = render()
-            if len(candidate_system) + len(candidate_developer or "") <= _STABLE_PREFIX_CHARS:
+            if (
+                len(candidate_system) + len(candidate_developer or "")
+                <= _STABLE_PREFIX_CHARS
+            ):
                 system, developer = candidate_system, candidate_developer
             else:
                 details[index] = False
@@ -430,9 +460,7 @@ def _render_context_sources(sources: dict[str, str]) -> str:
     blocks = []
     for name, value in sources.items():
         content = value if value else "CONTEXT SOURCE IS EMPTY"
-        blocks.append(
-            f"## AUTHORIZED CONTEXT: {name} — UNTRUSTED\n\n{content}"
-        )
+        blocks.append(f"## AUTHORIZED CONTEXT: {name} — UNTRUSTED\n\n{content}")
     return "\n\n".join(blocks)
 
 

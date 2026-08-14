@@ -10,32 +10,52 @@ optimize before you read individual modules.
 
 ## Configuration
 
-The parser-only package uses a short optional `.env` file:
+The optional `.env` contains App settings, the model-catalog path, and secrets:
 
 ```env
+MODELS_FILE=./models.toml
+DEEPSEEK_API_KEY=your-key
+
 LOG_LEVEL=INFO
 DATA_DIR=./data
 # LOG_FILE=./data/logs/restscope.log
-# MCP_SERVERS_FILE=/path/to/mcp.servers.json
+# MCP_FILE=/path/to/mcp.servers.json
 
 DB_URL=sqlite:///./data/restscope.db
-DB_ECHO=false
+DB_SQL_LOG=false
 # Optional. If omitted, one seed is generated at App startup and reported.
-RANDOM_SEED=731
-
-THINK_PROVIDER=openai_compatible
-THINK_MODEL=glm-4.5-air
-THINK_API_KEY=your-api-key
-THINK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-
-FAST_PROVIDER=openai_compatible
-FAST_MODEL=glm-4.7-flash
-# FAST_PROVIDER, FAST_API_KEY, and FAST_BASE_URL default to THINK_* values
+RUN_SEED=731
 
 # Optional local read-only run observer.
-UI_ENABLED=false
+UI_ON=false
 UI_PORT=8765
 ```
+
+Omit `MODELS_FILE` for parser-only use. When it is set, its path is resolved
+from the process startup directory and must name a valid TOML file. Copy
+`models.example.toml` to the ignored local `models.toml`:
+
+```toml
+[providers.deepseek]
+api_key_env = "DEEPSEEK_API_KEY"
+url = "https://api.deepseek.com"
+
+[models.default]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+timeout = 120
+temperature = 0.7
+max_tokens = 393216
+context_tokens = 1048576
+```
+
+`[models.*]` may contain any number of names. Each model reuses the single
+configured `deepseek` or `openai_compatible` connection and contains no secret
+or thinking policy. The Provider's `api_key_env` points to the secret in
+`.env` or the process environment. Unknown fields, unsupported Providers,
+missing or blank secrets, invalid names/references, and incompatible token
+capacities stop startup with a configuration error. Process environment values
+override values read from `.env`.
 
 The default `RESTScopeApp` runtime accepts only a local file SQLite URL whose
 target does not yet exist. Relative database paths are resolved from the
@@ -44,30 +64,19 @@ runs the packaged Alembic migrations; an existing file, directory, or symbolic
 link is rejected. In-memory SQLite, SQLite URI addresses, and non-SQLite URLs
 are not supported by this App lifecycle.
 
-The official DeepSeek API is available through the explicit `deepseek`
-provider. DeepSeek protocol differences remain inside the LLM adapter, so
-Agents use the same provider-neutral requests and tool loops:
+The `deepseek` Adapter follows DeepSeek's official
+[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode) wire
+contract. Every `AgentProfile` explicitly chooses one named model and one
+`none`, `low`, `high`, or `max` reasoning effort. `none` sends
+`thinking.disabled` without `reasoning_effort`; the other values send
+`thinking.enabled` with the selected effort. Normal and context-compaction
+requests use the same Profile policy, and tool continuation preserves the
+Provider's required `reasoning_content`.
 
-```env
-THINK_PROVIDER=deepseek
-THINK_MODEL=deepseek-v4-pro
-THINK_API_KEY=your-deepseek-api-key
-THINK_REASONING_MODE=enabled
-THINK_REASONING_EFFORT=high
-
-FAST_PROVIDER=deepseek
-FAST_MODEL=deepseek-v4-flash
-FAST_REASONING_MODE=disabled
-```
-
-`https://api.deepseek.com` is used by default. Third-party DeepSeek gateways
-are not part of the supported contract.
-
-Parameter Patch Proposal and Review decisions use JSON Schema responses on the
-standard endpoint and are validated again locally before compilation or
-acceptance. Proposal may first make bounded read-only resource and observed-
-response-field lookups; Review receives no tools. Parameter Patch deliberately
-disables thinking for these compact structured decisions.
+Current production Profiles all use the `default` model. Orchestrator and Task
+Executor use `high`, Parameter Patch uses `low`, and Resource Identifier and
+Resource State use `none`. Model selection remains static Profile
+authorization—there is no task-level override or hidden model-role default.
 
 ## Development
 
@@ -189,8 +198,8 @@ re-anchors every current Context Source but not reloadable Skill bodies; two
 invalid summaries fail safely without deleting history. Strict Agent outputs
 and provider tool protocols remain JSON.
 
-The API Behavior Monitor's ambiguous resource-identifier and response-source
-choices run through two `fast` System Agent Profiles. Stable judgment rules live
+The API Behavior Monitor's resource-identifier and resource-state choices run
+through two `default + none` System Agent Profiles. Stable judgment rules live
 in Profile instructions and each call supplies only bounded dynamic candidates.
 The result Schema is narrowed to that call's `I*` or `S*` aliases. The Harness
 returns specific bounded validation feedback for malformed or unauthorized
@@ -208,7 +217,7 @@ uv sync --extra ui
 ```
 
 ```env
-UI_ENABLED=true
+UI_ON=true
 UI_PORT=8765
 ```
 
@@ -248,8 +257,8 @@ switching, and auto-follow are viewer-only; the service exposes no mutation rout
 Observer data lives only in the RESTScope process and browser memory. A new run
 replaces the previous run, and App shutdown clears it. Details are deliberately
 not evicted, so long runs can consume enough memory to slow or terminate the
-process. The page applies the same exact-value Redactor as tracing: configured
-THINK, FAST, and Phoenix API key values are replaced, while ordinary target
+process. The page applies the same exact-value Redactor as tracing: every configured
+Provider and tracing API key value is replaced, while ordinary target
 Authorization, Cookie, and business fields remain visible. Use the loopback
 page as a developer diagnostic surface, not a credential boundary.
 
@@ -291,22 +300,22 @@ docker compose -f compose.phoenix.yaml up -d
 ```
 
 ```env
-TRACING_ENABLED=true
-PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006
-PHOENIX_PROJECT_NAME=restscope
-PHOENIX_API_KEY=
-PHOENIX_PROTOCOL=http/protobuf
-TRACING_BATCH=true
-TRACING_MAX_CONTENT_BYTES=65536
-TRACING_FLUSH_TIMEOUT_SECONDS=5
+TRACE_ON=true
+TRACE_URL=http://localhost:6006
+TRACE_PROJECT=restscope
+TRACE_API_KEY=
+TRACE_PROTOCOL=http/protobuf
+TRACE_BATCH=true
+TRACE_MAX_BYTES=65536
+TRACE_FLUSH_TIMEOUT=5
 ```
 
 Open [http://localhost:6006](http://localhost:6006) to inspect traces. RESTScope
 records App, Agent, LLM, and tool spans. Trace inputs and outputs preserve
 generated parameter values, but sensitive request headers such as
 Authorization, Cookie, API key, token, secret, and CSRF headers are represented
-only as `[redacted]`. Exact configured THINK, FAST, and Phoenix API key values
-are also replaced wherever they appear. Provider-private tool-call context is
+only as `[redacted]`. Exact configured Provider and tracing API key values are
+also replaced wherever they appear. Provider-private tool-call context is
 not projected into traces; model-visible reasoning remains visible when it is
 part of a recorded message.
 
@@ -339,7 +348,7 @@ RESTScope retains a generic lightweight MCP Host for caller-owned integrations.
 Set an optional server config file explicitly:
 
 ```env
-MCP_SERVERS_FILE=/path/to/mcp.servers.json
+MCP_FILE=/path/to/mcp.servers.json
 ```
 
 RESTScope does not bundle an MCP server or default server configuration. A
@@ -445,8 +454,8 @@ The Monitor and Bug Oracle coordinate four ordered responsibilities:
   change updates the current App's OpenAPI representation and its durable audit
   document/event atomically.
 - Resource Monitor reuses unambiguous known identity fields or asks the bounded
-  FAST Resource Identifier System Agent for a new direct field combination. It
-  asks a separate FAST Resource State System Agent only when an
+  no-thinking Resource Identifier System Agent for a new direct field combination. It
+  asks a separate no-thinking Resource State System Agent only when an
   operation/resource edge lacks its immutable result state. That Agent receives
   method, path, resource name, and established state names only—never response
   content. The Catalog atomically stores the edge, recursively merged instance

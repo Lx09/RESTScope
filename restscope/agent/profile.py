@@ -7,7 +7,11 @@ only the context sources available for the current run.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+ProfileReasoningEffort = Literal["none", "low", "high", "max"]
 
 
 class AgentProfile(BaseModel):
@@ -18,6 +22,9 @@ class AgentProfile(BaseModel):
         description: Optional plain-language purpose shown to a direct parent.
         instructions: Optional stable guidance shown to this Agent itself.
         model_config_name: Name of the exact provider/model configuration.
+        reasoning_effort: Thinking policy fixed for every request in this
+            Agent session. ``none`` disables thinking; the remaining values
+            enable it at the named effort.
         tool_names: Global Tool names this Agent may invoke.
         skill_names: Reusable instruction bundles this Agent may receive.
         context_sources: Bounded evidence sources the Harness may render.
@@ -37,6 +44,7 @@ class AgentProfile(BaseModel):
         max_length=120,
         pattern=r"^[a-z][a-z0-9_.-]*$",
     )
+    reasoning_effort: ProfileReasoningEffort
     tool_names: tuple[str, ...] = ()
     skill_names: tuple[str, ...] = ()
     context_sources: tuple[str, ...] = ()

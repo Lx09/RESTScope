@@ -100,8 +100,10 @@ a stale or changed Patch from being applied.
 
 ## 3. Read the main runtime in this order
 
-1. `restscope/main.py` — installed command, target arguments, exit codes, and
-   complete process lifetime. Then read `restscope/app/runtime.py` for the
+1. `restscope/config.py` — closed environment parsing, optional TOML Provider
+   and named-model catalog loading, secret resolution, and startup validation.
+   Then read `restscope/main.py` for the installed command, target arguments,
+   exit codes, and complete process lifetime. Read `restscope/app/runtime.py` for the
    embeddable App lifecycle, `restscope/app/target.py` for target validation,
    and `restscope/app/composition.py` only for the production object graph.
 2. `restscope/orchestration/runtime.py` — the only long-task loop. Then read
@@ -218,8 +220,14 @@ Tool grants the domain Tools named by a Skill.
 ### `restscope/agent/` and `restscope/harness/`
 
 There is one generic Agent implementation for child and System sessions.
-A Profile selects a model, ordered Tools, Skills, Context Sources, child
-Profiles, and bounded instructions. A registered `SystemAgentDefinition` binds
+A Profile selects one exact named model, a mandatory `none`, `low`, `high`, or
+`max` reasoning effort, ordered Tools, Skills, Context Sources, child Profiles,
+and bounded instructions. The same Profile effort applies to ordinary and
+context-compaction requests; model configuration owns no thinking policy.
+`restscope/config.py` loads any number of named models from `MODELS_FILE` and
+resolves each supported Provider's `api_key_env`, while `app/profiles.py` owns
+the production model references and effort choices. A registered
+`SystemAgentDefinition` binds
 only the expected result contract and task adapter; it does not grant
 capabilities. Every System invocation is a fresh root and has no token budget
 limit, while the Harness still records usage and validates final output until

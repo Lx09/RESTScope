@@ -74,7 +74,9 @@ def test_each_bounded_root_uses_an_authoritative_profile() -> None:
     runtime = build_harness(
         agent_runtime=AgentRuntimeDefinition(
             profiles=(
-                AgentProfile(name="main", model_config_name="thinking"),
+                AgentProfile(
+                    name="main", model_config_name="thinking", reasoning_effort="none"
+                ),
             ),
             models=(_model(),),
             client=client,
@@ -104,7 +106,9 @@ def test_each_bounded_root_uses_an_authoritative_profile() -> None:
     second_agent.close()
 
 
-def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch() -> None:
+def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch() -> (
+    None
+):
     """Invalid authorization graphs never create a Main Agent or model call."""
     from restscope.agent import AgentProfile
     from restscope.harness import AgentRuntimeDefinition, build_harness
@@ -114,7 +118,11 @@ def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch(
         build_harness(
             agent_runtime=AgentRuntimeDefinition(
                 profiles=(
-                    AgentProfile(name="main", model_config_name="missing"),
+                    AgentProfile(
+                        name="main",
+                        model_config_name="missing",
+                        reasoning_effort="none",
+                    ),
                 ),
                 models=(_model(),),
                 client=client,
@@ -129,6 +137,7 @@ def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch(
                         name="main",
                         description="Cycle participant main.",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         tool_names=(
                             "subagent.start",
                             "subagent.wait",
@@ -140,6 +149,7 @@ def test_profile_registry_rejects_unknown_access_and_child_cycles_before_launch(
                         name="child",
                         description="Cycle participant child.",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         tool_names=(
                             "subagent.start",
                             "subagent.wait",
@@ -184,7 +194,11 @@ def test_runtime_rejects_catalog_collisions_and_unowned_binding_factories() -> N
         ),
     )
     base = AgentRuntimeDefinition(
-        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        profiles=(
+            AgentProfile(
+                name="main", model_config_name="thinking", reasoning_effort="none"
+            ),
+        ),
         models=(_model(),),
         client=client,
     )
@@ -195,7 +209,11 @@ def test_runtime_rejects_catalog_collisions_and_unowned_binding_factories() -> N
         AgentRuntimeResolver(
             AgentRuntimeDefinition(
                 profiles=(
-                    AgentProfile(name="main", model_config_name="thinking"),
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
                 ),
                 models=(_model(),),
                 client=client,
@@ -212,7 +230,7 @@ def test_runtime_rejects_catalog_collisions_and_unowned_binding_factories() -> N
         )
 
 
-def test_runtime_rejects_disabled_provider_and_missing_profile_dependencies() -> None:
+def test_runtime_rejects_unknown_provider_and_missing_profile_dependencies() -> None:
     """Every model, Skill, Context Source, Tool Binding, and child resolves early."""
     from restscope.agent import AgentProfile
     from restscope.harness import AgentRuntimeDefinition, build_harness
@@ -221,19 +239,16 @@ def test_runtime_rejects_disabled_provider_and_missing_profile_dependencies() ->
     from restscope.skills import SkillDefinition, SkillManifest
 
     client, _provider = _client()
-    with pytest.raises(ValueError, match="disabled"):
-        build_harness(
-            agent_runtime=AgentRuntimeDefinition(
-                profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-                models=(_model().model_copy(update={"enabled": False}),),
-                client=client,
-            )
-        )
-
     with pytest.raises(ValueError, match="Unknown model provider"):
         build_harness(
             agent_runtime=AgentRuntimeDefinition(
-                profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
+                ),
                 models=(_model(),),
                 client=LLMClient(LLMProviderRegistry()),
             )
@@ -255,6 +270,7 @@ def test_runtime_rejects_disabled_provider_and_missing_profile_dependencies() ->
                     AgentProfile(
                         name="main",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         skill_names=("inspect",),
                         context_sources=("operation",),
                     ),
@@ -272,6 +288,7 @@ def test_runtime_rejects_disabled_provider_and_missing_profile_dependencies() ->
                     AgentProfile(
                         name="main",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         context_sources=("missing",),
                     ),
                 ),
@@ -287,6 +304,7 @@ def test_runtime_rejects_disabled_provider_and_missing_profile_dependencies() ->
                     AgentProfile(
                         name="main",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         tool_names=("openapi.list_inputs",),
                     ),
                 ),
@@ -305,6 +323,7 @@ def test_agent_profile_uses_model_configuration_and_explicit_child_names() -> No
     profile = AgentProfile(
         name="main",
         model_config_name="thinking",
+        reasoning_effort="none",
         subagent_profile_names=("research",),
     )
 
@@ -315,6 +334,7 @@ def test_agent_profile_uses_model_configuration_and_explicit_child_names() -> No
         AgentProfile(
             name="main",
             model_config_name="thinking",
+            reasoning_effort="none",
             model_role="legacy",
         )
 
@@ -332,6 +352,7 @@ def test_child_profile_requires_description_before_any_agent_starts() -> None:
                     AgentProfile(
                         name="main",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         tool_names=(
                             "subagent.start",
                             "subagent.wait",
@@ -339,7 +360,11 @@ def test_child_profile_requires_description_before_any_agent_starts() -> None:
                         ),
                         subagent_profile_names=("child",),
                     ),
-                    AgentProfile(name="child", model_config_name="thinking"),
+                    AgentProfile(
+                        name="child",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
                 ),
                 models=(_model(),),
                 client=client,
@@ -357,7 +382,9 @@ def test_generic_agent_rejects_construction_outside_the_harness() -> None:
     client, _provider = _client()
     with pytest.raises(RuntimeError, match="constructed by HarnessRuntime"):
         Agent(
-            profile=AgentProfile(name="main", model_config_name="thinking"),
+            profile=AgentProfile(
+                name="main", model_config_name="thinking", reasoning_effort="none"
+            ),
             client=client,
             toolbox=AgentToolbox(),
         )
@@ -402,6 +429,7 @@ def test_profile_resolves_exact_skill_context_and_tool_binding_into_agent() -> N
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("openapi.list_inputs",),
                     skill_names=("inspect_openapi",),
                     context_sources=("current_operation",),
@@ -460,7 +488,9 @@ def test_profile_resolves_exact_skill_context_and_tool_binding_into_agent() -> N
     ]
     assert "Inspect one operation." in provider.requests[0].messages[0].content
     assert "Use schema handles" not in provider.requests[0].messages[0].content
-    assert "GET /pets is authorized context." in provider.requests[0].messages[1].content
+    assert (
+        "GET /pets is authorized context." in provider.requests[0].messages[1].content
+    )
     assert provider.requests[1].messages[-1].role == "tool"
 
 
@@ -512,6 +542,7 @@ def test_agent_corrects_mixed_and_invalid_tool_outputs_without_executing_them() 
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("openapi.list_inputs",),
                 ),
             ),
@@ -575,6 +606,7 @@ def test_shared_rollout_budget_uses_cached_input_and_blocks_overage_action() -> 
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("openapi.list_inputs",),
                 ),
             ),
@@ -640,6 +672,7 @@ def test_rollout_budget_reminder_is_injected_once_after_crossing() -> None:
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("openapi.list_inputs",),
                 ),
             ),
@@ -727,6 +760,7 @@ def test_agent_compacts_at_eighty_percent_with_same_model_and_no_tools() -> None
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("openapi.list_inputs",),
                 ),
             ),
@@ -801,6 +835,7 @@ def test_agent_returns_stable_failure_after_two_invalid_compactions() -> None:
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("openapi.list_inputs",),
                 ),
             ),

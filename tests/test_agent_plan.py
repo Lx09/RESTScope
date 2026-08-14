@@ -123,9 +123,7 @@ def test_plan_toolbox_rejects_bad_updates_without_mutating_state() -> None:
             arguments={"plan": [_plan("Run the focused tests", "in_progress")]},
         )
     )
-    read = toolbox.execute(
-        ToolCall(id="read-plan", name="plan.read", arguments={})
-    )
+    read = toolbox.execute(ToolCall(id="read-plan", name="plan.read", arguments={}))
 
     assert invalid.status == "denied"
     assert invalid.error["code"] == "invalid_tool_arguments"
@@ -166,9 +164,7 @@ class _PlanProvider:
             return LLMResponse(
                 provider="scripted",
                 model=request.model,
-                tool_calls=[
-                    ToolCall(id="child-read", name="plan.read", arguments={})
-                ],
+                tool_calls=[ToolCall(id="child-read", name="plan.read", arguments={})],
                 prompt_tokens=20,
                 completion_tokens=10,
             )
@@ -240,6 +236,7 @@ def test_profile_plan_grants_are_paired_and_harness_owned() -> None:
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("plan.read",),
                 ),
             )
@@ -251,6 +248,7 @@ def test_profile_plan_grants_are_paired_and_harness_owned() -> None:
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     tool_names=("plan.read", "plan.update"),
                 ),
             ),
@@ -263,7 +261,11 @@ def test_profile_plan_grants_are_paired_and_harness_owned() -> None:
         )
 
     unselected_runtime, _provider = _plan_runtime(
-        profiles=(AgentProfile(name="main", model_config_name="thinking"),)
+        profiles=(
+            AgentProfile(
+                name="main", model_config_name="thinking", reasoning_effort="none"
+            ),
+        )
     )
     assert start_test_agent(unselected_runtime).toolbox.specs() == []
 
@@ -280,6 +282,7 @@ def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
             AgentProfile(
                 name="main",
                 model_config_name="thinking",
+                reasoning_effort="none",
                 tool_names=plan_tools + subagent_tools,
                 subagent_profile_names=("child",),
             ),
@@ -287,6 +290,7 @@ def test_each_agent_gets_one_private_plan_for_its_complete_session() -> None:
                 name="child",
                 description="Own an isolated child Plan.",
                 model_config_name="thinking",
+                reasoning_effort="none",
                 tool_names=plan_tools,
             ),
         )

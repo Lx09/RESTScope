@@ -298,6 +298,36 @@
 - `@ant-design/cli` 6.5.3 is installed globally for implementation-time API
   queries. The installed `ui-ux-pro-max` skill lacks its documented search
   script, so its written accessibility and visual rules are the fallback source.
+
+## 2026-08-14: Generic model catalog and Profile reasoning effort
+
+- The Harness already indexes any number of named `LLMModelConfig` values; the
+  fixed two-model limit exists only in App environment loading and production
+  Profile composition.
+- `AgentPromptSession` currently copies reasoning from `LLMModelConfig` into
+  both ordinary and compaction requests, so moving effort to `AgentProfile`
+  gives one stable owner for the complete Agent session.
+- Current local THINK and FAST entries select the same DeepSeek V4 Flash model.
+  Their only behavioral difference is high versus disabled reasoning, so the
+  migration can preserve behavior with one `default` model and per-Profile
+  effort.
+- Python 3.12 provides `tomllib`; no dependency is required for a closed TOML
+  provider/model catalog.
+- The approved TDD seams are environment/TOML loading, Agent Profile request
+  construction, DeepSeek wire serialization, and App/MCP startup integration.
+- The Harness did not need a new model registry: its existing exact-name model
+  index already supports arbitrary names and lets many Profiles reuse one
+  configuration. Only App configuration and Profile composition were shallow.
+- DeepSeek's current official contract accepts `thinking.type` as
+  `enabled/disabled`, accepts only `low/high/max` as Chat Completion effort,
+  and requires `reasoning_content` to be returned after a tool call. Profile
+  `none` therefore maps to disabled with no effort field.
+- A configured model file must contain at least one model; parser-only behavior
+  is represented only by omitting `MODELS_FILE`. This avoids silently treating
+  a misspelled or incomplete runtime catalog as parser-only configuration.
+- The local THINK and FAST keys used the same Provider secret, URL, model, and
+  capacities. The ignored migration could safely collapse them to one
+  `default` catalog entry without changing current runtime behavior.
 - At 1440×900, both dark and light builds keep the event view and 360 px
   Worklist sidebar readable together. Long prompt JSON scrolls inside its own
   detail region instead of widening the page or hiding Worklist state.

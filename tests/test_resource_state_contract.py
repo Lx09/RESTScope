@@ -1,4 +1,4 @@
-"""Protect the bounded FAST contract for operation result-state selection.
+"""Protect the bounded contract for operation result-state selection.
 
 The API Behavior Monitor owns this vocabulary. These tests keep raw response
 content out of the prompt and make existing state reuse unambiguous before the
@@ -49,10 +49,13 @@ def test_state_contract_reuses_aliases_and_rejects_duplicate_new_names() -> None
         "active",
         "pending_review",
     ]
-    assert validate_resource_state_output(
-        ResourceStateDecision(existing_state="active"),
-        task,
-    ) == ()
+    assert (
+        validate_resource_state_output(
+            ResourceStateDecision(existing_state="active"),
+            task,
+        )
+        == ()
+    )
     assert validate_resource_state_output(
         ResourceStateDecision(new_state="active"),
         task,

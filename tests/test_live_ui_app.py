@@ -41,7 +41,13 @@ def _interrupting_agent_definition() -> AgentRuntimeDefinition:
     registry = LLMProviderRegistry()
     registry.register(InterruptingProvider())
     return AgentRuntimeDefinition(
-        profiles=(AgentProfile(name="orchestrator", model_config_name="thinking"),),
+        profiles=(
+            AgentProfile(
+                name="orchestrator",
+                model_config_name="thinking",
+                reasoning_effort="none",
+            ),
+        ),
         models=(
             LLMModelConfig(
                 name="thinking",
@@ -80,7 +86,9 @@ _ONE_GET_SCHEMA = json.dumps(
 )
 
 
-def test_app_exposes_ui_url_and_closes_the_started_service(monkeypatch, tmp_path: Path) -> None:
+def test_app_exposes_ui_url_and_closes_the_started_service(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Scenario: enabled hosting exposes only the actual started loopback URL."""
     from restscope.app import RESTScopeApp
     from restscope.config import DBConfig, RESTScopeConfig, UIConfig
@@ -206,7 +214,9 @@ def test_app_continues_without_collection_when_ui_startup_fails(
     app.close()
 
 
-def test_ui_service_contains_missing_optional_dependency(monkeypatch, tmp_path: Path) -> None:
+def test_ui_service_contains_missing_optional_dependency(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Scenario: missing Uvicorn is a warning result instead of an App exception."""
     from restscope.ui.server import UIService
 

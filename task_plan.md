@@ -1,12 +1,23 @@
 # Task Plan: RESTScope Evolution
 
 ## Goal
-Upgrade the Live Observer to the approved Orchestrator workspace while preserving the current conversation presentation, read-only runtime boundary, complete evidence, and browser-only recovery.
+Replace fixed model slots with a validated named TOML catalog, make thinking
+effort explicit per Profile, and shorten the environment Interface without
+adding runtime model selection or compatibility aliases.
 
 ## Current Phase
-Phase 31 Orchestrator observer workspace is complete and verified
+Phase 32 generic model catalog and Profile reasoning effort is complete
 
 ## Phases
+
+### Phase 32: Generic model catalog and compact environment configuration
+- [x] Confirm the TOML model catalog, Profile-owned effort, incompatible environment migration, and no-Git boundary
+- [x] Add red configuration, Profile, prompt, Provider, and App integration tests
+- [x] Implement validated provider/model catalog loading and required Profile effort
+- [x] Migrate production Profiles, secret redaction, MCP configuration, and the local ignored configuration
+- [x] Update examples, README, navigation, and the cross-module task record
+- [x] Run focused and complete verification and review the unstaged diff
+- **Status:** complete and verified on local `main`; no branch, staging, commit, merge, or push performed
 
 ### Phase 31: Orchestrator observer workspace
 - [x] Confirm the schema-v4 Orchestration projection, text hierarchy, session identity, retained conversation styling, and browser-history replacement
@@ -257,6 +268,14 @@ Phase 31 Orchestrator observer workspace is complete and verified
 ## Errors Encountered
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Phase 32 first full suite retained 15 old environment fixtures | 1 | Migrate the affected Profile, MCP, tracing, seed, and redaction fixtures; keep parser-only tests independent of the repository `.env`. |
+| Phase 32 second full suite resolved relative `MODELS_FILE` from five tests' changed working directory | 1 | Make those database tests load an explicit missing dotenv file; relative model paths correctly continue to resolve from process cwd. |
+| Phase 32 MCP test still loaded the repository `.env` after an ambiguous earlier edit | 1 | Pass the test's missing temporary env path explicitly so it observes only monkeypatched process configuration. |
+| Phase 32 configured-model tracer still needs a caller-supplied slot name | 1 | Expected TDD red state; make the TOML model's own validated name authoritative. |
+| Phase 32 compaction test patch matched an earlier similar Profile block | 1 | The assertion exposed the unchanged target effort; restore the unrelated test and patch within the named compaction scenario. |
+| Phase 32 reasoning helper was inserted before the Prompt Session class ended | 1 | The focused Profile test did not exercise the displaced methods; move the helper below the final class method before any broader run. |
+| Phase 32 first Profile-test patch assumed module-level Agent imports | 1 | No test changed; inspect the current local-import style and add the tracer test at the real file seam. |
+| Phase 32 first TOML catalog test cannot read `LLMConfig.providers` | 1 | Expected TDD red state; replace the fixed two-slot configuration with the approved validated collections. |
 | Phase 31 public-seam tests fail because schema v4 and the observation callback do not exist | 1 | Expected TDD red state; implement only the approved observation DTO, runtime publication, and Observer replacement event. |
 | Phase 31 first planning-log patch used a stale empty error-table row | 1 | No partial edit occurred; inspect the current append-only files and apply exact anchors. |
 | Phase 30 stale-document scan included Markdown backticks in a shell argument | 1 | The shell attempted one harmless nonexistent command before the read-only scan; rerun searches with literal-safe expressions and change no files through the failed command. |

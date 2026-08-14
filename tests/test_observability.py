@@ -18,14 +18,14 @@ def test_tracing_config_reads_every_explicit_environment_field(tmp_path: Path) -
 
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "TRACING_ENABLED=true\n"
-        "PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.test:6006\n"
-        "PHOENIX_PROJECT_NAME=restscope-test\n"
-        "PHOENIX_API_KEY=phoenix-secret\n"
-        "PHOENIX_PROTOCOL=http/protobuf\n"
-        "TRACING_BATCH=false\n"
-        "TRACING_MAX_CONTENT_BYTES=2048\n"
-        "TRACING_FLUSH_TIMEOUT_SECONDS=2.5",
+        "TRACE_ON=true\n"
+        "TRACE_URL=http://phoenix.test:6006\n"
+        "TRACE_PROJECT=restscope-test\n"
+        "TRACE_API_KEY=phoenix-secret\n"
+        "TRACE_PROTOCOL=http/protobuf\n"
+        "TRACE_BATCH=false\n"
+        "TRACE_MAX_BYTES=2048\n"
+        "TRACE_FLUSH_TIMEOUT=2.5",
         encoding="utf-8",
     )
 
@@ -49,11 +49,11 @@ def test_ui_config_is_disabled_by_default_and_reads_flat_environment_fields(
     """Scenario: UI hosting is opt-in and accepts one valid loopback port."""
     from restscope.config import RESTScopeConfig
 
-    monkeypatch.delenv("UI_ENABLED", raising=False)
+    monkeypatch.delenv("UI_ON", raising=False)
     monkeypatch.delenv("UI_PORT", raising=False)
     default_config = RESTScopeConfig.from_environment(tmp_path / "missing.env")
     env_file = tmp_path / ".env"
-    env_file.write_text("UI_ENABLED=true\nUI_PORT=9876\n", encoding="utf-8")
+    env_file.write_text("UI_ON=true\nUI_PORT=9876\n", encoding="utf-8")
     enabled_config = RESTScopeConfig.from_environment(env_file)
 
     assert default_config.ui.enabled is False
@@ -101,7 +101,9 @@ def test_trace_content_encoder_only_redacts_registered_values() -> None:
     assert payload["authorization"] == "Bearer ***REDACTED***"
     assert payload["set-cookie"] == "sensitive-cookie-value"
     assert payload["items"][0]["api-key"] == "***REDACTED***"
-    assert payload["provider_context"]["reasoning_content"] == "private chain of thought"
+    assert (
+        payload["provider_context"]["reasoning_content"] == "private chain of thought"
+    )
     assert prepared.truncated is False
 
 
@@ -140,7 +142,9 @@ def test_trace_content_encoder_formats_normalized_json_for_people() -> None:
     assert prepared.truncated is False
 
 
-def test_trace_content_encoder_bounds_serialized_content_and_records_original_size() -> None:
+def test_trace_content_encoder_bounds_serialized_content_and_records_original_size() -> (
+    None
+):
     """Scenario: verify that trace content encoder bounds serialized content and records original size."""
     from restscope.observability import Redactor
     from restscope.observability.content import TraceContentEncoder
@@ -366,12 +370,12 @@ def test_llm_message_projection_preserves_roles_when_content_is_truncated() -> N
     assert attributes["restscope.input.original_size_bytes"] > 2048
     rendered = json.dumps(dict(attributes), ensure_ascii=False)
     assert "message-secret" not in rendered
-    assert len(
-        attributes["llm.input_messages.0.message.content"].encode("utf-8")
-    ) < 1024
-    assert len(
-        attributes["llm.input_messages.1.message.content"].encode("utf-8")
-    ) < 1024
+    assert (
+        len(attributes["llm.input_messages.0.message.content"].encode("utf-8")) < 1024
+    )
+    assert (
+        len(attributes["llm.input_messages.1.message.content"].encode("utf-8")) < 1024
+    )
 
 
 def test_llm_message_projection_failure_does_not_change_business_result() -> None:
@@ -761,9 +765,7 @@ def test_local_phoenix_runtime_temporarily_bypasses_process_proxy(monkeypatch) -
     assert {"existing.test", "localhost", "127.0.0.1"}.issubset(
         set(os.environ["no_proxy"].split(","))
     )
-    assert {"localhost", "127.0.0.1"}.issubset(
-        set(os.environ["NO_PROXY"].split(","))
-    )
+    assert {"localhost", "127.0.0.1"}.issubset(set(os.environ["NO_PROXY"].split(",")))
 
     runtime.close()
 

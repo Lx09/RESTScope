@@ -80,7 +80,7 @@ def test_load_mcp_server_configs_reads_file_and_env_var(
     )
 
     explicit = load_mcp_server_configs(config_path)
-    monkeypatch.setenv("MCP_SERVERS_FILE", str(config_path))
+    monkeypatch.setenv("MCP_FILE", str(config_path))
     from_env = load_mcp_server_configs()
 
     assert explicit == from_env
@@ -90,6 +90,16 @@ def test_load_mcp_server_configs_reads_file_and_env_var(
     assert explicit["example"].env == {"EXAMPLE_MODE": "local"}
     assert explicit["example"].cwd == tmp_path
     assert explicit["example"].timeout == 45
+
+
+def test_mcp_loader_rejects_the_retired_environment_name(tmp_path) -> None:
+    """Standalone MCP loading reports the same direct migration as App config."""
+    from restscope.tools.external.mcp import load_mcp_server_configs
+
+    with pytest.raises(ValueError, match="MCP_SERVERS_FILE.*MCP_FILE"):
+        load_mcp_server_configs(
+            env={"MCP_SERVERS_FILE": str(tmp_path / "servers.json")}
+        )
 
 
 def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
@@ -143,8 +153,7 @@ def test_mcp_host_discovers_tools_calls_original_name_and_closes() -> None:
     assert sessions[0].closed is True
 
 
-def test_mcp_source_builder_registers_discovered_tools_through_runtime(
-) -> None:
+def test_mcp_source_builder_registers_discovered_tools_through_runtime() -> None:
     """Scenario: verify that mcp source builder registers discovered tools through runtime."""
     from restscope.llm import ToolCall
     from restscope.tools import AgentToolbox
@@ -341,9 +350,7 @@ def test_build_harness_with_mcp_host_closes_owned_host_on_discovery_failure(
     monkeypatch.setattr("restscope.harness.runtime.MCPHost", lambda _configs: host)
     monkeypatch.setattr(
         "restscope.harness.runtime.MCPSourceBuilder.build_sources",
-        lambda self, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("discovery failed")
-        ),
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("discovery failed")),
     )
 
     with pytest.raises(RuntimeError, match="discovery failed"):
@@ -368,9 +375,7 @@ def test_build_harness_with_mcp_host_keeps_injected_host_on_failure(
     host = Host()
     monkeypatch.setattr(
         "restscope.harness.runtime.MCPSourceBuilder.build_sources",
-        lambda self, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("discovery failed")
-        ),
+        lambda self, **_kwargs: (_ for _ in ()).throw(RuntimeError("discovery failed")),
     )
 
     with pytest.raises(RuntimeError, match="discovery failed"):

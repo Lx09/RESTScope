@@ -163,121 +163,105 @@ def _build_agent_runtime_definition(
         config: Validated model-provider configuration for the process.
         tracing_runtime: App-owned tracing used by the shared model client.
         test_progress_context: Harness-owned bounded Reader required by the
-            Orchestrator, or ``None`` when no thinking Profile can be built.
+            Orchestrator. Parser-only configuration returns before reading it.
 
     Returns:
-        The Profiles, models, client, and System Agent contracts enabled by the
-        configuration, or ``None`` when neither configured model is enabled.
+        The Profiles, complete named model catalog, client, and System Agent
+        contracts, or ``None`` when no model catalog was configured.
     """
-    thinking = build_llm_model_config("thinking", config.llm.thinking)
-    fast = build_llm_model_config("fast", config.llm.fast)
-    profiles: list[AgentProfile] = []
-    system_agents: list[SystemAgentDefinition] = []
-    models = []
-    if thinking.enabled:
-        if test_progress_context is None:
-            raise ValueError("Orchestrator requires the test-progress Context Source")
-        if test_progress_context.name != TEST_PROGRESS_CONTEXT_SOURCE:
-            raise ValueError("Orchestrator Context Source must be test-progress")
-        models.append(thinking)
-        profiles.append(
-            AgentProfile(
-                name="orchestrator",
-                instructions=_ORCHESTRATOR_INSTRUCTIONS,
-                model_config_name="thinking",
-                tool_names=_ORCHESTRATOR_TOOLS,
-                skill_names=_ORCHESTRATOR_SKILLS,
-                context_sources=(TEST_PROGRESS_CONTEXT_SOURCE,),
-            )
-        )
-        profiles.append(
-            AgentProfile(
-                name="task-executor",
-                instructions=_TASK_EXECUTOR_PROFILE_INSTRUCTIONS,
-                model_config_name="thinking",
-                tool_names=_TASK_EXECUTOR_TOOLS,
-                skill_names=_TASK_EXECUTOR_SKILLS,
-                subagent_profile_names=(_PATCH_PROFILE_NAME,),
-            )
-        )
-        profiles.append(
-            AgentProfile(
-                name=_PATCH_PROFILE_NAME,
-                description=(
-                    "Build, validate, apply, and verify one bounded request "
-                    "Generation Parameter Patch using apply-parameter-patch."
-                ),
-                model_config_name="thinking",
-                tool_names=_PATCH_TOOLS,
-                skill_names=("apply-parameter-patch",),
-            )
-        )
-        system_agents.extend(
-            (
-                SystemAgentDefinition(
-                    profile_name="orchestrator",
-                    adapt_task=SystemAgentTask.model_validate,
-                    output_model=OrchestratorDecision,
-                    build_output_schema=orchestrator_output_schema,
-                    validate_output=validate_orchestrator_output,
-                    output_schema_name="OrchestratorDecision",
-                ),
-                SystemAgentDefinition(
-                    profile_name="task-executor",
-                    adapt_task=SystemAgentTask.model_validate,
-                    output_model=TaskExecutionResult,
-                    build_output_schema=task_execution_output_schema,
-                    validate_output=validate_task_execution_output,
-                    output_schema_name="TaskExecutionResult",
-                ),
-            )
-        )
-    if fast.enabled:
-        models.append(fast)
-        profiles.append(
-            AgentProfile(
-                name=RESOURCE_IDENTIFIER_PROFILE_NAME,
-                instructions=IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
-                model_config_name="fast",
-            )
-        )
-        system_agents.append(
-            SystemAgentDefinition(
-                profile_name=RESOURCE_IDENTIFIER_PROFILE_NAME,
-                adapt_task=SystemAgentTask.model_validate,
-                output_model=IdentifierSelectionDecision,
-                build_output_schema=identifier_system_output_schema,
-                validate_output=validate_identifier_system_output,
-                output_schema_name="IdentifierSelectionDecision",
-            )
-        )
-        profiles.append(
-            AgentProfile(
-                name=RESOURCE_STATE_PROFILE_NAME,
-                instructions=RESOURCE_STATE_SYSTEM_AGENT_INSTRUCTIONS,
-                model_config_name="fast",
-            )
-        )
-        system_agents.append(
-            SystemAgentDefinition(
-                profile_name=RESOURCE_STATE_PROFILE_NAME,
-                adapt_task=SystemAgentTask.model_validate,
-                output_model=ResourceStateDecision,
-                build_output_schema=resource_state_output_schema,
-                validate_output=validate_resource_state_output,
-                output_schema_name="ResourceStateDecision",
-            )
-        )
-    if not profiles:
+    models = tuple(build_llm_model_config(model) for model in config.llm.models)
+    if not models:
         return None
+    if not any(model.name == "default" for model in models):
+        raise ValueError(
+            "Production Agent Profiles require model configuration: default"
+        )
+    if test_progress_context is None:
+        raise ValueError("Orchestrator requires the test-progress Context Source")
+    if test_progress_context.name != TEST_PROGRESS_CONTEXT_SOURCE:
+        raise ValueError("Orchestrator Context Source must be test-progress")
+
+    profiles: list[AgentProfile] = [
+        AgentProfile(
+            name="orchestrator",
+            instructions=_ORCHESTRATOR_INSTRUCTIONS,
+            model_config_name="default",
+            reasoning_effort="high",
+            tool_names=_ORCHESTRATOR_TOOLS,
+            skill_names=_ORCHESTRATOR_SKILLS,
+            context_sources=(TEST_PROGRESS_CONTEXT_SOURCE,),
+        ),
+        AgentProfile(
+            name="task-executor",
+            instructions=_TASK_EXECUTOR_PROFILE_INSTRUCTIONS,
+            model_config_name="default",
+            reasoning_effort="high",
+            tool_names=_TASK_EXECUTOR_TOOLS,
+            skill_names=_TASK_EXECUTOR_SKILLS,
+            subagent_profile_names=(_PATCH_PROFILE_NAME,),
+        ),
+        AgentProfile(
+            name=_PATCH_PROFILE_NAME,
+            description=(
+                "Build, validate, apply, and verify one bounded request "
+                "Generation Parameter Patch using apply-parameter-patch."
+            ),
+            model_config_name="default",
+            reasoning_effort="low",
+            tool_names=_PATCH_TOOLS,
+            skill_names=("apply-parameter-patch",),
+        ),
+        AgentProfile(
+            name=RESOURCE_IDENTIFIER_PROFILE_NAME,
+            instructions=IDENTIFIER_SYSTEM_AGENT_INSTRUCTIONS,
+            model_config_name="default",
+            reasoning_effort="none",
+        ),
+        AgentProfile(
+            name=RESOURCE_STATE_PROFILE_NAME,
+            instructions=RESOURCE_STATE_SYSTEM_AGENT_INSTRUCTIONS,
+            model_config_name="default",
+            reasoning_effort="none",
+        ),
+    ]
+    system_agents = [
+        SystemAgentDefinition(
+            profile_name="orchestrator",
+            adapt_task=SystemAgentTask.model_validate,
+            output_model=OrchestratorDecision,
+            build_output_schema=orchestrator_output_schema,
+            validate_output=validate_orchestrator_output,
+            output_schema_name="OrchestratorDecision",
+        ),
+        SystemAgentDefinition(
+            profile_name="task-executor",
+            adapt_task=SystemAgentTask.model_validate,
+            output_model=TaskExecutionResult,
+            build_output_schema=task_execution_output_schema,
+            validate_output=validate_task_execution_output,
+            output_schema_name="TaskExecutionResult",
+        ),
+        SystemAgentDefinition(
+            profile_name=RESOURCE_IDENTIFIER_PROFILE_NAME,
+            adapt_task=SystemAgentTask.model_validate,
+            output_model=IdentifierSelectionDecision,
+            build_output_schema=identifier_system_output_schema,
+            validate_output=validate_identifier_system_output,
+            output_schema_name="IdentifierSelectionDecision",
+        ),
+        SystemAgentDefinition(
+            profile_name=RESOURCE_STATE_PROFILE_NAME,
+            adapt_task=SystemAgentTask.model_validate,
+            output_model=ResourceStateDecision,
+            build_output_schema=resource_state_output_schema,
+            validate_output=validate_resource_state_output,
+            output_schema_name="ResourceStateDecision",
+        ),
+    ]
     return AgentRuntimeDefinition(
         profiles=tuple(profiles),
-        models=tuple(models),
+        models=models,
         client=build_llm_client(config.llm, tracing_runtime=tracing_runtime),
         system_agents=tuple(system_agents),
-        context_sources=(
-            (test_progress_context,)
-            if thinking.enabled and test_progress_context is not None
-            else ()
-        ),
+        context_sources=(test_progress_context,),
     )

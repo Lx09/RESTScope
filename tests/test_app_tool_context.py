@@ -85,7 +85,7 @@ def test_production_profiles_separate_planning_from_task_execution(
     class Provider:
         """Record the one production-shaped Main request without network I/O."""
 
-        name = "scripted"
+        name = "openai_compatible"
 
         def __init__(self):
             self.requests = []
@@ -106,12 +106,21 @@ def test_production_profiles_separate_planning_from_task_execution(
         "restscope.app.profiles.build_llm_client",
         lambda *_args, **_kwargs: client,
     )
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.openai_compatible]\n"
+        'api_key_env = "TEST_MODEL_API_KEY"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "openai_compatible"\n'
+        'model = "thinking-model"\n'
+        "max_tokens = 512\n"
+        "context_tokens = 8192\n",
+        encoding="utf-8",
+    )
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "THINK_PROVIDER=scripted\n"
-        "THINK_MODEL=thinking-model\n"
-        "THINK_MAX_TOKENS=512\n"
-        "THINK_CONTEXT_WINDOW_TOKENS=8192\n",
+        f"MODELS_FILE={models_file}\nTEST_MODEL_API_KEY=test-key\n",
         encoding="utf-8",
     )
     definition = _build_agent_runtime_definition(
@@ -133,7 +142,9 @@ def test_production_profiles_separate_planning_from_task_execution(
     assert orchestrator.context_sources == ("test-progress",)
     assert [item.name for item in definition.context_sources] == ["test-progress"]
     assert profile.name == "task-executor"
-    assert profile.model_config_name == "thinking"
+    assert profile.model_config_name == "default"
+    assert orchestrator.reasoning_effort == "high"
+    assert profile.reasoning_effort == "high"
     assert profile.tool_names == (
         "plan.read",
         "plan.update",
@@ -163,6 +174,8 @@ def test_production_profiles_separate_planning_from_task_execution(
         item for item in definition.profiles if item.name == "parameter-patch"
     )
     assert patch_profile.skill_names == ("apply-parameter-patch",)
+    assert patch_profile.model_config_name == "default"
+    assert patch_profile.reasoning_effort == "low"
     assert "parameter_patch.apply" in patch_profile.tool_names
     assert "database.query" not in patch_profile.tool_names
     assert "query-restscope-database" not in patch_profile.skill_names
@@ -175,6 +188,8 @@ def test_production_profiles_separate_planning_from_task_execution(
         )
         assert narrow_profile.tool_names == ()
         assert narrow_profile.skill_names == ()
+        assert narrow_profile.model_config_name == "default"
+        assert narrow_profile.reasoning_effort == "none"
 
     assert "Prioritize operations" in orchestrator.instructions
     assert "reproducible happy-path" in orchestrator.instructions
@@ -190,10 +205,12 @@ def test_production_profiles_separate_planning_from_task_execution(
     assert "return `blocked` rather than expanding" in profile.instructions
     assert "`resolve-operation-failures`" in profile.instructions
     assert "`bug_found`" in profile.instructions
-    assert {item.profile_name for item in definition.system_agents}.issuperset({
-        "orchestrator",
-        "task-executor",
-    })
+    assert {item.profile_name for item in definition.system_agents}.issuperset(
+        {
+            "orchestrator",
+            "task-executor",
+        }
+    )
 
 
 def test_harness_binds_new_domain_tools_without_granting_them_to_main(
@@ -227,6 +244,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
     profile = AgentProfile(
         name="binding-check",
         model_config_name="thinking",
+        reasoning_effort="none",
         tool_names=(
             "openapi.list_operations",
             "request_generation.get_input_state",
@@ -247,9 +265,7 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
             config_store=store,
             api_behavior_catalog=api_behavior_catalog,
         ),
-        test_case_query_backend=TestCaseQueryToolBackend(
-            catalog=api_behavior_catalog
-        ),
+        test_case_query_backend=TestCaseQueryToolBackend(catalog=api_behavior_catalog),
         database_query_backend=DatabaseQueryToolBackend(
             engine=create_engine_from_url("sqlite:///:memory:")
         ),
@@ -273,7 +289,9 @@ def test_harness_binds_new_domain_tools_without_granting_them_to_main(
     agent.close()
 
 
-def test_app_initializes_once_and_starts_one_blocking_orchestration(monkeypatch, tmp_path) -> None:
+def test_app_initializes_once_and_starts_one_blocking_orchestration(
+    monkeypatch, tmp_path
+) -> None:
     """One parsed target and optional focus feed the sole long-task loop."""
     from restscope.openapi_parser import OpenAPIParser
     from restscope.tools.context import ToolContextError
@@ -322,8 +340,14 @@ def test_app_initializes_once_and_starts_one_blocking_orchestration(monkeypatch,
     ("schema_source", "parser_input"),
     [
         ({"kind": "file", "path": "/tmp/openapi.yaml"}, "/tmp/openapi.yaml"),
-        ({"kind": "url", "url": "https://example.test/openapi.yaml"}, "https://example.test/openapi.yaml"),
-        ({"kind": "inline", "format": "yaml", "content": "openapi: 3.0.3"}, "openapi: 3.0.3"),
+        (
+            {"kind": "url", "url": "https://example.test/openapi.yaml"},
+            "https://example.test/openapi.yaml",
+        ),
+        (
+            {"kind": "inline", "format": "yaml", "content": "openapi: 3.0.3"},
+            "openapi: 3.0.3",
+        ),
     ],
 )
 def test_app_validates_and_forwards_supported_schema_sources(
@@ -337,7 +361,11 @@ def test_app_validates_and_forwards_supported_schema_sources(
 
     parsed = OpenAPIParser.parse(_spec())
     seen = []
-    monkeypatch.setattr(OpenAPIParser, "parse", staticmethod(lambda source: seen.append(source) or parsed))
+    monkeypatch.setattr(
+        OpenAPIParser,
+        "parse",
+        staticmethod(lambda source: seen.append(source) or parsed),
+    )
     app, resources = _app_and_resources(monkeypatch, tmp_path)
 
     result = app.initialize(schema_source=schema_source, base_url="https://api.test")
@@ -377,7 +405,9 @@ def test_app_allows_retry_after_initialization_failure(monkeypatch, tmp_path) ->
     assert resources.context.ir is parsed
 
 
-def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(monkeypatch, tmp_path) -> None:
+def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
+    monkeypatch, tmp_path
+) -> None:
     """Scenario: verify that app rejects an openapi schema without operations and remains retryable."""
     app, resources = _app_and_resources(monkeypatch, tmp_path)
     empty = {
@@ -397,18 +427,23 @@ def test_app_rejects_an_openapi_schema_without_operations_and_remains_retryable(
         )
 
     assert resources.context is None
-    assert app.initialize(
-        schema_source={
-            "kind": "inline",
-            "format": "json",
-            "content": json.dumps(_spec()),
-        },
-        base_url="https://api.test",
-    ) is None
+    assert (
+        app.initialize(
+            schema_source={
+                "kind": "inline",
+                "format": "json",
+                "content": json.dumps(_spec()),
+            },
+            base_url="https://api.test",
+        )
+        is None
+    )
     assert resources.context.ir.operations
 
 
-def test_app_requires_initialization_and_clears_context_on_close(monkeypatch, tmp_path) -> None:
+def test_app_requires_initialization_and_clears_context_on_close(
+    monkeypatch, tmp_path
+) -> None:
     """Scenario: verify that app requires initialization and clears context on close."""
     from restscope.tools.context import ToolContextError
 
@@ -419,7 +454,11 @@ def test_app_requires_initialization_and_clears_context_on_close(monkeypatch, tm
     assert exc_info.value.code == "tool_context_not_initialized"
 
     app.initialize(
-        schema_source={"kind": "inline", "format": "json", "content": json.dumps(_spec())},
+        schema_source={
+            "kind": "inline",
+            "format": "json",
+            "content": json.dumps(_spec()),
+        },
         base_url="https://api.test",
     )
     assert resources.context is not None

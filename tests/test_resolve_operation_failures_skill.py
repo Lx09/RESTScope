@@ -44,7 +44,9 @@ def test_resolution_manifest_and_reference_library_are_exact() -> None:
     root = files("restscope.builtin_skills").joinpath(RESOLVE)
     source = root.joinpath("SKILL.md").read_text(encoding="utf-8")
     frontmatter = yaml.safe_load(source.split("---", 2)[1])
-    manifest = yaml.safe_load(root.joinpath("restscope.yaml").read_text(encoding="utf-8"))
+    manifest = yaml.safe_load(
+        root.joinpath("restscope.yaml").read_text(encoding="utf-8")
+    )
     assert frontmatter == {
         "name": RESOLVE,
         "description": skill.manifest.description,
@@ -61,7 +63,10 @@ def test_resolution_delegates_application_and_verifies_real_effect() -> None:
         [skill.instructions, *(item.content for item in skill.references)]
     )
     assert PATCH in combined
-    assert all(name in combined for name in ("subagent.start", "subagent.wait", "subagent.cancel"))
+    assert all(
+        name in combined
+        for name in ("subagent.start", "subagent.wait", "subagent.cancel")
+    )
     assert "request_generation.get_input_state" in combined
     assert "test_case.run_batch" in combined
     assert "Do not construct or rewrite" in combined
@@ -115,6 +120,7 @@ def test_resolution_profile_rejects_each_missing_tool(missing_tool: str) -> None
 
     required = builtin_skill_catalog().get(RESOLVE).manifest.required_tools
     granted = tuple(name for name in required if name != missing_tool)
+
     class Provider:
         """Exist only so Profile validation reaches Skill dependencies."""
 
@@ -129,6 +135,7 @@ def test_resolution_profile_rejects_each_missing_tool(missing_tool: str) -> None
                     AgentProfile(
                         name="resolution",
                         model_config_name="fast",
+                        reasoning_effort="none",
                         tool_names=granted,
                         skill_names=(RESOLVE,),
                         subagent_profile_names=("patch",),
@@ -137,6 +144,7 @@ def test_resolution_profile_rejects_each_missing_tool(missing_tool: str) -> None
                         name="patch",
                         description="Apply one Patch with apply-parameter-patch.",
                         model_config_name="fast",
+                        reasoning_effort="none",
                     ),
                 ),
                 models=(

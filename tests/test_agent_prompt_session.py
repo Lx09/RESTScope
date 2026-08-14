@@ -66,6 +66,77 @@ def _completion(summary: str = "Done"):
     )
 
 
+def test_profiles_reuse_one_deepseek_model_with_individual_effort() -> None:
+    """One named DeepSeek model carries each Profile's explicit thinking policy."""
+    from restscope.agent import AgentProfile, AgentTask
+    from restscope.harness import AgentRuntimeDefinition, build_harness
+    from restscope.llm import LLMClient, LLMModelConfig, LLMResponse
+    from restscope.llm.registry import LLMProviderRegistry
+
+    class Provider:
+        """Record Profile-built requests without calling the DeepSeek service."""
+
+        name = "deepseek"
+
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def invoke(self, request):
+            """Return one valid completion after retaining the exact request."""
+            self.requests.append(request)
+            return LLMResponse(
+                provider=self.name,
+                model=request.model,
+                parsed_json={"summary": "Done", "findings": []},
+            )
+
+    provider = Provider()
+    registry = LLMProviderRegistry()
+    registry.register(provider)
+    runtime = build_harness(
+        agent_runtime=AgentRuntimeDefinition(
+            profiles=tuple(
+                AgentProfile(
+                    name=f"profile-{effort}",
+                    model_config_name="default",
+                    reasoning_effort=effort,
+                )
+                for effort in ("none", "low", "high", "max")
+            ),
+            models=(
+                LLMModelConfig(
+                    name="default",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                ),
+            ),
+            client=LLMClient(registry),
+        )
+    )
+
+    for effort in ("none", "low", "high", "max"):
+        result = start_test_agent(runtime, f"profile-{effort}").run(
+            AgentTask(objective="Return the bounded result.")
+        )
+        assert result.status == "completed"
+
+    assert [request.model for request in provider.requests] == [
+        "deepseek-v4-flash",
+    ] * 4
+    assert [request.reasoning.mode for request in provider.requests] == [
+        "disabled",
+        "enabled",
+        "enabled",
+        "enabled",
+    ]
+    assert [request.reasoning.effort for request in provider.requests] == [
+        None,
+        "low",
+        "high",
+        "max",
+    ]
+
+
 def test_profile_instructions_are_complete_stable_developer_guidance() -> None:
     """The current Agent sees its own instructions without confusing description."""
     from restscope.agent import AgentProfile, AgentTask
@@ -73,20 +144,23 @@ def test_profile_instructions_are_complete_stable_developer_guidance() -> None:
 
     instructions = "Own every semantic decision for the current bounded task."
     client, provider = _client(_completion())
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    description="Parent-visible metadata is not self-guidance.",
-                    instructions=instructions,
-                    model_config_name="thinking",
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        description="Parent-visible metadata is not self-guidance.",
+                        instructions=instructions,
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
                 ),
-            ),
-            models=(_model(),),
-            client=client,
+                models=(_model(),),
+                client=client,
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="Inspect the current objective."))
 
@@ -105,21 +179,22 @@ def test_profile_instructions_fail_closed_when_the_stable_prefix_cannot_fit() ->
     from restscope.harness import AgentRuntimeDefinition, build_harness
 
     client, provider = _client()
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    instructions="I" * 12_000,
-                    model_config_name="thinking",
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        instructions="I" * 12_000,
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
                 ),
-            ),
-            models=(
-                _model(context_window_tokens=3_500, max_tokens=256),
-            ),
-            client=client,
+                models=(_model(context_window_tokens=3_500, max_tokens=256),),
+                client=client,
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="Do not reach the model."))
 
@@ -157,6 +232,7 @@ def test_skill_read_is_auto_appended_and_injects_only_authorized_instructions() 
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     skill_names=("inspect",),
                 ),
             ),
@@ -219,6 +295,7 @@ def test_skill_loader_denies_unselected_names_and_cannot_be_overridden() -> None
             AgentProfile(
                 name="main",
                 model_config_name="thinking",
+                reasoning_effort="none",
                 skill_names=("inspect",),
             ),
         ),
@@ -279,6 +356,7 @@ def test_skill_loader_denies_unselected_names_and_cannot_be_overridden() -> None
                     AgentProfile(
                         name="main",
                         model_config_name="thinking",
+                        reasoning_effort="none",
                         tool_names=("skill.read",),
                         skill_names=("inspect",),
                     ),
@@ -309,6 +387,7 @@ def test_each_fresh_root_receives_the_current_complete_context_source() -> None:
                 AgentProfile(
                     name="main",
                     model_config_name="thinking",
+                    reasoning_effort="none",
                     context_sources=("operation",),
                 ),
             ),
@@ -364,32 +443,37 @@ def test_parent_prompt_lists_only_direct_children_in_developer_role() -> None:
 
     lifecycle_tools = ("subagent.start", "subagent.wait", "subagent.cancel")
     client, provider = _client(_completion())
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    tool_names=lifecycle_tools,
-                    subagent_profile_names=("research",),
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        tool_names=lifecycle_tools,
+                        subagent_profile_names=("research",),
+                    ),
+                    AgentProfile(
+                        name="research",
+                        description="Research one bounded primary-source question.",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        tool_names=lifecycle_tools,
+                        subagent_profile_names=("specialist",),
+                    ),
+                    AgentProfile(
+                        name="specialist",
+                        description="Inspect one specialist detail.",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
                 ),
-                AgentProfile(
-                    name="research",
-                    description="Research one bounded primary-source question.",
-                    model_config_name="thinking",
-                    tool_names=lifecycle_tools,
-                    subagent_profile_names=("specialist",),
-                ),
-                AgentProfile(
-                    name="specialist",
-                    description="Inspect one specialist detail.",
-                    model_config_name="thinking",
-                ),
-            ),
-            models=(_model(),),
-            client=client,
+                models=(_model(),),
+                client=client,
+            )
         )
-    ))
+    )
 
     agent.run(AgentTask(objective="Delegate if useful."))
 
@@ -413,54 +497,62 @@ def test_child_uses_its_own_profile_prompt_and_not_parent_history() -> None:
 
     lifecycle_tools = ("subagent.start", "subagent.wait", "subagent.cancel")
     client, provider = _client(_completion("parent"), _completion("child"))
-    main = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    tool_names=lifecycle_tools,
-                    skill_names=("parent-skill",),
-                    context_sources=("parent-context",),
-                    subagent_profile_names=("child",),
-                ),
-                AgentProfile(
-                    name="child",
-                    description="Inspect one isolated child question.",
-                    model_config_name="fast",
-                    skill_names=("child-skill",),
-                    context_sources=("child-context",),
-                ),
-            ),
-            models=(
-                _model(),
-                _model(role="fast", model="fast-model"),
-            ),
-            client=client,
-            skills=(
-                SkillDefinition(
-                    manifest=SkillManifest(
-                        name="parent-skill",
-                        description="Parent-only method.",
-                        required_context_sources=("parent-context",),
+    main = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        tool_names=lifecycle_tools,
+                        skill_names=("parent-skill",),
+                        context_sources=("parent-context",),
+                        subagent_profile_names=("child",),
                     ),
-                    instructions="Parent-only body.",
-                ),
-                SkillDefinition(
-                    manifest=SkillManifest(
-                        name="child-skill",
-                        description="Child-only method.",
-                        required_context_sources=("child-context",),
+                    AgentProfile(
+                        name="child",
+                        description="Inspect one isolated child question.",
+                        model_config_name="fast",
+                        reasoning_effort="none",
+                        skill_names=("child-skill",),
+                        context_sources=("child-context",),
                     ),
-                    instructions="Child-only body.",
                 ),
-            ),
-            context_sources=(
-                ContextSourceBinding(name="parent-context", read=lambda: "PARENT-EVIDENCE"),
-                ContextSourceBinding(name="child-context", read=lambda: "CHILD-EVIDENCE"),
-            ),
+                models=(
+                    _model(),
+                    _model(role="fast", model="fast-model"),
+                ),
+                client=client,
+                skills=(
+                    SkillDefinition(
+                        manifest=SkillManifest(
+                            name="parent-skill",
+                            description="Parent-only method.",
+                            required_context_sources=("parent-context",),
+                        ),
+                        instructions="Parent-only body.",
+                    ),
+                    SkillDefinition(
+                        manifest=SkillManifest(
+                            name="child-skill",
+                            description="Child-only method.",
+                            required_context_sources=("child-context",),
+                        ),
+                        instructions="Child-only body.",
+                    ),
+                ),
+                context_sources=(
+                    ContextSourceBinding(
+                        name="parent-context", read=lambda: "PARENT-EVIDENCE"
+                    ),
+                    ContextSourceBinding(
+                        name="child-context", read=lambda: "CHILD-EVIDENCE"
+                    ),
+                ),
+            )
         )
-    ))
+    )
     main.run(AgentTask(objective="PARENT-OBJECTIVE"))
 
     started = main.toolbox.execute(
@@ -502,13 +594,21 @@ def test_protocol_reservation_can_stop_before_model_or_tool_execution() -> None:
     from restscope.harness import AgentRuntimeDefinition, build_harness
 
     client, provider = _client()
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(AgentProfile(name="main", model_config_name="thinking"),),
-            models=(_model(context_window_tokens=300, max_tokens=128),),
-            client=client,
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                    ),
+                ),
+                models=(_model(context_window_tokens=300, max_tokens=128),),
+                client=client,
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="This must not reach the model."))
 
@@ -527,26 +627,29 @@ def test_oversized_context_source_stops_before_model_use() -> None:
     )
 
     client, provider = _client()
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    context_sources=("operation",),
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        context_sources=("operation",),
+                    ),
                 ),
-            ),
-            models=(_model(),),
-            client=client,
-            context_sources=(
-                ContextSourceBinding(
-                    name="operation",
-                    read=lambda: "X" * 101,
-                    max_chars=100,
+                models=(_model(),),
+                client=client,
+                context_sources=(
+                    ContextSourceBinding(
+                        name="operation",
+                        read=lambda: "X" * 101,
+                        max_chars=100,
+                    ),
                 ),
-            ),
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="Inspect."))
 
@@ -564,25 +667,28 @@ def test_non_text_context_source_is_rejected_by_the_harness_reader() -> None:
     )
 
     client, provider = _client()
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    context_sources=("operation",),
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        context_sources=("operation",),
+                    ),
                 ),
-            ),
-            models=(_model(),),
-            client=client,
-            context_sources=(
-                ContextSourceBinding(
-                    name="operation",
-                    read=lambda: None,  # type: ignore[arg-type, return-value]
+                models=(_model(),),
+                client=client,
+                context_sources=(
+                    ContextSourceBinding(
+                        name="operation",
+                        read=lambda: None,  # type: ignore[arg-type, return-value]
+                    ),
                 ),
-            ),
+            )
         )
-    ))
+    )
 
     with pytest.raises(TypeError, match="Context Source must return text: operation"):
         agent.run(AgentTask(objective="Inspect."))
@@ -607,20 +713,23 @@ def test_stable_prefix_keeps_all_names_and_omits_later_descriptions_in_order() -
         for index in range(15)
     )
     client, provider = _client(_completion())
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    skill_names=tuple(skill.name for skill in skills),
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        skill_names=tuple(skill.name for skill in skills),
+                    ),
                 ),
-            ),
-            models=(_model(),),
-            client=client,
-            skills=skills,
+                models=(_model(),),
+                client=client,
+                skills=skills,
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="Inspect metadata."))
 
@@ -650,20 +759,23 @@ def test_stable_prefix_rejects_essential_names_before_model_use() -> None:
         for index in range(220)
     )
     client, provider = _client()
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    skill_names=tuple(skill.name for skill in skills),
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="none",
+                        skill_names=tuple(skill.name for skill in skills),
+                    ),
                 ),
-            ),
-            models=(_model(),),
-            client=client,
-            skills=skills,
+                models=(_model(),),
+                client=client,
+                skills=skills,
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="Do not clip authorization names."))
 
@@ -690,7 +802,9 @@ def test_compaction_reanchors_context_but_not_loaded_skill_instructions() -> Non
             provider="scripted",
             model="thinking-model",
             tool_calls=[
-                ToolCall(id="read-skill", name="skill.read", arguments={"name": "inspect"})
+                ToolCall(
+                    id="read-skill", name="skill.read", arguments={"name": "inspect"}
+                )
             ],
         ),
         LLMResponse(
@@ -711,63 +825,73 @@ def test_compaction_reanchors_context_but_not_loaded_skill_instructions() -> Non
         ),
         _completion(),
     )
-    agent = start_test_agent(build_harness(
-        agent_runtime=AgentRuntimeDefinition(
-            profiles=(
-                AgentProfile(
-                    name="main",
-                    model_config_name="thinking",
-                    tool_names=("openapi.list_inputs",),
-                    skill_names=("inspect",),
-                    context_sources=("operation",),
-                ),
-            ),
-            models=(_model(context_window_tokens=2_400, max_tokens=200),),
-            client=client,
-            skills=(
-                SkillDefinition(
-                    manifest=SkillManifest(
-                        name="inspect",
-                        description="Inspect one operation.",
-                        required_tools=("openapi.list_inputs",),
-                        required_context_sources=("operation",),
+    agent = start_test_agent(
+        build_harness(
+            agent_runtime=AgentRuntimeDefinition(
+                profiles=(
+                    AgentProfile(
+                        name="main",
+                        model_config_name="thinking",
+                        reasoning_effort="high",
+                        tool_names=("openapi.list_inputs",),
+                        skill_names=("inspect",),
+                        context_sources=("operation",),
                     ),
-                    instructions=skill_body,
                 ),
-            ),
-            context_sources=(
-                ContextSourceBinding(
-                    name="operation",
-                    read=lambda: "## Current operation\nGET /pets",
+                models=(_model(context_window_tokens=2_400, max_tokens=200),),
+                client=client,
+                skills=(
+                    SkillDefinition(
+                        manifest=SkillManifest(
+                            name="inspect",
+                            description="Inspect one operation.",
+                            required_tools=("openapi.list_inputs",),
+                            required_context_sources=("operation",),
+                        ),
+                        instructions=skill_body,
+                    ),
                 ),
-            ),
-            tool_binding_factories=(
-                ToolBindingFactory(
-                    name="openapi.list_inputs",
-                    create=lambda: ToolBinding(
+                context_sources=(
+                    ContextSourceBinding(
+                        name="operation",
+                        read=lambda: "## Current operation\nGET /pets",
+                    ),
+                ),
+                tool_binding_factories=(
+                    ToolBindingFactory(
                         name="openapi.list_inputs",
-                        execute=lambda operation_key: {
-                            "content": "X" * 7_000,
-                            "structured": {
-                                "operation_key": operation_key,
-                                "inputs": [],
-                                "total": 0,
-                                "offset": 0,
+                        create=lambda: ToolBinding(
+                            name="openapi.list_inputs",
+                            execute=lambda operation_key: {
+                                "content": "X" * 7_000,
+                                "structured": {
+                                    "operation_key": operation_key,
+                                    "inputs": [],
+                                    "total": 0,
+                                    "offset": 0,
+                                },
                             },
-                        },
+                        ),
                     ),
                 ),
-            ),
+            )
         )
-    ))
+    )
 
     result = agent.run(AgentTask(objective="Inspect."))
 
     assert result.status == "completed"
+    assert provider.requests[0].reasoning.mode == "enabled"
+    assert provider.requests[0].reasoning.effort == "high"
     assert provider.requests[2].metadata["purpose"] == "context_compaction"
+    assert provider.requests[2].reasoning.mode == "enabled"
+    assert provider.requests[2].reasoning.effort == "high"
+    assert provider.requests[3].reasoning.effort == "high"
     final_messages = provider.requests[3].messages
     assert any("COMPACTED AGENT HISTORY" in item.content for item in final_messages)
-    assert any("## Current operation\nGET /pets" in item.content for item in final_messages)
+    assert any(
+        "## Current operation\nGET /pets" in item.content for item in final_messages
+    )
     assert all(skill_body not in item.content for item in final_messages)
 
 

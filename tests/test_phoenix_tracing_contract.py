@@ -32,7 +32,9 @@ def _wait_for_phoenix() -> None:
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = exc
             time.sleep(0.25)
-    raise AssertionError("Local Phoenix did not become ready within 30 seconds") from last_error
+    raise AssertionError(
+        "Local Phoenix did not become ready within 30 seconds"
+    ) from last_error
 
 
 def _wait_for_traces(
@@ -45,8 +47,7 @@ def _wait_for_traces(
         "?include_spans=true&limit=100"
     )
     span_url = (
-        f"{PHOENIX_ENDPOINT}/v1/projects/{quote(project_name, safe='')}/spans"
-        "?limit=100"
+        f"{PHOENIX_ENDPOINT}/v1/projects/{quote(project_name, safe='')}/spans?limit=100"
     )
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -54,9 +55,7 @@ def _wait_for_traces(
             traces = _get_json(trace_url)
             if traces.get("data"):
                 spans = _get_json(span_url)
-                span_names = {
-                    span["name"] for span in spans.get("data", [])
-                }
+                span_names = {span["name"] for span in spans.get("data", [])}
                 if spans.get("data") and (
                     expected_span_names is None
                     or expected_span_names.issubset(span_names)
@@ -130,7 +129,11 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
     main_registry = LLMProviderRegistry()
     main_registry.register(MainProvider())
     agent_definition = AgentRuntimeDefinition(
-        profiles=(AgentProfile(name="main", model_config_name="thinking"),),
+        profiles=(
+            AgentProfile(
+                name="main", model_config_name="thinking", reasoning_effort="none"
+            ),
+        ),
         models=(
             LLMModelConfig(
                 name="thinking",
@@ -246,9 +249,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
 
     spans = payload["spans"]["data"]
     assert expected_names.issubset({span["name"] for span in spans})
-    assert {"CHAIN", "TOOL", "LLM"}.issubset(
-        {span["span_kind"] for span in spans}
-    )
+    assert {"CHAIN", "TOOL", "LLM"}.issubset({span["span_kind"] for span in spans})
 
     app_span = next(span for span in spans if span["name"] == "RESTScopeApp.start")
     agent_span = next(
@@ -270,7 +271,9 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
         if span["name"] == "LLMClient.invoke"
         and span["context"]["trace_id"] != app_span["context"]["trace_id"]
     )
-    truncated_span = next(span for span in spans if span["name"] == "contract.truncated")
+    truncated_span = next(
+        span for span in spans if span["name"] == "contract.truncated"
+    )
 
     assert agent_span["parent_id"] == app_span["context"]["span_id"]
     assert main_llm_span["parent_id"] == agent_span["context"]["span_id"]
@@ -285,10 +288,7 @@ def test_local_phoenix_accepts_restscope_trace_hierarchy(
         "message_count": 1,
         "roles": ["user"],
     }
-    assert (
-        llm_span["attributes"]["llm.input_messages.0.message.role"]
-        == "user"
-    )
+    assert llm_span["attributes"]["llm.input_messages.0.message.role"] == "user"
     assert (
         llm_span["attributes"]["llm.input_messages.0.message.content"]
         == "***REDACTED***"

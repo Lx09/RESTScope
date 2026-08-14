@@ -17,6 +17,7 @@ ui/*.tsbuildinfo
 /.idea/
 *.xml
 .env
+models.toml
 *.log
 
 # Test framework caches

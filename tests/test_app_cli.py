@@ -17,9 +17,7 @@ def _openapi_file(tmp_path: Path) -> Path:
                 "openapi": "3.0.3",
                 "info": {"title": "CLI", "version": "1"},
                 "paths": {
-                    "/health": {
-                        "get": {"responses": {"200": {"description": "ok"}}}
-                    }
+                    "/health": {"get": {"responses": {"200": {"description": "ok"}}}}
                 },
             }
         ),
@@ -73,7 +71,7 @@ def test_command_passes_validated_inputs_and_closes_the_app(
     monkeypatch.setattr(main_module, "RESTScopeApp", App)
     schema = _openapi_file(tmp_path)
     env_file = tmp_path / ".env"
-    env_file.write_text("UI_ENABLED=false\n", encoding="utf-8")
+    env_file.write_text("UI_ON=false\n", encoding="utf-8")
 
     result = CliRunner().invoke(
         main_module.main,

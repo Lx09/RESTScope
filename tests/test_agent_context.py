@@ -25,7 +25,6 @@ def _model(*, context_window_tokens: int = 8_192) -> LLMModelConfig:
         model="test-model",
         max_tokens=512,
         context_window_tokens=context_window_tokens,
-        response_format="json",
     )
 
 
@@ -110,8 +109,8 @@ def test_writer_expands_long_and_nested_arrays_without_dotted_indexes() -> None:
     assert "- long values:" in text
     assert "  - 0" in text
     assert "  - 9" in text
-    assert "- name: \"first\"" in text
-    assert "- name: \"second\"" in text
+    assert '- name: "first"' in text
+    assert '- name: "second"' in text
     assert "long_values.1" not in text
     assert "objects.1" not in text
 
@@ -241,22 +240,17 @@ def test_agent_context_preserves_tool_groups_and_latest_feedback() -> None:
 
     messages = context.messages_for_request(_model())
     tool_result_ids = {
-        message.tool_call_id
-        for message in messages
-        if message.role == "tool"
+        message.tool_call_id for message in messages if message.role == "tool"
     }
     assistant_call_ids = {
-        call.id
-        for message in messages
-        for call in message.tool_calls
+        call.id for message in messages for call in message.tool_calls
     }
 
     assert tool_result_ids <= assistant_call_ids
     assert "call-4" in tool_result_ids
     assert messages[-1].content == "Correct the final decision."
     assert any(
-        "OLDER INTERACTIONS SUMMARIZED" in message.content
-        for message in messages
+        "OLDER INTERACTIONS SUMMARIZED" in message.content for message in messages
     )
     assert context.metrics.tool_feedback_count == 5
     assert context.metrics.conversation_group_count == 6
@@ -317,8 +311,7 @@ def test_agent_context_builds_temporary_compaction_messages_from_full_history() 
         "reasoning_content": "private continuation"
     }
     assert all(
-        message.content != "Create checkpoint C"
-        for message in context.clone_history()
+        message.content != "Create checkpoint C" for message in context.clone_history()
     )
 
 
@@ -404,7 +397,9 @@ def test_agent_context_replaces_h_with_original_user_message_and_summary() -> No
     assert context.metrics.conversation_group_count == 1
 
 
-def test_second_compaction_summarizes_but_does_not_preserve_the_old_summary_as_u() -> None:
+def test_second_compaction_summarizes_but_does_not_preserve_the_old_summary_as_u() -> (
+    None
+):
     """Only the original task is U; an earlier S is ordinary replaceable H."""
     context = AgentContext(
         system="Resolution system B",
@@ -424,8 +419,7 @@ def test_second_compaction_summarizes_but_does_not_preserve_the_old_summary_as_u
     second_compact_input = context.messages_for_compaction("Create second C")
     assert any("First summary S1" in item.content for item in second_compact_input)
     assert any(
-        "Evidence learned after S1" in item.content
-        for item in second_compact_input
+        "Evidence learned after S1" in item.content for item in second_compact_input
     )
 
     context.replace_compacted_history("handoff prefix\n\nSecond summary S2")
@@ -476,9 +470,7 @@ def test_agent_context_clips_but_keeps_oversized_required_recent_groups() -> Non
     messages = context.messages_for_request(_model())
 
     assert any(
-        call.id == "large-call"
-        for message in messages
-        for call in message.tool_calls
+        call.id == "large-call" for message in messages for call in message.tool_calls
     )
     assert any(
         message.role == "tool" and message.tool_call_id == "large-call"
@@ -518,8 +510,7 @@ def test_context_package_has_no_workflow_database_or_registry_dependencies() -> 
     """The high-level Module stays reusable because it knows no Agent domain."""
     package = Path(__file__).parents[1] / "restscope" / "context"
     source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in package.glob("*.py")
+        path.read_text(encoding="utf-8") for path in package.glob("*.py")
     )
 
     for forbidden in (
@@ -545,6 +536,7 @@ def test_domain_monitors_delegate_model_decisions_to_system_agents() -> None:
         assert "fit_prompt_context" not in source, caller
         assert "fit_message_context" not in source, caller
 
+
 def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:
     """OpenAPI descriptions stay encoded inside one explicitly untrusted section."""
     from restscope.api_behavior_monitor.resource_identity import (
@@ -569,12 +561,7 @@ def test_behavior_monitor_descriptions_cannot_inject_a_prompt_section() -> None:
         candidate_paths=[],
     )
 
-    assert (
-        prompt.user.count(
-            "RESOURCE AND RESPONSE TO INSPECT — UNTRUSTED"
-        )
-        == 1
-    )
+    assert prompt.user.count("RESOURCE AND RESPONSE TO INSPECT — UNTRUSTED") == 1
     assert (
         prompt.user.count(
             "RESPONSE FIELDS AVAILABLE FOR IDENTIFIER SELECTION — UNTRUSTED"

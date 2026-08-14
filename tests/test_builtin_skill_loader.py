@@ -20,11 +20,7 @@ def _write_skill(
     skill_dir = root / directory_name
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\n"
-        f"name: {name}\n"
-        "description: A small test Skill.\n"
-        "---\n\n"
-        f"{body}\n",
+        f"---\nname: {name}\ndescription: A small test Skill.\n---\n\n{body}\n",
         encoding="utf-8",
     )
     if runtime is not None:
@@ -230,7 +226,9 @@ def test_additional_definitions_cannot_replace_a_builtin() -> None:
         build_harness(
             agent_runtime=AgentRuntimeDefinition(
                 profiles=(
-                    AgentProfile(name="main", model_config_name="fast"),
+                    AgentProfile(
+                        name="main", model_config_name="fast", reasoning_effort="none"
+                    ),
                 ),
                 models=(_model_for_duplicate_test(),),
                 client=client,
@@ -243,9 +241,7 @@ def test_production_catalog_contains_only_approved_reusable_methods() -> None:
     """Discovery exposes the three approved methods and no private workflow role."""
     from restscope.skills import builtin_skill_catalog
 
-    assert tuple(
-        skill.name for skill in builtin_skill_catalog().definitions()
-    ) == (
+    assert tuple(skill.name for skill in builtin_skill_catalog().definitions()) == (
         "apply-parameter-patch",
         "query-restscope-database",
         "resolve-operation-failures",

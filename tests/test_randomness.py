@@ -10,7 +10,7 @@ def test_random_config_loads_one_optional_environment_seed(tmp_path) -> None:
     from restscope import RESTScopeConfig
 
     env_file = tmp_path / ".env"
-    env_file.write_text("RANDOM_SEED=731\n", encoding="utf-8")
+    env_file.write_text("RUN_SEED=731\n", encoding="utf-8")
 
     config = RESTScopeConfig.from_environment(env_file)
 

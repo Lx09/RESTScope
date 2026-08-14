@@ -29,12 +29,16 @@ def test_database_query_skill_manifest_and_categories_are_exact() -> None:
     assert skill.manifest.risk_level == "medium"
     assert skill.manifest.required_tools == ("file.read", "database.query")
     assert skill.manifest.required_context_sources == ()
-    assert tuple(reference.path for reference in skill.references) == EXPECTED_REFERENCES
+    assert (
+        tuple(reference.path for reference in skill.references) == EXPECTED_REFERENCES
+    )
 
     root = files("restscope.builtin_skills").joinpath(SKILL_NAME)
     source = root.joinpath("SKILL.md").read_text(encoding="utf-8")
     frontmatter = yaml.safe_load(source.split("---", 2)[1])
-    runtime = yaml.safe_load(root.joinpath("restscope.yaml").read_text(encoding="utf-8"))
+    runtime = yaml.safe_load(
+        root.joinpath("restscope.yaml").read_text(encoding="utf-8")
+    )
     assert frontmatter == {
         "name": SKILL_NAME,
         "description": skill.manifest.description,
@@ -47,7 +51,9 @@ def test_database_query_skill_manifest_and_categories_are_exact() -> None:
     }
 
 
-def test_database_query_skill_routes_every_purpose_and_preserves_evidence_meaning() -> None:
+def test_database_query_skill_routes_every_purpose_and_preserves_evidence_meaning() -> (
+    None
+):
     """Natural questions route to storage mappings without losing safety rules."""
 
     from restscope.skills import builtin_skill_catalog
@@ -82,7 +88,9 @@ def test_database_query_skill_routes_every_purpose_and_preserves_evidence_meanin
     assert "only selected column" in combined
     assert "does not store the current mutable test-input configuration" in combined
     assert "response_headers, observation_id" not in combined
-    assert "each `observation_id` is the durable ID\nof an executed test case" in combined
+    assert (
+        "each `observation_id` is the durable ID\nof an executed test case" in combined
+    )
     assert "grouped test run a **Batch**" in combined
     assert "**Bug Oracle\nAssessment**" in combined
 
@@ -155,6 +163,7 @@ def test_one_reference_enters_context_only_after_file_read() -> None:
                 AgentProfile(
                     name="query",
                     model_config_name="query-model",
+                    reasoning_effort="none",
                     tool_names=("database.query", "file.read"),
                     skill_names=(SKILL_NAME,),
                 ),
@@ -217,6 +226,7 @@ def test_profile_missing_a_database_skill_dependency_fails_startup(
                     AgentProfile(
                         name="query",
                         model_config_name="unused",
+                        reasoning_effort="none",
                         tool_names=granted,
                         skill_names=(SKILL_NAME,),
                     ),

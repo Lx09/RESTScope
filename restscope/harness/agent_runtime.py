@@ -215,7 +215,9 @@ class AgentRuntimeResolver:
         try:
             definition = self.system_agents[profile_name]
         except KeyError as exc:
-            raise ValueError(f"System Agent Profile is not registered: {profile_name}") from exc
+            raise ValueError(
+                f"System Agent Profile is not registered: {profile_name}"
+            ) from exc
         bounded_task = definition.adapt_task(task)
         if not isinstance(bounded_task, SystemAgentTask):
             raise TypeError("System Agent task adapter must return SystemAgentTask")
@@ -427,7 +429,9 @@ class AgentRuntimeResolver:
             else:
                 redacted = self.tracing_runtime.redactor.redact(value)
             if not isinstance(redacted, str):
-                raise TypeError(f"Context Source redaction must return text: {source.name}")
+                raise TypeError(
+                    f"Context Source redaction must return text: {source.name}"
+                )
             if len(redacted) > source.max_chars:
                 raise PromptSessionError(
                     code="context_budget_exceeded",
@@ -455,8 +459,7 @@ class AgentRuntimeResolver:
         collisions = built_in_names & external_names
         if collisions:
             raise ValueError(
-                "Tool name exists in built-in and external Catalogs: "
-                f"{min(collisions)}"
+                f"Tool name exists in built-in and external Catalogs: {min(collisions)}"
             )
         for binding_name in self.binding_factories:
             if binding_name == SKILL_READ_TOOL_NAME:
@@ -494,9 +497,7 @@ class AgentRuntimeResolver:
             if selected_plan_tools and set(selected_plan_tools) != set(
                 _PLAN_TOOL_NAMES
             ):
-                raise ValueError(
-                    "Agent Profiles must grant both Plan Tools or neither"
-                )
+                raise ValueError("Agent Profiles must grant both Plan Tools or neither")
             selected_subagent_tools = tuple(
                 name for name in profile.tool_names if name in _SUBAGENT_TOOL_NAMES
             )
@@ -519,10 +520,6 @@ class AgentRuntimeResolver:
                     f"Unknown model configuration in Agent Profile: "
                     f"{profile.model_config_name}"
                 ) from exc
-            if not model.enabled:
-                raise ValueError(
-                    f"Agent Profile model configuration is disabled: {model.name}"
-                )
             if model.provider not in provider_names:
                 raise ValueError(
                     f"Unknown model provider in Agent Profile: {model.provider}"
@@ -557,7 +554,9 @@ class AgentRuntimeResolver:
                         f"{min(missing_context)} in the same Profile"
                     )
                 if not self.skill_policy.is_allowed(skill=skill):
-                    raise ValueError(f"Skill is not allowed by Harness policy: {skill_name}")
+                    raise ValueError(
+                        f"Skill is not allowed by Harness policy: {skill_name}"
+                    )
             for source_name in profile.context_sources:
                 if source_name not in self.context_sources:
                     raise ValueError(
@@ -569,7 +568,9 @@ class AgentRuntimeResolver:
                     tool_name not in self.binding_factories
                     and tool_name not in _HARNESS_OWNED_TOOL_NAMES
                 ):
-                    raise ValueError(f"Missing Tool Binding for Agent Profile: {tool_name}")
+                    raise ValueError(
+                        f"Missing Tool Binding for Agent Profile: {tool_name}"
+                    )
 
     def _tool_definition(self, name: str):
         """Resolve one name from exactly one of the isolated Tool Catalogs."""
@@ -582,7 +583,9 @@ class AgentRuntimeResolver:
         if not found:
             raise ValueError(f"Unknown Tool in Agent Profile: {name}")
         if len(found) > 1:
-            raise ValueError(f"Tool name exists in built-in and external Catalogs: {name}")
+            raise ValueError(
+                f"Tool name exists in built-in and external Catalogs: {name}"
+            )
         return found[0]
 
 

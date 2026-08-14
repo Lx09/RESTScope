@@ -35,7 +35,9 @@ def test_llm_schema_serialization_and_import_smoke() -> None:
     )
 
     assert LLMClient is not None
-    assert request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
+    assert (
+        request.model_dump(mode="json")["tools"][0]["name"] == "artifact.read_summary"
+    )
 
 
 def test_model_config_is_named_without_a_semantic_role_selector() -> None:
@@ -148,9 +150,7 @@ def test_deepseek_preserves_raw_reasoning_on_every_response(
 
     provider = DeepSeekProvider(
         api_key="test-key",
-        client=SimpleNamespace(
-            chat=SimpleNamespace(completions=Completions())
-        ),
+        client=SimpleNamespace(chat=SimpleNamespace(completions=Completions())),
     )
     request = LLMRequest(
         provider="deepseek",
@@ -242,7 +242,9 @@ def test_llm_public_contract_excludes_removed_legacy_surface() -> None:
     assert all(not hasattr(llm, name) for name in removed_llm_exports)
     assert "FakeProvider" not in providers.__all__
     assert not hasattr(providers, "FakeProvider")
-    assert "context_package" not in inspect.signature(OutputValidator.validate).parameters
+    assert (
+        "context_package" not in inspect.signature(OutputValidator.validate).parameters
+    )
     assert not hasattr(BaseLLMProvider, "ainvoke")
 
 
@@ -348,7 +350,9 @@ class _FailingOpenAIClient:
         self.chat = SimpleNamespace(completions=_FailingCompletions(error))
 
 
-def test_openai_compatible_provider_classifies_exhausted_503_without_leaking_body() -> None:
+def test_openai_compatible_provider_classifies_exhausted_503_without_leaking_body() -> (
+    None
+):
     """A busy provider becomes a stable capacity error after SDK retries end."""
     from restscope.llm import (
         LLMMessage,
@@ -483,7 +487,9 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
     from restscope.llm.providers.openai_compatible import OpenAICompatibleProvider
 
     fake_client = _FakeOpenAIClient()
-    provider = OpenAICompatibleProvider(api_key="test-key", base_url="https://example.test/v1", client=fake_client)
+    provider = OpenAICompatibleProvider(
+        api_key="test-key", base_url="https://example.test/v1", client=fake_client
+    )
 
     response = provider.invoke(
         LLMRequest(
@@ -498,7 +504,10 @@ def test_openai_compatible_provider_converts_schema_and_tools_without_network() 
                     name="artifact.read_summary",
                     description="Read summary",
                     kind="local_function",
-                    input_schema={"type": "object", "properties": {"artifact_id": {"type": "string"}}},
+                    input_schema={
+                        "type": "object",
+                        "properties": {"artifact_id": {"type": "string"}},
+                    },
                     strict=True,
                 )
             ],
@@ -587,7 +596,10 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
                 tool_calls=[
                     {
                         "id": "call_search",
-                        "function": {"name": provider_name, "arguments": '{"query":"userId"}'},
+                        "function": {
+                            "name": provider_name,
+                            "arguments": '{"query":"userId"}',
+                        },
                     }
                 ],
             )
@@ -620,56 +632,78 @@ def test_openai_compatible_provider_restores_internal_dotted_tool_name() -> None
     assert response.tool_calls[0].name == "catalog.search"
 
 
-def test_model_builder_uses_named_thinking_and_fast_configs(tmp_path: Path) -> None:
-    """Each raw slot translates directly without semantic role selection."""
+def test_environment_loads_one_named_model_from_toml(tmp_path: Path) -> None:
+    """A model file defines one reusable model without a THINK/FAST slot."""
     from restscope.config import RESTScopeConfig
-    from restscope.llm import build_llm_model_config
+    from restscope.llm import build_llm_model_config, build_llm_registry
 
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "THINK_PROVIDER=fake\n"
-        "THINK_MODEL=strong-model\n"
-        "THINK_TEMPERATURE=0.1\n"
-        "THINK_MAX_TOKENS=4096\n"
-        "FAST_PROVIDER=fake\n"
-        "FAST_MODEL=fast-model\n"
-        "FAST_TEMPERATURE=0.2",
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.deepseek]\n"
+        'api_key_env = "DEEPSEEK_API_KEY"\n'
+        'url = "https://api.deepseek.com"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "deepseek"\n'
+        'model = "deepseek-v4-flash"\n'
+        "timeout = 120\n"
+        "temperature = 0.7\n"
+        "max_tokens = 393216\n"
+        "context_tokens = 1048576\n",
         encoding="utf-8",
     )
-    config = RESTScopeConfig.from_environment(env_file)
-    thinking = build_llm_model_config("thinking", config.llm.thinking)
-    fast = build_llm_model_config("fast", config.llm.fast)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"MODELS_FILE={models_file}\nDEEPSEEK_API_KEY=test-key\n",
+        encoding="utf-8",
+    )
 
-    assert thinking.name == "thinking"
-    assert thinking.model == "strong-model"
-    assert fast.name == "fast"
-    assert fast.model == "fast-model"
-    assert fast.provider == "fake"
+    config = RESTScopeConfig.from_environment(env_file)
+
+    assert config.llm.providers[0].name == "deepseek"
+    assert config.llm.providers[0].api_key == "test-key"
+    assert "test-key" not in repr(config.llm)
+    assert config.llm.providers[0].base_url == "https://api.deepseek.com"
+    assert config.llm.models[0].name == "default"
+    assert config.llm.models[0].provider == "deepseek"
+    assert config.llm.models[0].model == "deepseek-v4-flash"
+    assert config.llm.models[0].timeout == 120
+    assert config.llm.models[0].temperature == 0.7
+    assert config.llm.models[0].max_tokens == 393_216
+    assert config.llm.models[0].context_window_tokens == 1_048_576
+    model = build_llm_model_config(config.llm.models[0])
+    registry = build_llm_registry(config.llm)
+    assert model.name == "default"
+    assert model.model == "deepseek-v4-flash"
+    assert registry.list_names() == ["deepseek"]
 
 
 def test_deepseek_profiles_accept_one_m_context_and_384k_output(tmp_path: Path) -> None:
-    """The approved local DeepSeek capacities remain valid for both model slots."""
+    """The approved local DeepSeek context and output capacities remain valid."""
     from restscope.config import RESTScopeConfig
 
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.deepseek]\n"
+        'api_key_env = "DEEPSEEK_API_KEY"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "deepseek"\n'
+        'model = "deepseek-v4-flash"\n'
+        "context_tokens = 1048576\n"
+        "max_tokens = 393216\n",
+        encoding="utf-8",
+    )
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "THINK_PROVIDER=deepseek\n"
-        "THINK_MODEL=deepseek-v4-flash\n"
-        "THINK_CONTEXT_WINDOW_TOKENS=1048576\n"
-        "THINK_MAX_TOKENS=393216\n"
-        "FAST_PROVIDER=deepseek\n"
-        "FAST_MODEL=deepseek-v4-flash\n"
-        "FAST_CONTEXT_WINDOW_TOKENS=1048576\n"
-        "FAST_MAX_TOKENS=393216",
+        f"MODELS_FILE={models_file}\nDEEPSEEK_API_KEY=test-key\n",
         encoding="utf-8",
     )
 
     config = RESTScopeConfig.from_environment(env_file)
 
-    assert config.llm.thinking.context_window_tokens == 1_048_576
-    assert config.llm.thinking.max_tokens == 393_216
-    assert config.llm.fast.context_window_tokens == 1_048_576
-    assert config.llm.fast.max_tokens == 393_216
+    assert config.llm.models[0].context_window_tokens == 1_048_576
+    assert config.llm.models[0].max_tokens == 393_216
 
 
 def test_model_config_exposes_separate_context_and_output_limits(
@@ -678,21 +712,34 @@ def test_model_config_exposes_separate_context_and_output_limits(
     """Scenario: context capacity and completion capacity remain distinct."""
     from restscope.config import RESTScopeConfig
 
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.openai_compatible]\n"
+        'api_key_env = "COMPAT_API_KEY"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "openai_compatible"\n'
+        'model = "large-model"\n'
+        "context_tokens = 200000\n"
+        "max_tokens = 12000\n"
+        "\n"
+        "[models.quick]\n"
+        'provider = "openai_compatible"\n'
+        'model = "quick-model"\n',
+        encoding="utf-8",
+    )
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "THINK_MODEL=think-model\n"
-        "FAST_MODEL=fast-model\n"
-        "THINK_CONTEXT_WINDOW_TOKENS=200000\n"
-        "THINK_MAX_TOKENS=12000",
+        f"MODELS_FILE={models_file}\nCOMPAT_API_KEY=test-key\n",
         encoding="utf-8",
     )
 
     config = RESTScopeConfig.from_environment(env_file)
 
-    assert config.llm.thinking.context_window_tokens == 200000
-    assert config.llm.thinking.max_tokens == 12000
-    assert config.llm.fast.context_window_tokens == 131072
-    assert config.llm.fast.max_tokens == 8192
+    assert config.llm.models[0].context_window_tokens == 200000
+    assert config.llm.models[0].max_tokens == 12000
+    assert config.llm.models[1].context_window_tokens == 131072
+    assert config.llm.models[1].max_tokens == 8192
 
 
 def test_model_config_rejects_output_limit_that_fills_context(
@@ -701,74 +748,112 @@ def test_model_config_rejects_output_limit_that_fills_context(
     """Scenario: a model must retain room for prompt evidence."""
     from restscope.config import RESTScopeConfig
 
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.deepseek]\n"
+        'api_key_env = "DEEPSEEK_API_KEY"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "deepseek"\n'
+        'model = "deepseek-v4-flash"\n'
+        "context_tokens = 4096\n"
+        "max_tokens = 4096\n",
+        encoding="utf-8",
+    )
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "THINK_MODEL=think-model\n"
-        "THINK_CONTEXT_WINDOW_TOKENS=4096\n"
-        "THINK_MAX_TOKENS=4096",
+        f"MODELS_FILE={models_file}\nDEEPSEEK_API_KEY=test-key\n",
         encoding="utf-8",
     )
 
     with pytest.raises(
         ValueError,
-        match="THINK_MAX_TOKENS must be smaller",
+        match="max_tokens must be smaller than context_window_tokens",
     ):
         RESTScopeConfig.from_environment(env_file)
 
 
-def test_deepseek_config_defaults_reasoning_by_model_slot_and_registers_provider(
+def test_deepseek_model_has_no_profile_reasoning_and_registers_provider(
     tmp_path: Path,
 ) -> None:
-    """Scenario: verify that deepseek config defaults reasoning by model slot and registers provider."""
+    """The catalog configures a model connection, not an Agent thinking policy."""
     from restscope.config import RESTScopeConfig
     from restscope.llm import build_llm_model_config, build_llm_registry
     from restscope.llm.providers.deepseek import DeepSeekProvider
 
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.deepseek]\n"
+        'api_key_env = "DEEPSEEK_API_KEY"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "deepseek"\n'
+        'model = "deepseek-v4-pro"\n',
+        encoding="utf-8",
+    )
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "THINK_PROVIDER=deepseek\n"
-        "THINK_MODEL=deepseek-v4-pro\n"
-        "THINK_API_KEY=test-key",
+        f"MODELS_FILE={models_file}\nDEEPSEEK_API_KEY=test-key\n",
         encoding="utf-8",
     )
 
     config = RESTScopeConfig.from_environment(env_file)
-    thinking = build_llm_model_config("thinking", config.llm.thinking)
-    fast = build_llm_model_config("fast", config.llm.fast)
+    model = build_llm_model_config(config.llm.models[0])
     registry = build_llm_registry(config.llm)
 
-    assert thinking.reasoning.mode == "enabled"
-    assert fast.reasoning.mode == "disabled"
+    assert set(type(model).model_fields) == {
+        "name",
+        "provider",
+        "model",
+        "temperature",
+        "max_tokens",
+        "context_window_tokens",
+        "timeout_seconds",
+    }
     assert registry.list_names() == ["deepseek"]
     assert isinstance(registry.get("deepseek"), DeepSeekProvider)
     assert registry.get("deepseek").base_url == "https://api.deepseek.com"
 
 
-def test_deepseek_config_parses_explicit_reasoning_effort(tmp_path: Path) -> None:
-    """Scenario: verify that deepseek config parses explicit reasoning effort."""
+def test_catalog_registers_both_provider_connections_and_all_secrets(
+    tmp_path: Path,
+) -> None:
+    """The real configured Provider collection drives registration and redaction."""
     from restscope.config import RESTScopeConfig
-    from restscope.llm import build_llm_model_config
+    from restscope.llm import build_llm_client
+    from restscope.observability import TracingRuntime
 
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "THINK_PROVIDER=deepseek\n"
-        "THINK_MODEL=deepseek-v4-pro\n"
-        "THINK_API_KEY=test-key\n"
-        "THINK_REASONING_MODE=enabled\n"
-        "THINK_REASONING_EFFORT=max\n"
-        "FAST_PROVIDER=deepseek\n"
-        "FAST_MODEL=deepseek-v4-flash\n"
-        "FAST_REASONING_MODE=disabled",
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.deepseek]\n"
+        'api_key_env = "DEEPSEEK_KEY"\n'
+        "[providers.openai_compatible]\n"
+        'api_key_env = "COMPAT_KEY"\n'
+        'url = "https://models.example/v1"\n'
+        "[models.default]\n"
+        'provider = "deepseek"\n'
+        'model = "deepseek-v4-flash"\n'
+        "[models.backup]\n"
+        'provider = "openai_compatible"\n'
+        'model = "backup-model"\n',
         encoding="utf-8",
     )
-
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"MODELS_FILE={models_file}\n"
+        "DEEPSEEK_KEY=deepseek-secret\n"
+        "COMPAT_KEY=compat-secret\n",
+        encoding="utf-8",
+    )
     config = RESTScopeConfig.from_environment(env_file)
-    thinking = build_llm_model_config("thinking", config.llm.thinking)
-    fast = build_llm_model_config("fast", config.llm.fast)
+    tracing = TracingRuntime.disabled()
 
-    assert thinking.reasoning.effort == "max"
-    assert fast.reasoning.mode == "disabled"
-    assert fast.reasoning.effort is None
+    client = build_llm_client(config.llm, tracing_runtime=tracing)
+
+    assert client.registry.list_names() == ["deepseek", "openai_compatible"]
+    rendered = tracing.redactor.redact_text("deepseek-secret and compat-secret")
+    assert "deepseek-secret" not in rendered
+    assert "compat-secret" not in rendered
 
 
 def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
@@ -792,7 +877,9 @@ def test_output_validator_prefers_parsed_json_and_reports_errors() -> None:
     )
 
     invalid = validator.validate(
-        response=LLMResponse(provider="fake", model="fake-model", content='{"campaign_type": "only"}'),
+        response=LLMResponse(
+            provider="fake", model="fake-model", content='{"campaign_type": "only"}'
+        ),
         output_model=CampaignSpec,
     )
 
@@ -835,7 +922,11 @@ def test_agent_toolbox_exposes_and_executes_only_explicit_tools(tool_context) ->
     )
 
     success = toolbox.execute(
-        ToolCall(id="call_1", name="artifact.read_summary", arguments={"artifact_id": "artifact_1"})
+        ToolCall(
+            id="call_1",
+            name="artifact.read_summary",
+            arguments={"artifact_id": "artifact_1"},
+        )
     )
     denied = toolbox.execute(
         ToolCall(id="call_2", name="external.run_campaign", arguments={})
@@ -852,7 +943,9 @@ def test_redactor_only_removes_registered_secret_values() -> None:
     """Scenario: verify that redactor only removes registered secret values."""
     from restscope.observability import Redactor
 
-    text = "Authorization: Bearer abc.def.ghi api_key=secret123 access_token: token-value"
+    text = (
+        "Authorization: Bearer abc.def.ghi api_key=secret123 access_token: token-value"
+    )
     redacted = Redactor(["secret123"]).redact_text(text)
 
     assert "abc.def.ghi" in redacted

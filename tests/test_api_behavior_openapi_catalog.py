@@ -42,7 +42,7 @@ def test_app_initialization_persists_the_normalized_openapi_document(
     from restscope.openapi_parser import OpenAPIParser
 
     config = replace(
-        RESTScopeConfig.from_environment(),
+        RESTScopeConfig.from_environment(tmp_path / "missing.env"),
         db=DBConfig(url=f"sqlite:///{tmp_path / 'audit.sqlite'}"),
     )
     app = RESTScopeApp(config)

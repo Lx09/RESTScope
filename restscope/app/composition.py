@@ -211,11 +211,7 @@ def _compose_app_resources(config: RESTScopeConfig) -> _AppResources:
         configure_logging(config.logging, log_file=config.log_file)
         tracing = _build_app_tracing_runtime(config)
         tracing.redactor.register_secrets(
-            (
-                config.llm.thinking.api_key,
-                config.llm.fast.api_key,
-                config.tracing.api_key,
-            )
+            (*config.llm.api_keys, config.tracing.api_key)
         )
         if config.ui.enabled:
             run_observer = LiveRunObserver(redactor=tracing.redactor)
@@ -317,13 +313,7 @@ def _build_app_tracing_runtime(config: RESTScopeConfig) -> TracingRuntime:
     """Build tracing with configured App secrets registered for redaction."""
     return build_tracing_runtime(
         config.tracing,
-        redactor=Redactor(
-            (
-                config.llm.thinking.api_key,
-                config.llm.fast.api_key,
-                config.tracing.api_key,
-            )
-        ),
+        redactor=Redactor((*config.llm.api_keys, config.tracing.api_key)),
     )
 
 

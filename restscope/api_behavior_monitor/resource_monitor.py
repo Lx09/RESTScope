@@ -3,7 +3,7 @@
 The Resource Response Tracker first reuses immutable identity fields from the
 unified Catalog.  For a previously unknown response group it asks the bounded
 Resource Identifier System Agent which direct scalar field or fields identify
-one persistent instance. A missing operation/resource edge then asks the FAST
+one persistent instance. A missing operation/resource edge then asks the
 Resource State System Agent for one stable semantic result state without
 showing it response content. The Catalog atomically stores the edge, recursively
 merged instances, current semantic states, and transition events.
@@ -220,9 +220,7 @@ class ResourceResponseTracker:
             )
             for alias, name in aliases.items()
         ]
-        candidate_paths = (
-            [operation.path] if "{" in operation.path else []
-        )
+        candidate_paths = [operation.path] if "{" in operation.path else []
         prompt = build_identifier_prompt(
             method=operation.method,
             path=operation.path,
@@ -254,9 +252,7 @@ class ResourceResponseTracker:
             raise ValueError(issues[0])
         if decision.identifier is None:
             return ()
-        return tuple(
-            sorted(aliases[alias] for alias in decision.identifier.fields)
-        )
+        return tuple(sorted(aliases[alias] for alias in decision.identifier.fields))
 
     def _select_result_state(
         self,
@@ -265,7 +261,7 @@ class ResourceResponseTracker:
         resource_name: str,
         existing_states: tuple[str, ...],
     ) -> str:
-        """Ask the registered FAST Profile for one missing edge's stable state."""
+        """Ask the registered no-thinking Profile for a missing edge's state."""
 
         prompt = build_state_prompt(
             method=operation.method,
@@ -322,8 +318,10 @@ def _response_groups(
             for name, child in value.items():
                 if isinstance(child, dict):
                     visit(child, f"{selector}.{name}", name)
-                elif isinstance(child, list) and child and all(
-                    isinstance(item, dict) for item in child
+                elif (
+                    isinstance(child, list)
+                    and child
+                    and all(isinstance(item, dict) for item in child)
                 ):
                     if len(child) > _MAX_INSTANCES:
                         raise ValueError("response resource instances exceed 1000")
@@ -340,8 +338,10 @@ def _response_groups(
                             instances=instances,
                         )
                     )
-        elif isinstance(value, list) and value and all(
-            isinstance(item, dict) for item in value
+        elif (
+            isinstance(value, list)
+            and value
+            and all(isinstance(item, dict) for item in value)
         ):
             if len(value) > _MAX_INSTANCES:
                 raise ValueError("response resource instances exceed 1000")

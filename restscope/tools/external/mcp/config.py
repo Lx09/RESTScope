@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_MCP_SERVERS_FILE = Path("./mcp.servers.json")
+DEFAULT_MCP_FILE = Path("./mcp.servers.json")
 
 
 @dataclass(frozen=True)
@@ -40,10 +40,12 @@ def load_mcp_server_configs(
     *,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, MCPServerConfig]:
-    """Load MCP server definitions from `MCP_SERVERS_FILE` or the default file."""
+    """Load MCP server definitions from ``MCP_FILE`` or the default file."""
 
     values = env or os.environ
-    path = Path(config_file or values.get("MCP_SERVERS_FILE", DEFAULT_MCP_SERVERS_FILE)).expanduser()
+    if "MCP_SERVERS_FILE" in values:
+        raise ValueError("environment field MCP_SERVERS_FILE was removed; use MCP_FILE")
+    path = Path(config_file or values.get("MCP_FILE", DEFAULT_MCP_FILE)).expanduser()
     if not path.exists():
         return {}
 

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from restscope.data_types import JSONObject, JSONValue
 
 LLMRole = Literal["system", "developer", "user", "assistant", "tool"]
 LLMResponseFormat = Literal["text", "json", "json_schema"]
 LLMReasoningMode = Literal["default", "enabled", "disabled"]
-LLMReasoningEffort = Literal["high", "max"]
+LLMReasoningEffort = Literal["low", "high", "max"]
 ToolKind = Literal["local_function", "mcp_tool", "skill", "provider_builtin"]
 ToolResultStatus = Literal["succeeded", "failed", "denied", "timed_out"]
 
@@ -115,7 +115,9 @@ class LLMResponse(BaseModel):
 
 
 class LLMModelConfig(BaseModel):
-    """One named provider/model configuration available to Agent Profiles."""
+    """One named Provider/model capacity configuration available to Profiles."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str
     provider: str
@@ -124,18 +126,12 @@ class LLMModelConfig(BaseModel):
     max_tokens: int = 8192
     context_window_tokens: int = 131072
     timeout_seconds: int = 60
-    response_format: LLMResponseFormat = "json_schema"
-    tool_choice: str = "none"
-    reasoning: LLMReasoningConfig = Field(default_factory=LLMReasoningConfig)
-    enabled: bool = True
 
     @model_validator(mode="after")
     def validate_context_capacity(self) -> LLMModelConfig:
         """Reserve at least one token of the context window for model input."""
         if self.max_tokens >= self.context_window_tokens:
-            raise ValueError(
-                "max_tokens must be smaller than context_window_tokens"
-            )
+            raise ValueError("max_tokens must be smaller than context_window_tokens")
         return self
 
 

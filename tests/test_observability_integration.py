@@ -132,14 +132,8 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     assert span.attributes["restscope.llm.latency_ms"] == 25
     assert span.attributes["restscope.llm.strict_tool_beta"] is True
     assert input_value == {"message_count": 1, "roles": ["user"]}
-    assert (
-        span.attributes["llm.input_messages.0.message.role"]
-        == "user"
-    )
-    assert (
-        span.attributes["llm.input_messages.0.message.content"]
-        == "***REDACTED***"
-    )
+    assert span.attributes["llm.input_messages.0.message.role"] == "user"
+    assert span.attributes["llm.input_messages.0.message.content"] == "***REDACTED***"
     assert set(output) == {
         "parsed_json",
         "tool_calls",
@@ -147,22 +141,12 @@ def test_llm_client_records_sanitized_request_response_and_metrics() -> None:
     }
     assert output["finish_reason"] == "tool_calls"
     assert output["parsed_json"] == {"ok": True}
-    assert output["tool_calls"] == [
-        {"id": "call-1", "name": "catalog.lookup"}
-    ]
+    assert output["tool_calls"] == [{"id": "call-1", "name": "catalog.lookup"}]
     assert span.attributes["llm.finish_reason"] == "tool_calls"
+    assert span.attributes["llm.output_messages.0.message.role"] == "assistant"
+    assert span.attributes["llm.output_messages.0.message.content"] == "done"
     assert (
-        span.attributes["llm.output_messages.0.message.role"]
-        == "assistant"
-    )
-    assert (
-        span.attributes["llm.output_messages.0.message.content"]
-        == "done"
-    )
-    assert (
-        span.attributes[
-            "llm.output_messages.0.message.tool_calls.0.tool_call.id"
-        ]
+        span.attributes["llm.output_messages.0.message.tool_calls.0.tool_call.id"]
         == "call-1"
     )
     assert (
@@ -366,9 +350,7 @@ def test_agent_toolbox_propagates_provider_unavailable_without_tracing_cause() -
     )
 
     with pytest.raises(ProviderUnavailableError) as caught:
-        toolbox.execute(
-            ToolCall(id="review", name="patch.review", arguments={})
-        )
+        toolbox.execute(ToolCall(id="review", name="patch.review", arguments={}))
     runtime.close()
 
     span = exporter.get_finished_spans()[0]
@@ -445,25 +427,23 @@ def test_parallel_agent_tools_keep_the_current_trace_parent() -> None:
     runtime.close()
 
     spans = exporter.get_finished_spans()
-    agent_span = next(
-        span for span in spans if span.name == "main"
-    )
+    agent_span = next(span for span in spans if span.name == "main")
     tool_spans = [span for span in spans if span.name == "catalog.query"]
 
     assert [result.status for result in results] == ["succeeded", "succeeded"]
     assert len(tool_spans) == 2
     assert all(
-        span.context.trace_id == agent_span.context.trace_id
-        for span in tool_spans
+        span.context.trace_id == agent_span.context.trace_id for span in tool_spans
     )
     assert all(
-        span.parent is not None
-        and span.parent.span_id == agent_span.context.span_id
+        span.parent is not None and span.parent.span_id == agent_span.context.span_id
         for span in tool_spans
     )
 
 
-def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: Path) -> None:
+def test_app_owns_one_runtime_and_emits_chain_hierarchy(
+    monkeypatch, tmp_path: Path
+) -> None:
     """The blocking App and fresh Orchestrator roots form one trace hierarchy."""
     from restscope import RESTScopeApp
     from restscope.agent import AgentProfile, SystemAgentTask
@@ -533,13 +513,23 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
             }
         },
     }
+    models_file = tmp_path / "models.toml"
+    models_file.write_text(
+        "[providers.openai_compatible]\n"
+        'api_key_env = "MODEL_API_KEY"\n'
+        "\n"
+        "[models.default]\n"
+        'provider = "openai_compatible"\n'
+        'model = "unused-model"\n',
+        encoding="utf-8",
+    )
     env_file = tmp_path / ".env"
     database = tmp_path / "tracing-app.sqlite"
     env_file.write_text(
         "\n".join(
             [
-                "THINK_API_KEY=thinking-secret",
-                "FAST_API_KEY=fast-secret",
+                f"MODELS_FILE={models_file}",
+                "MODEL_API_KEY=model-secret",
                 f"DB_URL=sqlite:///{database}",
             ]
         ),
@@ -549,7 +539,13 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
     registry = LLMProviderRegistry()
     registry.register(Provider())
     agent_definition = AgentRuntimeDefinition(
-        profiles=(AgentProfile(name="orchestrator", model_config_name="thinking"),),
+        profiles=(
+            AgentProfile(
+                name="orchestrator",
+                model_config_name="thinking",
+                reasoning_effort="none",
+            ),
+        ),
         models=(
             LLMModelConfig(
                 name="thinking",
@@ -591,7 +587,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
         "test.config-secrets",
         kind="CHAIN",
         input_value={
-            "keys": ["thinking-secret", "fast-secret"],
+            "keys": ["model-secret"],
             "authorization": "Bearer header-secret",
         },
     ):
@@ -611,8 +607,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
     assert len(agent_spans) == 2
     assert len(model_spans) == 2
     assert all(
-        span.parent is not None
-        and span.parent.span_id == app_span.context.span_id
+        span.parent is not None and span.parent.span_id == app_span.context.span_id
         for span in agent_spans
     )
     agent_span_ids = {span.context.span_id for span in agent_spans}
@@ -622,12 +617,10 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
     )
     assert app_span.attributes["openinference.span.kind"] == "CHAIN"
     assert all(
-        span.attributes["openinference.span.kind"] == "CHAIN"
-        for span in agent_spans
+        span.attributes["openinference.span.kind"] == "CHAIN" for span in agent_spans
     )
     assert all(
-        span.attributes["openinference.span.kind"] == "LLM"
-        for span in model_spans
+        span.attributes["openinference.span.kind"] == "LLM" for span in model_spans
     )
     assert json.loads(app_span.attributes["output.value"]) == {
         "runtime": "orchestration",
@@ -635,8 +628,7 @@ def test_app_owns_one_runtime_and_emits_chain_hierarchy(monkeypatch, tmp_path: P
     }
     assert app_span.attributes["restscope.output.truncated"] is False
     assert "header-secret" in rendered
-    assert "thinking-secret" not in rendered
-    assert "fast-secret" not in rendered
+    assert "model-secret" not in rendered
 
 
 def test_harness_rebinds_only_its_owned_trace_consumers() -> None:
@@ -704,7 +696,9 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
             {
                 "openapi": "3.0.3",
                 "info": {"title": "Trace HTTP", "version": "1"},
-                "paths": {"/large": {"get": {"responses": {"200": {"description": "ok"}}}}},
+                "paths": {
+                    "/large": {"get": {"responses": {"200": {"description": "ok"}}}}
+                },
             }
         ),
         baseline_schema_source={"kind": "inline", "format": "json", "content": "{}"},
@@ -729,7 +723,11 @@ def test_http_request_tool_keeps_full_result_while_trace_output_is_bounded() -> 
     assert result.status == "succeeded"
     assert len(result.structured["body"]) > 65536
     assert "runtime-secret" not in result.model_dump_json()
-    span = next(span for span in exporter.get_finished_spans() if span.name == "restscope.http.request")
+    span = next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.name == "restscope.http.request"
+    )
     assert span.attributes["restscope.output.truncated"] is True
     assert span.attributes["restscope.output.original_size_bytes"] > 65536
     assert "runtime-secret" not in span.attributes["output.value"]
@@ -764,7 +762,11 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
                 "/search": {
                     "get": {
                         "parameters": [
-                            {"name": "token", "in": "query", "schema": {"type": "string"}}
+                            {
+                                "name": "token",
+                                "in": "query",
+                                "schema": {"type": "string"},
+                            }
                         ],
                         "responses": {"200": {"description": "ok"}},
                     }
@@ -846,10 +848,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
         {
             "operation_key": result.operation_key,
             "seed": result.seed,
-            "cases": [
-                case.model_dump(mode="json")
-                for case in result.cases
-            ],
+            "cases": [case.model_dump(mode="json") for case in result.cases],
         }
     )
     assert "runtime-secret" not in rendered_result
@@ -859,9 +858,7 @@ def test_generic_batch_emits_sanitized_batch_and_case_spans(
     assert "generated-secret" in rendered_result
     spans = list(exporter.get_finished_spans())
     batch = next(
-        span
-        for span in spans
-        if span.name == "OperationTestingService.run_batch"
+        span for span in spans if span.name == "OperationTestingService.run_batch"
     )
     cases = [span for span in spans if span.name == "RESTScopeTestCase.execute"]
     assert len(cases) == 2

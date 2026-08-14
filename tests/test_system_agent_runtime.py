@@ -90,6 +90,7 @@ def _runtime(
                     name="chooser",
                     instructions="Choose one offered alias.",
                     model_config_name="fast",
+                    reasoning_effort="none",
                     tool_names=tool_names,
                 ),
             ),
@@ -138,10 +139,13 @@ def test_system_agent_retries_without_an_attempt_limit_until_output_is_valid() -
         "I2",
     ]
     assert provider.requests[0].tools == []
-    assert sum(
-        "rejected by the Harness" in message.content
-        for message in provider.requests[-1].messages
-    ) == 3
+    assert (
+        sum(
+            "rejected by the Harness" in message.content
+            for message in provider.requests[-1].messages
+        )
+        == 3
+    )
 
 
 def test_system_agent_invocations_use_unique_roots_and_can_repeat() -> None:
@@ -194,9 +198,7 @@ def test_system_agent_receives_every_tool_granted_by_its_profile() -> None:
         LLMResponse(
             provider="scripted",
             model="fast-model",
-            tool_calls=[
-                ToolCall(id="plan-read", name="plan.read", arguments={})
-            ],
+            tool_calls=[ToolCall(id="plan-read", name="plan.read", arguments={})],
         ),
         {"choice": "I1"},
         tool_names=("plan.read", "plan.update"),

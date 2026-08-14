@@ -22,13 +22,17 @@ BUSINESS_TABLES = {
     "abstract_test_cases",
     "oracle_assessments",
 }
+EMPTY_ENV = Path(__file__).with_name("missing.env")
 
 
 def _config(database_url: str):
     """Build one default App configuration with an isolated database URL."""
     from restscope.config import DBConfig, RESTScopeConfig
 
-    return replace(RESTScopeConfig.from_environment(), db=DBConfig(url=database_url))
+    return replace(
+        RESTScopeConfig.from_environment(EMPTY_ENV),
+        db=DBConfig(url=database_url),
+    )
 
 
 def test_default_app_creates_only_the_approved_persistent_business_tables(
@@ -45,7 +49,9 @@ def test_default_app_creates_only_the_approved_persistent_business_tables(
     config = _config("sqlite:///runtime.sqlite")
     app = RESTScopeApp(config)
     try:
-        assert set(inspect(create_engine_from_url(config.db.url)).get_table_names()) == {
+        assert set(
+            inspect(create_engine_from_url(config.db.url)).get_table_names()
+        ) == {
             "alembic_version",
             *BUSINESS_TABLES,
         }
@@ -59,9 +65,7 @@ def test_default_app_creates_only_the_approved_persistent_business_tables(
                         "info": {"title": "Bootstrap", "version": "1"},
                         "paths": {
                             "/health": {
-                                "get": {
-                                    "responses": {"200": {"description": "ok"}}
-                                }
+                                "get": {"responses": {"200": {"description": "ok"}}}
                             }
                         },
                     }

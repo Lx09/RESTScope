@@ -29,12 +29,7 @@ def build_api_behavior_monitor_coordinator(
     """
 
     runtime = tracing_runtime or TracingRuntime.disabled()
-    runtime.redactor.register_secrets(
-        (
-            config.llm.thinking.api_key,
-            config.llm.fast.api_key,
-        )
-    )
+    runtime.redactor.register_secrets(config.llm.api_keys)
     return APIBehaviorMonitorCoordinator(
         contract_tracker=ResponseContractTracker(catalog),
         catalog=catalog,

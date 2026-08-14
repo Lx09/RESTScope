@@ -6,6 +6,30 @@ import pytest
 from pydantic import ValidationError
 
 
+def test_agent_profile_requires_one_explicit_reasoning_effort() -> None:
+    """Every Agent session makes its thinking cost policy reviewable."""
+    from restscope.agent import AgentProfile
+
+    with pytest.raises(ValidationError, match="reasoning_effort"):
+        AgentProfile(name="missing-effort", model_config_name="default")
+
+    for effort in ("none", "low", "high", "max"):
+        profile = AgentProfile(
+            name=f"profile-{effort}",
+            model_config_name="default",
+            reasoning_effort=effort,
+        )
+        assert profile.reasoning_effort == effort
+
+    for unsupported in ("medium", "xhigh", "turbo"):
+        with pytest.raises(ValidationError, match="reasoning_effort"):
+            AgentProfile(
+                name=f"profile-{unsupported}",
+                model_config_name="default",
+                reasoning_effort=unsupported,
+            )
+
+
 def test_agent_profile_rejects_duplicate_access_names() -> None:
     """Scenario: repeated permissions are a construction error, not ambiguity."""
     from restscope.agent import AgentProfile
@@ -14,6 +38,7 @@ def test_agent_profile_rejects_duplicate_access_names() -> None:
         AgentProfile(
             name="failure_resolution",
             model_config_name="thinking",
+            reasoning_effort="none",
             tool_names=["openapi.list_inputs", "openapi.list_inputs"],
         )
 
@@ -25,6 +50,7 @@ def test_agent_profile_keeps_each_access_kind_explicit() -> None:
     profile = AgentProfile(
         name="failure_resolution",
         model_config_name="thinking",
+        reasoning_effort="none",
         tool_names=["openapi.list_inputs"],
         skill_names=["failure_diagnosis"],
         context_sources=["failure_sources"],
@@ -43,16 +69,23 @@ def test_agent_profile_accepts_only_a_bounded_optional_description() -> None:
         name="research",
         description="Investigate one bounded question for the parent Agent.",
         model_config_name="thinking",
+        reasoning_effort="none",
     )
 
     assert profile.description.startswith("Investigate")
     with pytest.raises(ValidationError):
-        AgentProfile(name="blank", description="", model_config_name="thinking")
+        AgentProfile(
+            name="blank",
+            description="",
+            model_config_name="thinking",
+            reasoning_effort="none",
+        )
     with pytest.raises(ValidationError):
         AgentProfile(
             name="large",
             description="X" * 2_001,
             model_config_name="thinking",
+            reasoning_effort="none",
         )
 
 
@@ -63,6 +96,7 @@ def test_agent_profile_accepts_only_bounded_nonblank_instructions() -> None:
     profile = AgentProfile(
         name="main",
         model_config_name="thinking",
+        reasoning_effort="none",
         instructions="Own semantic testing decisions.",
     )
 
@@ -71,12 +105,14 @@ def test_agent_profile_accepts_only_bounded_nonblank_instructions() -> None:
         AgentProfile(
             name="blank",
             model_config_name="thinking",
+            reasoning_effort="none",
             instructions="   \n",
         )
     with pytest.raises(ValidationError):
         AgentProfile(
             name="large",
             model_config_name="thinking",
+            reasoning_effort="none",
             instructions="X" * 12_001,
         )
 

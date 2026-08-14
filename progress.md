@@ -797,3 +797,32 @@
   suite with 629 passed and 13 skipped. No external service was called.
 - Implementation is verified but remains unstaged and uncommitted pending Git
   authorization.
+
+# Phase 32: Generic model catalog and Profile reasoning effort (2026-08-14)
+
+- User approved replacing THINK/FAST slots with an arbitrary named TOML model
+  catalog and moving mandatory `none/low/high/max` effort to `AgentProfile`.
+- User approved a direct environment Interface replacement with clear startup
+  errors for legacy names, plus concise App-wide environment names.
+- Confirmed a clean local `main`, three commits ahead of `origin/main`; Git
+  staging, commit, merge, push, and branch operations remain out of scope.
+- Confirmed TDD through the existing configuration, Profile/prompt, Provider,
+  and App/MCP startup seams. No external service will be called.
+- First tracer test is red as expected: `LLMConfig` has no `providers`
+  collection because production still exposes only `thinking` and `fast`.
+- Replaced the two fixed slots with one closed TOML Provider/model catalog,
+  exact model-name registration, environment-resolved Provider secrets, and
+  startup errors for malformed catalogs and every retired environment field.
+- Made Profile effort mandatory and reused it for every ordinary, continuation,
+  and compaction request. Production uses `default + high` for Orchestrator and
+  Task Executor, `default + low` for Parameter Patch, and `default + none` for
+  the two resource selectors.
+- Atomically migrated the ignored local `.env` and created ignored
+  `models.toml`; both keys were confirmed ignored and no secret entered the
+  tracked diff. Added tracked `.env.example` and `models.example.toml`.
+- Updated current README/navigation/source terminology while preserving
+  historical task records. Confirmed the official DeepSeek Thinking Mode wire
+  contract without making a live Provider call.
+- Final fresh verification passed: 730 tests with 2 skips; Ruff; Python
+  compilation; the repository `typing.Any` guard; retired runtime-read scan;
+  and `git diff --check`. No DeepSeek, Phoenix, MCP, or target API was called.
