@@ -221,13 +221,15 @@ validation and execution but does not decide testing semantics.
 
 The Orchestrator Profile has no Tools, Skills, or children. Its only Context
 Source is `test-progress`, freshly read through the Catalog's one aggregate and
-safely rendered by `harness/test_progress.py`. Each operation record carries four
-independent progress values: positive/negative Batch attempts and
-positive/negative executed cases. A read failure stops the root.
-The Task Executor Profile has the
-API-testing Tools, exploration and failure-resolution Skills, a private
-intra-task Plan, and one Parameter Patch child. Neither profile carries state
-between root invocations.
+safely rendered by `harness/test_progress.py`. Each operation record carries
+four independent progress values: positive/negative Batch attempts and
+positive/negative executed cases. Its stable instructions own cross-Task REST
+API exploration, including Operation priority, prerequisites, testing phase,
+coverage, and completion. A read failure stops the root. The Task Executor
+Profile has API-testing Tools, the Failure Resolution Skill, a private
+intra-task Plan, and one Parameter Patch child. It executes only the assigned
+Operation and testing purpose. Neither profile carries state between root
+invocations.
 
 ### `restscope/orchestration/`
 

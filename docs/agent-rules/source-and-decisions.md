@@ -66,7 +66,11 @@ as the active project direction.
 
 - OpenAPI operations are discovered from the supplied source at runtime.
 - Testing evidence may change dependency analysis and scheduling while a run is
-  in progress.
+  in progress. The Orchestrator's stable instructions own cross-Task REST API
+  exploration strategy: Operation priority, prerequisites, happy-path versus
+  exceptional phase selection, coverage gaps, and completion. A Task Executor
+  follows one dispatched Operation and testing purpose, resolving failures only
+  inside that assignment; it never selects the next Operation or phase.
 - The approved Orchestrator owns long-task planning, ordering, Replan, and
   completion through an App-lifetime in-memory Ledger. Each bounded Task Executor
   owns Skill, Tool, Parameter Patch delegation, and evidence-driven retry

@@ -134,12 +134,25 @@ def test_production_profiles_separate_planning_from_task_execution(
     assert [item.name for item in definition.context_sources] == ["test-progress"]
     assert profile.name == "task-executor"
     assert profile.model_config_name == "thinking"
-    assert "test_case.run_batch" in profile.tool_names
-    assert "parameter_patch.apply" not in profile.tool_names
-    assert profile.skill_names == (
-        "explore-api-behavior",
-        "resolve-operation-failures",
+    assert profile.tool_names == (
+        "plan.read",
+        "plan.update",
+        "openapi.list_operations",
+        "openapi.list_inputs",
+        "openapi.list_response_fields",
+        "openapi.get_input_schema",
+        "openapi.get_response_field_schema",
+        "request_generation.get_input_state",
+        "test_case.run_batch",
+        "test_case.get_batch_results",
+        "test_case.get",
+        "restscope.http.request",
+        "subagent.start",
+        "subagent.wait",
+        "subagent.cancel",
+        "file.read",
     )
+    assert profile.skill_names == ("resolve-operation-failures",)
     assert profile.context_sources == ()
     assert profile.subagent_profile_names == ("parameter-patch",)
     patch_profile = next(
@@ -148,7 +161,20 @@ def test_production_profiles_separate_planning_from_task_execution(
     assert patch_profile.skill_names == ("apply-parameter-patch",)
     assert "parameter_patch.apply" in patch_profile.tool_names
 
-    assert "single Task" in profile.instructions
+    assert "Prioritize operations" in orchestrator.instructions
+    assert "reproducible happy-path" in orchestrator.instructions
+    assert "`happy_path`" in orchestrator.instructions
+    assert "`exceptional`" in orchestrator.instructions
+    assert (
+        "`completed`, `partial`, `blocked`, or lifecycle failure"
+        in orchestrator.instructions
+    )
+    assert "`bug_found`" in orchestrator.instructions
+    assert "`unknown` or `not_met`" in orchestrator.instructions
+    assert "Do not choose the next Operation" in profile.instructions
+    assert "return `blocked` rather than expanding" in profile.instructions
+    assert "`resolve-operation-failures`" in profile.instructions
+    assert "`bug_found`" in profile.instructions
     assert {item.profile_name for item in definition.system_agents}.issuperset({
         "orchestrator",
         "task-executor",

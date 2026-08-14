@@ -143,9 +143,10 @@ Each standard `SKILL.md` frontmatter contains only `name` and `description`,
 while `restscope.yaml` declares version, risk, required Tools, and bounded
 Context Sources. `restscope.skills` automatically discovers these packaged
 files and exposes an immutable built-in Catalog; callers may add test
-definitions but cannot replace a built-in. The production Task Executor selects
-both exploration and failure-resolution Skills; its Parameter Patch child
-selects only `apply-parameter-patch`.
+definitions but cannot replace a built-in. Cross-Task REST API exploration is
+always-required Orchestrator Profile guidance rather than an optional Skill.
+The production Task Executor selects only `resolve-operation-failures`; its
+Parameter Patch child selects only `apply-parameter-patch`.
 The retired specialized Failure Resolution, Patch, Review, and Compact Agents
 are not runtime fallbacks.
 
@@ -538,9 +539,11 @@ Python embedders may instead construct `RESTScopeApp(config)`, or call
 `RESTScopeApp.start(focus=None)` blocks until the outer Orchestrator completes,
 is interrupted, or fails safely. The optional focus narrows a run but cannot
 replace RESTScope's fixed mission. The Orchestrator has only the read-only
-`test-progress` Context Source and no Tool, Skill, or child capability; each
-fresh Task Executor has the API-testing Tools and Skills needed for one
-dispatched Task plus one Parameter Patch child.
+`test-progress` Context Source and no Tool, Skill, or child capability. Its
+stable instructions own Operation ordering, prerequisites, testing phase,
+coverage, and completion. Each fresh Task Executor has the API-testing Tools,
+Failure Resolution Skill, and Parameter Patch child needed to execute one
+dispatched Task without choosing what comes next.
 
 App construction prepares the database before building the default capability
 and LLM runtimes. If construction fails, RESTScope removes only the SQLite file

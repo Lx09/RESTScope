@@ -204,12 +204,15 @@ ask which direction to preserve if the answer would affect implementation.
 
 These seven terms are RESTScope's core runtime language and hard constraints:
 
-- **Orchestrator** is the outer, no-Tool System Agent that owns Milestones,
-  Task dispatch, Replan, and semantic completion through the App-lifetime
-  in-memory Task Ledger. **Task Executor** is a fresh System Agent root that owns
-  execution only inside one dispatched Task. It may choose authorized Skills,
-  Tools, Parameter Patch Subagent work, and evidence-driven retries, but never
-  the next Task. **Subagent** is an independent, task-scoped use of the same
+- **Orchestrator** is the outer, no-Tool System Agent that owns REST API
+  exploration strategy, Operation ordering, prerequisites, happy-path and
+  exceptional phase selection, Milestones, Task dispatch, Replan, and semantic
+  completion through the App-lifetime in-memory Task Ledger. **Task Executor**
+  is a fresh System Agent root that executes only one dispatched Task. It may
+  choose authorized Tools, load Failure Resolution, delegate Parameter Patch
+  work, and make evidence-driven retries inside that assignment, but never
+  choose the next Operation, testing phase, or Task. **Subagent** is an
+  independent, task-scoped use of the same
   configurable Agent runtime, started only after its direct parent requests it.
   Do not create separate Agent inheritance trees or new domain-specific
   `*Agent` classes. `RESTScopeApp.start(focus)` blocks on
@@ -220,6 +223,8 @@ These seven terms are RESTScope's core runtime language and hard constraints:
   The Reader calls only `APIBehaviorCatalog.read_test_progress()`, renders at
   most 12,000 characters through `CompactTextWriter`, and fails the fresh root
   if progress cannot be read; it does not query tables or interpret states.
+  The always-required REST API exploration policy lives in the Orchestrator's
+  stable Profile instructions rather than an optional Skill.
 - **System Agent** is a synchronous, repeatable root use of the same generic
   Agent, started only through a Harness-registered Profile/result contract.
   Every call owns an isolated prompt session and Agent tree and is closed after

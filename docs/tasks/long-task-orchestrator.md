@@ -1,6 +1,6 @@
 # Long-task Orchestrator
 
-Status: Implemented and verified on local `main`; uncommitted
+Status: Implemented and verified in a dedicated feature worktree; uncommitted
 
 ## Objective
 
@@ -41,13 +41,24 @@ each bounded task.
   remain within 18,000 characters.
 - Replan, Task, and Task Execution Result text is limited to 4,000, 4,000, and
   6,000 aggregate characters respectively before Ledger mutation.
+- Cross-Task REST API exploration strategy belongs to the Orchestrator's stable
+  instructions because every planning decision needs it. Task Executors follow
+  one assigned Operation and testing purpose, load Failure Resolution only when
+  execution evidence requires it, and never choose the next Operation or phase.
+- The retired exploration Skill is not retained as a compatibility path. Its
+  execution-level safety rules live in Task Executor instructions.
 
 ## Verification
 
+- Focused Profile, Skill, Orchestration, Ledger, Failure Resolution, and Patch
+  tests — 58 passed.
 - `uv run ruff check restscope tests` — passed.
 - `uv run python -m compileall -q restscope tests` — passed.
-- `uv run pytest -q` — 633 passed, 2 skipped.
-- `git diff --check` — passed.
-- The skipped tests are existing opt-in live service/provider checks.
-- `mypy` is not installed in the locked workspace environment, so no mypy
-  result is claimed.
+- `uv run pytest -q` — 630 passed, 13 skipped.
+- `uv build` — source distribution and wheel built successfully; both contain
+  only the two retained production Skills.
+- Changed Python scope contains no `typing.Any`; old exploration Skill names and
+  ownership descriptions are absent from production code, tests, and current
+  documentation; `git diff --check` passed.
+- The skipped tests are existing opt-in live service/provider checks. No real
+  model, target API, MCP server, or other external service was called.

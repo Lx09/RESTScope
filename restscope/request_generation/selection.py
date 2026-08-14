@@ -1,10 +1,12 @@
 """Choose positive and negative Generator candidates for one Batch slot.
 
-The Task Executor chooses happy-path or exceptional testing. This module then
-performs only deterministic mechanics: separate epsilon-greedy selection for
-positive and negative candidates, the exceptional 50/50 action split, and
-whole-component Constraint removal. It receives frozen reward statistics and
-returns one selected configuration; it performs no I/O or persistence.
+The Orchestrator's dispatched Task defines whether testing serves a happy path
+or an exceptional case, and the Task Executor supplies that mode while carrying
+out the assignment. This module performs only deterministic mechanics: separate
+epsilon-greedy selection for positive and negative candidates, the exceptional
+50/50 action split, and whole-component Constraint removal. It receives frozen
+reward statistics and returns one selected configuration; it performs no I/O or
+persistence.
 """
 
 from __future__ import annotations

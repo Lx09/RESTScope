@@ -239,6 +239,18 @@ def test_additional_definitions_cannot_replace_a_builtin() -> None:
         )
 
 
+def test_production_catalog_contains_only_reusable_execution_methods() -> None:
+    """Cross-Task exploration policy belongs to the Orchestrator instructions."""
+    from restscope.skills import builtin_skill_catalog
+
+    assert tuple(
+        skill.name for skill in builtin_skill_catalog().definitions()
+    ) == (
+        "apply-parameter-patch",
+        "resolve-operation-failures",
+    )
+
+
 def _client_for_duplicate_test():
     """Build the smallest provider registry used by duplicate validation."""
     from restscope.llm import LLMClient

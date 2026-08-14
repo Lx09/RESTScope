@@ -42,7 +42,7 @@ from restscope.orchestration.models import OrchestratorDecision, TaskExecutionRe
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
 
 _PATCH_PROFILE_NAME = "parameter-patch"
-_TASK_EXECUTOR_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
+_TASK_EXECUTOR_SKILLS = ("resolve-operation-failures",)
 _TASK_EXECUTOR_TOOLS = (
     PLAN_READ_TOOL_NAME,
     PLAN_UPDATE_TOOL_NAME,
@@ -80,16 +80,34 @@ _ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator
 - On the first call, return replan and create a small rolling set of verifiable
   Milestones. On later calls, return exactly one replan, dispatch_task, or
   complete decision.
-- Every dispatched Task must name one current Milestone, explain why it serves
-  the Goal, and give criterion IDs that the Task Executor can report exactly once.
+- Plan REST API exploration across Tasks. Honor the run focus and confirmed
+  prerequisites first. Prioritize operations without reproducible happy-path
+  evidence, and prefer safe read-only discovery before work that may change
+  target state.
+- When an Operation lacks a required resource, identifier, or state, first
+  dispatch one bounded prerequisite Task that can establish or discover it.
+- After a reproducible happy path exists, plan worthwhile exceptional testing;
+  exceptional evidence may justify earlier testing. Progress and resource-state
+  counts identify coverage opportunities but never prove API behavior.
+- Every testing Task must name one exact Operation, specify a `happy_path` or
+  `exceptional` purpose, explain why it serves one current Milestone, and give
+  evidence criteria the Task Executor can report exactly once. A prerequisite
+  Task must likewise have one bounded objective.
+- Use a `completed`, `partial`, `blocked`, or lifecycle failure result as follows:
+  replan to complete a satisfied Milestone when useful work remains, or complete
+  the run when none does; dispatch different follow-up work when missing evidence
+  is still obtainable; replan when an assumption fails; and retry only when a
+  method, state, or prerequisite materially changes.
+- A skipped exceptional slot is unavailable coverage, not evidence. Count a Bug
+  only when the Task result reports `bug_found` after replay confirmation.
 - Replan when evidence changes what future work is useful. A replan may split,
   merge, reorder, supersede, or reopen work, but must change the future plan and
   must never change the Goal or rewrite prior Tasks or Attempts.
 - Do not repeat a failed Task unchanged unless a new reason or changed state
   makes the next attempt materially different.
-- Treat missing positive or negative progress as current evidence, not proof that
-  an operation is irrelevant. Complete only after assessing every Goal criterion,
-  the current test progress, and naming unresolved work.
+- Complete only when no reasonable safe coverage work remains. Assess every Goal
+  criterion and current progress; every `unknown` or `not_met` verdict must also
+  appear in unresolved work with its reason.
 - Return only the required structured OrchestratorDecision.
 """
 
@@ -97,13 +115,21 @@ _TASK_EXECUTOR_PROFILE_INSTRUCTIONS = """You are RESTScope's Task Executor for o
 
 - Work only on the Goal summary, current Milestone, single Task, success
   criteria, and selected Attempt history supplied in this fresh root call.
-- Own semantic execution inside that Task: choose appropriate authorized Skills,
-  Tools, Parameter Patch child work, order, and evidence-driven retries.
-- Find reproducible happy-path or exceptional evidence required by the Task.
-  Report a Bug only when the authorized behavior workflow confirms it by replay.
-- Inspect authorized Skill metadata and load the Skills relevant to the current
-  work. Skills provide methods; they do not grant access or override this
-  Profile or the Harness contract.
+- Do not choose the next Operation, testing phase, cross-Task order, or overall
+  coverage. Follow the assigned Operation, testing purpose, and criteria. If the
+  assignment lacks enough information, return `blocked` rather than expanding
+  its scope.
+- Own execution inside that Task: choose authorized Tools, Parameter Patch child
+  work, order, and evidence-driven retries. Load `resolve-operation-failures`
+  when request or Batch evidence requires diagnosis.
+- Keep failure recovery inside the Task while its criteria remain unchanged.
+  After a Parameter Patch, run a fresh Batch; applying a Patch is not HTTP
+  success. Return `partial` or `blocked` when authentication, permission,
+  resource state, method, server, or another prerequisite cannot be resolved
+  safely inside the assignment.
+- A successful Tool call, skipped exceptional slot, or exceptional 2xx is not
+  completion or Bug evidence. Report a Bug only when the result says
+  `bug_found` after replay confirmation.
 - Use the private Plan only as short-lived intra-task working memory. It is not
   the outer Ledger, evidence, a scheduler, or cross-task memory.
 - Use a child Profile only when its described capability fits a bounded piece

@@ -24,8 +24,12 @@ owns a fresh Prompt Session and Agent tree, returns one validated structured
 result, and closes. The Orchestrator has no Tools, Skills, or children. Its one
 later-approved input is the read-only `test-progress` Context Source.
 Harness freshly reads its deep Catalog aggregate for every root and stops the
-root if that read fails. The Task Executor owns execution inside one Task, may use API-testing
-Tools and Skills, and may delegate only Parameter Patch work to its child.
+root if that read fails. Always-required REST API exploration policy lives in
+the Orchestrator's stable instructions: it owns Operation priority,
+prerequisites, happy-path and exceptional phase selection, coverage, and
+completion. The Task Executor owns execution inside one assigned Operation and
+testing purpose, may use API-testing Tools and the Failure Resolution Skill,
+and may delegate only Parameter Patch work to its child.
 
 The Orchestrator may revise future work but cannot modify the fixed Goal or
 rewrite prior Task and Attempt history. Its first decision must create a plan;
