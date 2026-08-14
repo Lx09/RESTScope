@@ -68,7 +68,7 @@ as the active project direction.
 - Testing evidence may change dependency analysis and scheduling while a run is
   in progress.
 - The approved Orchestrator owns long-task planning, ordering, Replan, and
-  completion through an App-lifetime in-memory Ledger. Each bounded Main Worker
+  completion through an App-lifetime in-memory Ledger. Each bounded Task Executor
   owns Skill, Tool, Parameter Patch delegation, and evidence-driven retry
   choices only inside its dispatched Task. The Harness validates and executes
   authorized contracts but chooses no testing work. `RESTScopeApp.start()`

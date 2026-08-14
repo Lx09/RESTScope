@@ -1,6 +1,6 @@
 ---
 name: explore-api-behavior
-description: Explore an initialized REST API by finding reproducible happy paths, including resource identifiers from different observed states, then performing exceptional testing with replay-confirmed Bug evidence. Use when the Main Agent must choose happy_path or exceptional Batches, expand useful positive Generator candidates through a Patch Subagent, and maximize distinct confirmed API bugs without persisting a test plan.
+description: Explore an initialized REST API by finding reproducible happy paths, including resource identifiers from different observed states, then performing exceptional testing with replay-confirmed Bug evidence. Use when the Task Executor must choose happy_path or exceptional Batches, expand useful positive Generator candidates through a Patch Subagent, and maximize distinct confirmed API bugs without persisting a test plan.
 ---
 
 # Explore API Behavior

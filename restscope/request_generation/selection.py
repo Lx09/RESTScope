@@ -1,6 +1,6 @@
 """Choose positive and negative Generator candidates for one Batch slot.
 
-The Main Agent chooses happy-path or exceptional testing. This module then
+The Task Executor chooses happy-path or exceptional testing. This module then
 performs only deterministic mechanics: separate epsilon-greedy selection for
 positive and negative candidates, the exceptional 50/50 action split, and
 whole-component Constraint removal. It receives frozen reward statistics and
@@ -31,7 +31,7 @@ type BanditKey = tuple[CandidateKind, str, str]
 
 
 class TestMode(StrEnum):
-    """Name the Main Agent's semantic purpose for one Batch."""
+    """Name the Task Executor's semantic purpose for one Batch."""
 
     HAPPY_PATH = "happy_path"
     EXCEPTIONAL = "exceptional"

@@ -169,8 +169,10 @@ explicit project decision:
   complete schema-v3 snapshots in same-origin IndexedDB, including the
   already-redacted raw Provider Reasoning, Agent messages, target
   Authorization/Cookie values, Tool details, HTTP exchanges, Subagent
-  relationships, and the current Main Worker's private Plan projection as Todo delivered
-  to that browser. Batch execution and Parameter Patch application appear as
+  relationships, and the legacy ``lifecycle=main`` Plan projection as Todo
+  delivered to that browser. Current Task Executor Plans remain ordinary
+  System Agent tracing and do not replace that Todo. Batch execution and
+  Parameter Patch application appear as
   ordinary Tool cards rather than special workflow events.
   It must not add a backend write API, SQLite record, cross-origin sync, or
   runtime input. Clearing browser site data removes this history; the App and
@@ -188,13 +190,13 @@ Module design documents under `docs/` remain useful context. When they conflict
 with current code, tests, or a newer approved decision, expose the conflict and
 ask which direction to preserve if the answer would affect implementation.
 
-## Orchestrator, Main Worker, Subagent, System Agent, Skill, Tool, and Harness boundaries
+## Orchestrator, Task Executor, Subagent, System Agent, Skill, Tool, and Harness boundaries
 
 These seven terms are RESTScope's core runtime language and hard constraints:
 
 - **Orchestrator** is the outer, no-Tool System Agent that owns Milestones,
   Task dispatch, Replan, and semantic completion through the App-lifetime
-  in-memory Task Ledger. **Main Worker** is a fresh System Agent root that owns
+  in-memory Task Ledger. **Task Executor** is a fresh System Agent root that owns
   execution only inside one dispatched Task. It may choose authorized Skills,
   Tools, Parameter Patch Subagent work, and evidence-driven retries, but never
   the next Task. **Subagent** is an independent, task-scoped use of the same
@@ -243,7 +245,7 @@ These seven terms are RESTScope's core runtime language and hard constraints:
   capabilities into authorized Tools. `test_case.run_batch` returns bounded
   inline evidence and creates no run-local registry. The retired run-scoped FIFO and
   retry scheduler must not be restored; Orchestration owns cross-Task semantic
-  scheduling while a Main Worker owns only its bounded execution.
+  scheduling while a Task Executor owns only its bounded execution.
 - `run_system_agent(profile_name, task)` may start only a Profile registered by
   an immutable `SystemAgentDefinition`. Registration binds bounded task input
   and the structured result contract but grants no capability: the unchanged
@@ -265,7 +267,7 @@ These seven terms are RESTScope's core runtime language and hard constraints:
   three.
 - `plan.read` and `plan.update` are an optional paired Profile grant for one
   Agent's private task Plan. The Harness creates a separate in-memory Plan for
-  every Main Worker and Subagent session. Plans are not shared between Agents,
+  every Task Executor and Subagent session. Plans are not shared between Agents,
   persisted, or exposed as scheduler state.
 - Parent and child Agents share only deterministic tree control: weighted model
   budget, open/active slots, cancellation, tracing parentage, and bounded

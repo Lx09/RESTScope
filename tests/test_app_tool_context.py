@@ -70,11 +70,11 @@ def _app(monkeypatch, tmp_path):
     return app
 
 
-def test_production_profiles_separate_planning_from_worker_execution(
+def test_production_profiles_separate_planning_from_task_execution(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Orchestrator has no grants; each Worker may use one Patch child."""
+    """Orchestrator has no grants; each Task Executor may use one Patch child."""
     from restscope.app.profiles import _build_agent_runtime_definition
     from restscope.config import RESTScopeConfig
     from restscope.llm import LLMClient, LLMResponse
@@ -125,7 +125,7 @@ def test_production_profiles_separate_planning_from_worker_execution(
     assert orchestrator.tool_names == ()
     assert orchestrator.skill_names == ()
     assert orchestrator.subagent_profile_names == ()
-    assert profile.name == "main-worker"
+    assert profile.name == "task-executor"
     assert profile.model_config_name == "thinking"
     assert "test_case.run_batch" in profile.tool_names
     assert "parameter_patch.apply" not in profile.tool_names
@@ -144,7 +144,7 @@ def test_production_profiles_separate_planning_from_worker_execution(
     assert "single Task" in profile.instructions
     assert {item.profile_name for item in definition.system_agents}.issuperset({
         "orchestrator",
-        "main-worker",
+        "task-executor",
     })
 
 

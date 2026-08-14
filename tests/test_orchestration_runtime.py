@@ -25,8 +25,8 @@ class _ScriptedSystemAgentRunner:
         )
 
 
-def test_runtime_replans_dispatches_one_fresh_worker_and_completes() -> None:
-    """One bounded Worker result returns to the outer Ledger before completion."""
+def test_runtime_replans_dispatches_one_fresh_executor_and_completes() -> None:
+    """One bounded execution result returns to the Ledger before completion."""
     from restscope.orchestration import OrchestrationRuntime
 
     runner = _ScriptedSystemAgentRunner(
@@ -105,7 +105,7 @@ def test_runtime_replans_dispatches_one_fresh_worker_and_completes() -> None:
     assert [profile for profile, _task in runner.calls] == [
         "orchestrator",
         "orchestrator",
-        "main-worker",
+        "task-executor",
         "orchestrator",
     ]
     assert result.summary == "The focused happy path was confirmed."
@@ -121,8 +121,8 @@ def test_runtime_replans_dispatches_one_fresh_worker_and_completes() -> None:
     assert len({call[1].objective for call in runner.calls}) == 4
 
 
-def test_worker_lifecycle_failure_is_recorded_before_replan() -> None:
-    """A failed Worker root returns control through an immutable Attempt."""
+def test_executor_lifecycle_failure_is_recorded_before_replan() -> None:
+    """A failed Task Executor root returns through an immutable Attempt."""
     from restscope.agent import AgentError, AgentUsage, SystemAgentResult
     from restscope.orchestration import OrchestrationRuntime
 
@@ -131,10 +131,10 @@ def test_worker_lifecycle_failure_is_recorded_before_replan() -> None:
 
         def run_system_agent(self, profile_name: str, task: object):
             """Inject the failure without bypassing normal call recording."""
-            if profile_name == "main-worker":
+            if profile_name == "task-executor":
                 self.calls.append((profile_name, task))
                 return SystemAgentResult(
-                    session_id="failed_worker",
+                    session_id="failed_executor",
                     profile_name=profile_name,
                     status="failed",
                     error=AgentError(code="provider_failed", message="Provider stopped."),
@@ -178,7 +178,7 @@ def test_worker_lifecycle_failure_is_recorded_before_replan() -> None:
                     {
                         "criterion_id": f"goal_{index}",
                         "status": "unknown",
-                        "explanation": "Worker lifecycle failed.",
+                        "explanation": "Task Executor lifecycle failed.",
                     }
                     for index in range(1, 4)
                 ],
@@ -195,12 +195,177 @@ def test_worker_lifecycle_failure_is_recorded_before_replan() -> None:
     assert [name for name, _task in runner.calls] == [
         "orchestrator",
         "orchestrator",
-        "main-worker",
+        "task-executor",
         "orchestrator",
     ]
 
 
-def test_hundred_worker_rounds_keep_each_prompt_projection_bounded() -> None:
+def test_next_orchestrator_call_receives_the_task_attempt_causal_chain() -> None:
+    """The next decision sees why work ran and what it actually established."""
+    from restscope.orchestration import OrchestrationRuntime
+
+    runner = _ScriptedSystemAgentRunner(
+        [
+            {
+                "kind": "replan",
+                "expected_plan_revision": 0,
+                "reason": "Prioritize one known pet happy path before errors.",
+                "milestones": [
+                    {
+                        "title": "Confirm pets",
+                        "purpose": "Establish a reproducible happy path.",
+                        "success_criteria": ["GET /pets returns 2xx."],
+                    }
+                ],
+            },
+            {
+                "kind": "dispatch_task",
+                "expected_plan_revision": 1,
+                "task": {
+                    "milestone_id": "milestone_1",
+                    "objective": "Probe GET /pets with a known identifier.",
+                    "purpose": "Confirm the pet milestone before exceptional testing.",
+                    "success_criteria": [
+                        {
+                            "criterion_id": "criterion_1",
+                            "description": "The known pet request returns 2xx.",
+                        }
+                    ],
+                },
+            },
+            {
+                "task_id": "task_1",
+                "outcome": "partial",
+                "criteria": [
+                    {
+                        "criterion_id": "criterion_1",
+                        "status": "unknown",
+                        "explanation": "The identifier source was empty.",
+                    }
+                ],
+                "unresolved_issues": ["A valid pet identifier is still required."],
+            },
+            {
+                "kind": "complete",
+                "expected_plan_revision": 1,
+                "goal_criteria": [
+                    {
+                        "criterion_id": f"goal_{index}",
+                        "status": "unknown",
+                        "explanation": "The focused attempt remained unresolved.",
+                    }
+                    for index in range(1, 4)
+                ],
+                "summary": "The run retained its unresolved causal evidence.",
+            },
+        ]
+    )
+
+    OrchestrationRuntime(runner).run()
+
+    next_decision = runner.calls[-1][1].objective
+    assert "Prioritize one known pet happy path before errors." in next_decision
+    assert "Probe GET /pets with a known identifier." in next_decision
+    assert "Confirm the pet milestone before exceptional testing." in next_decision
+    assert "The identifier source was empty." in next_decision
+    assert "A valid pet identifier is still required." in next_decision
+
+
+def test_orchestrator_contract_rejects_an_oversized_future_plan() -> None:
+    """A large rolling plan receives correction before it can reach the Ledger."""
+    from restscope.agent import SystemAgentTask
+    from restscope.orchestration.contracts import validate_orchestrator_output
+    from restscope.orchestration.models import OrchestratorDecision
+
+    output = OrchestratorDecision.model_validate(
+        {
+            "kind": "replan",
+            "expected_plan_revision": 0,
+            "reason": "Create an intentionally oversized future plan.",
+            "milestones": [
+                {
+                    "title": f"Milestone {index}",
+                    "purpose": "p" * 1_500,
+                    "success_criteria": ["One bounded result is required."],
+                }
+                for index in range(3)
+            ],
+        }
+    )
+    task = SystemAgentTask(
+        objective="Choose the first plan.",
+        allowed_result_aliases=("revision_0", "goal_1", "goal_2", "goal_3"),
+    )
+
+    assert validate_orchestrator_output(output, task) == (
+        "Replan future work text must not exceed 4000 characters.",
+    )
+
+
+def test_orchestration_contracts_reject_oversized_task_and_execution_text() -> None:
+    """Task prompts and results stay small enough for the required context."""
+    from restscope.agent import SystemAgentTask
+    from restscope.orchestration.contracts import (
+        validate_orchestrator_output,
+        validate_task_execution_output,
+    )
+    from restscope.orchestration.models import OrchestratorDecision, TaskExecutionResult
+
+    task_decision = OrchestratorDecision.model_validate(
+        {
+            "kind": "dispatch_task",
+            "expected_plan_revision": 1,
+            "task": {
+                "milestone_id": "milestone_1",
+                "objective": "o" * 3_000,
+                "purpose": "p" * 1_500,
+                "success_criteria": [
+                    {
+                        "criterion_id": "criterion_1",
+                        "description": "One result is required.",
+                    }
+                ],
+            },
+        }
+    )
+    orchestrator_task = SystemAgentTask(
+        objective="Choose one task.",
+        allowed_result_aliases=(
+            "revision_1",
+            "goal_1",
+            "goal_2",
+            "goal_3",
+            "milestone_1",
+        ),
+    )
+    assert validate_orchestrator_output(task_decision, orchestrator_task) == (
+        "Dispatched Task text must not exceed 4000 characters.",
+    )
+
+    result = TaskExecutionResult.model_validate(
+        {
+            "task_id": "task_1",
+            "outcome": "partial",
+            "criteria": [
+                {
+                    "criterion_id": f"criterion_{index}",
+                    "status": "unknown",
+                    "explanation": "e" * 3_000,
+                }
+                for index in range(1, 3)
+            ],
+        }
+    )
+    executor_task = SystemAgentTask(
+        objective="Execute one task.",
+        allowed_result_aliases=("task_1", "criterion_1", "criterion_2"),
+    )
+    assert validate_task_execution_output(result, executor_task) == (
+        "Task execution result text must not exceed 6000 characters.",
+    )
+
+
+def test_hundred_execution_rounds_keep_each_prompt_projection_bounded() -> None:
     """Complete history stays in the Ledger while model inputs remain rolling."""
     from restscope.orchestration import OrchestrationRuntime
 
@@ -225,7 +390,9 @@ def test_hundred_worker_rounds_keep_each_prompt_projection_bounded() -> None:
                     "expected_plan_revision": index,
                     "task": {
                         "milestone_id": f"milestone_{index}",
-                        "objective": f"Execute bounded task {index}.",
+                        "objective": (
+                            f"Execute bounded task {index}. " + "task-context-" * 55
+                        ),
                         "purpose": "Exercise one bounded operation.",
                         "success_criteria": [
                             {
@@ -242,7 +409,10 @@ def test_hundred_worker_rounds_keep_each_prompt_projection_bounded() -> None:
                         {
                             "criterion_id": "criterion_1",
                             "status": "met",
-                            "explanation": "Scripted evidence satisfied it.",
+                            "explanation": (
+                                f"Scripted evidence satisfied task {index}. "
+                                + "result-context-" * 50
+                            ),
                         }
                     ],
                 },
@@ -270,3 +440,10 @@ def test_hundred_worker_rounds_keep_each_prompt_projection_bounded() -> None:
     assert len(result.ledger.attempts) == 100
     assert result.ledger.plan_revision == 100
     assert max(len(task.objective) for _profile, task in runner.calls) <= 18_000
+    final_prompt = runner.calls[-1][1].objective
+    assert "Return exactly one replan, dispatch_task, or complete" in final_prompt
+    assert "Open bounded milestone 100." in final_prompt
+    assert "Execute bounded task 100." in final_prompt
+    assert "Execute bounded task 99." in final_prompt
+    assert "Execute bounded task 81." not in final_prompt
+    assert "optional history records omitted" in final_prompt

@@ -2,7 +2,7 @@
 
 This is the only module that knows the long-task control flow. It calls the
 existing Harness System Agent lifecycle for each Orchestrator decision and each
-Main Worker task, then asks :class:`TaskLedger` to validate every transition.
+Task Executor run, then asks :class:`TaskLedger` to validate every transition.
 """
 
 from __future__ import annotations
@@ -13,14 +13,17 @@ from restscope.harness import HarnessRuntime
 
 from .ledger import TaskLedger
 from .models import (
+    AttemptRecord,
     CompleteDecision,
     DispatchTaskDecision,
     GoalContract,
     GoalCriterion,
-    MainTaskResult,
+    MilestoneRecord,
     OrchestrationResult,
     OrchestratorDecision,
+    PlanRevisionRecord,
     ReplanDecision,
+    TaskExecutionResult,
     TaskRecord,
 )
 
@@ -32,7 +35,7 @@ _MISSION = (
 
 
 class OrchestrationRuntime:
-    """Coordinate fresh Orchestrator and Worker roots around one durable Ledger."""
+    """Coordinate fresh planning and execution roots around one in-memory Ledger."""
 
     def __init__(self, system_agents: HarnessRuntime) -> None:
         """Accept the Harness-owned lifecycle without copying Agent machinery."""
@@ -72,8 +75,8 @@ class OrchestrationRuntime:
                     expected_revision=decision.expected_plan_revision,
                 )
                 try:
-                    worker_result = self._run_worker(goal, ledger, task)
-                except _WorkerLifecycleError as exc:
+                    execution_result = self._run_task_executor(goal, ledger, task)
+                except _TaskExecutorLifecycleError as exc:
                     # A failed fresh root is still material history. Recording
                     # it lets the Orchestrator choose a changed recovery task.
                     ledger.append_failure(
@@ -88,11 +91,11 @@ class OrchestrationRuntime:
                     message = str(exc).strip() or type(exc).__name__
                     ledger.append_failure(
                         task.task_id,
-                        failure_code="worker_lifecycle_error",
+                        failure_code="task_executor_lifecycle_error",
                         failure_message=message[:2_000],
                     )
                 else:
-                    ledger.append_attempt(worker_result)
+                    ledger.append_attempt(execution_result)
                 continue
 
             final_snapshot = ledger.complete(decision)
@@ -128,27 +131,27 @@ class OrchestrationRuntime:
         output = _require_completed_output(result, profile_name="orchestrator")
         return OrchestratorDecision.model_validate(output).root
 
-    def _run_worker(
+    def _run_task_executor(
         self, goal: GoalContract, ledger: TaskLedger, task: TaskRecord
-    ) -> MainTaskResult:
-        """Run one fresh Worker against only its assignment and selected history."""
+    ) -> TaskExecutionResult:
+        """Run one fresh Task Executor with only its assignment and history."""
         system_task = SystemAgentTask(
-            objective=_render_worker_task(goal, ledger, task),
+            objective=_render_task_execution(goal, ledger, task),
             allowed_result_aliases=(
                 task.task_id,
                 *(criterion.criterion_id for criterion in task.success_criteria),
             ),
         )
-        result = self._system_agents.run_system_agent("main-worker", system_task)
+        result = self._system_agents.run_system_agent("task-executor", system_task)
         if result.status != "completed" or result.output is None:
             code = result.status
-            message = "Main Worker ended without a structured result."
+            message = "Task Executor ended without a structured result."
             if result.error is not None:
                 code = result.error.code
                 message = result.error.message
-            raise _WorkerLifecycleError(code=code, message=message)
+            raise _TaskExecutorLifecycleError(code=code, message=message)
         output = result.output
-        return MainTaskResult.model_validate(output)
+        return TaskExecutionResult.model_validate(output)
 
 
 def _build_goal(focus: str | None) -> GoalContract:
@@ -176,7 +179,14 @@ def _build_goal(focus: str | None) -> GoalContract:
 def _render_orchestrator_task(ledger: TaskLedger) -> str:
     """Project current state as bounded Markdown without prior Agent transcripts."""
     snapshot = ledger.snapshot()
+    tasks_by_id = {item.task_id: item for item in snapshot.tasks}
+    milestones_by_id = {item.milestone_id: item for item in snapshot.milestones}
     writer = CompactTextWriter(max_value_chars=1_000)
+    writer.section("Required decision")
+    writer.text(
+        "Instruction",
+        "Return exactly one replan, dispatch_task, or complete decision for this state.",
+    )
     writer.section("Goal contract")
     writer.text("Mission", ledger.goal.mission)
     writer.text("Run focus", ledger.goal.focus)
@@ -189,28 +199,71 @@ def _render_orchestrator_task(ledger: TaskLedger) -> str:
     writer.section("Current Ledger")
     writer.text("Plan revision", snapshot.plan_revision)
     writer.text("Run status", snapshot.run_status)
-    visible_milestones = tuple(
-        item for item in snapshot.milestones if item.status == "pending"
-    ) + tuple(
+    for milestone in snapshot.milestones:
+        if milestone.status == "pending":
+            writer.record(
+                milestone.milestone_id,
+                **_milestone_projection(milestone),
+            )
+
+    # The newest accepted plan change and execution outcome are required causal
+    # state. Earlier records remain useful, but the Writer may omit them whole
+    # instead of clipping the final instruction or half of one Attempt.
+    if snapshot.plan_revisions:
+        latest_revision = snapshot.plan_revisions[-1]
+        writer.section("Latest Plan Revision")
+        writer.record(
+            f"revision_{latest_revision.plan_revision}",
+            **_plan_revision_projection(latest_revision),
+        )
+    if snapshot.attempts:
+        latest_attempt = snapshot.attempts[-1]
+        writer.section("Latest Attempt")
+        writer.record(
+            latest_attempt.attempt_id,
+            **_attempt_projection(
+                latest_attempt,
+                tasks_by_id=tasks_by_id,
+                milestones_by_id=milestones_by_id,
+            ),
+        )
+
+    writer.section("Optional recent history")
+    for revision in reversed(snapshot.plan_revisions[-10:-1]):
+        writer.record(
+            f"revision_{revision.plan_revision}",
+            required=False,
+            **_plan_revision_projection(revision),
+        )
+    for attempt in reversed(snapshot.attempts[-20:-1]):
+        writer.record(
+            attempt.attempt_id,
+            required=False,
+            **_attempt_projection(
+                attempt,
+                tasks_by_id=tasks_by_id,
+                milestones_by_id=milestones_by_id,
+            ),
+        )
+    historical_milestones = tuple(
         item for item in snapshot.milestones if item.status != "pending"
     )[-10:]
-    writer.detail(
-        "Current and recent Milestones",
-        [_milestone_projection(item) for item in visible_milestones],
-    )
-    writer.detail("Recent Attempts", [_attempt_projection(item) for item in snapshot.attempts[-20:]])
-    writer.section("Required decision")
-    writer.text(
-        "Instruction",
-        "Return exactly one replan, dispatch_task, or complete decision for this state.",
-    )
+    for milestone in reversed(historical_milestones):
+        writer.record(
+            milestone.milestone_id,
+            required=False,
+            **_milestone_projection(milestone),
+        )
     return writer.render(18_000).text
 
 
-def _render_worker_task(goal: GoalContract, ledger: TaskLedger, task: TaskRecord) -> str:
+def _render_task_execution(goal: GoalContract, ledger: TaskLedger, task: TaskRecord) -> str:
     """Render one bounded assignment plus only explicitly related Attempt history."""
+    snapshot = ledger.snapshot()
+    tasks_by_id = {item.task_id: item for item in snapshot.tasks}
+    milestones_by_id = {item.milestone_id: item for item in snapshot.milestones}
     milestone = next(
-        item for item in ledger.snapshot().milestones if item.milestone_id == task.milestone_id
+        item for item in snapshot.milestones if item.milestone_id == task.milestone_id
     )
     writer = CompactTextWriter(max_value_chars=1_000)
     writer.section("Bounded Goal")
@@ -223,7 +276,7 @@ def _render_worker_task(goal: GoalContract, ledger: TaskLedger, task: TaskRecord
         purpose=milestone.purpose,
         success_criteria=milestone.success_criteria,
     )
-    writer.section("Single Worker Task")
+    writer.section("Single Task Executor assignment")
     writer.record(
         task.task_id,
         objective=task.objective,
@@ -236,7 +289,14 @@ def _render_worker_task(goal: GoalContract, ledger: TaskLedger, task: TaskRecord
     writer.section("Related Attempt history")
     writer.detail(
         "Attempts",
-        [_attempt_projection(item) for item in ledger.related_attempts(task)],
+        [
+            _attempt_projection(
+                item,
+                tasks_by_id=tasks_by_id,
+                milestones_by_id=milestones_by_id,
+            )
+            for item in ledger.related_attempts(task)
+        ],
     )
     writer.section("Required result")
     writer.text(
@@ -246,14 +306,9 @@ def _render_worker_task(goal: GoalContract, ledger: TaskLedger, task: TaskRecord
     return writer.render(18_000).text
 
 
-def _milestone_projection(milestone: object) -> dict[str, object]:
+def _milestone_projection(milestone: MilestoneRecord) -> dict[str, object]:
     """Keep one Milestone prompt entry small and free of implementation details."""
-    from .models import MilestoneRecord
-
-    if not isinstance(milestone, MilestoneRecord):
-        raise TypeError("Expected a MilestoneRecord")
     return {
-        "milestone_id": milestone.milestone_id,
         "revision": milestone.plan_revision,
         "title": milestone.title,
         "purpose": milestone.purpose,
@@ -262,16 +317,35 @@ def _milestone_projection(milestone: object) -> dict[str, object]:
     }
 
 
-def _attempt_projection(attempt: object) -> dict[str, object]:
-    """Bound historical evidence to conclusions needed for future decisions."""
-    from .models import AttemptRecord
+def _plan_revision_projection(revision: PlanRevisionRecord) -> dict[str, object]:
+    """Retain why one plan changed and which Milestones it affected."""
+    return {
+        "reason": revision.reason,
+        "completed_milestone_ids": revision.completed_milestone_ids,
+        "superseded_milestone_ids": revision.superseded_milestone_ids,
+        "created_milestone_ids": revision.created_milestone_ids,
+    }
 
-    if not isinstance(attempt, AttemptRecord):
-        raise TypeError("Expected an AttemptRecord")
+
+def _attempt_projection(
+    attempt: AttemptRecord,
+    *,
+    tasks_by_id: dict[str, TaskRecord],
+    milestones_by_id: dict[str, MilestoneRecord],
+) -> dict[str, object]:
+    """Join one outcome to the Task and Milestone that explain why it ran."""
+    task = tasks_by_id[attempt.task_id]
+    milestone = milestones_by_id[task.milestone_id]
     result = attempt.result
     return {
-        "attempt_id": attempt.attempt_id,
         "task_id": attempt.task_id,
+        "plan_revision": attempt.plan_revision,
+        "milestone_id": milestone.milestone_id,
+        "milestone_title": milestone.title,
+        "task_objective": task.objective,
+        "task_purpose": task.purpose,
+        "task_success_criteria": task.success_criteria,
+        "retry_reason": task.retry_reason,
         "outcome": attempt.outcome,
         "criteria": () if result is None else result.criteria,
         "findings": () if result is None else result.findings,
@@ -296,8 +370,8 @@ def _require_completed_output(
     return result.output
 
 
-class _WorkerLifecycleError(RuntimeError):
-    """Carry one bounded terminal Worker failure into the immutable Ledger."""
+class _TaskExecutorLifecycleError(RuntimeError):
+    """Carry one bounded Task Executor failure into the immutable Ledger."""
 
     def __init__(self, *, code: str, message: str) -> None:
         """Preserve stable failure details without exposing stack traces."""

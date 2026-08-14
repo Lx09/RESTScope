@@ -8,11 +8,17 @@ the Ledger to mutate state.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from pydantic import BaseModel
 
 from restscope.agent import SystemAgentTask
 
-from .models import MainTaskResult, OrchestratorDecision
+from .models import OrchestratorDecision, TaskExecutionResult
+
+_MAX_REPLAN_TEXT_CHARS = 4_000
+_MAX_TASK_TEXT_CHARS = 4_000
+_MAX_TASK_RESULT_TEXT_CHARS = 6_000
 
 
 def orchestrator_output_schema(_task: SystemAgentTask) -> dict[str, object]:
@@ -54,6 +60,10 @@ def validate_orchestrator_output(
                 + ", ".join(sorted(unknown_completed))
                 + "."
             )
+        if _text_chars(decision.milestones) > _MAX_REPLAN_TEXT_CHARS:
+            errors.append(
+                "Replan future work text must not exceed 4000 characters."
+            )
     elif decision.kind == "dispatch_task":
         if decision.task.milestone_id not in aliases:
             errors.append("The dispatched Milestone is not present in this Ledger view.")
@@ -61,6 +71,10 @@ def validate_orchestrator_output(
         if unknown_attempts:
             errors.append(
                 "Unknown related Attempt IDs: " + ", ".join(sorted(unknown_attempts)) + "."
+            )
+        if _text_chars(decision.task) > _MAX_TASK_TEXT_CHARS:
+            errors.append(
+                "Dispatched Task text must not exceed 4000 characters."
             )
     elif decision.kind == "complete":
         offered_goal_ids = {item for item in aliases if item.startswith("goal_")}
@@ -73,31 +87,48 @@ def validate_orchestrator_output(
     return tuple(errors)
 
 
-def worker_output_schema(_task: SystemAgentTask) -> dict[str, object]:
-    """Return the closed result schema for one bounded Main Worker task."""
-    return MainTaskResult.model_json_schema()
+def _text_chars(value: object) -> int:
+    """Count model-authored string leaves for one aggregate output budget."""
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, BaseModel):
+        return _text_chars(value.model_dump(mode="python"))
+    if isinstance(value, Mapping):
+        return sum(_text_chars(item) for item in value.values())
+    if isinstance(value, Sequence):
+        return sum(_text_chars(item) for item in value)
+    return 0
 
 
-def validate_worker_output(
+def task_execution_output_schema(_task: SystemAgentTask) -> dict[str, object]:
+    """Return the closed result schema for one bounded Task execution."""
+    return TaskExecutionResult.model_json_schema()
+
+
+def validate_task_execution_output(
     output: BaseModel,
     task: SystemAgentTask,
 ) -> tuple[str, ...]:
     """Require the active Task and every offered criterion exactly once."""
-    result = MainTaskResult.model_validate(output)
+    result = TaskExecutionResult.model_validate(output)
     if not task.allowed_result_aliases:
-        return ("Worker task did not declare its active Task identity.",)
+        return ("Task execution did not declare its active Task identity.",)
     expected_task_id, *expected_criterion_ids = task.allowed_result_aliases
     errors: list[str] = []
     if result.task_id != expected_task_id:
-        errors.append(f"task_id must be {expected_task_id} for this Worker call.")
+        errors.append(f"task_id must be {expected_task_id} for this Task execution.")
     actual_ids = tuple(item.criterion_id for item in result.criteria)
     if (
         len(actual_ids) != len(set(actual_ids))
         or set(actual_ids) != set(expected_criterion_ids)
     ):
-        errors.append("Worker must report every offered criterion exactly once.")
+        errors.append("Task Executor must report every offered criterion exactly once.")
     if result.outcome == "completed" and any(
         item.status != "met" for item in result.criteria
     ):
-        errors.append("A completed Worker result requires every criterion to be met.")
+        errors.append("A completed Task execution requires every criterion to be met.")
+    if _text_chars(result) > _MAX_TASK_RESULT_TEXT_CHARS:
+        errors.append(
+            "Task execution result text must not exceed 6000 characters."
+        )
     return tuple(errors)

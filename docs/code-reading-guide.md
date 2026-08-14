@@ -7,8 +7,8 @@ runtime that exists now.
 ## 1. The shortest mental model
 
 RESTScope starts one in-memory Orchestration loop. An outer Orchestrator revises
-a rolling Task Ledger and dispatches one bounded Main Worker at a time. Every
-Orchestrator and Worker call is a fresh registered System Agent root, so task
+a rolling Task Ledger and dispatches one bounded Task Executor at a time. Every
+Orchestrator and Task Executor call is a fresh registered System Agent root, so task
 memory lives in the Ledger rather than a long conversation.
 
 The runtime has five distinct responsibilities:
@@ -216,7 +216,7 @@ limit, while the Harness still records usage and validates final output until
 it is valid or a terminal runtime event occurs. The Harness performs mechanical
 validation and execution but does not decide testing semantics.
 
-The Orchestrator Profile has no capabilities. The Main Worker Profile has the
+The Orchestrator Profile has no capabilities. The Task Executor Profile has the
 API-testing Tools, exploration and failure-resolution Skills, a private
 intra-task Plan, and one Parameter Patch child. Neither profile carries state
 between root invocations.

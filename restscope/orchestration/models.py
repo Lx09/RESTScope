@@ -1,6 +1,6 @@
 """Define immutable data exchanged inside the long-task Orchestration loop.
 
-The Orchestrator proposes revisions and one task at a time, the Main Worker
+The Orchestrator proposes revisions and one task at a time, the Task Executor
 returns criterion-level results, and the Ledger records accepted transitions.
 These models contain no runtime behavior and are never persisted.
 """
@@ -74,7 +74,7 @@ class ReplanDecision(_FrozenModel):
 
 
 class TaskCriterion(_FrozenModel):
-    """Give a Worker one exact, independently reportable completion condition."""
+    """Give a Task Executor one independently reportable completion condition."""
 
     criterion_id: str = Field(pattern=r"^criterion_[1-9][0-9]*$")
     description: str = Field(min_length=1, max_length=2_000)
@@ -95,7 +95,7 @@ class TaskProposal(_FrozenModel):
     def require_unique_criterion_ids(
         cls, values: tuple[TaskCriterion, ...]
     ) -> tuple[TaskCriterion, ...]:
-        """Prevent an ambiguous Worker result contract before dispatch."""
+        """Prevent an ambiguous execution result contract before dispatch."""
         identities = tuple(value.criterion_id for value in values)
         if len(identities) != len(set(identities)):
             raise ValueError("Task criterion IDs must be unique")
@@ -117,7 +117,7 @@ class TaskProposal(_FrozenModel):
 
 
 class DispatchTaskDecision(_FrozenModel):
-    """Request one Worker execution against the current plan revision."""
+    """Request one Task Executor run against the current plan revision."""
 
     kind: Literal["dispatch_task"]
     expected_plan_revision: int = Field(ge=1)
@@ -162,8 +162,8 @@ class CriterionVerdict(_FrozenModel):
     evidence_refs: tuple[str, ...] = Field(default=(), max_length=50)
 
 
-class MainTaskResult(_FrozenModel):
-    """Return only what happened in one Worker task, never the next plan."""
+class TaskExecutionResult(_FrozenModel):
+    """Return only what happened in one executed Task, never the next plan."""
 
     task_id: str = Field(pattern=r"^task_[1-9][0-9]*$")
     outcome: Literal["completed", "partial", "blocked"]
@@ -171,6 +171,16 @@ class MainTaskResult(_FrozenModel):
     findings: tuple[AgentFinding, ...] = Field(default=(), max_length=100)
     unresolved_issues: tuple[str, ...] = Field(default=(), max_length=100)
     target_state_changes: tuple[str, ...] = Field(default=(), max_length=100)
+
+
+class PlanRevisionRecord(_FrozenModel):
+    """Remember why one accepted Replan replaced the future work."""
+
+    plan_revision: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2_000)
+    completed_milestone_ids: tuple[str, ...]
+    superseded_milestone_ids: tuple[str, ...]
+    created_milestone_ids: tuple[str, ...] = Field(min_length=1)
 
 
 class MilestoneRecord(_FrozenModel):
@@ -186,7 +196,7 @@ class MilestoneRecord(_FrozenModel):
 
 
 class TaskRecord(_FrozenModel):
-    """Store the exact Worker assignment accepted by the Ledger."""
+    """Store the exact Task Executor assignment accepted by the Ledger."""
 
     task_id: str
     milestone_id: str
@@ -200,24 +210,24 @@ class TaskRecord(_FrozenModel):
 
 
 class AttemptRecord(_FrozenModel):
-    """Preserve one immutable Worker outcome or lifecycle failure."""
+    """Preserve one immutable Task execution outcome or lifecycle failure."""
 
     attempt_id: str
     task_id: str
     plan_revision: int
     outcome: Literal["completed", "partial", "blocked", "failed"]
-    result: MainTaskResult | None = None
+    result: TaskExecutionResult | None = None
     failure_code: str | None = None
     failure_message: str | None = None
 
     @model_validator(mode="after")
     def require_result_or_failure_payload(self) -> AttemptRecord:
-        """Keep normal Worker results and lifecycle failures mutually exclusive."""
+        """Keep Task results and lifecycle failures mutually exclusive."""
         if self.outcome == "failed":
             if self.result is not None or self.failure_code is None or self.failure_message is None:
                 raise ValueError("Failed Attempt requires failure details only")
         elif self.result is None or self.failure_code is not None or self.failure_message is not None:
-            raise ValueError("Worker Attempt requires one structured result only")
+            raise ValueError("Task execution Attempt requires one structured result only")
         return self
 
 
@@ -226,6 +236,7 @@ class TaskLedgerSnapshot(_FrozenModel):
 
     plan_revision: int
     run_status: Literal["planning", "running", "completed"]
+    plan_revisions: tuple[PlanRevisionRecord, ...]
     milestones: tuple[MilestoneRecord, ...]
     tasks: tuple[TaskRecord, ...]
     attempts: tuple[AttemptRecord, ...]

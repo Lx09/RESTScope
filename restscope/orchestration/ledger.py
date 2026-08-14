@@ -7,13 +7,16 @@ cannot modify Ledger collections directly.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .models import (
     AttemptRecord,
     CompleteDecision,
     GoalContract,
-    MainTaskResult,
     MilestoneRecord,
+    PlanRevisionRecord,
     ReplanDecision,
+    TaskExecutionResult,
     TaskLedgerSnapshot,
     TaskProposal,
     TaskRecord,
@@ -27,7 +30,8 @@ class TaskLedger:
         """Create an empty Ledger anchored to an immutable Goal contract."""
         self._goal = goal
         self._plan_revision = 0
-        self._run_status = "planning"
+        self._run_status: Literal["planning", "running", "completed"] = "planning"
+        self._plan_revisions: list[PlanRevisionRecord] = []
         self._milestones: list[MilestoneRecord] = []
         self._tasks: list[TaskRecord] = []
         self._attempts: list[AttemptRecord] = []
@@ -46,12 +50,12 @@ class TaskLedger:
     def apply_replan(self, decision: ReplanDecision) -> None:
         """Supersede unfinished work and append a materially new future plan.
 
-        The method rejects stale revisions, active Worker tasks, unknown reopen
+        The method rejects stale revisions, active Task execution, unknown reopen
         targets, and no-op replans. Historical Tasks and Attempts remain intact.
         """
         self._require_current_revision(decision.expected_plan_revision)
         if self._active_task_id is not None:
-            raise ValueError("Cannot replan while a Worker task is active")
+            raise ValueError("Cannot replan while a Task Executor is active")
 
         proposed_shape = tuple(
             (
@@ -91,9 +95,13 @@ class TaskLedger:
             if reopened is not None and reopened not in known_milestones:
                 raise ValueError(f"Unknown superseded milestone: {reopened}")
 
-        # Revisions never rewrite old rows. Replacing a frozen record changes
-        # only the Ledger's current view while preserving its prior identity.
-        self._milestones = [
+        next_revision = self._plan_revision + 1
+        superseded_ids = tuple(
+            item.milestone_id
+            for item in self._milestones
+            if item.status == "pending" and item.milestone_id not in completed_ids
+        )
+        updated_milestones = [
             item.model_copy(
                 update={
                     "status": (
@@ -107,25 +115,39 @@ class TaskLedger:
             else item
             for item in self._milestones
         ]
-        self._plan_revision += 1
-        for proposal in decision.milestones:
-            self._milestones.append(
-                MilestoneRecord(
-                    milestone_id=f"milestone_{len(self._milestones) + 1}",
-                    plan_revision=self._plan_revision,
-                    title=proposal.title,
-                    purpose=proposal.purpose,
-                    success_criteria=proposal.success_criteria,
-                    supersedes_milestone_id=proposal.supersedes_milestone_id,
-                )
+        new_milestones = [
+            MilestoneRecord(
+                milestone_id=f"milestone_{len(self._milestones) + index}",
+                plan_revision=next_revision,
+                title=proposal.title,
+                purpose=proposal.purpose,
+                success_criteria=proposal.success_criteria,
+                supersedes_milestone_id=proposal.supersedes_milestone_id,
             )
+            for index, proposal in enumerate(decision.milestones, start=1)
+        ]
+        revision = PlanRevisionRecord(
+            plan_revision=next_revision,
+            reason=decision.reason,
+            completed_milestone_ids=decision.completed_milestone_ids,
+            superseded_milestone_ids=superseded_ids,
+            created_milestone_ids=tuple(
+                item.milestone_id for item in new_milestones
+            ),
+        )
+
+        # Build every frozen replacement before publishing any state. A model
+        # validation failure therefore cannot leave a partially applied plan.
+        self._milestones = [*updated_milestones, *new_milestones]
+        self._plan_revisions.append(revision)
+        self._plan_revision = next_revision
         self._run_status = "running"
 
     def dispatch(self, proposal: TaskProposal, *, expected_revision: int) -> TaskRecord:
         """Create one running Task after validating its plan and Milestone."""
         self._require_current_revision(expected_revision)
         if self._active_task_id is not None:
-            raise ValueError("Only one Worker task may be active")
+            raise ValueError("Only one Task Executor may be active")
         milestone = self._find_milestone(proposal.milestone_id)
         if milestone.status != "pending" or milestone.plan_revision != self._plan_revision:
             raise ValueError("Task must target a pending Milestone in the current plan")
@@ -149,17 +171,17 @@ class TaskLedger:
         self._active_task_id = task.task_id
         return task
 
-    def append_attempt(self, result: MainTaskResult) -> AttemptRecord:
-        """Validate a complete Worker result before recording any state change."""
+    def append_attempt(self, result: TaskExecutionResult) -> AttemptRecord:
+        """Validate one Task execution result before recording a state change."""
         task = self._require_active_task(result.task_id)
         expected_ids = tuple(item.criterion_id for item in task.success_criteria)
         actual_ids = tuple(item.criterion_id for item in result.criteria)
         if len(actual_ids) != len(set(actual_ids)) or set(actual_ids) != set(expected_ids):
-            raise ValueError("Worker must report every Task criterion exactly once")
+            raise ValueError("Task Executor must report every Task criterion exactly once")
         if result.outcome == "completed" and any(
             item.status != "met" for item in result.criteria
         ):
-            raise ValueError("A completed Worker result requires every criterion to be met")
+            raise ValueError("A completed Task execution requires every criterion to be met")
 
         attempt = AttemptRecord(
             attempt_id=f"attempt_{len(self._attempts) + 1}",
@@ -180,7 +202,7 @@ class TaskLedger:
         failure_code: str,
         failure_message: str,
     ) -> AttemptRecord:
-        """Record a terminal Worker lifecycle failure before replanning.
+        """Record a terminal Task Executor failure before replanning.
 
         Args:
             task_id: Identity of the currently running Task.
@@ -214,7 +236,7 @@ class TaskLedger:
         if self._plan_revision == 0:
             raise ValueError("The Orchestrator must create a plan before completion")
         if self._active_task_id is not None:
-            raise ValueError("Cannot complete while a Worker task is active")
+            raise ValueError("Cannot complete while a Task Executor is active")
         expected_ids = {item.criterion_id for item in self._goal.success_criteria}
         actual_ids = tuple(item.criterion_id for item in decision.goal_criteria)
         if len(actual_ids) != len(set(actual_ids)) or set(actual_ids) != expected_ids:
@@ -227,6 +249,7 @@ class TaskLedger:
         return TaskLedgerSnapshot(
             plan_revision=self._plan_revision,
             run_status=self._run_status,
+            plan_revisions=tuple(self._plan_revisions),
             milestones=tuple(self._milestones),
             tasks=tuple(self._tasks),
             attempts=tuple(self._attempts),
@@ -245,9 +268,9 @@ class TaskLedger:
             )
 
     def _require_active_task(self, task_id: str) -> TaskRecord:
-        """Resolve the one running Task named by a Worker result."""
+        """Resolve the running Task named by one execution result."""
         if self._active_task_id != task_id:
-            raise ValueError("Worker result does not match the active Task")
+            raise ValueError("Task execution result does not match the active Task")
         return next(item for item in self._tasks if item.task_id == task_id)
 
     def _find_milestone(self, milestone_id: str) -> MilestoneRecord:

@@ -8,9 +8,9 @@ from restscope.orchestration.ledger import TaskLedger
 from restscope.orchestration.models import (
     GoalContract,
     GoalCriterion,
-    MainTaskResult,
     ReplanDecision,
     TaskCriterion,
+    TaskExecutionResult,
     TaskProposal,
 )
 
@@ -81,7 +81,38 @@ def test_no_op_replan_preserves_revision_and_history() -> None:
     assert ledger.snapshot() == before
 
 
-def test_invalid_worker_criteria_do_not_change_the_ledger() -> None:
+def test_replan_appends_an_immutable_reasoned_revision() -> None:
+    """A successful Replan remembers why and how future work changed."""
+    ledger = _ledger_with_plan()
+
+    ledger.apply_replan(
+        ReplanDecision(
+            kind="replan",
+            expected_plan_revision=1,
+            reason="The happy path is confirmed; exceptional behavior is next.",
+            completed_milestone_ids=("milestone_1",),
+            milestones=(
+                {
+                    "title": "Test invalid input",
+                    "purpose": "Cover worthwhile exceptional behavior.",
+                    "success_criteria": ("One invalid request is observed.",),
+                },
+            ),
+        )
+    )
+
+    snapshot = ledger.snapshot()
+    assert tuple(item.reason for item in snapshot.plan_revisions) == (
+        "Create the first bounded milestone.",
+        "The happy path is confirmed; exceptional behavior is next.",
+    )
+    assert snapshot.plan_revisions[-1].plan_revision == 2
+    assert snapshot.plan_revisions[-1].completed_milestone_ids == ("milestone_1",)
+    assert snapshot.plan_revisions[-1].superseded_milestone_ids == ()
+    assert snapshot.plan_revisions[-1].created_milestone_ids == ("milestone_2",)
+
+
+def test_invalid_execution_criteria_do_not_change_the_ledger() -> None:
     """Missing criterion results fail before a Task or Attempt is replaced."""
     ledger = _ledger_with_plan()
     running = ledger.dispatch(_task(), expected_revision=1)
@@ -89,7 +120,7 @@ def test_invalid_worker_criteria_do_not_change_the_ledger() -> None:
 
     with pytest.raises(ValueError, match="every Task criterion exactly once"):
         ledger.append_attempt(
-            MainTaskResult(
+            TaskExecutionResult(
                 task_id=running.task_id,
                 outcome="partial",
                 criteria=(
@@ -106,7 +137,7 @@ def test_invalid_worker_criteria_do_not_change_the_ledger() -> None:
 
 
 def test_lifecycle_failure_appends_history_before_future_replan() -> None:
-    """A failed Worker root becomes immutable evidence instead of disappearing."""
+    """A failed Task Executor root becomes immutable evidence."""
     ledger = _ledger_with_plan()
     running = ledger.dispatch(_task(), expected_revision=1)
 

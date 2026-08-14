@@ -141,7 +141,7 @@ Each standard `SKILL.md` frontmatter contains only `name` and `description`,
 while `restscope.yaml` declares version, risk, required Tools, and bounded
 Context Sources. `restscope.skills` automatically discovers these packaged
 files and exposes an immutable built-in Catalog; callers may add test
-definitions but cannot replace a built-in. The production Main Worker selects
+definitions but cannot replace a built-in. The production Task Executor selects
 both exploration and failure-resolution Skills; its Parameter Patch child
 selects only `apply-parameter-patch`.
 The retired specialized Failure Resolution, Patch, Review, and Compact Agents
@@ -160,7 +160,7 @@ failure can still terminate it. No Profile, task, queue, transcript, budget, or
 compacted history is persisted.
 
 A Profile may also select the paired `plan.read` and `plan.update` Tools. The
-Harness gives each selected Main Worker, Subagent, or System Agent a separate
+Harness gives each selected Task Executor, Subagent, or System Agent a separate
 session-memory
 Plan containing an optional update explanation and up to 100 ordered
 `pending`, `in_progress`, or `completed` steps. At most one step may be active.
@@ -414,7 +414,7 @@ new revision. Batch execution can mutate the target API and does not retry,
 follow redirects, or roll back effects.
 
 These capabilities are bound by the production Harness but are not thereby
-authorized to an Agent. The Orchestrator grants none of them; the Main Worker
+authorized to an Agent. The Orchestrator grants none of them; the Task Executor
 receives only its explicit testing Tool and Skill set. The default App does not
 start MCP processes.
 
@@ -524,7 +524,7 @@ Python embedders may instead construct `RESTScopeApp(config)`, or call
 `RESTScopeApp.start(focus=None)` blocks until the outer Orchestrator completes,
 is interrupted, or fails safely. The optional focus narrows a run but cannot
 replace RESTScope's fixed mission. The Orchestrator has no capabilities; each
-fresh Main Worker has the API-testing Tools and Skills needed for one dispatched
+fresh Task Executor has the API-testing Tools and Skills needed for one dispatched
 Task plus one Parameter Patch child.
 
 App construction prepares the database before building the default capability

@@ -1,6 +1,6 @@
 """Build the Agent Profiles owned by RESTScope's production App.
 
-The module translates App model configuration into Orchestrator, Main Worker,
+The module translates App model configuration into Orchestrator, Task Executor,
 Parameter Patch, and Resource Identifier Profiles. Harness remains responsible
 for validating and running those definitions; composition only requests this
 one App-specific runtime definition.
@@ -22,16 +22,16 @@ from restscope.llm import build_llm_client, build_llm_model_config
 from restscope.observability import TracingRuntime
 from restscope.orchestration.contracts import (
     orchestrator_output_schema,
+    task_execution_output_schema,
     validate_orchestrator_output,
-    validate_worker_output,
-    worker_output_schema,
+    validate_task_execution_output,
 )
-from restscope.orchestration.models import MainTaskResult, OrchestratorDecision
+from restscope.orchestration.models import OrchestratorDecision, TaskExecutionResult
 from restscope.tools.plan import PLAN_READ_TOOL_NAME, PLAN_UPDATE_TOOL_NAME
 
 _PATCH_PROFILE_NAME = "parameter-patch"
-_WORKER_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
-_WORKER_TOOLS = (
+_TASK_EXECUTOR_SKILLS = ("explore-api-behavior", "resolve-operation-failures")
+_TASK_EXECUTOR_TOOLS = (
     PLAN_READ_TOOL_NAME,
     PLAN_UPDATE_TOOL_NAME,
     "openapi.list_operations",
@@ -68,7 +68,7 @@ _ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator
   Milestones. On later calls, return exactly one replan, dispatch_task, or
   complete decision.
 - Every dispatched Task must name one current Milestone, explain why it serves
-  the Goal, and give criterion IDs that the Worker can report exactly once.
+  the Goal, and give criterion IDs that the Task Executor can report exactly once.
 - Replan when evidence changes what future work is useful. A replan may split,
   merge, reorder, supersede, or reopen work, but must change the future plan and
   must never change the Goal or rewrite prior Tasks or Attempts.
@@ -78,7 +78,7 @@ _ORCHESTRATOR_INSTRUCTIONS = """You are RESTScope's outer long-task Orchestrator
 - Return only the required structured OrchestratorDecision.
 """
 
-_WORKER_PROFILE_INSTRUCTIONS = """You are RESTScope's Main Worker for one task.
+_TASK_EXECUTOR_PROFILE_INSTRUCTIONS = """You are RESTScope's Task Executor for one task.
 
 - Work only on the Goal summary, current Milestone, single Task, success
   criteria, and selected Attempt history supplied in this fresh root call.
@@ -99,7 +99,7 @@ _WORKER_PROFILE_INSTRUCTIONS = """You are RESTScope's Main Worker for one task.
   OpenAPI description, or successful Tool execution as proof of an API outcome.
 - Return one criterion verdict for every supplied criterion. State partial or
   blocked work explicitly, and never choose or propose the next Task.
-- Return only the required structured MainTaskResult.
+- Return only the required structured TaskExecutionResult.
 """
 
 
@@ -134,11 +134,11 @@ def _build_agent_runtime_definition(
         )
         profiles.append(
             AgentProfile(
-                name="main-worker",
-                instructions=_WORKER_PROFILE_INSTRUCTIONS,
+                name="task-executor",
+                instructions=_TASK_EXECUTOR_PROFILE_INSTRUCTIONS,
                 model_config_name="thinking",
-                tool_names=_WORKER_TOOLS,
-                skill_names=_WORKER_SKILLS,
+                tool_names=_TASK_EXECUTOR_TOOLS,
+                skill_names=_TASK_EXECUTOR_SKILLS,
                 subagent_profile_names=(_PATCH_PROFILE_NAME,),
             )
         )
@@ -165,12 +165,12 @@ def _build_agent_runtime_definition(
                     output_schema_name="OrchestratorDecision",
                 ),
                 SystemAgentDefinition(
-                    profile_name="main-worker",
+                    profile_name="task-executor",
                     adapt_task=SystemAgentTask.model_validate,
-                    output_model=MainTaskResult,
-                    build_output_schema=worker_output_schema,
-                    validate_output=validate_worker_output,
-                    output_schema_name="MainTaskResult",
+                    output_model=TaskExecutionResult,
+                    build_output_schema=task_execution_output_schema,
+                    validate_output=validate_task_execution_output,
+                    output_schema_name="TaskExecutionResult",
                 ),
             )
         )
