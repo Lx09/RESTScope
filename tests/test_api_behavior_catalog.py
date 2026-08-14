@@ -555,7 +555,7 @@ def test_resource_state_write_is_atomic_and_observation_remains_independent() ->
 
 
 def test_progress_counts_only_schema_v1_batch_execution_summaries() -> None:
-    """Skipped slots and ordinary Observations cannot inflate executed progress."""
+    """Only eligible run_batch summaries add Batch attempts and executed cases."""
 
     from restscope.api_behavior_monitor.catalog import (
         BatchWrite,
@@ -585,6 +585,13 @@ def test_progress_counts_only_schema_v1_batch_execution_summaries() -> None:
             "operation_key": "POST /items",
             "test_mode": "exceptional",
             "executed_case_count": 2,
+        },
+        {
+            "schema_version": 1,
+            "status": "running",
+            "operation_key": "POST /items",
+            "test_mode": "exceptional",
+            "executed_case_count": 0,
         },
         {
             "schema_version": 2,
@@ -625,11 +632,17 @@ def test_progress_counts_only_schema_v1_batch_execution_summaries() -> None:
     snapshot = catalog.read_test_progress()
 
     assert [
-        (item.operation_id, item.positive_case_count, item.negative_case_count)
+        (
+            item.operation_id,
+            item.positive_batch_count,
+            item.negative_batch_count,
+            item.positive_case_count,
+            item.negative_case_count,
+        )
         for item in snapshot.operations
     ] == [
-        ("GET /untested", 0, 0),
-        ("POST /items", 4, 2),
+        ("GET /untested", 0, 0, 0, 0),
+        ("POST /items", 2, 2, 4, 2),
     ]
 
 

@@ -19,6 +19,8 @@ def test_context_prioritizes_incomplete_operations_and_reports_omissions() -> No
                 operation_id="GET /untested",
                 method="GET",
                 path="/untested",
+                positive_batch_count=0,
+                negative_batch_count=0,
                 positive_case_count=0,
                 negative_case_count=0,
             ),
@@ -26,6 +28,8 @@ def test_context_prioritizes_incomplete_operations_and_reports_omissions() -> No
                 operation_id="POST /partial",
                 method="POST",
                 path="/partial",
+                positive_batch_count=2,
+                negative_batch_count=0,
                 positive_case_count=4,
                 negative_case_count=0,
             ),
@@ -34,6 +38,8 @@ def test_context_prioritizes_incomplete_operations_and_reports_omissions() -> No
                     operation_id=f"GET /complete/{index}",
                     method="GET",
                     path=f"/complete/{index}/" + "x" * 200,
+                    positive_batch_count=2,
+                    negative_batch_count=1,
                     positive_case_count=3,
                     negative_case_count=2,
                 )
@@ -54,6 +60,14 @@ def test_context_prioritizes_incomplete_operations_and_reports_omissions() -> No
     assert len(rendered) <= 2_400
     assert "GET /untested" in rendered
     assert "POST /partial" in rendered
+    assert "positive batches" in rendered
+    assert "negative batches" in rendered
+    assert "positive cases" in rendered
+    assert "negative cases" in rendered
+    assert "positive batches: 2" in rendered
+    assert "negative batches: 0" in rendered
+    assert "positive cases: 4" in rendered
+    assert "negative cases: 0" in rendered
     assert "users" in rendered
     assert "active" in rendered
     assert "operation records omitted" in rendered

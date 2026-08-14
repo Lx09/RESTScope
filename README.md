@@ -412,9 +412,11 @@ each matched case Observation are audit evidence; `observation_id` is the Test
 Case ID. This creates no planning registry, Failure memory, candidate, or
 resumable scheduler.
 The Catalog's read-only `read_test_progress()` aggregate counts only these
-schema-v1 Batch summaries: `happy_path` executed cases are positive,
-`exceptional` executed cases are negative, and skipped slots are excluded.
-Every OpenAPI operation remains visible at `0/0` until tested.
+schema-v1 Batch summaries. For every operation it reports both the number of
+`happy_path`/positive and `exceptional`/negative Batch attempts and their
+separate executed-case counts; skipped slots are excluded from case counts.
+Every OpenAPI operation remains visible with zero Batch and case counts until
+tested.
 An already-running Batch is unaffected by a later Patch; a later Batch sees the
 new revision. Batch execution can mutate the target API and does not retry,
 follow redirects, or roll back effects.

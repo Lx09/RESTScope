@@ -179,10 +179,11 @@ responses, and state-unchanged instances produce no state event.
 
 `APIBehaviorCatalog.read_test_progress()` reads one aggregate transaction:
 every OpenAPI operation with positive (`happy_path`) and negative
-(`exceptional`) schema-v1 Batch `executed_case_count`, plus current instance
-counts grouped by resource and semantic state. Running, failed, and completed
-Batches all contribute executed cases; skipped slots and ordinary HTTP Tool
-Observations do not.
+(`exceptional`) schema-v1 Batch counts and separate `executed_case_count`
+totals, plus current instance counts grouped by resource and semantic state.
+Running, failed, and completed Batches each contribute one Batch attempt,
+including a valid attempt with zero executed cases. Skipped slots and ordinary
+HTTP Tool Observations do not contribute to executed-case or Batch counts.
 
 ## Lifecycle and compatibility
 

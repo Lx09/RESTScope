@@ -619,12 +619,13 @@ class _SqlAlchemyAPIBehaviorRepository:
         ], total
 
     def read_test_progress(self) -> TestProgressSnapshot:
-        """Aggregate all operation Batch counts and current resource states."""
+        """Aggregate operation Batch/case counts and current resource states."""
 
         operations = self.session.scalars(
             select(OperationORM).order_by(OperationORM.operation_id)
         ).all()
-        counts: dict[tuple[str, str], int] = {}
+        case_counts: dict[tuple[str, str], int] = {}
+        batch_counts: dict[tuple[str, str], int] = {}
         for batch in self.session.scalars(select(BatchORM)).all():
             summary = batch.summary
             if summary.get("schema_version") != 1:
@@ -643,7 +644,10 @@ class _SqlAlchemyAPIBehaviorRepository:
             ):
                 continue
             key = (operation_key, test_mode)
-            counts[key] = counts.get(key, 0) + executed
+            # A zero-case failed or running Batch is still an attempted Batch.
+            # Its executed-case contribution correctly remains zero.
+            batch_counts[key] = batch_counts.get(key, 0) + 1
+            case_counts[key] = case_counts.get(key, 0) + executed
 
         state_rows = self.session.execute(
             select(
@@ -666,11 +670,19 @@ class _SqlAlchemyAPIBehaviorRepository:
                     operation_id=row.operation_id,
                     method=row.method,
                     path=row.path,
-                    positive_case_count=counts.get(
+                    positive_batch_count=batch_counts.get(
                         (row.operation_id, "happy_path"),
                         0,
                     ),
-                    negative_case_count=counts.get(
+                    negative_batch_count=batch_counts.get(
+                        (row.operation_id, "exceptional"),
+                        0,
+                    ),
+                    positive_case_count=case_counts.get(
+                        (row.operation_id, "happy_path"),
+                        0,
+                    ),
+                    negative_case_count=case_counts.get(
                         (row.operation_id, "exceptional"),
                         0,
                     ),

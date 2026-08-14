@@ -73,6 +73,12 @@ def render_test_progress_context(
             item.positive_case_count == 0 and item.negative_case_count == 0
             for item in snapshot.operations
         ),
+        positive_batch_count=sum(
+            item.positive_batch_count for item in snapshot.operations
+        ),
+        negative_batch_count=sum(
+            item.negative_batch_count for item in snapshot.operations
+        ),
         positive_executed_case_count=sum(
             item.positive_case_count for item in snapshot.operations
         ),
@@ -86,7 +92,7 @@ def render_test_progress_context(
     summary = summary_writer.render(max_chars=summary_budget).text
 
     operation_writer = CompactTextWriter(max_value_chars=400)
-    operation_writer.section("OPERATION CASE COUNTS", untrusted=True)
+    operation_writer.section("OPERATION BATCH AND CASE COUNTS", untrusted=True)
     for index, item in enumerate(
         sorted(snapshot.operations, key=_operation_priority),
         start=1,
@@ -97,8 +103,10 @@ def render_test_progress_context(
             operation=item.operation_id,
             method=item.method,
             path=item.path,
-            positive=item.positive_case_count,
-            negative=item.negative_case_count,
+            positive_batches=item.positive_batch_count,
+            negative_batches=item.negative_batch_count,
+            positive_cases=item.positive_case_count,
+            negative_cases=item.negative_case_count,
         )
     operation_rendered = operation_writer.render(
         max_chars=operation_budget - _OMISSION_RESERVE

@@ -75,8 +75,9 @@ as the active project direction.
   blocks on this loop; the former FIFO Run Harness and taskless Main lifecycle
   are retired. The Orchestrator has no Tools, Skills, or child Profiles; its one
   read-only `test-progress` Context Source is freshly rendered by Harness from a
-  deep Catalog aggregate, and a read failure stops that root before a completion
-  decision.
+  deep Catalog aggregate. That aggregate reports positive/negative Batch
+  attempts separately from positive/negative executed cases, and a read failure
+  stops that root before a completion decision.
 - Deterministic runtime code may synchronously start a registered System Agent
   through `run_system_agent(profile_name, task)`. It is another lifecycle of the
   same generic Agent, not a domain-specific Agent class. Every invocation is an

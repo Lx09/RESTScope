@@ -413,11 +413,19 @@ class ResourceStateEventRecord(_CatalogModel):
 
 
 class OperationTestProgress(_CatalogModel):
-    """Summarize executed positive and negative Batch cases for one operation."""
+    """Summarize attempted Batches and executed cases for one operation.
+
+    Batch counts show how many ``run_batch`` attempts used each test mode.
+    Case counts separately show how many generated slots actually executed, so
+    a failed Batch with no executed cases remains visible without inflating
+    case coverage.
+    """
 
     operation_id: str
     method: str
     path: str
+    positive_batch_count: int = Field(default=0, ge=0)
+    negative_batch_count: int = Field(default=0, ge=0)
     positive_case_count: int = Field(default=0, ge=0)
     negative_case_count: int = Field(default=0, ge=0)
 
